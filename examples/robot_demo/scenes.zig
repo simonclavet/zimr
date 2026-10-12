@@ -17,7 +17,8 @@ const Allocator = std.mem.Allocator;
 
 const zm = @import("zm");
 const rbt = @import("zimr").robot;
-const bufPrint = std.fmt.bufPrint;
+/// What a scene's `readout` returns: one line of numbers, held by value.
+pub const ReadoutText = @import("zimr").Str(160);
 
 const Vec = zm.Vec;
 const Vec2 = zm.Vec2;
@@ -67,7 +68,7 @@ pub const Scene = struct {
     /// Optional live readout, drawn under the blurb. Lets a scene surface the numbers it is
     /// actually about - an IMU's reading, a tendon's length - rather than leaving the
     /// interesting quantity invisible inside `Data`.
-    readout: ?*const fn (live: *const Live, buf: []u8) []const u8 = null,
+    readout: ?*const fn (live: *const Live) ReadoutText = null,
     /// Farthest the mechanism can reach from the origin, in metres. The host scales the
     /// view to fit it, so a three-link chain and a two-link arm both fill the screen
     /// instead of one being tiny and the other running off the bottom.
@@ -352,14 +353,13 @@ const Imu = struct {
 
     /// The instrument's own reading, in its own frame - which is what makes it an
     /// instrument rather than a derived quantity.
-    fn readout(live: *const Live, buf: []u8) []const u8 {
+    fn readout(live: *const Live) ReadoutText {
         const sensor: []const f32 = live.data.sensor_data;
         const magnitude: f32 = @sqrt(sensor[0] * sensor[0] + sensor[1] * sensor[1] + sensor[2] * sensor[2]);
-        return bufPrint(
-            buf,
+        return .print(
             "accel |a| {d:.2} m/s2   gyro {d:.2} rad/s   speed {d:.2} m/s",
             .{ magnitude, sensor[5], @abs(sensor[7]) },
-        ) catch "";
+        );
     }
 };
 

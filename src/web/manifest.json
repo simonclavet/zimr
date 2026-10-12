@@ -5,7 +5,7 @@
       "module": "audio",
       "stars": 2,
       "title": "zimr - audio - amp envelope",
-      "description": "shapes a tone's amplitude with adsr sliders that regenerate the pcm you see and hear",
+      "description": "ADSR sliders reshape a tone's amplitude, and the plot below is the exact PCM you hear",
       "functions": []
     },
     {
@@ -13,7 +13,7 @@
       "module": "audio",
       "stars": 2,
       "title": "zimr - WebGPU - audio basic",
-      "description": "synthesize 3 tones in code, play on click -- no file load",
+      "description": "simple version of audio_amp_envelope: three tones (square, sine, triangle) synthesized in code and played on a tap - no file to load",
       "functions": []
     },
     {
@@ -21,7 +21,7 @@
       "module": "audio",
       "stars": 2,
       "title": "zimr - audio - sound lab",
-      "description": "loads a wav then demos polyphony via aliases and stereo positioning across three modes",
+      "description": "a WAV loaded, then played three ways: decoded and inspected, layered by aliases for polyphony, and panned across the stereo field",
       "functions": []
     },
     {
@@ -29,7 +29,7 @@
       "module": "audio",
       "stars": 2,
       "title": "zimr - audio - spectrum visualizer",
-      "description": "live fft of the master bus via a webaudio analyser tap drawn as a frequency spectrum",
+      "description": "a live FFT of everything playing, tapped off the master bus and drawn as a frequency spectrum",
       "functions": []
     },
     {
@@ -37,7 +37,7 @@
       "module": "audio",
       "stars": 3,
       "title": "zimr - WebGPU - audio stream synth",
-      "description": "push-based AudioStream -- mouse Y drives a live theremin",
+      "description": "a theremin: mouse Y sets the pitch of samples synthesized every frame and pushed to an AudioStream",
       "functions": []
     },
     {
@@ -45,7 +45,7 @@
       "module": "audio",
       "stars": 3,
       "title": "zimr - WebGPU - composer drum",
-      "description": "8-step kick/snare/hat loop built with composer.Sequence",
+      "description": "an 8-step kick, snare and hat loop baked into one looping sound by composer.Sequence, with a sweeping playhead",
       "functions": []
     },
     {
@@ -53,7 +53,7 @@
       "module": "audio",
       "stars": 3,
       "title": "zimr - WebGPU - music streaming",
-      "description": "load OGG -> play / pause / seek / volume / mute",
+      "description": "stream an OGG track: play, pause, tap the bar to seek, volume and mute",
       "functions": []
     },
     {
@@ -61,7 +61,7 @@
       "module": "compute",
       "stars": 2,
       "title": "zimr - WebGPU - comptime Mandelbrot",
-      "description": "the set evaluated at comptime, baked into the binary",
+      "description": "the Mandelbrot set computed by the Zig compiler and baked into the binary; at run time it only maps values to colours",
       "functions": []
     },
     {
@@ -69,7 +69,7 @@
       "module": "compute",
       "stars": 3,
       "title": "zimr - WebGPU - compute particles",
-      "description": "65536 particles whose kernel auto-flips between gpu dispatch and cpu loop with state carried across, rendered zero-copy",
+      "description": "65536 particles from one kernel that flips between GPU dispatch and a CPU loop without losing state, drawn straight from the GPU buffer",
       "functions": []
     },
     {
@@ -77,7 +77,7 @@
       "module": "compute",
       "stars": 1,
       "title": "zimr - WebGPU - compute smoke",
-      "description": "a gpu compute round-trip doubling an ascending array and drawing the result as bars, with a cpu self-check",
+      "description": "hello GPU compute: double an array on the GPU, read it back, draw it as bars and check it against the CPU",
       "functions": []
     },
     {
@@ -85,7 +85,7 @@
       "module": "compute",
       "stars": 3,
       "title": "zimr - WebGPU - 20k GPU fluid (sorted)",
-      "description": "a 20000-particle gpu clavet fluid using a counting-sort neighbour grid across eleven kernels, rendered zero-copy",
+      "description": "a 20000-particle viscoelastic fluid entirely on the GPU: eleven kernels with a counting-sort neighbour grid, drawn zero-copy",
       "functions": []
     },
     {
@@ -93,7 +93,7 @@
       "module": "compute",
       "stars": 3,
       "title": "zimr - one function, four machines",
-      "description": "runs one zig escape-fractal function four ways: comptime, cpu, worker and gpu, side by side",
+      "description": "one Zig escape-fractal function run four ways side by side: at compile time, on the main thread, on a worker and on the GPU",
       "functions": []
     },
     {
@@ -101,7 +101,7 @@
       "module": "compute",
       "stars": 2,
       "title": "zimr - WebGPU - langton ant",
-      "description": "a two-rule automaton building a highway",
+      "description": "Langton's ant turning chaos into a highway, its last turns drawn so the two rules read off the screen; pan, zoom, single-step",
       "functions": []
     },
     {
@@ -109,7 +109,7 @@
       "module": "compute",
       "stars": 3,
       "title": "zimr - jobs - a path tracer across the worker pool",
-      "description": "runs a path tracer across the worker pool with tiles popping in out of order as workers finish",
+      "description": "a path tracer split across the worker pool: tiles land out of order as workers finish, and the frame never stalls",
       "functions": []
     },
     {
@@ -117,7 +117,7 @@
       "module": "compute",
       "stars": 2,
       "title": "zimr - WebGPU - shared memory smoke",
-      "description": "diagnoses workgroup shared memory and barriers on device with three independent pass/fail checks",
+      "description": "device check: do workgroup shared memory and its barrier work on this GPU? three pass/fail tests, with the CPU as oracle",
       "functions": []
     },
     {
@@ -125,7 +125,7 @@
       "module": "compute",
       "stars": 2,
       "title": "zimr - WebGPU - counting sort smoke",
-      "description": "runs the fluid's five counting-sort kernels over 64 hand-checkable particles on both cpu and gpu and verifies each stage",
+      "description": "device check: the fluid's counting-sort kernels on 64 hand-checkable particles, on CPU and GPU, verified stage by stage",
       "functions": []
     },
     {
@@ -133,7 +133,7 @@
       "module": "compute",
       "stars": 3,
       "title": "zimr - WebGPU - SPH fluid 2D",
-      "description": "SPH fluid 2D",
+      "description": "CPU version of fluid_sort: the same particle-based viscoelastic fluid, about 2000 particles computed on the CPU",
       "functions": []
     },
     {
@@ -141,7 +141,7 @@
       "module": "compute",
       "stars": 2,
       "title": "zimr - WebGPU - tiling smoke",
-      "description": "de-risks shared-memory neighbour tiling by checking each particle's neighbour count against brute-force ground truth",
+      "description": "device check: shared-memory neighbour tiling, every particle's neighbour count compared with brute force",
       "functions": []
     },
     {
@@ -149,7 +149,7 @@
       "module": "compute",
       "stars": 2,
       "title": "zimr - jobs - PNG encode on a worker",
-      "description": "offloads a slow png encode to a worker so the frame never freezes while a dot keeps spinning",
+      "description": "a slow PNG encode moved to a worker: tap either button and watch whether the spinning dot freezes",
       "functions": []
     },
     {
@@ -157,7 +157,7 @@
       "module": "core",
       "stars": 1,
       "title": "zimr - WebGPU - basic",
-      "description": "minimal hello-world: pulse the background between two slate shades",
+      "description": "the WebGPU path end to end: a pulsing background and one textured triangle through raylib's rlBegin/rlVertex immediate API",
       "functions": [
         "f.clear",
         "f.clock.time",
@@ -181,7 +181,7 @@
       "module": "core",
       "stars": 2,
       "title": "zimr - WebGPU - camera2d",
-      "description": "pan / zoom / world-coords \u2014 drag to pan, wheel to zoom",
+      "description": "a 2D camera panning, zooming and turning over a world of landmarks: offset, target, zoom and rotation",
       "functions": [
         "f.clear",
         "z.App",
@@ -211,7 +211,15 @@
       "module": "core",
       "stars": 1,
       "title": "zimr - core - delta time",
-      "description": "moves a ball at constant real-world speed by scaling motion with frame delta time",
+      "description": "a ball moving at the same real speed at any frame rate, its step scaled by the frame's delta time",
+      "functions": []
+    },
+    {
+      "name": "profiler_flamegraph",
+      "module": "core",
+      "stars": 1,
+      "title": "zimr - profiler flamegraph",
+      "description": "the integrated profiler's flamegraph on pretend work: nested zones that spin, and a hitch once a second",
       "functions": []
     },
     {
@@ -219,7 +227,7 @@
       "module": "core",
       "stars": 3,
       "title": "zimr - WebGPU - ECS boids",
-      "description": "Reynolds steering + ImGui sliders + mouse repel/attract",
+      "description": "Reynolds flocking on the ECS: separation, alignment and cohesion on sliders, and the mouse repels or attracts",
       "functions": []
     },
     {
@@ -227,7 +235,7 @@
       "module": "core",
       "stars": 4,
       "title": "zimr - WebGPU - ECS solar system",
-      "description": "node tree, tags, CmdBuf -- sun/planets/moons/ships + orbits",
+      "description": "an ECS node tree with tags and a command buffer: a sun, planets, moons and ships on their orbits",
       "functions": []
     },
     {
@@ -235,7 +243,7 @@
       "module": "core",
       "stars": 2,
       "title": "zimr - WebGPU - fps playground",
-      "description": "first-person camera, capsule collision and a level to walk",
+      "description": "first-person physics: a capsule character walks, jumps and shoves a pile of cubes; click to lock the mouse",
       "functions": []
     },
     {
@@ -243,7 +251,7 @@
       "module": "core",
       "stars": 3,
       "title": "zimr - WebGPU - fractal tree",
-      "description": "fractal tree",
+      "description": "a recursive tree swaying in the wind, a ripple running up its branches to the blossoms",
       "functions": []
     },
     {
@@ -251,7 +259,7 @@
       "module": "core",
       "stars": 3,
       "title": "zimr - WebGPU - gallery (4 sub-apps)",
-      "description": "4 sub-apps with their own RNG / Logger / scratch arena",
+      "description": "hand-rolled version of gallery_all: four sub-apps in a 2x2 grid, each drawing into its own viewport",
       "functions": [
         "f.clear",
         "f.clock.frameTime",
@@ -284,7 +292,7 @@
       "module": "core",
       "stars": 3,
       "title": "zimr - WebGPU - multi-app gallery",
-      "description": "multi-app gallery",
+      "description": "four independent apps in a 2x2 grid under z.Launcher; tap a cell to restart that app and check it leaked nothing",
       "functions": []
     },
     {
@@ -292,7 +300,7 @@
       "module": "core",
       "stars": 2,
       "title": "zimr - WebGPU - gestures",
-      "description": "drag, pinch, hold -- name + data display, touch only",
+      "description": "simple version of gestures_testbed: the last gesture recognized (drag, pinch, hold) with its data; touch only",
       "functions": []
     },
     {
@@ -300,7 +308,7 @@
       "module": "core",
       "stars": 3,
       "title": "zimr - WebGPU - gestures testbed",
-      "description": "per-finger state + gesture FSM + transition log",
+      "description": "every finger's touch state, the gesture state machine and a log of its transitions; touch only",
       "functions": []
     },
     {
@@ -308,7 +316,7 @@
       "module": "core",
       "stars": 3,
       "title": "zimr - WebGPU - hello world",
-      "description": "hello world",
+      "description": "Hello, World! in the default font: the smallest app that draws text",
       "functions": []
     },
     {
@@ -316,7 +324,7 @@
       "module": "core",
       "stars": 2,
       "title": "zimr - WebGPU - input actions",
-      "description": "named actions bound to keys, pads and touch",
+      "description": "named actions bound to keys, pads and touch: the game asks whether UP is down and never reads a key itself",
       "functions": []
     },
     {
@@ -324,7 +332,7 @@
       "module": "core",
       "stars": 1,
       "title": "zimr - WebGPU - input keys",
-      "description": "minimal arrow-keys-move-ball demo (parallels existing keys.zig)",
+      "description": "simple version of keys: arrow keys move a ball - isKeyDown and nothing else",
       "functions": []
     },
     {
@@ -332,7 +340,7 @@
       "module": "core",
       "stars": 1,
       "title": "zimr - WebGPU - input mouse",
-      "description": "ball follows cursor; 7 mouse buttons each set a different color; H toggles cursor",
+      "description": "simple version of keys' mouse side: a ball follows the cursor, each of seven mouse buttons sets its colour, H hides the cursor",
       "functions": []
     },
     {
@@ -340,7 +348,7 @@
       "module": "core",
       "stars": 2,
       "title": "zimr - WebGPU - window requests",
-      "description": "buttons asking the platform for fullscreen, a screen kept awake, and a web page opened",
+      "description": "buttons that ask the platform for fullscreen, a screen kept awake, an opened web page, and clipboard copy and paste",
       "functions": []
     },
     {
@@ -348,7 +356,7 @@
       "module": "core",
       "stars": 2,
       "title": "zimr - WebGPU - input cursor shapes",
-      "description": "hover a tile to show its cursor shape, or hide the cursor; the window title names the shape",
+      "description": "hover a tile to switch the cursor to its shape, or hide it; the window title names the shape",
       "functions": []
     },
     {
@@ -356,7 +364,7 @@
       "module": "core",
       "stars": 2,
       "title": "zimr - WebGPU - input pointer lock",
-      "description": "click to lock the pointer and turn a view with the mouse; shows the lock, the pointer's presence, the window's focus and the mouse delta",
+      "description": "click to lock the pointer and turn a view by mouse motion alone; shows the lock, the focus and the raw delta",
       "functions": []
     },
     {
@@ -364,7 +372,7 @@
       "module": "core",
       "stars": 1,
       "title": "zimr - WebGPU - mouse wheel",
-      "description": "wheel scrolls a box; smallest possible getMouseWheelMove demo",
+      "description": "simple version of keys' mouse side: the wheel moves a box - getMouseWheelMove alone",
       "functions": []
     },
     {
@@ -372,7 +380,7 @@
       "module": "core",
       "stars": 1,
       "title": "zimr - WebGPU - input multitouch",
-      "description": "one orange circle per finger with the slot index above it",
+      "description": "simple version of touch_paint: one circle per finger, labelled with its touch slot",
       "functions": []
     },
     {
@@ -380,7 +388,7 @@
       "module": "core",
       "stars": 2,
       "title": "zimr - WebGPU - input virtual controls",
-      "description": "on-screen D-pad drives a player ball; touch or mouse-hold",
+      "description": "simple version of input_actions' pad: an on-screen D-pad drives a ball by touch or mouse",
       "functions": []
     },
     {
@@ -388,7 +396,7 @@
       "module": "core",
       "stars": 1,
       "title": "zimr - WebGPU - keys",
-      "description": "WASD/arrows move a square (shift=fast), SPACE toggles bg, mouse crosshair + click splats",
+      "description": "WASD or arrows move a square (Shift is fast), Space toggles the background, the mouse aims a crosshair and clicks splat",
       "functions": [
         "f.clear",
         "f.clock.fps",
@@ -414,7 +422,7 @@
       "module": "core",
       "stars": 3,
       "title": "zimr - launcher",
-      "description": "the flagship multi-app switcher: 25 full examples lazily booted, one shown fullscreen, cycled by a tap pill",
+      "description": "the flagship examples in one page: each boots when you first reach it, fullscreen, switched with the pill at the bottom",
       "functions": []
     },
     {
@@ -422,7 +430,7 @@
       "module": "core",
       "stars": 1,
       "title": "zimr - WebGPU - life",
-      "description": "200\u00d7200 grid stepped each frame, click to seed",
+      "description": "Conway's Game of Life on a 200x200 grid: paint cells, pause, clear, randomize, set the speed",
       "functions": [
         "f.clear",
         "f.clock.time",
@@ -449,7 +457,7 @@
       "module": "core",
       "stars": 2,
       "title": "zimr - shared cursors",
-      "description": "peer cursors over WebRTC, no server in the loop",
+      "description": "everyone in the room sees everyone's cursor and click ripples, peer to peer over WebRTC",
       "functions": []
     },
     {
@@ -457,7 +465,7 @@
       "module": "core",
       "stars": 1,
       "title": "zimr - p2p webrtc",
-      "description": "the WebRTC data channel on its own",
+      "description": "the WebRTC layer under net_cursors: two tabs open one data channel by hand",
       "functions": []
     },
     {
@@ -465,7 +473,7 @@
       "module": "core",
       "stars": 1,
       "title": "zimr - p2p signaling (ws)",
-      "description": "the signaling handshake on its own",
+      "description": "the signaling layer under net_cursors: join a room and watch WELCOME, JOINED, LEFT and FROM arrive",
       "functions": []
     },
     {
@@ -473,7 +481,7 @@
       "module": "core",
       "stars": 3,
       "title": "zimr - WebGPU - particles + real ImGui",
-      "description": "3000-particle fountain with per-particle gravity + lifetime",
+      "description": "a CPU particle fountain with an ImGui panel for rate, gravity and size; drag to move the emitter",
       "functions": [
         "f.clear",
         "f.clock.frameTime",
@@ -494,7 +502,7 @@
       "module": "core",
       "stars": 1,
       "title": "zimr - core - random sequence",
-      "description": "fisher-yates shuffles a non-repeating integer sequence drawn as a rainbow bar chart, space reshuffles",
+      "description": "a shuffled sequence with no repeats (Fisher-Yates) drawn as a rainbow bar chart; Space reshuffles",
       "functions": []
     },
     {
@@ -502,7 +510,7 @@
       "module": "core",
       "stars": 1,
       "title": "zimr - core - generate random values",
-      "description": "generates a fresh ranged pseudo-random integer every two seconds from a state-owned prng",
+      "description": "simple version of random_sequence: a fresh random integer every two seconds, from a generator the app owns",
       "functions": []
     },
     {
@@ -510,7 +518,7 @@
       "module": "core",
       "stars": 5,
       "title": "zimr - ray tracer (CPU)",
-      "description": "CPU path tracer with live camera + ECS-stored scene + ImGui params",
+      "description": "a CPU path tracer with a live camera: glass, metal and matte spheres, an ImGui panel, and an image that converges while you hold still",
       "functions": []
     },
     {
@@ -518,7 +526,7 @@
       "module": "core",
       "stars": 2,
       "title": "zimr - core - scissor test",
-      "description": "clips a red fill and text to a finger-dragged box using the gpu hardware scissor rectangle",
+      "description": "a red fill and a line of text clipped by the GPU scissor to a box you drag",
       "functions": []
     },
     {
@@ -526,7 +534,7 @@
       "module": "core",
       "stars": 2,
       "title": "zimr - core - smooth pixel-perfect",
-      "description": "renders pixel-art at low-res into a render texture and scales up with smooth sub-pixel scrolling",
+      "description": "sibling of viewport_scaling: pixel art drawn at 320x180 and scaled up, scrolling smoothly by sub-pixels yet staying crisp",
       "functions": []
     },
     {
@@ -534,7 +542,7 @@
       "module": "core",
       "stars": 1,
       "title": "zimr - WebGPU - snake",
-      "description": "the game, in about a screen of code",
+      "description": "the classic: arrows, WASD or swipes; every dot eaten adds a segment and a little speed",
       "functions": []
     },
     {
@@ -542,7 +550,7 @@
       "module": "core",
       "stars": 3,
       "title": "zimr - WebGPU - split screen: two cameras, one world",
-      "description": "Two cameras rendering the same scene side-by-side via render-to-texture",
+      "description": "two players, one world: two cameras, each rendered into its own texture and tinted by the fog zone it is in - local split screen",
       "functions": [
         "f.gl",
         "f.time.current",
@@ -600,7 +608,7 @@
       "module": "core",
       "stars": 3,
       "title": "zimr - WebGPU - starfield",
-      "description": "starfield",
+      "description": "simple version of starfield_effect: stars streaming out of the centre at warp speed as motion streaks",
       "functions": []
     },
     {
@@ -608,7 +616,7 @@
       "module": "core",
       "stars": 2,
       "title": "zimr - state persistence",
-      "description": "state surviving reload, stored browser-side",
+      "description": "tweak a colour and some sliders, press Save, reload: a plain struct, serialized and stored by the platform, comes back",
       "functions": []
     },
     {
@@ -616,7 +624,7 @@
       "module": "core",
       "stars": 1,
       "title": "zimr - WebGPU - tic tac toe",
-      "description": "the game, with a perfect opponent",
+      "description": "two players share the screen; the board, X and O are drawn with nothing but 2D shapes",
       "functions": []
     },
     {
@@ -624,7 +632,7 @@
       "module": "core",
       "stars": 2,
       "title": "zimr - WebGPU - touch paint",
-      "description": "multi-touch finger painting -- color per touch ID",
+      "description": "multi-touch finger painting, one colour per finger",
       "functions": []
     },
     {
@@ -632,7 +640,7 @@
       "module": "core",
       "stars": 5,
       "title": "zimr - ui_clipper (Phase A2: 100k-row virtualization)",
-      "description": "ImGuiListClipper port: virtualized rendering of a 100,000-row log at O(visible) per frame. Toggle clipper on/off to see frame time spike from rendering all 100k rows naively. Demonstrates Phase A2 of the imgui-parity arc.",
+      "description": "sibling of ui_log_viewer: a 100,000-row log drawn at the cost of the visible rows; turn the clipper off to feel the difference",
       "functions": []
     },
     {
@@ -640,7 +648,7 @@
       "module": "core",
       "stars": 4,
       "title": "zimr - WebGPU - code editor",
-      "description": "inputTextMultiline + pushFont/popFont: a tiny code editor with Enter-inserts-newline, Up/Down line nav, click-to-place-cursor, line-number gutter, font-size push for the title. Demonstrates Phase A3 of the imgui-parity arc.",
+      "description": "simple version of ui_text_editing's multi-line field: a tiny code editor with a line-number gutter",
       "functions": []
     },
     {
@@ -648,7 +656,7 @@
       "module": "core",
       "stars": 4,
       "title": "zimr - WebGPU - UI color picker",
-      "description": "colorPicker block widget \u00e2\u20ac\u201d bar and wheel hue layouts, with/without alpha, size-tweakable",
+      "description": "the colour picker widget: bar and wheel layouts, with or without alpha, at any size",
       "functions": []
     },
     {
@@ -656,7 +664,7 @@
       "module": "core",
       "stars": 4,
       "title": "zimr - WebGPU - UI combo",
-      "description": "Custom-content combo dropdowns. Caller fills the popup with arbitrary widgets \u00e2\u20ac\u201d selectables + colored descriptions in the graphics-preset combo, theme picker selectables in the color-theme combo. Opening one combo closes the other (single-slot semantics, matches imgui). Demonstrates Phase B3c, closing imgui-parity Phase B.",
+      "description": "dropdowns filled with any widgets: presets with swatches and descriptions, and a colour-theme picker",
       "functions": []
     },
     {
@@ -664,7 +672,7 @@
       "module": "core",
       "stars": 4,
       "title": "zimr - UI custom rendering",
-      "description": "DrawList primitive gallery: line, polyline, triangle, circle, ngon, bezier, ellipse, gradient",
+      "description": "focused version of ui_full_showcase's Drawing tab: every draw-list primitive inside a window, driven by sliders",
       "functions": []
     },
     {
@@ -672,7 +680,7 @@
       "module": "core",
       "stars": 5,
       "title": "zimr - UI drag-drop demo",
-      "description": "Kanban-style lanes; drag build chips between Backlog / Queued / Running / Passed / Failed",
+      "description": "drag build chips between lanes (Backlog, Queued, Running, Passed, Failed): source, target, preview and drop highlight",
       "functions": []
     },
     {
@@ -680,7 +688,7 @@
       "module": "core",
       "stars": 3,
       "title": "zimr - DragDropFlags + ItemFlags tour",
-      "description": "ItemFlags.disabled, ItemFlags.button_repeat, DragDropFlags target variants (default ring, no ring + draw-as-hovered, peek-before-delivery)",
+      "description": "sibling of ui_drag_drop_demo: disabled items, auto-repeat buttons, and three ways a drop target can react",
       "functions": []
     },
     {
@@ -688,7 +696,7 @@
       "module": "core",
       "stars": 3,
       "title": "zimr - UI drag-drop source",
-      "description": "beginDragDropSource + setDragDropPayload + endDragDropSource; preview tooltip follows the cursor",
+      "description": "simple version of ui_drag_drop_demo: the drag source alone - the preview follows the cursor, nothing receives it",
       "functions": []
     },
     {
@@ -696,7 +704,7 @@
       "module": "core",
       "stars": 4,
       "title": "zimr - WebGPU - UI drawlists",
-      "description": "getBackgroundDrawList + getForegroundDrawList: CAD-style grid on the background DL (under all windows), corner watermark + crosshair on the foreground DL (above all windows), control window in between sliders the grid + toggles the watermark. Drag the window across the grid to see the three-layer stacking. Demonstrates Phase B3a of the imgui-parity arc.",
+      "description": "the background and foreground draw lists: a grid under every window, a watermark above them all",
       "functions": []
     },
     {
@@ -704,7 +712,7 @@
       "module": "core",
       "stars": 5,
       "title": "zimr - UI full showcase",
-      "description": "Single-file tab-navigable doc covering every widget, table feature, plot, drag-drop pattern, and polish helper from Phases 0-3 (~2000 LOC)",
+      "description": "the UI tour: every widget, table feature, plot, draw-list primitive and drag-and-drop pattern, one tab each",
       "functions": []
     },
     {
@@ -712,7 +720,7 @@
       "module": "core",
       "stars": 3,
       "title": "zimr - UI imgui extras",
-      "description": "inputTextWithHint, sliderAngle, beginItemTooltip, calcTextSize, setKeyboardFocusHere \u00e2\u20ac\u201d small but high-value imgui parity helpers",
+      "description": "small helpers: hint text in empty fields, a slider in degrees, hover tooltips, text measuring, keyboard focus on demand",
       "functions": []
     },
     {
@@ -720,7 +728,7 @@
       "module": "core",
       "stars": 4,
       "title": "zimr - ui_input_callbacks (Phase A4)",
-      "description": "InputTextCallbackData: four widgets demonstrating CharFilter (decimal-only), Edit (password mask), Completion (Tab autocomplete), History (Up/Down command scroll). Demonstrates Phase A4 of the imgui-parity arc.",
+      "description": "input fields with callbacks: digits only, a masked password, Tab completion and Up/Down command history",
       "functions": []
     },
     {
@@ -728,7 +736,7 @@
       "module": "core",
       "stars": 3,
       "title": "zimr - UI text editing",
-      "description": "text fields edited as in a text editor: selection by keyboard and mouse, word moves, cut, copy, undo by words, Escape, scrolling, filters, and fields of several lines",
+      "description": "text fields that edit like an editor: selection, word moves, clipboard, undo, scrolling, filters, several lines, IME",
       "functions": []
     },
     {
@@ -736,7 +744,7 @@
       "module": "core",
       "stars": 2,
       "title": "zimr - gamepads",
-      "description": "the gamepads in each slot: buttons lit while held, sticks, triggers; the south button rumbles the pad",
+      "description": "every gamepad slot: buttons light while held, sticks and triggers move; the south button rumbles the pad",
       "functions": ["isGamepadAvailable", "isGamepadButtonDown", "getGamepadAxisMovement", "setGamepadVibration"]
     },
     {
@@ -744,7 +752,7 @@
       "module": "core",
       "stars": 2,
       "title": "zimr - monitors",
-      "description": "the monitors the platform reports: each one's name, position, size, scale and refresh rate; the primary, and the one holding the window",
+      "description": "the monitors the platform reports - name, position, size, scale and refresh rate - with the window's own monitor highlighted",
       "functions": ["monitorCount", "monitor", "currentMonitor"]
     },
     {
@@ -752,7 +760,7 @@
       "module": "core",
       "stars": 4,
       "title": "zimr - WebGPU - log viewer",
-      "description": "Auto-scroll-to-bottom log viewer demonstrating the imgui-parity Phase A1 window scroll API (getScrollY/setScrollY/setScrollHereY/getScrollMaxY) + clipboard write (setClipboardText). 500 lines, jump-to-top/bottom buttons, copy-all-to-clipboard.",
+      "description": "a log viewer that follows new lines, jumps to the top or bottom and copies everything to the clipboard",
       "functions": []
     },
     {
@@ -760,7 +768,7 @@
       "module": "core",
       "stars": 4,
       "title": "zimr - ui mouse drag (B1 capstone)",
-      "description": "setMouseCursor / getMouseCursor / isMouseDragging / getMouseDragDelta / resetMouseDragDelta / isMouseHoveringRect \u00e2\u20ac\u201d six cursor zones with hover-brighten highlight; draggable orange square via consumed drag delta. Demonstrates Phase B1 of the imgui-parity arc.",
+      "description": "hover zones that change the mouse cursor, and a square you drag by consuming the drag delta",
       "functions": []
     },
     {
@@ -768,7 +776,7 @@
       "module": "core",
       "stars": 4,
       "title": "zimr - WebGPU - UI plotting",
-      "description": "plotLines + plotHistogram sparklines (live fps, animated sine, editable bins) plus beginTooltip block API demo",
+      "description": "focused version of ui_full_showcase's Plots tab: line and histogram sparklines with hover readouts, and a rich tooltip",
       "functions": []
     },
     {
@@ -776,7 +784,7 @@
       "module": "core",
       "stars": 3,
       "title": "zimr - UI polish",
-      "description": "pushStyle/popStyle (reflection-based), setCursorPos/getCursorPos, labelText, textDisabled",
+      "description": "focused version of ui_full_showcase's Polish tab: temporary style overrides, exact cursor placement, label/value rows, dimmed text",
       "functions": []
     },
     {
@@ -784,7 +792,7 @@
       "module": "core",
       "stars": 4,
       "title": "zimr - ui shortcuts (B2 capstone)",
-      "description": "Ui.shortcut + KeyChord: seven chord rows (Ctrl+S, Ctrl+Z, Ctrl+Shift+Z, Esc, Space, Up/Down with auto-repeat) each tied to wired app state (dirty bit, undo depth, counter). Demonstrates Phase B2 of the imgui-parity arc; modifier strictness, edge-trigger, and opts.repeat all observable.",
+      "description": "keyboard shortcuts: Ctrl+S, Ctrl+Z, Ctrl+Shift+Z, Esc and auto-repeating arrows, each wired to visible state",
       "functions": []
     },
     {
@@ -792,7 +800,7 @@
       "module": "core",
       "stars": 3,
       "title": "zimr - WebGPU - UI TabBar tour",
-      "description": "Tab-bar demo: closeable + middle-click, leading/trailing pinning, unsaved-document asterisk, force-select, overline",
+      "description": "tab bars: closeable tabs, pinned tabs, unsaved markers, forced selection",
       "functions": []
     },
     {
@@ -800,7 +808,7 @@
       "module": "core",
       "stars": 4,
       "title": "zimr - WebGPU - UI tables basic",
-      "description": "beginTable / tableSetupColumn / tableNextRow / tableNextColumn; stretch + fixed sizing, optional borders",
+      "description": "simple version of ui_tables_demo: a four-column scoreboard; click a header to sort, Shift-click for a tie-breaker",
       "functions": []
     },
     {
@@ -808,7 +816,7 @@
       "module": "core",
       "stars": 5,
       "title": "zimr - UI tables demo",
-      "description": "CI build dashboard combining every table feature: layout + sort + scroll + alternating tints + per-row highlight",
+      "description": "a CI build dashboard using every table feature: fixed and stretch columns, multi-key sort, scrolling, row tints",
       "functions": []
     },
     {
@@ -816,7 +824,7 @@
       "module": "core",
       "stars": 4,
       "title": "zimr - UI tables scroll",
-      "description": "200-row scoreboard inside a fixed-height table; sticky header + wheel scroll + click-to-sort",
+      "description": "simple version of ui_tables_demo: 200 sortable rows scrolling under a sticky header",
       "functions": []
     },
     {
@@ -824,7 +832,7 @@
       "module": "core",
       "stars": 4,
       "title": "zimr - WebGPU - input data types",
-      "description": "slider / drag / input over scalar and *[2/3/4]T arrays; arrow + small buttons; collapsing headers",
+      "description": "focused version of ui_full_showcase's Widgets tab: slider, drag and input over numbers and 2-, 3- and 4-component vectors",
       "functions": []
     },
     {
@@ -832,7 +840,7 @@
       "module": "core",
       "stars": 4,
       "title": "zimr - WebGPU - per-window menu bar",
-      "description": "beginMenuBar/endMenuBar: three windows each with their own menu bar (Document: File/Edit/View, Properties: Tools, Settings: Help/About). Help \u00e2\u2020\u2019 About toggles a foreground overlay (B3a). Bottom status bar shows the most recent menu action. Drag any window \u00e2\u20ac\u201d bar drags with it. Demonstrates Phase B3b of the imgui-parity arc.",
+      "description": "three windows, each with its own menu bar; Help > About opens an overlay, and a status bar shows the last action",
       "functions": []
     },
     {
@@ -840,7 +848,7 @@
       "module": "core",
       "stars": 2,
       "title": "zimr - core - undo / redo",
-      "description": "snapshot-based undo and redo over an edited string driven by buttons or keyboard",
+      "description": "edit a string with word buttons or the keyboard, then undo and redo through its snapshots",
       "functions": []
     },
     {
@@ -848,7 +856,7 @@
       "module": "core",
       "stars": 2,
       "title": "zimr - core - viewport scaling (letterbox)",
-      "description": "renders at a fixed virtual resolution then letterboxes it into any window preserving aspect ratio",
+      "description": "render at a fixed 640x360, letterbox it into any window, and map the mouse back into the small picture",
       "functions": []
     },
     {
@@ -856,7 +864,7 @@
       "module": "models",
       "stars": 3,
       "title": "zimr - WebGPU - 3D probe",
-      "description": "3D probe",
+      "description": "simple version of models3d: a few 3D primitives on a lit plane, orbited by dragging",
       "functions": []
     },
     {
@@ -864,7 +872,7 @@
       "module": "models",
       "stars": 3,
       "title": "zimr - WebGPU - billboards",
-      "description": "drawBillboard / Rec / Pro \u2014 camera-facing textured quads",
+      "description": "simple version of directional_billboard: glowing sprites that always face the camera, among solid cubes",
       "functions": [
         "f.clear",
         "f.clock.frameTime",
@@ -891,7 +899,7 @@
       "module": "models",
       "stars": 3,
       "title": "zimr - WebGPU - bone socket (rigged character)",
-      "description": "attach a prop to a moving bone, in the bone's own frame",
+      "description": "a rigged glTF character plays its animation, a sword socketed to its hand bone swinging with it",
       "functions": []
     },
     {
@@ -899,7 +907,7 @@
       "module": "models",
       "stars": 2,
       "title": "zimr - WebGPU - box collisions (drag the player)",
-      "description": "drag a player box that flashes red when its aabb overlaps an enemy cube or sphere",
+      "description": "drag a player box around an arena; it turns red when it overlaps the enemy cube or sphere",
       "functions": []
     },
     {
@@ -907,7 +915,7 @@
       "module": "models",
       "stars": 2,
       "title": "zimr - WebGPU - camera controls",
-      "description": "demos the shared orbit camera doing orbit, pan and zoom on mouse and touch over a cube scene",
+      "description": "the shared orbit camera: orbit, pan and zoom with mouse or touch - how every 3D example takes input",
       "functions": []
     },
     {
@@ -915,7 +923,7 @@
       "module": "models",
       "stars": 3,
       "title": "zimr - WebGPU - cel shading + inverted-hull ink",
-      "description": "toon-shades a bunny with lambert snapped to flat bands plus an inverted-hull silhouette ink outline",
+      "description": "a toon-shaded bunny: lighting snapped to flat bands, plus an ink outline from an inverted hull",
       "functions": []
     },
     {
@@ -923,7 +931,7 @@
       "module": "models",
       "stars": 3,
       "title": "zimr - WebGPU - 3D cube",
-      "description": "rotating 3D cube with reference grid",
+      "description": "simple version of models3d: one spinning cube, solid and wireframe, over a grid",
       "functions": [
         "f.clear",
         "f.clock.frameTime",
@@ -950,7 +958,7 @@
       "module": "models",
       "stars": 2,
       "title": "zimr \u00b7 WebGPU \u00b7 3D depth-tested cube",
-      "description": "a textured spinning cube, depth-tested, the first 3d demo through the webgpu backend",
+      "description": "simple version of lambert_demo: a textured spinning cube drawn by hand on one uniform buffer",
       "functions": []
     },
     {
@@ -958,7 +966,7 @@
       "module": "models",
       "stars": 2,
       "title": "zimr - WebGPU - cubicmap maze",
-      "description": "turns a pixel map into a hollow cube-walled maze mesh, face-shaded so the layout reads without textures",
+      "description": "sibling of first_person_maze: a pixel map turned into a hollow cube-walled maze, orbited from above",
       "functions": []
     },
     {
@@ -966,7 +974,7 @@
       "module": "models",
       "stars": 3,
       "title": "zimr - WebGPU - damaged helmet",
-      "description": "the khronos damaged helmet gltf rendered with real base-color, metallic-roughness, normal, occlusion and emissive maps",
+      "description": "the Khronos Damaged Helmet with full PBR materials; drag to orbit, pinch or wheel to zoom",
       "functions": []
     },
     {
@@ -974,7 +982,7 @@
       "module": "models",
       "stars": 3,
       "title": "zimr - WebGPU - decals",
-      "description": "click a surface to shader-project a textured decal that wraps around curvature with no mesh clipping",
+      "description": "tap the sphere or the bunny to project a decal that wraps around its curves, the way games do bullet holes",
       "functions": []
     },
     {
@@ -982,7 +990,7 @@
       "module": "models",
       "stars": 3,
       "title": "zimr - WebGPU - deferred rendering (MRT G-buffer)",
-      "description": "deferred shading: an mrt pass fills position, normal and albedo maps, then a fullscreen pass lights four point lights",
+      "description": "deferred shading: one pass writes position, normal and colour maps, a second lights four point lights per pixel",
       "functions": []
     },
     {
@@ -990,7 +998,7 @@
       "module": "models",
       "stars": 2,
       "title": "zimr - WebGPU - depth cue",
-      "description": "shades a field of cubes grayscale by per-object camera distance under a slowly orbiting camera",
+      "description": "simple version of depth_rendering: cubes shaded grey by their distance from the camera, one shade per cube",
       "functions": []
     },
     {
@@ -998,7 +1006,7 @@
       "module": "models",
       "stars": 2,
       "title": "zimr - WebGPU - depth rendering",
-      "description": "renders a depth-tested scene writing each fragment's normalized device depth straight into the color buffer",
+      "description": "a 3D scene drawn as its depth: every pixel's depth shown as grey, near dark and far light",
       "functions": []
     },
     {
@@ -1006,7 +1014,7 @@
       "module": "models",
       "stars": 2,
       "title": "zimr - WebGPU - fragment depth writing",
-      "description": "a material lies to the depth buffer so cubes pop in front or sink behind against their real positions",
+      "description": "a material lies to the depth buffer, so cubes pop in front of or sink behind their real positions; toggle the lie",
       "functions": []
     },
     {
@@ -1014,7 +1022,7 @@
       "module": "models",
       "stars": 2,
       "title": "zimr - WebGPU - directional billboard",
-      "description": "an 8-direction sprite billboard picking its atlas frame from the camera angle, doom-style, plus a walk cycle",
+      "description": "a Doom-style sprite that faces the camera, picks one of eight views by the camera's angle, and walks",
       "functions": []
     },
     {
@@ -1022,7 +1030,7 @@
       "module": "models",
       "stars": 3,
       "title": "zimr - WebGPU - dynamic mesh",
-      "description": "updateMeshBuffer each frame -- wobbly quad with breathing corners",
+      "description": "sibling of mesh_builder: a quad whose corners breathe as its vertex buffer is rewritten every frame",
       "functions": []
     },
     {
@@ -1030,7 +1038,7 @@
       "module": "models",
       "stars": 4,
       "title": "zimr - WebGPU - first-person camera",
-      "description": "WASD + mouse look (pointer-lock) FPS-style camera",
+      "description": "simple version of fps_playground's camera: WASD and mouse look over blocky terrain; click to lock the mouse",
       "functions": [
         "f.clear",
         "f.clock",
@@ -1065,7 +1073,7 @@
       "module": "models",
       "stars": 2,
       "title": "zimr - WebGPU - first person maze",
-      "description": "walk a cubicmap maze in first person, sliding along walls via collision-circle checks against wall cells",
+      "description": "walk a generated maze in first person, sliding along its walls",
       "functions": []
     },
     {
@@ -1073,7 +1081,7 @@
       "module": "models",
       "stars": 2,
       "title": "zimr - WebGPU - distance fog (shared gbuffer_vs)",
-      "description": "a row of toruses dissolving into exponential-squared distance fog with a slider, reusing the gbuffer vertex stage",
+      "description": "a row of tori fading into distance fog, with a density slider",
       "functions": []
     },
     {
@@ -1081,7 +1089,7 @@
       "module": "models",
       "stars": 2,
       "title": "zimr - WebGPU - glTF simple",
-      "description": "parses an embedded binary gltf cube with positions only and draws it lit and auto-rotating",
+      "description": "loader sibling of obj_bunny: a glTF cube with positions only, its normals made up at load",
       "functions": []
     },
     {
@@ -1089,7 +1097,7 @@
       "module": "models",
       "stars": 2,
       "title": "zimr - WebGPU - textured glTF quad",
-      "description": "a textured gltf quad rotating in 3d, exercising the png and flat-normal-synthesis material paths",
+      "description": "loader sibling of obj_bunny: a textured glTF quad spinning in 3D",
       "functions": []
     },
     {
@@ -1097,7 +1105,7 @@
       "module": "models",
       "stars": 2,
       "title": "zimr - WebGPU - heightmap terrain",
-      "description": "turns a perlin-noise image into a height-banded terrain mesh that colors itself water to snow, regen button",
+      "description": "a noise image turned into terrain coloured from water to snow by height; regenerate for a new landscape",
       "functions": []
     },
     {
@@ -1105,7 +1113,7 @@
       "module": "models",
       "stars": 3,
       "title": "zimr - WebGPU - one PBR shader: CPU | GPU",
-      "description": "one PBR shader: CPU | GPU",
+      "description": "one PBR shader run three ways on the Damaged Helmet: the CPU rasterizer, the GPU, and baked at compile time",
       "functions": []
     },
     {
@@ -1113,7 +1121,7 @@
       "module": "models",
       "stars": 3,
       "title": "zimr - WebGPU - hybrid raster + raymarch (shared depth)",
-      "description": "a raymarched sdf metaball scene and rasterized cubes sharing one depth buffer via fragment depth writes",
+      "description": "raymarched metaballs and ordinary cubes sharing one depth buffer, so each passes in front of and behind the other",
       "functions": []
     },
     {
@@ -1121,7 +1129,7 @@
       "module": "models",
       "stars": 4,
       "title": "zimr - WebGPU - instancing",
-      "description": "1000 cubes in one drawElementsInstanced call",
+      "description": "1000 spinning cubes drawn by a single instanced draw call",
       "functions": [
         "f.clear",
         "f.clock.fps",
@@ -1147,7 +1155,7 @@
       "module": "models",
       "stars": 2,
       "title": "zimr \u00b7 WebGPU \u00b7 Lambert-lit cube",
-      "description": "a lambert-lit textured cube binding vertex uniforms, a sampler and a fragment uniform across three groups",
+      "description": "a lit textured cube wired by hand: vertex uniforms, a sampler and fragment uniforms in three bind groups",
       "functions": []
     },
     {
@@ -1155,7 +1163,7 @@
       "module": "models",
       "stars": 3,
       "title": "zimr - WebGPU - mesh picking (tap to pick)",
-      "description": "tap to cast a world ray tested against a quad, box, sphere and a live rotating torus mesh, closest hit wins",
+      "description": "tap to cast a ray: it is tested against a quad, a box, a sphere and a spinning torus mesh, and the closest hit lights up",
       "functions": []
     },
     {
@@ -1163,7 +1171,7 @@
       "module": "models",
       "stars": 3,
       "title": "zimr - mocap viewer",
-      "description": "load a BVH capture and scrub its skeleton",
+      "description": "open BVH or FBX motion captures, play and scrub them, and compare several skeletons at once",
       "functions": []
     },
     {
@@ -1171,7 +1179,7 @@
       "module": "models",
       "stars": 3,
       "title": "zimr - WebGPU - 3D primitives",
-      "description": "every 3D primitive: sphere, cube, cylinder, capsule, cone",
+      "description": "every immediate-mode 3D primitive - sphere, cube, cylinder, capsule, cone - each in its bounding box",
       "functions": [
         "f.clear",
         "f.clock.frameTime",
@@ -1201,7 +1209,7 @@
       "module": "models",
       "stars": 3,
       "title": "zimr - WebGPU - animation blend (per-bone)",
-      "description": "per-bone blend weights between two clips",
+      "description": "sibling of bone_socket: two animations blended per bone - the upper body attacks while the legs keep walking",
       "functions": []
     },
     {
@@ -1209,7 +1217,7 @@
       "module": "models",
       "stars": 2,
       "title": "zimr - models - geometric shapes",
-      "description": "a spinnable 3d gallery of procedurally generated primitives with solid, wireframe and both toggles",
+      "description": "every procedural mesh generator in a grid you can spin, drawn solid, wireframe or both",
       "functions": []
     },
     {
@@ -1217,7 +1225,7 @@
       "module": "models",
       "stars": 2,
       "title": "zimr - WebGPU - OBJ bunny",
-      "description": "loads the 69k-triangle stanford bunny obj, stress-testing smooth-normal synthesis and de-indexing, lit and turning",
+      "description": "the 69k-triangle Stanford bunny loaded from OBJ, its smooth normals computed at load",
       "functions": []
     },
     {
@@ -1225,7 +1233,7 @@
       "module": "models",
       "stars": 2,
       "title": "zimr - WebGPU - OBJ simple",
-      "description": "loads a wavefront obj cube through the obj codec, exercising quad triangulation and normal indices, lit and rotating",
+      "description": "loader sibling of obj_bunny: an OBJ cube with quad faces, texture coordinates and normals",
       "functions": []
     },
     {
@@ -1233,7 +1241,7 @@
       "module": "models",
       "stars": 2,
       "title": "zimr - WebGPU - orthographic projection",
-      "description": "draws one primitive scene twice, toggling the camera between perspective and orthographic projection",
+      "description": "one scene, the camera toggled between perspective and orthographic projection",
       "functions": []
     },
     {
@@ -1241,7 +1249,7 @@
       "module": "models",
       "stars": 3,
       "title": "zimr \u00b7 WebGPU \u00b7 PBR-lit cube",
-      "description": "the damaged helmet rendered with full pbr materials through the reusable pbr3d renderer",
+      "description": "simple version of damaged_helmet: the same helmet and PBR renderer, turning on its own",
       "functions": []
     },
     {
@@ -1249,7 +1257,7 @@
       "module": "models",
       "stars": 2,
       "title": "zimr - WebGPU - point rendering (1k to 1M points)",
-      "description": "renders a random spherical point cloud of rainbow-shelled points as a single point-list draw",
+      "description": "a spherical cloud of rainbow-shelled points in one draw; step the count up to a million",
       "functions": []
     },
     {
@@ -1257,7 +1265,7 @@
       "module": "models",
       "stars": 3,
       "title": "zimr - WebGPU - shadow map",
-      "description": "full two-pass shadow mapping: a directional light casts real shadows on a floor, boxes and a bunny",
+      "description": "a directional light casting real shadows over a floor, boxes and a bunny, by classic two-pass shadow mapping",
       "functions": []
     },
     {
@@ -1265,7 +1273,7 @@
       "module": "models",
       "stars": 4,
       "title": "zimr - WebGPU - skinned mesh (CPU skinning)",
-      "description": "GPU skinning -- bone VBO + boneMatrices uniform + crossfade",
+      "description": "simple version of bone_socket: a two-bone quad waving, skinned on the CPU from a tiny embedded glTF",
       "functions": []
     },
     {
@@ -1273,7 +1281,7 @@
       "module": "models",
       "stars": 3,
       "title": "zimr - WebGPU - skybox",
-      "description": "procedural 6-face cubemap + drawSkybox, orbiting camera",
+      "description": "a gradient sky behind a few 3D objects, its horizon staying level as the camera turns",
       "functions": [
         "f.clear",
         "f.clock.fps",
@@ -1301,7 +1309,7 @@
       "module": "models",
       "stars": 3,
       "title": "zimr - WebGPU - tesseract view",
-      "description": "a 4d hypercube spinning through the xw plane, projected from 4d to 3d as vertices and edges",
+      "description": "a four-dimensional hypercube turning through its fourth axis, projected into 3D",
       "functions": []
     },
     {
@@ -1309,7 +1317,7 @@
       "module": "models",
       "stars": 3,
       "title": "zimr - WebGPU - textured cube",
-      "description": "textured cube",
+      "description": "the smallest textured 3D draw: a checker-textured cube over a grid",
       "functions": []
     },
     {
@@ -1317,7 +1325,7 @@
       "module": "models",
       "stars": 2,
       "title": "zimr - WebGPU - basic voxel (tap to break)",
-      "description": "an 8x8x8 cube field where a tap casts a ray to break the closest voxel minecraft-style",
+      "description": "an 8x8x8 block of cubes: tap to break the one under the crosshair, Minecraft-style",
       "functions": []
     },
     {
@@ -1325,7 +1333,7 @@
       "module": "models",
       "stars": 2,
       "title": "zimr - WebGPU - waving cubes",
-      "description": "a 15x15x15 grid of rainbow cubes rippling on sine waves, orbited by the phone camera",
+      "description": "a 15x15x15 grid of rainbow cubes rippling on sine waves",
       "functions": []
     },
     {
@@ -1333,7 +1341,7 @@
       "module": "models",
       "stars": 3,
       "title": "zimr - WebGPU - wireframe",
-      "description": "drawModelWires on sphere + cube \u2014 TAB to toggle solid/wires",
+      "description": "simple version of models_geometric_shapes' wire toggle: a sphere and cubes drawn solid or as wireframe (Tab)",
       "functions": [
         "f.clear",
         "f.clock.frameTime",
@@ -1361,7 +1369,7 @@
       "module": "models",
       "stars": 2,
       "title": "zimr - WebGPU - yaw pitch roll",
-      "description": "the aircraft-orientation demo composing pitch, yaw and roll into one matrix applied to a plane",
+      "description": "an aircraft turned by pitch, yaw and roll composed into one rotation; keys or on-screen buttons",
       "functions": []
     },
     {
@@ -1369,7 +1377,7 @@
       "module": "physics",
       "stars": 1,
       "title": "zimr - bouncing ball",
-      "description": "restitution and rest: a ball settling under gravity",
+      "description": "simple version of ball_physics: one ball under gravity; G toggles gravity, Space pauses",
       "functions": []
     },
     {
@@ -1377,7 +1385,7 @@
       "module": "physics",
       "stars": 3,
       "title": "zimr - WebGPU - does friction obey Coulomb?",
-      "description": "a block on an incline, checked against Coulomb",
+      "description": "a block on a slope you tilt: does it start sliding exactly where Coulomb's law says it should?",
       "functions": []
     },
     {
@@ -1385,7 +1393,7 @@
       "module": "physics",
       "stars": 2,
       "title": "zimr - WebGPU - 2D | 3D physics side by side",
-      "description": "two physics worlds, side by side, drawn the way each kind of game would actually draw it",
+      "description": "the 2D and the 3D physics engines dropping the same boxes with nearly the same code",
       "functions": []
     },
     {
@@ -1393,7 +1401,7 @@
       "module": "compute",
       "stars": 2,
       "title": "zimr - zimrnum field",
-      "description": "builds a 64x64 field with zimrnum tensors, evaluates it on the cpu and the gpu, and draws both plus their difference",
+      "description": "a 64x64 field built from zimrnum tensors, computed on the CPU and the GPU, drawn side by side with their difference",
       "functions": []
     },
     {
@@ -1401,7 +1409,7 @@
       "module": "physics",
       "stars": 2,
       "title": "zimr - WebGPU - zimrphysics2d demo",
-      "description": "a box2d-style testbed for the `zimrphysics2d` engine",
+      "description": "a Box2D-style testbed: switchable 2D physics scenes, with joints, contacts and bounding boxes drawn on demand",
       "functions": []
     },
     {
@@ -1409,7 +1417,7 @@
       "module": "physics",
       "stars": 3,
       "title": "zimr - WebGPU - zimrphysics demo",
-      "description": "zimrphysics demo",
+      "description": "six Jolt-style 3D physics scenes - pyramid, stack, restitution, friction, funnel; Space launches a body",
       "functions": []
     },
     {
@@ -1417,7 +1425,7 @@
       "module": "plot",
       "stars": 3,
       "title": "zimr - 3D plot demo",
-      "description": "3D plot demo",
+      "description": "3D plots - a helix, a surface and a scatter - that you orbit by dragging",
       "functions": []
     },
     {
@@ -1425,7 +1433,7 @@
       "module": "plot",
       "stars": 3,
       "title": "zimr - 3D plot gallery",
-      "description": "3D plot gallery",
+      "description": "sibling of plot3d_demo: ImPlot3D's README plots in tabs - lines, surfaces, scatter, a mesh, markers",
       "functions": []
     },
     {
@@ -1433,7 +1441,7 @@
       "module": "plot",
       "stars": 3,
       "title": "zimr - plot demo",
-      "description": "plot demo",
+      "description": "the plotting showcase in the spirit of ImPlot: one tab per feature, with pan, zoom, pinch and value readouts",
       "functions": []
     },
     {
@@ -1441,7 +1449,7 @@
       "module": "robot",
       "stars": 3,
       "title": "zimr - WebGPU - why a robot windmills its arms",
-      "description": "a reaction wheel holding a pole upright: angular momentum as a control input",
+      "description": "two balancing figures get the same shove; the one allowed to spin its arms uses them as a momentum sink",
       "functions": []
     },
     {
@@ -1457,7 +1465,7 @@
       "module": "robot",
       "stars": 3,
       "title": "zimr - WebGPU - catching, not swatting",
-      "description": "intercepting a thrown object, planning where it will be",
+      "description": "two arms catch a thrown ball: IK chases and swats it, a planner meets it moving at its speed",
       "functions": []
     },
     {
@@ -1497,7 +1505,7 @@
       "module": "robot",
       "stars": 4,
       "title": "zimr - WebGPU - humanoid from MJCF",
-      "description": "27-DOF humanoid from MJCF, ragdoll and live solver knobs",
+      "description": "MuJoCo's 27-DOF humanoid standing on its own feet; drag the stiffness to see both ways it fails",
       "functions": []
     },
     {
@@ -1513,7 +1521,7 @@
       "module": "robot",
       "stars": 4,
       "title": "zimr - WebGPU - quadruped trunk MPC",
-      "description": "trunk MPC on a Go1: a horizon short enough to run live",
+      "description": "work in progress: a quadruped's trunk planner thinking out loud - the forces come out right, the loop does not hold yet",
       "functions": []
     },
     {
@@ -1553,7 +1561,7 @@
       "module": "robot",
       "stars": 3,
       "title": "zimr - WebGPU - robot: double pendulum",
-      "description": "a double pendulum in generalized coordinates",
+      "description": "simple version of robot_sidebyside: a double pendulum in joint angles, with its energy drift and an integrator switch",
       "functions": []
     },
     {
@@ -1561,7 +1569,7 @@
       "module": "robot",
       "stars": 3,
       "title": "zimr - WebGPU - maximal | generalized",
-      "description": "maximal against generalized coordinates, same scene, side by side",
+      "description": "one double pendulum two ways: rigid bodies held together by constraints, against joint angles that cannot come apart",
       "functions": []
     },
     {
@@ -1593,7 +1601,7 @@
       "module": "shaders",
       "stars": 3,
       "title": "zimr - WebGPU - comptime Julia",
-      "description": "comptime Julia",
+      "description": "sibling of comptime_mandelbrot: the Julia set computed by the Zig compiler and baked into the binary",
       "functions": []
     },
     {
@@ -1601,7 +1609,7 @@
       "module": "shaders",
       "stars": 3,
       "title": "zimr - WebGPU - ray cube CPU|GPU|comptime",
-      "description": "ray cube CPU|GPU|comptime",
+      "description": "simple version of rt_sidebyside: one ray-traced cube shader on the CPU, the GPU and baked at compile time",
       "functions": []
     },
     {
@@ -1609,7 +1617,7 @@
       "module": "shaders",
       "stars": 3,
       "title": "zimr - WebGPU - one decal shader: CPU | GPU",
-      "description": "runs one zig decal shader on both the gpu pipeline and the software rasterizer side by side, bit-identically",
+      "description": "sibling of helmet_sw: one decal shader on the CPU rasterizer and on the GPU, side by side and identical",
       "functions": []
     },
     {
@@ -1617,7 +1625,7 @@
       "module": "shaders",
       "stars": 3,
       "title": "zimr - WebGPU - Julia set",
-      "description": "Julia set",
+      "description": "the Julia set as a fullscreen shader, morphing as its constant circles",
       "functions": []
     },
     {
@@ -1625,7 +1633,7 @@
       "module": "shaders",
       "stars": 3,
       "title": "zimr - WebGPU - Julia gallery",
-      "description": "Julia gallery",
+      "description": "comptime_julia with four constants: dragon, fern, starfish and spiral Julia sets, all computed at compile time",
       "functions": []
     },
     {
@@ -1633,7 +1641,7 @@
       "module": "shaders",
       "stars": 3,
       "title": "zimr - WebGPU - Mandelbrot/Julia morph",
-      "description": "Mandelbrot/Julia morph",
+      "description": "a shader morphing continuously between the Mandelbrot and Julia sets",
       "functions": []
     },
     {
@@ -1641,7 +1649,7 @@
       "module": "shaders",
       "stars": 3,
       "title": "zimr - WebGPU - Mandelbrot CPU|GPU",
-      "description": "Mandelbrot CPU|GPU",
+      "description": "one Mandelbrot shader on the CPU and on the GPU side by side; pan and zoom both at once",
       "functions": []
     },
     {
@@ -1649,7 +1657,7 @@
       "module": "shaders",
       "stars": 2,
       "title": "zimr - WebGPU - pipeline basic",
-      "description": "the first custom render pipeline: a vertex buffer and one draw of a gradient triangle from zig-authored shaders",
+      "description": "the first custom render pipeline: one gradient triangle from shaders written in Zig",
       "functions": []
     },
     {
@@ -1657,7 +1665,7 @@
       "module": "shaders",
       "stars": 2,
       "title": "zimr - WebGPU - pipeline bloom",
-      "description": "the Phase 2 headline (`src/notes/webgpu_control.md`): a full multi-pass BLOOM effect, the \"complicated...",
+      "description": "a full bloom effect in five passes: bright filter, separable blur, composite",
       "functions": []
     },
     {
@@ -1665,7 +1673,7 @@
       "module": "shaders",
       "stars": 2,
       "title": "zimr - WebGPU - pipeline instancing",
-      "description": "one draw call paints a grid of triangles, each fed its own offset and color from instance-rate buffers",
+      "description": "one draw call paints a grid of triangles, each fed its own offset and colour from per-instance buffers",
       "functions": []
     },
     {
@@ -1673,7 +1681,7 @@
       "module": "shaders",
       "stars": 2,
       "title": "zimr - WebGPU - pipeline MSAA",
-      "description": "renders the same triangle at 1 versus 4 samples magnified side by side to show msaa resolving jagged edges",
+      "description": "the same triangle at 1 and 4 samples per pixel, magnified side by side: MSAA smooths the jagged edges",
       "functions": []
     },
     {
@@ -1681,7 +1689,7 @@
       "module": "shaders",
       "stars": 2,
       "title": "zimr - WebGPU - pipeline postprocess",
-      "description": "renders a triangle into a texture then a fullscreen pass samples it for chromatic aberration and vignette",
+      "description": "a scene rendered into a texture, then sampled by a fullscreen pass for chromatic aberration and a vignette",
       "functions": []
     },
     {
@@ -1689,7 +1697,7 @@
       "module": "shaders",
       "stars": 2,
       "title": "zimr - WebGPU - pipeline render target",
-      "description": "renders a custom pipeline once into an offscreen render texture then composites it to the screen many times",
+      "description": "a custom pipeline rendered once into a texture, then stamped across the screen",
       "functions": []
     },
     {
@@ -1697,7 +1705,7 @@
       "module": "shaders",
       "stars": 2,
       "title": "zimr - WebGPU - pipeline settings",
-      "description": "draws the same translucent geometry twice with alpha versus additive blend from two pipeline states",
+      "description": "the same translucent shapes from two pipelines differing only in blend state: alpha versus additive",
       "functions": []
     },
     {
@@ -1705,7 +1713,7 @@
       "module": "shaders",
       "stars": 2,
       "title": "zimr - WebGPU - pipeline uniforms",
-      "description": "a custom pipeline driven by a vertex-stage uniform buffer holding a per-frame transform matrix",
+      "description": "a custom pipeline driven by a per-frame transform in a vertex-stage uniform buffer",
       "functions": []
     },
     {
@@ -1713,7 +1721,7 @@
       "module": "shaders",
       "stars": 3,
       "title": "zimr - WebGPU - raytracer (GPU shader)",
-      "description": "raytracer (GPU shader)",
+      "description": "simple version of rt_sidebyside: its GPU half alone - a path tracer in a fragment shader",
       "functions": []
     },
     {
@@ -1721,7 +1729,7 @@
       "module": "shaders",
       "stars": 3,
       "title": "zimr - WebGPU - ray tracer CPU|GPU",
-      "description": "ray tracer CPU|GPU",
+      "description": "one path-tracer shader on the CPU, on the GPU, and baked at compile time in the corner",
       "functions": []
     },
     {
@@ -1729,7 +1737,7 @@
       "module": "shaders",
       "stars": 3,
       "title": "zimr - WebGPU - 2D shader effects gallery",
-      "description": "a live gallery of 2d fragment effects: color grade, waves, outline and palette switch over a live scene",
+      "description": "colour grading, waves, outline and palette swap applied live to a moving 2D scene",
       "functions": []
     },
     {
@@ -1737,7 +1745,7 @@
       "module": "shaders",
       "stars": 2,
       "title": "zimr - shaders - lightmap rendering",
-      "description": "a baked lightmap sampled alongside the base texture",
+      "description": "thirty lights and their shadows baked into a lightmap at load, so drawing them costs one texture lookup",
       "functions": []
     },
     {
@@ -1745,7 +1753,7 @@
       "module": "shaders",
       "stars": 2,
       "title": "zimr - shaders - multi-texture (mask + divider)",
-      "description": "one shader mixes two textures by a blend factor: a finger-following mask spotlight or a draggable wipe divider",
+      "description": "one shader mixing two live textures, through a spotlight mask that follows your finger or a wipe you drag",
       "functions": []
     },
     {
@@ -1753,7 +1761,7 @@
       "module": "shaders",
       "stars": 2,
       "title": "zimr - shaders - normal map rendering",
-      "description": "tangent-space normal mapping",
+      "description": "normal mapping: a flat floor lit as if it had bevels and grout; turn the map off to see the flat quad",
       "functions": []
     },
     {
@@ -1761,7 +1769,7 @@
       "module": "shaders",
       "stars": 2,
       "title": "zimr - shaders - shapes + textures (BeginShaderMode)",
-      "description": "wraps ordinary shape and texture draws in a grayscale shader mode toggled several times per frame",
+      "description": "ordinary shapes and textures drawn through a grayscale shader that switches on and off within one frame",
       "functions": []
     },
     {
@@ -1769,7 +1777,7 @@
       "module": "shaders",
       "stars": 3,
       "title": "zimr - shaders - vertex displacement",
-      "description": "displacement-maps a flat grid into lit moving swells by sampling a perlin heightfield in the vertex shader",
+      "description": "a flat grid pushed into moving, lit swells by sampling a noise texture in the vertex shader",
       "functions": []
     },
     {
@@ -1777,7 +1785,7 @@
       "module": "shaders",
       "stars": 3,
       "title": "zimr - WebGPU - ray shadows CPU|GPU|comptime",
-      "description": "the same zig ray-shadow shader run three ways: cpu raster, gpu fullscreen pass, and comptime-baked",
+      "description": "simple version of shadowmap_sw: hard shadows by ray tracing on the CPU, the GPU and baked at compile time",
       "functions": []
     },
     {
@@ -1785,7 +1793,7 @@
       "module": "shaders",
       "stars": 3,
       "title": "zimr - WebGPU - one shadow shader: CPU | GPU | comptime",
-      "description": "one shadow-map shader source run three ways: cpu rasterizer, gpu two-pass and comptime-baked, live",
+      "description": "one shadow-map shader on the CPU rasterizer, the GPU and baked at compile time",
       "functions": []
     },
     {
@@ -1793,7 +1801,7 @@
       "module": "shaders",
       "stars": 3,
       "title": "zimr - CPU | GPU side-by-side",
-      "description": "CPU | GPU side-by-side",
+      "description": "one 2D scene drawn by the software rasterizer and by the GPU, split where the mouse is",
       "functions": []
     },
     {
@@ -1801,7 +1809,7 @@
       "module": "shaders",
       "stars": 2,
       "title": "zimr - WebGPU - vao multibuffer",
-      "description": "splits a vertex layout across separate per-attribute buffers and swaps the color buffer between palettes",
+      "description": "a vertex layout split across two buffers: swap the colour buffer and the positions never notice",
       "functions": []
     },
     {
@@ -1809,7 +1817,7 @@
       "module": "shaders",
       "stars": 2,
       "title": "zimr - shaders - vertex texture fetch",
-      "description": "warps a triangle grid by sampling a checkerboard texture in the vertex stage, proving vertex texture fetch",
+      "description": "simple version of shaders_vertex_displacement: a grid warped by a texture read in the vertex shader",
       "functions": []
     },
     {
@@ -1817,7 +1825,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - ball physics",
-      "description": "up to 5000 grabbable bouncing balls; LMB drag-throws, RMB spawns, MMB shakes, wheel adjusts gravity",
+      "description": "toss up to 5000 bouncing balls: grab and throw with the mouse, spawn more, shake the box, tune gravity and bounce",
       "functions": []
     },
     {
@@ -1825,7 +1833,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - bullet hell",
-      "description": "a radial bullet spawner; volleys creep each frame so the rings braid into a spiral",
+      "description": "rings of bullets fired from the centre, creeping each volley so they braid into spirals; tap to change the pattern",
       "functions": []
     },
     {
@@ -1833,7 +1841,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - circle sector drawing",
-      "description": "a filled circular sector (pie slice) with its outline",
+      "description": "one shapes_showcase primitive up close: a pie-slice sector with its segment count animating; tap to see the vertices",
       "functions": []
     },
     {
@@ -1841,7 +1849,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - clock of clocks",
-      "description": "the time as HHMMSS, where every digit is a 4x6 grid of 24 tiny analog clocks",
+      "description": "the time as six digits, each drawn by 24 tiny analog clocks whose hands sweep into place",
       "functions": []
     },
     {
@@ -1849,7 +1857,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - collision",
-      "description": "AABB intersection rect between a moving box and mouse-tracked box",
+      "description": "a bouncing box and a mouse box, their overlap drawn as it changes",
       "functions": []
     },
     {
@@ -1857,7 +1865,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - color wheel",
-      "description": "an HSV colour wheel drawn as a fan of triangles (rim = full-saturation hue, hub = the value/grey), with a...",
+      "description": "an HSV colour wheel from a triangle fan: drag to pick hue and saturation, slide for value, read the hex",
       "functions": []
     },
     {
@@ -1865,7 +1873,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - colors",
-      "description": "21 raylib named colors; hover for label, SPACE reveals all",
+      "description": "raylib's 21 named colours as swatches; hover for a name, hold Space for all of them",
       "functions": []
     },
     {
@@ -1873,7 +1881,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - dashed line",
-      "description": "a dashed line whose endpoint follows the pointer (drag to aim; when idle the endpoint orbits so the demo...",
+      "description": "one shapes_showcase primitive up close: a dashed line aimed at the pointer, its dashes and gaps breathing",
       "functions": []
     },
     {
@@ -1881,7 +1889,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - digital clock",
-      "description": "a clock with two faces: a custom seven-segment digital readout and an analog dial with sweeping hands",
+      "description": "sibling of clock_of_clocks: the real time as a seven-segment display or an analog dial; tap to switch",
       "functions": []
     },
     {
@@ -1889,7 +1897,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - double pendulum",
-      "description": "chaotic motion via Lagrangian integration; persistent render-texture trail with alpha-fade per frame",
+      "description": "two double pendulums started a hair apart drift onto completely different paths: chaos, with fading trails",
       "functions": []
     },
     {
@@ -1897,7 +1905,7 @@
       "module": "shapes",
       "stars": 1,
       "title": "zimr - draw2d immediate surface",
-      "description": "exercises the unified immediate draw2d surface with rects, circles and a cached sprite image",
+      "description": "the unified 2D drawing sink: rectangles, circles and a cached sprite image",
       "functions": []
     },
     {
@@ -1905,7 +1913,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - easings",
-      "description": "3-stage ball animation: elasticOut slide-in, elasticIn grow, cubicOut fade",
+      "description": "scripted version of easings_testbed: a ball slides in, grows and fades through three easing curves",
       "functions": []
     },
     {
@@ -1913,7 +1921,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - easings box",
-      "description": "5-stage box drop+scale+rotate+grow+fade tour of the easing catalogue",
+      "description": "scripted version of easings_testbed: a box drops, stretches, spins, grows and fades through five easing curves",
       "functions": []
     },
     {
@@ -1921,7 +1929,7 @@
       "module": "shapes",
       "stars": 3,
       "title": "zimr - WebGPU - easings rects",
-      "description": "16x9 grid of rectangles shrinking with circOut + rotating linearly",
+      "description": "scripted version of easings_testbed: a grid of rectangles shrinking and spinning on two curves",
       "functions": []
     },
     {
@@ -1929,7 +1937,7 @@
       "module": "shapes",
       "stars": 3,
       "title": "zimr - WebGPU - easings testbed",
-      "description": "pick any easing for X/Y axes (arrows), preview on a 2D ball path",
+      "description": "pick any easing curve for X and another for Y, and watch a ball travel the combined path",
       "functions": []
     },
     {
@@ -1937,7 +1945,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - ellipse collision",
-      "description": "axis-aligned ellipse-ellipse and point-ellipse predicates; press A/B to drive each ellipse with the cursor",
+      "description": "sibling of collision_area: ellipse-ellipse and point-in-ellipse tests; press A or B to move either ellipse",
       "functions": []
     },
     {
@@ -1945,7 +1953,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - following eyes",
-      "description": "two googly eyes whose irises track the pointer, each clamped to stay inside its sclera (atan2 + a radius...",
+      "description": "googly eyes whose pupils follow your pointer, wandering on their own when nothing touches the screen",
       "functions": []
     },
     {
@@ -1953,7 +1961,7 @@
       "module": "shapes",
       "stars": 3,
       "title": "zimr - WebGPU - hilbert",
-      "description": "animated space-filling curve; [/] adjusts order, hue sweeps across the path",
+      "description": "a Hilbert curve drawing itself, order 2 to 6, its colour sweeping along the path",
       "functions": []
     },
     {
@@ -1961,7 +1969,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - icosphere subdivision",
-      "description": "subdivision from a platonic solid to a smooth sphere",
+      "description": "sibling of models_geometric_shapes: an icosahedron refined step by step into a smooth sphere",
       "functions": []
     },
     {
@@ -1969,7 +1977,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - kaleidoscope",
-      "description": "LMB-drag draws strokes mirrored 12 ways (6 rotational + reflection); R clears",
+      "description": "a brush mirrored twelve ways around the centre, painting a fading rainbow kaleidoscope by itself",
       "functions": []
     },
     {
@@ -1977,7 +1985,7 @@
       "module": "shapes",
       "stars": 1,
       "title": "zimr - WebGPU - bezier",
-      "description": "drag two endpoints; eased bezier curve interpolates between them",
+      "description": "simple version of splines_drawing's Bezier mode: a cubic Bezier whose control points drift",
       "functions": []
     },
     {
@@ -1985,7 +1993,7 @@
       "module": "shapes",
       "stars": 1,
       "title": "zimr - WebGPU - lines drawing",
-      "description": "paint into an RTT canvas with HSV-cycling hue + right-click eraser",
+      "description": "sibling of textures_mouse_painting: paint strokes whose hue shifts with speed; right-drag erases, the wheel sets the width",
       "functions": []
     },
     {
@@ -1993,7 +2001,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - logo",
-      "description": "the classic \"framed square\" logo, drawn entirely from primitives: a filled square, a smaller filled square...",
+      "description": "simple version of logo_raylib_anim: the framed-square logo drawn from plain shapes",
       "functions": []
     },
     {
@@ -2001,7 +2009,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - logo anim",
-      "description": "the framed-square logo, assembled live by a little state machine: a box blinks, the top+left bars grow,...",
+      "description": "the framed-square logo assembled by a small state machine: bars grow, letters type in, it fades and loops",
       "functions": []
     },
     {
@@ -2009,7 +2017,7 @@
       "module": "shapes",
       "stars": 1,
       "title": "zimr - WebGPU - math angle rotation",
-      "description": "fixed 0/30/60/90 deg lines + animated rotating HSV-cycled line",
+      "description": "simple version of math_sine_cosine: lines at fixed angles and one sweeping round",
       "functions": []
     },
     {
@@ -2017,7 +2025,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - sine & cosine",
-      "description": "unit-circle visualization of sin/cos/tan and related angles",
+      "description": "the unit circle where cosine and sine are the triangle's sides, with both waves traced below",
       "functions": []
     },
     {
@@ -2025,7 +2033,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - mesh builder",
-      "description": "assemble vertex buffers from primitives at runtime",
+      "description": "3D objects built from parts: meshes generated, moved, rotated, flipped and welded into a capped cylinder and an arrow",
       "functions": []
     },
     {
@@ -2033,7 +2041,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - penrose tile",
-      "description": "a Penrose tiling grown from an L-system (Lindenmayer system) and drawn with a turtle: the production...",
+      "description": "a Penrose tiling grown from an L-system and drawn by a turtle; tap for the next generation",
       "functions": []
     },
     {
@@ -2041,7 +2049,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - pie chart",
-      "description": "a live pie chart of N slices whose values breathe, so the wedges continuously re-proportion",
+      "description": "a live pie chart: slices that breathe, pop out under the pointer and carry percentage labels; tap for a donut",
       "functions": []
     },
     {
@@ -2049,7 +2057,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - platonic solids",
-      "description": "the five solids, generated rather than authored",
+      "description": "sibling of models_geometric_shapes: the tetrahedron, octahedron, dodecahedron and icosahedron, flat-shaded and spinning",
       "functions": []
     },
     {
@@ -2057,7 +2065,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - rectangle advanced",
-      "description": "rounded rectangles with independent left/right corner roundness and a horizontal colour gradient (solid...",
+      "description": "one shapes_showcase primitive up close: rounded bars with different left and right corners and a colour gradient",
       "functions": []
     },
     {
@@ -2065,7 +2073,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - rectangle scaling",
-      "description": "drag the bottom-right corner of a rectangle to live-resize; hover-vs-drag state machine with min/max clamps",
+      "description": "drag a rectangle's corner handle to resize it, within limits",
       "functions": []
     },
     {
@@ -2073,7 +2081,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - ring drawing",
-      "description": "a parametric ring (annulus)",
+      "description": "one shapes_showcase primitive up close: a ring opening and closing like a loading dial, filled or outlined",
       "functions": []
     },
     {
@@ -2081,7 +2089,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - procedural rocks",
-      "description": "procedural rocks from noise-displaced spheres",
+      "description": "sibling of mesh_builder: unique procedural rocks from one noise-displaced sphere generator",
       "functions": []
     },
     {
@@ -2089,7 +2097,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - rounded rectangle",
-      "description": "a rounded rectangle whose roundness, size, outline thickness and corner-segment count all animate, cycling...",
+      "description": "one shapes_showcase primitive up close: a rounded rectangle with animated roundness, size and outline",
       "functions": []
     },
     {
@@ -2097,7 +2105,7 @@
       "module": "shapes",
       "stars": 3,
       "title": "zimr - WebGPU - 2D shapes (WgpuGl)",
-      "description": "2D shapes (WgpuGl)",
+      "description": "simple version of shapes_showcase: a rectangle, two circles, a texture and text",
       "functions": []
     },
     {
@@ -2105,7 +2113,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - shapes gallery",
-      "description": "every 2D primitive the shape API draws",
+      "description": "sibling of models_geometric_shapes: parametric shapes from a Klein bottle to a trefoil knot, plus a welded dumbbell",
       "functions": []
     },
     {
@@ -2113,7 +2121,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - shapes - procedural (trail + tree)",
-      "description": "two procedural drawing modes: a fading pointer trail and an iteratively grown branching tree with live sliders",
+      "description": "a branching tree grown from a rule, with sliders (fractal_tree with controls), and a fading pointer trail",
       "functions": []
     },
     {
@@ -2121,7 +2129,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - shapes showcase",
-      "description": "Tour of every 2D primitive: lines, rectangles, circles, polygons, splines, gradients",
+      "description": "every 2D primitive animated in one grid: lines, rectangles, circles, polygons, gradients, sectors, splines",
       "functions": [
         "f.clock",
         "f.gl",
@@ -2183,7 +2191,7 @@
       "module": "shapes",
       "stars": 3,
       "title": "zimr - shapes - top-down lights",
-      "description": "2d top-down lighting with hard shadow volumes accumulated per light into a multiplied lightmap",
+      "description": "2D lights casting hard shadows from boxes, each light's mask added into one lightmap",
       "functions": []
     },
     {
@@ -2191,7 +2199,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - particles",
-      "description": "3000-particle ring buffer with three types (water/smoke/fire), each with distinct physics + lifetime",
+      "description": "sibling of particles: an emitter cycling water, smoke and fire, each with its own motion and lifetime",
       "functions": []
     },
     {
@@ -2199,7 +2207,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - splines drawing",
-      "description": "four spline families over a shared set of draggable points: Linear, B-Spline (Basis), Catmull-Rom, and...",
+      "description": "linear, B-spline, Catmull-Rom and Bezier curves through the same draggable points; tap to switch",
       "functions": []
     },
     {
@@ -2207,7 +2215,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - starfield effect",
-      "description": "420 stars projected via Z-divide; wheel adjusts speed, SPACE toggles lines vs circles",
+      "description": "warp-speed stars with a control panel: speed, lines or dots, trails, colour, and a hyperjump",
       "functions": []
     },
     {
@@ -2215,7 +2223,7 @@
       "module": "shapes",
       "stars": 1,
       "title": "zimr - WebGPU - triangle gradient",
-      "description": "drawTriangleGradient with sine-pulsing per-vertex colors",
+      "description": "one shapes_showcase primitive up close: triangles whose corner colours pulse out of phase",
       "functions": []
     },
     {
@@ -2223,7 +2231,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - triangle strip",
-      "description": "a gear/star built from a triangle strip: alternating inside- and outside-radius points around a circle...",
+      "description": "one shapes_showcase primitive up close: a gear built from one triangle strip; drag to change the count",
       "functions": []
     },
     {
@@ -2231,7 +2239,7 @@
       "module": "shapes",
       "stars": 2,
       "title": "zimr - WebGPU - vector angle",
-      "description": "two modes: angle between two vectors, or line vs horizontal",
+      "description": "the angle between two vectors, or between a ray and the horizontal, following your pointer",
       "functions": []
     },
     {
@@ -2239,7 +2247,7 @@
       "module": "text",
       "stars": 2,
       "title": "zimr - text - codepoints loading",
-      "description": "bakes an explicit unicode codepoint set into a font atlas, ascii-only versus extended side by side",
+      "description": "simple version of text_unicode_ranges: the same font baked with ASCII only and with extra scripts, side by side",
       "functions": []
     },
     {
@@ -2247,7 +2255,7 @@
       "module": "text",
       "stars": 3,
       "title": "zimr - WebGPU - text field",
-      "description": "text field",
+      "description": "simple version of ui_text_editing: a single-line field that brings up the phone's keyboard",
       "functions": []
     },
     {
@@ -2255,7 +2263,7 @@
       "module": "text",
       "stars": 2,
       "title": "zimr - text - font filters",
-      "description": "compares point and bilinear sampling on a font atlas baked small then drawn large",
+      "description": "sibling of text_font_sdf: a small font drawn large, with nearest versus bilinear sampling",
       "functions": []
     },
     {
@@ -2263,7 +2271,7 @@
       "module": "text",
       "stars": 1,
       "title": "zimr - text - font loading",
-      "description": "loads a ttf font and draws a sample string at several sizes off one baked atlas",
+      "description": "simple version of text_layout: a TTF font drawn at several sizes from one baked atlas",
       "functions": []
     },
     {
@@ -2271,7 +2279,7 @@
       "module": "text",
       "stars": 3,
       "title": "zimr - WebGPU - text font SDF",
-      "description": "signed-distance-field glyphs, crisp at any size",
+      "description": "bitmap versus signed-distance-field text, magnified by a slider: one blurs, the other stays sharp",
       "functions": []
     },
     {
@@ -2279,7 +2287,7 @@
       "module": "text",
       "stars": 2,
       "title": "zimr - text - inline styling",
-      "description": "parses inline color tags inside a string to change foreground and background per styled run",
+      "description": "colour tags inside a string change the text and background colours mid-sentence",
       "functions": []
     },
     {
@@ -2287,7 +2295,7 @@
       "module": "text",
       "stars": 2,
       "title": "zimr - WebGPU - text layout",
-      "description": "TTF font loading, atlas baking, multiple sizes, measure",
+      "description": "text measured and laid out: a per-letter rainbow heading, a word-wrapped paragraph, several sizes, measured boxes",
       "functions": [
         "f.clear",
         "f.clock.frameTime",
@@ -2311,7 +2319,7 @@
       "module": "text",
       "stars": 3,
       "title": "zimr - WebGPU - text on texture",
-      "description": "imageDrawText into CPU image, upload, paint on rotating plane",
+      "description": "live 2D text rendered into a texture and wrapped around a spinning cube",
       "functions": [
         "f.clear",
         "f.clock.frameTime",
@@ -2348,7 +2356,7 @@
       "module": "text",
       "stars": 2,
       "title": "zimr - WebGPU - text sprite fonts",
-      "description": "bitmap fonts from a packed atlas",
+      "description": "bitmap fonts cut from image atlases; change the sample text, the scale and the letter spacing",
       "functions": []
     },
     {
@@ -2356,7 +2364,7 @@
       "module": "text",
       "stars": 2,
       "title": "zimr - text - strings management",
-      "description": "drag word chips to glue them and tap to shatter into characters, a live string split/join playground",
+      "description": "words as chips: drag one onto another to join them, tap one to split it into letters",
       "functions": []
     },
     {
@@ -2364,7 +2372,7 @@
       "module": "text",
       "stars": 2,
       "title": "zimr - text - unicode ranges",
-      "description": "toggles unicode ranges to re-bake the font atlas at runtime and watch the glyph count grow",
+      "description": "Unicode ranges added to a font while it runs, missing glyphs appearing as each is baked",
       "functions": []
     },
     {
@@ -2372,7 +2380,7 @@
       "module": "text",
       "stars": 2,
       "title": "zimr - WebGPU - writing anim",
-      "description": "typewriter text reveal -- SPACE speeds up, ENTER restarts",
+      "description": "a typewriter: text revealed one letter at a time behind a blinking cursor",
       "functions": []
     },
     {
@@ -2380,7 +2388,7 @@
       "module": "textures",
       "stars": 2,
       "title": "zimr - texture views",
-      "description": "a mip chain painted level by level through each level's view, the gpu's choice of level shown in colour, and a texture array drawn into layer by layer",
+      "description": "one texture seen through different views: each mip level, the whole chain the GPU picks from, each layer of an array",
       "functions": []
     },
     {
@@ -2388,7 +2396,7 @@
       "module": "textures",
       "stars": 3,
       "title": "zimr - WebGPU - cellular automata",
-      "description": "Wolfram's 1-D elementary cellular automata (Rule 30/90/110...) streamed to the GPU each frame",
+      "description": "Wolfram's one-dimensional rules (30, 90, 110...) growing row by row; tap to change the rule",
       "functions": []
     },
     {
@@ -2396,7 +2404,7 @@
       "module": "textures",
       "stars": 3,
       "title": "zimr - WebGPU - image editor",
-      "description": "blur / invert / rotate variants + live updateTexture demo",
+      "description": "the CPU image API: decode, copy, blur, invert and rotate an image, and rewrite a texture every frame",
       "functions": [
         "f.clear",
         "f.clock.time",
@@ -2428,7 +2436,7 @@
       "module": "textures",
       "stars": 2,
       "title": "zimr - WebGPU - pipeline sampler",
-      "description": "Phase 3 opener (`src/notes/webgpu_control.md`): texture sampling control",
+      "description": "one texture sampled four ways: nearest or linear filtering, with repeat, clamp or mirror edges",
       "functions": []
     },
     {
@@ -2436,7 +2444,7 @@
       "module": "textures",
       "stars": 2,
       "title": "zimr - WebGPU - png demo",
-      "description": "embedded PNG \u2192 zigimg decode \u2192 texture upload \u2192 draw",
+      "description": "simple version of image_editor: a PNG decoded, uploaded and drawn four times tinted",
       "functions": [
         "f.clear",
         "f.log.info",
@@ -2456,7 +2464,7 @@
       "module": "textures",
       "stars": 3,
       "title": "zimr - WebGPU - procgen noise",
-      "description": "white / Perlin / cellular noise, 256\u00b2 each, animated",
+      "description": "white, Perlin and cellular noise generated as images, plus an animated Perlin field",
       "functions": [
         "f.clear",
         "f.clock.time",
@@ -2488,7 +2496,7 @@
       "module": "textures",
       "stars": 3,
       "title": "zimr - WebGPU - render texture",
-      "description": "render texture",
+      "description": "a scene drawn once into a texture, then pasted across the screen many times",
       "functions": []
     },
     {
@@ -2496,7 +2504,7 @@
       "module": "textures",
       "stars": 2,
       "title": "zimr - WebGPU - srcrec dstrec",
-      "description": "maps one frame's source sub-rect of a sprite sheet onto a scaled destination rectangle",
+      "description": "one frame of a sprite sheet mapped onto any rectangle on screen: tap to change the frame, drag to move it",
       "functions": []
     },
     {
@@ -2504,7 +2512,7 @@
       "module": "textures",
       "stars": 3,
       "title": "zimr - WebGPU - texture readback (GPU to CPU to GPU)",
-      "description": "render-to-texture -> loadImageFromTexture -> re-upload, side-by-side",
+      "description": "a rendered texture read back to the CPU without stalling, its copy drawn beside the original",
       "functions": []
     },
     {
@@ -2512,7 +2520,7 @@
       "module": "textures",
       "stars": 2,
       "title": "zimr - WebGPU - textured curve",
-      "description": "sweeps a road texture along a draggable cubic bezier as a uv-mapped ribbon of quads",
+      "description": "a road texture bent along a Bezier curve you drag",
       "functions": []
     },
     {
@@ -2520,7 +2528,7 @@
       "module": "textures",
       "stars": 2,
       "title": "zimr - WebGPU - textures background scrolling",
-      "description": "three parallax cyberpunk layers scrolling at different speeds, each drawn twice for a seamless loop",
+      "description": "three parallax layers of a cyberpunk street scrolling at different speeds",
       "functions": []
     },
     {
@@ -2528,7 +2536,7 @@
       "module": "textures",
       "stars": 2,
       "title": "zimr - WebGPU - textures blend modes",
-      "description": "composites a foreground over a background cycling through alpha, additive, multiply and premultiplied blends",
+      "description": "a foreground over a background through alpha, additive, multiply and premultiplied blending; tap to cycle",
       "functions": []
     },
     {
@@ -2536,7 +2544,7 @@
       "module": "textures",
       "stars": 2,
       "title": "zimr - WebGPU - textures bunnymark",
-      "description": "hold to spawn thousands of drifting bouncing bunnies, a draw-call stress test",
+      "description": "hold to spawn thousands of bouncing bunnies: how many sprites before the frame rate drops?",
       "functions": []
     },
     {
@@ -2544,7 +2552,7 @@
       "module": "textures",
       "stars": 2,
       "title": "zimr - WebGPU - textures fog of war",
-      "description": "a tile map with fog stored in a tiny per-tile texture, bilinear-filtered into smooth soft edges as you move",
+      "description": "a tile map revealed as you move, its fog smoothed by sampling a tiny texture",
       "functions": []
     },
     {
@@ -2552,7 +2560,7 @@
       "module": "textures",
       "stars": 3,
       "title": "zimr - WebGPU - textures framebuffer rendering",
-      "description": "one world drawn into two framebuffers composited side by side, plus a magnified zoom sampled back out",
+      "description": "one world rendered for two cameras side by side, one showing where the other looks, with a zoomed viewfinder",
       "functions": []
     },
     {
@@ -2560,7 +2568,7 @@
       "module": "textures",
       "stars": 2,
       "title": "zimr - WebGPU - textures gif player",
-      "description": "decode and play an animated GIF",
+      "description": "an animated GIF player: scrub to any frame, step, pause, loop and change the speed",
       "functions": []
     },
     {
@@ -2568,7 +2576,7 @@
       "module": "textures",
       "stars": 2,
       "title": "zimr - WebGPU - textures image channel",
-      "description": "splits a png into its r, g, b and a channels on the cpu and lays them out tinted over a checkerboard",
+      "description": "simple version of image_editor: an image split into its red, green, blue and alpha channels",
       "functions": []
     },
     {
@@ -2576,7 +2584,7 @@
       "module": "textures",
       "stars": 1,
       "title": "zimr - WebGPU - textures image rotate",
-      "description": "rotates the logo on the cpu by several angles at init, then cycles between the uploaded textures",
+      "description": "simple version of image_editor: an image rotated on the CPU by any angle; click to cycle",
       "functions": []
     },
     {
@@ -2584,7 +2592,7 @@
       "module": "textures",
       "stars": 2,
       "title": "zimr - WebGPU - textures image text",
-      "description": "rasterizes text into a cpu image so the caption is baked into the texels before uploading as a texture",
+      "description": "simple version of image_editor: text drawn into an image's pixels before it becomes a texture",
       "functions": []
     },
     {
@@ -2592,7 +2600,7 @@
       "module": "textures",
       "stars": 3,
       "title": "zimr - WebGPU - textures magnifying glass",
-      "description": "a circular 2x magnifier following the pointer that reveals multiply-blended hidden bunnies in a render texture",
+      "description": "a 2x magnifier following your pointer reveals bunnies hidden in the picture",
       "functions": []
     },
     {
@@ -2600,7 +2608,7 @@
       "module": "textures",
       "stars": 2,
       "title": "zimr - WebGPU - textures mouse painting",
-      "description": "paints onto a persistent render-texture canvas that accumulates strokes, with a color palette",
+      "description": "paint on a canvas that keeps every stroke, picking colours from a palette",
       "functions": []
     },
     {
@@ -2608,7 +2616,7 @@
       "module": "textures",
       "stars": 2,
       "title": "zimr - WebGPU - textures N-patch drawing",
-      "description": "nine-slice panel drawing where fixed corners stay put while edges and center stretch to the mouse",
+      "description": "nine-slice panels: drag to resize, and the corners stay sharp while the edges stretch",
       "functions": []
     },
     {
@@ -2616,7 +2624,7 @@
       "module": "textures",
       "stars": 2,
       "title": "zimr - WebGPU - textures polygon drawing",
-      "description": "maps a texture onto a spinning irregular ten-sided polygon viewed through an orthographic camera",
+      "description": "a texture mapped onto a spinning irregular polygon",
       "functions": []
     },
     {
@@ -2624,7 +2632,7 @@
       "module": "textures",
       "stars": 1,
       "title": "zimr - WebGPU - textures raw data",
-      "description": "builds a gpu texture from a hand-filled rgba checkerboard buffer alongside a decoded png",
+      "description": "simple version of image_editor: a texture built from a hand-filled pixel buffer",
       "functions": []
     },
     {
@@ -2632,7 +2640,7 @@
       "module": "textures",
       "stars": 2,
       "title": "zimr - WebGPU - textures screen buffer",
-      "description": "a cpu palette-cycling fire effect propagated up an index buffer, mapped through an hsv palette and uploaded",
+      "description": "a classic fire effect computed per pixel on the CPU and uploaded every frame",
       "functions": []
     },
     {
@@ -2640,7 +2648,7 @@
       "module": "textures",
       "stars": 1,
       "title": "zimr - WebGPU - textures sprite animation",
-      "description": "cycles a six-frame scarfy sprite sheet at a fixed speed over normalized-uv sub-rects",
+      "description": "simple version of srcrec_dstrec: a running character from a six-frame sprite sheet",
       "functions": []
     },
     {
@@ -2648,7 +2656,7 @@
       "module": "textures",
       "stars": 1,
       "title": "zimr - WebGPU - textures sprite button",
-      "description": "a three-frame button sheet picking normal, hover or pressed by mouse state",
+      "description": "simple version of srcrec_dstrec: a button sheet showing its normal, hover and pressed frames",
       "functions": []
     },
     {
@@ -2656,7 +2664,7 @@
       "module": "textures",
       "stars": 1,
       "title": "zimr - WebGPU - textures sprite explosion",
-      "description": "auto-loops a 5x5 explosion sprite sheet over normalized-uv sub-rects",
+      "description": "simple version of srcrec_dstrec: an explosion played from a 5x5 sprite sheet",
       "functions": []
     },
     {
@@ -2664,7 +2672,7 @@
       "module": "textures",
       "stars": 2,
       "title": "zimr - WebGPU - textures sprite stacking",
-      "description": "stacks 122 horizontal cross-section slices in world y to fake a 3d model, viewed with the orbit camera",
+      "description": "a fake 3D model from 122 stacked image slices; orbit it and spread the slices apart",
       "functions": []
     },
     {
@@ -2672,7 +2680,7 @@
       "module": "textures",
       "stars": 2,
       "title": "zimr - WebGPU - textures tiled drawing",
-      "description": "tiles a chosen sub-rect of a pattern sheet across an area with slider-driven scale, rotation and tint",
+      "description": "a pattern tiled across an area, with scale, rotation and tint sliders",
       "functions": []
     },
     {
@@ -2680,7 +2688,7 @@
       "module": "textures",
       "stars": 3,
       "title": "zimr - WebGPU - render texture trails",
-      "description": "render texture trails",
+      "description": "glowing emitters leaving trails in a texture that fades instead of clearing",
       "functions": []
     },
     {
@@ -2688,7 +2696,7 @@
       "module": "ui",
       "stars": 3,
       "title": "zimr - phone demo",
-      "description": "phone demo",
+      "description": "phone version of ui_full_showcase: a widget tour laid out for a portrait screen with finger-sized targets",
       "functions": []
     },
     {
@@ -2696,7 +2704,7 @@
       "module": "ui",
       "stars": 3,
       "title": "zimr - WebGPU - recursive HUD",
-      "description": "Surface stack composition: HUD on a cube, inner cube on the HUD. Headline showcase of pushRenderTexture/popRenderTexture.",
+      "description": "sibling of render_texture: a HUD rendered once, then drawn inside itself as a shrinking tunnel",
       "functions": [
         "f.clear",
         "f.clock.fps",
@@ -2734,7 +2742,7 @@
       "module": "ui",
       "stars": 3,
       "title": "zimr - animation gallery",
-      "description": "Spring / ease / decay easings demoed across animated UI widgets",
+      "description": "the UI's tweens and springs: six easing curves side by side, and a spring chasing a slider",
       "functions": [
         "f.gl",
         "z.AppBridge",
@@ -2754,7 +2762,7 @@
       "module": "ui",
       "stars": 3,
       "title": "zimr - canvas demo",
-      "description": "Custom-drawn canvas pane with shapes and text via the immediate-mode draw list",
+      "description": "a tiny node editor: boxes joined by curves on a canvas you pan and zoom",
       "functions": [
         "f.gl",
         "z.AppBridge",
@@ -2775,7 +2783,7 @@
       "module": "ui",
       "stars": 3,
       "title": "zimr - WebGPU - UI custom widget",
-      "description": "Build a custom interactive widget on top of the low-level UI primitives",
+      "description": "how to write your own widget: a star rating built on the public item API",
       "functions": [
         "z.AppBridge",
         "z.Color",
@@ -2793,7 +2801,7 @@
       "module": "ui",
       "stars": 4,
       "title": "zimr - data grid phone",
-      "description": "Scrollable data grid tuned for phone screens: sticky headers, large hit targets",
+      "description": "sibling of ui_tables_demo: a data grid wider than the screen, scrolled both ways by finger",
       "functions": [
         "f.gl",
         "f.window.screen_height",
@@ -2817,7 +2825,7 @@
       "module": "ui",
       "stars": 3,
       "title": "zimr - WebGPU - UI demo (real ImGui)",
-      "description": "UI demo (real ImGui)",
+      "description": "the UI starter: one ImGui window with a label, a slider, a checkbox and a counting button",
       "functions": []
     },
     {
@@ -2825,7 +2833,7 @@
       "module": "ui",
       "stars": 3,
       "title": "zimr - Devtools (P2.4)",
-      "description": "Built-in dev overlay: layout inspector, draw-list viewer, theme editor",
+      "description": "the built-in developer overlay: frame metrics, the event log, and an inspector for any struct",
       "functions": [
         "f.window.screen_height",
         "f.window.screen_width",
@@ -2843,7 +2851,7 @@
       "module": "ui",
       "stars": 3,
       "title": "zimr - Docking demo",
-      "description": "Splittable / mergeable docked panels \u2014 imgui-style docking",
+      "description": "docking: drag a window into the dockspace's drop zones, split and resize panels, reset the layout",
       "functions": [
         "f.window.screen_height",
         "f.window.screen_width",
@@ -2863,7 +2871,7 @@
       "module": "ui",
       "stars": 4,
       "title": "zimr - Docking persistence",
-      "description": "Docking layout saved and restored across sessions",
+      "description": "sibling of ui_dock_basic: rearrange the docked windows, reload the page, and the layout comes back",
       "functions": [
         "f.window.screen_height",
         "f.window.screen_width",
@@ -2884,7 +2892,7 @@
       "module": "ui",
       "stars": 3,
       "title": "zimr - WebGPU - docking",
-      "description": "docking",
+      "description": "simple version of ui_dock_basic: three windows docked into a full-window layout by code",
       "functions": []
     },
     {
@@ -2892,7 +2900,7 @@
       "module": "ui",
       "stars": 3,
       "title": "zimr - input flags zoo (phone)",
-      "description": "input flags zoo (phone)",
+      "description": "sibling of ui_input_callbacks: one card per input-field flag, each saying what it should do and showing what it did",
       "functions": []
     },
     {
@@ -2900,7 +2908,7 @@
       "module": "ui",
       "stars": 2,
       "title": "zimr - input query",
-      "description": "Inspect the imgui input-query API: isItemHovered / Focused / Active etc.",
+      "description": "every key, mouse button and modifier the UI sees, live, and whether the UI wants the input",
       "functions": [
         "f.gl",
         "z.AppBridge",
@@ -2920,7 +2928,7 @@
       "module": "ui",
       "stars": 4,
       "title": "Migrate auth to OAuth2",
-      "description": "Drag-and-drop card board: lists, cards, reordering, edit-in-place",
+      "description": "sibling of ui_tables_demo: a task table showing which columns may sort, and in which direction",
       "functions": [
         "z.AppBridge",
         "z.Color",
@@ -2937,7 +2945,7 @@
       "module": "ui",
       "stars": 3,
       "title": "zimr - log_viewer skeleton",
-      "description": "log_viewer skeleton",
+      "description": "a stripped-down ui_log_viewer left from a bug hunt",
       "functions": []
     },
     {
@@ -2945,7 +2953,7 @@
       "module": "ui",
       "stars": 2,
       "title": "zimr - miniPlot smoke test",
-      "description": "Sparkline / mini-plot widget exercising the plotting primitives",
+      "description": "a single mini line plot, superseded by ui_plot",
       "functions": [
         "f.gl",
         "z.AppBridge",
@@ -2965,7 +2973,7 @@
       "module": "ui",
       "stars": 3,
       "title": "zimr - WebGPU - minimal button",
-      "description": "minimal button",
+      "description": "three windows with a button and a tap counter each: the smallest multi-window UI",
       "functions": []
     },
     {
@@ -2973,7 +2981,7 @@
       "module": "ui",
       "stars": 3,
       "title": "zimr - WebGPU - minimal one-context",
-      "description": "minimal one-context",
+      "description": "the same three windows as ui_minimal_button, at fixed positions",
       "functions": []
     },
     {
@@ -2981,7 +2989,7 @@
       "module": "ui",
       "stars": 3,
       "title": "zimr - multi-select finder",
-      "description": "multi-select finder",
+      "description": "a Finder-style file list with click, Ctrl-click and Shift-click selection, and a tap mode for phones",
       "functions": []
     },
     {
@@ -2989,7 +2997,7 @@
       "module": "ui",
       "stars": 4,
       "title": "zimr - notes scratchpad (Q8)",
-      "description": "Phone-style notes app: list, detail, edit, soft-keyboard handling",
+      "description": "a phone notes app: write as much as you like and it saves itself",
       "functions": [
         "f.window.screen_height",
         "f.window.screen_width",
@@ -3008,7 +3016,7 @@
       "module": "ui",
       "stars": 3,
       "title": "zimr - WebGPU - panes",
-      "description": "Splitter pane layout \u2014 drag the divider to resize",
+      "description": "a three-pane workspace - file tree, editor, output - with draggable dividers",
       "functions": [
         "z.AppBridge",
         "z.FontCache",
@@ -3026,7 +3034,7 @@
       "module": "ui",
       "stars": 3,
       "title": "zimr - UI persistence",
-      "description": "Widget state survives reloads via the persistent-storage API",
+      "description": "simple version of ui_dock_persistence: move, resize and scroll a window, reload, and it is where you left it",
       "functions": [
         "z.AppBridge",
         "z.FontCache",
@@ -3042,7 +3050,7 @@
       "module": "ui",
       "stars": 3,
       "title": "zimr - WebGPU - phone gestures",
-      "description": "phone gestures",
+      "description": "tap targets, a drag handle and a swipe list, hand-built on raw touch input",
       "functions": []
     },
     {
@@ -3050,7 +3058,7 @@
       "module": "ui",
       "stars": 3,
       "title": "zimr - interactive plot",
-      "description": "interactive plot",
+      "description": "simple version of plot_demo: one interactive plot with live curves, pan, zoom and a Fit button",
       "functions": []
     },
     {
@@ -3058,7 +3066,7 @@
       "module": "ui",
       "stars": 4,
       "title": "zimr - WebGPU - Pomodoro (phone)",
-      "description": "Phone-style pomodoro app: cycles, settings, notifications",
+      "description": "a pomodoro timer app: an animated ring that turns from green to red in the last minute",
       "functions": [
         "f.window.screen_height",
         "f.window.screen_width",
@@ -3078,7 +3086,7 @@
       "module": "ui",
       "stars": 3,
       "title": "zimr - primitives zoo (phone)",
-      "description": "primitives zoo (phone)",
+      "description": "sibling of ui_custom_rendering: one card per drawing primitive, each saying what it should look like",
       "functions": []
     },
     {
@@ -3086,7 +3094,7 @@
       "module": "ui",
       "stars": 3,
       "title": "zimr - WebGPU - UI smoke (button)",
-      "description": "UI smoke (button)",
+      "description": "simple version of ui_demo: one window, one line of text, one button",
       "functions": []
     }
   ]

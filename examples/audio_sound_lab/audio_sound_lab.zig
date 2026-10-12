@@ -39,7 +39,6 @@ const c = Color;
 const Vec2 = zm.Vec2;
 const float = zm.float;
 const clamp = zm.clamp;
-const bufPrint = std.fmt.bufPrint;
 
 const alias_count: usize = 8;
 
@@ -247,9 +246,12 @@ fn update(f: *z.Frame, s: *State) void {
                 .{ .color = if (on) lit else dim },
             );
         }
-        var vb: [48]u8 = undefined;
-        const vt: []const u8 = bufPrint(&vb, "voices sounding: {d} / {d}", .{ playing, alias_count }) catch "?";
-        f.gl.text(.{ 20, fh * 0.62 + 14.0 }, vt, .{ .size = 16, .color = c.raywhite, .font = &s.font });
+        f.gl.textf(
+            .{ 20, fh * 0.62 + 14.0 },
+            "voices sounding: {d} / {d}",
+            .{ playing, alias_count },
+            .{ .size = 16, .color = c.raywhite, .font = &s.font },
+        );
     }
 
     // ---- UI ---------------------------------------------------------------
@@ -278,20 +280,20 @@ fn update(f: *z.Frame, s: *State) void {
                     const secs: f32 = if (s.clip_rate > 0) float(s.clip_frames) / float(s.clip_rate) else 0;
                     u.text(".wav decoded: {d} Hz, {d} ch", .{ s.clip_rate, s.clip_ch });
                     u.text("{d} frames = {d:.2} s", .{ s.clip_frames, secs });
-                    if (u.button("Play", .{})) {
+                    if (u.button("Play", .{ .pressed_on_click = true })) {
                         z.sounds.setVolume(&s.audio.sounds, s.clip, s.volume);
                         z.sounds.setPitch(&s.audio.sounds, s.clip, s.pitch);
                         z.sounds.play(&s.audio.sounds, s.clip);
                     }
                     u.sameLine(.{});
-                    if (u.button("Stop", .{})) {
+                    if (u.button("Stop", .{ .pressed_on_click = true })) {
                         z.sounds.stop(&s.audio.sounds, s.clip);
                     }
-                    if (u.button("Pause", .{})) {
+                    if (u.button("Pause", .{ .pressed_on_click = true })) {
                         z.sounds.pause(&s.audio.sounds, s.clip);
                     }
                     u.sameLine(.{});
-                    if (u.button("Resume", .{})) {
+                    if (u.button("Resume", .{ .pressed_on_click = true })) {
                         z.sounds.resumeSound(&s.audio.sounds, s.clip);
                     }
                     u.text("playing: {}", .{z.sounds.isPlaying(&s.audio.sounds, s.clip)});
@@ -299,13 +301,13 @@ fn update(f: *z.Frame, s: *State) void {
             },
             .multi => {
                 u.text("One buffer, {d} alias voices.", .{alias_count});
-                if (u.button("FIRE (tap fast)", .{})) {
+                if (u.button("FIRE (tap fast)", .{ .pressed_on_click = true })) {
                     fireAlias(s);
                 }
             },
             .position => {
                 u.text("Drag the orange emitter.", .{});
-                if (u.button("Ping", .{})) {
+                if (u.button("Ping", .{ .pressed_on_click = true })) {
                     z.sounds.play(&s.audio.sounds, s.ping);
                 }
                 u.sameLine(.{});

@@ -11,7 +11,6 @@
 // widgets in a popover.
 
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
@@ -85,16 +84,15 @@ fn update(f: *z.Frame, s: *State) void {
         u.separator();
 
         // --- Live FPS history ---
-        var fps_overlay: [32]u8 = undefined;
         const fps_now: f32 = s.fps_hist[(s.fps_idx + hist_len - 1) % hist_len];
-        const overlay: []const u8 = bufPrint(&fps_overlay, "{d:.1} fps", .{fps_now}) catch fps_overlay[0..0];
+        const overlay: z.Str(32) = .print("{d:.1} fps", .{fps_now});
         // Linearize the ring buffer for clean left-to-right display.
         var fps_linear: [hist_len]f32 = undefined;
         for (0..hist_len) |i| {
             fps_linear[i] = s.fps_hist[(s.fps_idx + i) % hist_len];
         }
         u.plotLines("fps (60-frame history)", fps_linear[0..], .{
-            .overlay = overlay,
+            .overlay = overlay.slice(),
             .min = 0,
             .max = 120,
             .height = 70,
@@ -127,9 +125,8 @@ fn update(f: *z.Frame, s: *State) void {
         u.text("Tweak the bins:", .{});
         // Edit each bin via a row of small dragInts.
         for (s.bins[0..], 0..) |*b, i| {
-            var lbl_buf: [8]u8 = undefined;
-            const lbl: []const u8 = bufPrint(&lbl_buf, "b{d}", .{i}) catch lbl_buf[0..0];
-            _ = u.drag(lbl, b, .{ .speed = 0.2, .fmt = "{d:.0}" });
+            const lbl: z.Str(8) = .print("b{d}", .{i});
+            _ = u.drag(lbl.slice(), b, .{ .speed = 0.2, .fmt = "{d:.0}" });
             if ((i + 1) % 4 != 0 and i + 1 < s.bins.len) {
                 u.sameLine(.{});
             }

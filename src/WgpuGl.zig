@@ -1001,6 +1001,20 @@ pub fn text(self: *WgpuGl, pos: Vec2, str: []const u8, opts: draw2d.TextOpts) vo
     text2d.drawWithFont(self, 0, font.*, str, pos, opts.size, opts.spacing, opts.color);
 }
 
+/// `text`, formatting the string first: `f.gl.textf(pos, "{d} fps", .{fps}, opts)`. The
+/// line lives on this call's stack, which is enough - `text` emits its glyphs before
+/// returning. Up to `draw2d.TextLine`'s capacity.
+pub fn textf(
+    self: *WgpuGl,
+    pos: Vec2,
+    comptime fmt: []const u8,
+    args: anytype,
+    opts: draw2d.TextOpts,
+) void {
+    const formatted: draw2d.TextLine = .print(fmt, args);
+    self.text(pos, formatted.slice(), opts);
+}
+
 /// Gap primitive: rotated filled rectangle (raylib DrawRectanglePro).
 pub fn rectRotated(
     self: *WgpuGl,

@@ -15,7 +15,6 @@ const float = zm.float;
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
-const bufPrint = std.fmt.bufPrint;
 const sliceAsBytes = std.mem.sliceAsBytes;
 
 const im_w: usize = 512;
@@ -147,13 +146,12 @@ fn drawChips(f: *z.Frame, s: *State, lay: Layout) void {
         const selected: bool = (i == s.preset);
         const fill: Color = if (selected) common.palette.accent else common.palette.surface;
         gl.rectRoundedXYWH(x0, lay.pad, lay.chip_w, lay.chip_h, 0.35, 6, .{ .color = fill });
-        var nb: [8]u8 = undefined;
-        const num: []const u8 = bufPrint(&nb, "{d}", .{presets[i]}) catch "";
-        const dim: Vec2 = z.measureText(s.font, num, 14);
+        const num: z.Str(8) = .print("{d}", .{presets[i]});
+        const dim: Vec2 = z.measureText(s.font, num.slice(), 14);
         const tcol: Color = if (selected) common.palette.bg else common.palette.ink_dim;
         gl.text(
             .{ x0 + (lay.chip_w - dim[0]) * 0.5, lay.pad + (lay.chip_h - dim[1]) * 0.5 },
-            num,
+            num.slice(),
             .{ .size = 14, .color = tcol, .font = &s.font },
         );
     }
@@ -195,9 +193,7 @@ fn update(f: *z.Frame, s: *State) void {
     s.fb.present(f.gl, lay.pad, lay.canvas_y, f.window.widthf() - 2.0 * lay.pad, lay.canvas_h);
     drawChips(f, s, lay);
 
-    var buf: [32]u8 = undefined;
-    const label: []const u8 = bufPrint(&buf, "rule {d} - tap a preset or the canvas", .{s.rule}) catch "";
-    common.caption(f.gl, s.font, label);
+    common.captionf(f.gl, s.font, "rule {d} - tap a preset or the canvas", .{s.rule});
     z.endDrawing(f.gl);
 }
 

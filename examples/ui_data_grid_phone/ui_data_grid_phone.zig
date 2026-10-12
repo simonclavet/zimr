@@ -17,7 +17,6 @@
 //   zig build install -Dfocus=ui_data_grid_phone
 
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const Random = std.Random;
 const z = @import("zimr");
@@ -36,6 +35,9 @@ const Neg: Color = .{ .r = 239, .g = 68, .b = 68, .a = 255 };
 const col_w: f32 = 120;
 const n_cols: usize = 8;
 const n_rows: usize = 500;
+
+/// One cell's text; the widest is a price like "$699.99".
+const CellText = z.Str(32);
 
 const State = struct {
     ui_host: z.UiHost,
@@ -56,11 +58,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 /// real without bundling a dataset.  Each row's prng is seeded
 /// from its index, so the same row always shows the same data
 /// across frames.
-fn formatCell(
-    row: usize,
-    col: usize,
-    buf: []u8,
-) []const u8 {
+fn formatCell(row: usize, col: usize) CellText {
     var prng: Random.DefaultPrng = .init(@as(u64, @intCast(row * 37 + 11)));
     const r: Random = prng.random();
     return switch (col) {
@@ -68,20 +66,20 @@ fn formatCell(
             const a: u8 = 'A' + @as(u8, @intCast(row % 26));
             const b: u8 = 'A' + @as(u8, @intCast((row * 7) % 26));
             const c: u8 = 'A' + @as(u8, @intCast((row * 13) % 26));
-            break :blk bufPrint(buf, "{c}{c}{c}", .{ a, b, c }) catch "???";
+            break :blk .print("{c}{c}{c}", .{ a, b, c });
         },
-        1 => bufPrint(buf, "${d:.2}", .{r.float(f32) * 500 + 10}) catch "?",
+        1 => .print("${d:.2}", .{r.float(f32) * 500 + 10}),
         2 => blk: {
             const v: f32 = (r.float(f32) - 0.5) * 10;
             const sign: u8 = if (v < 0) '-' else '+';
-            break :blk bufPrint(buf, "{c}{d:.2}%", .{ sign, @abs(v) }) catch "?";
+            break :blk .print("{c}{d:.2}%", .{ sign, @abs(v) });
         },
-        3 => bufPrint(buf, "{d}M", .{r.intRangeAtMost(u32, 1, 999)}) catch "?",
-        4 => bufPrint(buf, "${d}B", .{r.intRangeAtMost(u32, 1, 500)}) catch "?",
-        5 => bufPrint(buf, "{d:.1}", .{r.float(f32) * 50 + 5}) catch "?",
-        6 => bufPrint(buf, "${d:.2}", .{r.float(f32) * 600 + 100}) catch "?",
-        7 => bufPrint(buf, "${d:.2}", .{r.float(f32) * 100 + 5}) catch "?",
-        else => "?",
+        3 => .print("{d}M", .{r.intRangeAtMost(u32, 1, 999)}),
+        4 => .print("${d}B", .{r.intRangeAtMost(u32, 1, 500)}),
+        5 => .print("{d:.1}", .{r.float(f32) * 50 + 5}),
+        6 => .print("${d:.2}", .{r.float(f32) * 600 + 100}),
+        7 => .print("${d:.2}", .{r.float(f32) * 100 + 5}),
+        else => .print("?", .{}),
     };
 }
 
@@ -165,9 +163,8 @@ fn update(f: *z.Frame, s: *State) void {
                     if (col > 0) {
                         u.sameLine(.{ .offset_x = float(col) * col_w });
                     }
-                    var buf: [32]u8 = undefined;
-                    const txt: []const u8 = formatCell(row, col, &buf);
-                    u.textColored(cellColor(col, txt), "{s}", .{txt});
+                    const txt: CellText = formatCell(row, col);
+                    u.textColored(cellColor(col, txt.slice()), "{s}", .{txt.slice()});
                 }
             }
         }

@@ -312,4 +312,7 @@ pub fn main() !void {
     try zimr_app.run(.{
         .window = .{ .title = "zimr - WebGPU - depth rendering", .width = 800, .height = 600 },
     }, State, initState, update);
+    // A native program calls its frames itself, until the window closes; on the web this returns at once, and the
+    // browser calls them.
+    zimr_app.runNative();
 }

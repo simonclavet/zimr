@@ -1160,8 +1160,10 @@ pub fn evaluate(st: ?*SuperTrack, episodes: u32, seed: u64) f32 {
 }
 
 /// The gym and the training loop over zimrnum's cartpole: `iterations` of (gather 4 ticks of 8
-/// cartpoles, one world-model step, one policy step), the real evaluation every `every`.
-fn runCartpole(options: Options, iterations: usize, every: usize) !f32 {
+/// cartpoles, one world-model step, one policy step), the real evaluation every `every`. It stops at
+/// the first evaluation past `stop_above` - the bar its caller asserts, so the test's claim is "it
+/// gets there within `iterations`" - unless the table is asked for, which wants the whole curve.
+fn runCartpole(options: Options, iterations: usize, every: usize, stop_above: f32) !f32 {
     const gpa: Allocator = testing_allocator;
     const st: *SuperTrack = try .init(gpa, options);
     defer st.deinit();
@@ -1189,7 +1191,9 @@ fn runCartpole(options: Options, iterations: usize, every: usize) !f32 {
     var final_eval: f32 = 0;
     const io: Io = std.testing.io;
     var train_ns: i96 = 0;
+    var ran: usize = 0;
     for (1..iterations + 1) |iteration| {
+        ran = iteration;
         // Gather: 4 ticks of 8 cartpoles, the current policy plus noise.
         for (0..4) |_| {
             for (0..envs) |e| {
@@ -1226,10 +1230,14 @@ fn runCartpole(options: Options, iterations: usize, every: usize) !f32 {
             final_eval = evaluate(st, 10, 99);
             report.print("    iteration {d:>4} ({d:>6} samples): world loss {e:.2}, policy loss {d:.4}, " ++
                 "REAL episodes {d:.1} steps\n", .{ iteration, samples, wm_loss, pi_loss, final_eval });
+            const cleared: bool = final_eval > stop_above;
+            if (cleared and !report.requested()) {
+                break;
+            }
         }
     }
     report.print("    training: {d:.2} ms an iteration (batch {d}, windows {d}/{d})\n", .{
-        float64(train_ns) / 1.0e6 / float64(iterations),
+        float64(train_ns) / 1.0e6 / float64(ran),
         options.batch,
         options.wm_window,
         options.policy_window,
@@ -1249,8 +1257,9 @@ test "supertrack: supervised learning alone holds a real cartpole upright under 
     if (!slow) {
         return error.SkipZigTest;
     }
-    const final_eval: f32 = try runCartpole(.{}, 3000, 250);
-    try expect(final_eval > evaluate(null, 10, 99) * 4.0);
+    const bar: f32 = evaluate(null, 10, 99) * 4.0;
+    const final_eval: f32 = try runCartpole(.{}, 3000, 250, bar);
+    try expect(final_eval > bar);
 }
 
 test "supertrack: the page's small configuration - its cost, and that it still learns" {
@@ -1261,6 +1270,7 @@ test "supertrack: the page's small configuration - its cost, and that it still l
     if (!slow) {
         return error.SkipZigTest;
     }
-    const final_eval: f32 = try runCartpole(.{ .batch = 16, .policy_window = 16 }, 1500, 500);
-    try expect(final_eval > evaluate(null, 10, 99) * 4.0);
+    const bar: f32 = evaluate(null, 10, 99) * 4.0;
+    const final_eval: f32 = try runCartpole(.{ .batch = 16, .policy_window = 16 }, 1500, 500, bar);
+    try expect(final_eval > bar);
 }

@@ -1230,6 +1230,7 @@ fn matchesFocus(example_name: []const u8, focus_list: []const u8) bool {
 fn addBridgeSource(b: *std.Build, to_c: *Run) void {
     to_c.addFileArg(b.path("src/bridge.zig"));
     to_c.addFileInput(b.path("src/dom_input.zig"));
+    to_c.addFileInput(b.path("src/page_audio.zig"));
     to_c.addFileInput(b.path("src/types.zig"));
 }
 
@@ -1489,6 +1490,23 @@ fn buildAudioWorkletJs(b: *std.Build, c2js_exe: *Compile) LazyPath {
     return to_js.captureStdOut(.{});
 }
 
+/// The page's sound output (`src/page_audio.zig`) transpiled on its own, as the root of its own program: it then
+/// publishes its entry points (`page_audio_*`), which the page test drives in Node (`audio_page_test.cjs`). In a page,
+/// the bridge imports the same file and calls it directly.
+fn buildPageAudioJs(b: *std.Build, c2js_exe: *Compile) LazyPath {
+    const to_c: *Run = b.addSystemCommand(&.{
+        b.graph.zig_exe,       "build-obj",
+        "-ofmt=c",             "-target",
+        "wasm32-freestanding", "-OReleaseSmall",
+    });
+    to_c.addPrefixedFileArg("-Mroot=", b.path("src/page_audio.zig"));
+    const page_audio_c: LazyPath = to_c.addPrefixedOutputFileArg("-femit-bin=", "page_audio.c");
+
+    const to_js: *Run = b.addRunArtifact(c2js_exe);
+    to_js.setStdIn(.{ .lazy_path = page_audio_c });
+    return to_js.captureStdOut(.{});
+}
+
 /// The single-file bridge page for a wasm app: src/bridge.zig -> C ->
 /// c2js --html --wasm-embed. The bridge transpile Run is byte-identical
 /// across examples, so the build cache collapses it to one execution.
@@ -1580,16 +1598,13 @@ fn hostPlatform() ?Platform {
     };
 }
 
-/// A step that only gathers others - one platform's build of an app, say - and that `zig build -l` does not list. A
-/// step tagged top-level does no work of its own, only waits for its dependencies, which is all a gathering step
-/// does; it is made as `std.Build.step` makes the listed ones, so whatever reads a top-level step's description
-/// finds one, and is left out of `b.top_level_steps`, the list `-l` prints.
+/// A step that only gathers others - one platform's build of an app, say - and that `zig build -l` does not list.
+/// Not a top-level step: Zig 0.17 lists every reachable step tagged top-level, in `b.top_level_steps` or not. With no
+/// step type that does nothing, it is an empty write-files step - one cache hit, shared by every gathering step, since
+/// an empty one always hashes the same.
 fn gatheringStep(b: *std.Build, name: []const u8) *Step {
-    const gathering: *Step.TopLevel = b.graph.arena.create(Step.TopLevel) catch @panic("oom");
-    gathering.* = .{
-        .step = Step.init(.{ .tag = .top_level, .name = name, .owner = b }),
-        .description = b.graph.dupeString(name),
-    };
+    const gathering: *Step.WriteFile = b.addWriteFiles();
+    gathering.step.name = b.graph.dupeString(name);
     return &gathering.step;
 }
 
@@ -1890,7 +1905,9 @@ pub const App = struct {
     /// main loop calls beginFrame/endFrame) instead of being ticked by the
     /// shared `wgpu_runner`. Low-level 3D demos use this. They still get the
     /// same build glue (module, shaders, page, standalone, step) - only the exe
-    /// root differs. Own-frame examples are not smoke-tested.
+    /// root differs, on the web and natively (`nativeAppExe`), where the example's
+    /// `main` calls `App.runNative` after `App.run`. Own-frame examples are not
+    /// smoke-tested.
     own_frame: bool = false,
     /// Opt-in GPU compute. When non-empty, the example also imports `kompute`
     /// and each kernel is compiled (Zig -> SPIR-V -> WGSL) and wired in - the
@@ -2187,6 +2204,31 @@ fn appRunFor(
     }
 }
 
+/// Installs a Windows program, and its PDB, into `b`'s zig-out/windows/. The PDB goes through `pdb_void_workaround`
+/// when there is one - a Zig compiler bug's workaround, not part of the build's design: `tools/pdb_void_workaround.zig`
+/// says what it fixes, and it goes when the bug does. It installs the PDB rewritten so LLDB sees the program's `void`
+/// functions, in place of the linker's.
+fn installWindowsProgram(
+    b: *std.Build,
+    exe: *Compile,
+    pdb_void_workaround: ?*Compile,
+) *InstallArtifact {
+    const windows_dir: std.Build.InstallDir = .{ .custom = "windows" };
+    const workaround_exe: ?*Compile = if (exe.producesPdbFile()) pdb_void_workaround else null;
+    const install: *InstallArtifact = b.addInstallArtifact(exe, .{
+        .dest_dir = .{ .override = windows_dir },
+        .pdb_dir = if (workaround_exe == null) .default else .disabled,
+    });
+    if (workaround_exe) |fix_exe| {
+        const pdb_name: []const u8 = b.fmt("{s}.pdb", .{exe.name});
+        const fix_run: *Run = b.addRunArtifact(fix_exe);
+        fix_run.addFileArg(exe.getEmittedPdb());
+        const fixed_pdb: LazyPath = fix_run.addOutputFileArg(pdb_name);
+        install.step.dependOn(&b.addInstallFileWithDir(fixed_pdb, windows_dir, pdb_name).step);
+    }
+    return install;
+}
+
 /// Installs a Windows program into `install_builder`'s zig-out/windows/, once it has passed the context's native
 /// check (no WGSL inside). zimr's examples install with zimr's builder, a project's apps with the project's.
 fn installWindowsApp(
@@ -2194,19 +2236,26 @@ fn installWindowsApp(
     ctx: AppContext,
     exe: *Compile,
 ) *Step.InstallArtifact {
-    const install: *Step.InstallArtifact = install_builder.addInstallArtifact(exe, .{
-        .dest_dir = .{ .override = .{ .custom = "windows" } },
-    });
+    const install: *Step.InstallArtifact = installWindowsProgram(install_builder, exe, ctx.pdb_void_workaround);
     if (ctx.native_wgsl_check) |check_exe| {
         install.step.dependOn(&addNativeWgslCheck(install_builder, check_exe, exe).step);
     }
     return install;
 }
 
-/// A native program - the browser build's own runner with `app_mod` as its app - for the context's target: Windows,
-/// or the build's own machine for a headless run. Not yet installed (`installWindowsApp`).
-fn nativeAppExe(ctx: AppContext, app_mod: *Module, name: []const u8) *Compile {
+/// A native program for the context's target - Windows, or the build's own machine for a headless run - rooted as the
+/// web's `appExe` roots the app's wasm: an own-frame app's module IS the program (its `main` drives its frames), any
+/// other is the browser build's own runner with `app_mod` as its app. Not yet installed (`installWindowsApp`).
+fn nativeAppExe(
+    ctx: AppContext,
+    app_mod: *Module,
+    name: []const u8,
+    own_frame: bool,
+) *Compile {
     const b: *std.Build = ctx.b;
+    if (own_frame) {
+        return b.addExecutable(.{ .name = name, .root_module = app_mod });
+    }
     const runner_mod: *Module = b.createModule(.{
         .root_source_file = b.path("src/wgpu_runner.zig"),
         .target = ctx.target,
@@ -2263,9 +2312,10 @@ fn addHeadlessRunOf(
     ctx: AppContext,
     app_mod: *Module,
     name: []const u8,
+    own_frame: bool,
     script_path: ?[]const u8,
 ) *Compile {
-    const exe: *Compile = nativeAppExe(ctx, app_mod, name);
+    const exe: *Compile = nativeAppExe(ctx, app_mod, name, own_frame);
     const install: *Step.InstallArtifact = b.addInstallArtifact(exe, .{
         .dest_dir = .{ .override = .{ .custom = "headless/bin" } },
     });
@@ -2297,17 +2347,18 @@ fn addHeadlessRun(
     app: App,
     script_path: ?[]const u8,
 ) void {
-    _ = addHeadlessRunOf(b, ctx, ctx.buildAppModule(app), app.name, script_path);
+    _ = addHeadlessRunOf(b, ctx, ctx.buildAppModule(app), app.name, app.own_frame, script_path);
 }
 
-/// A program for the native Windows host: the browser build's own runner with `app_mod` as its app, installed as
-/// `zig-out/windows/<name>.exe` once it has passed the context's native check (no WGSL inside).
+/// A program for the native Windows host (`nativeAppExe`), installed as `zig-out/windows/<name>.exe` once it has passed
+/// the context's native check (no WGSL inside).
 fn addWindowsApp(
     ctx: AppContext,
     app_mod: *Module,
     name: []const u8,
+    own_frame: bool,
 ) *Step.InstallArtifact {
-    return installWindowsApp(ctx.b, ctx, nativeAppExe(ctx, app_mod, name));
+    return installWindowsApp(ctx.b, ctx, nativeAppExe(ctx, app_mod, name, own_frame));
 }
 
 /// What a `zig fmt` run does: report unformatted files and fail (`--check`), or rewrite them.
@@ -2390,6 +2441,9 @@ pub const AppContext = struct {
     /// The check every native program passes before it is installed (`tools/native_wgsl_check.zig`: no WGSL inside),
     /// or null where no native programs are built.
     native_wgsl_check: ?*Compile = null,
+    /// A Zig compiler bug's workaround every Windows program's PDB goes through (`tools/pdb_void_workaround.zig`), or
+    /// null where no Windows programs are built. Deleted with the tool once Zig is fixed.
+    pdb_void_workaround: ?*Compile = null,
     /// The check every web page's wasm passes (`tools/bridge_import_check.zig`): every import registered by the bridge.
     bridge_import_check: ?*Compile = null,
 
@@ -2753,6 +2807,9 @@ const PublishedEngine = struct {
     serve_exe: *Compile,
     /// The build-log distiller, which a project installs into its own zig-out/bin (`zig build zbuild`).
     zbuild_exe: *Compile,
+    /// The editor-config writer (`tools/gen_editor_configs.zig`), which a project runs over its own apps
+    /// (`Project.Config.editor_configs`).
+    editor_configs_exe: *Compile,
 };
 
 /// One entry per configured zimr instance (in practice one). A file-scope `var`
@@ -2782,6 +2839,7 @@ fn publishEngine(
     windows_ctx: AppContext,
     serve_exe: *Compile,
     zbuild_exe: *Compile,
+    editor_configs_exe: *Compile,
 ) void {
     const pipeline: *ShaderPipeline = b.allocator.create(ShaderPipeline) catch @panic("OOM");
     pipeline.* = ctx.shader_pipeline.*;
@@ -2797,6 +2855,7 @@ fn publishEngine(
         .windows_ctx = published_windows,
         .serve_exe = serve_exe,
         .zbuild_exe = zbuild_exe,
+        .editor_configs_exe = editor_configs_exe,
     }) catch @panic("OOM");
 }
 
@@ -2863,6 +2922,9 @@ pub const Project = struct {
     run_step: *Step,
     /// Whether an app is wired into `run_step` yet.
     has_run_app: bool,
+    /// The two runs of zimr's editor-config writer when `Config.editor_configs` is on - `zig build editor-configs`,
+    /// and its `--check` in `check` - which `addApp` names every app to. Empty when the configs are off.
+    editor_configs_runs: []const *Run,
 
     pub const Config = struct {
         /// Copied as-is into zig-out/web/: the gallery page, a manifest, icons.
@@ -2875,6 +2937,11 @@ pub const Project = struct {
         /// zimr's linter over the project's sources. Gates the shareable artifacts
         /// (`*-standalone`) and `check`, never a plain build.
         lint: ?Lint = null,
+        /// VS Code and Zed debug configs in the project's .vscode/ and .zed/, as zimr keeps its own: for every app a
+        /// web one (Chrome, through the dev server) and a Windows one (CodeLLDB), each with the task that builds the
+        /// app first. `zig build editor-configs` writes them, and `check` fails once an app is added
+        /// without rewriting them.
+        editor_configs: bool = false,
     };
 
     pub const Lint = struct {
@@ -2908,7 +2975,9 @@ pub const Project = struct {
         job_kernels: bool = false,
         /// Embed every engine shader's WGSL (`@embedFile("pbr_fs.wgsl")`, ...).
         engine_wgsl: bool = false,
-        /// The app owns its GPU frame (its own loop) instead of zimr's runner ticking it.
+        /// The app's source is the program's root - the wasm's, or the Windows program's - instead of zimr's runner:
+        /// it declares `main` (which calls `App.run`) and opens and closes each frame itself. Such an app is not a
+        /// descriptor, so no launcher can host it.
         own_frame: bool = false,
     };
 
@@ -2959,6 +3028,7 @@ pub const Project = struct {
             .port = config.port,
             .run_step = b.step("run", "Build the first app for -Dplatform and run it (as its run-<name> does)"),
             .has_run_app = false,
+            .editor_configs_runs = &.{},
         };
         p.check_step.dependOn(p.test_step);
         p.check_step.dependOn(b.getInstallStep());
@@ -3005,6 +3075,23 @@ pub const Project = struct {
         zbuild_step.dependOn(&zbuild_install.step);
         suggestZbuild(b, "zig-out/bin/zbuild");
 
+        // `zig build editor-configs` - zimr's own editor-config writer, over the project's apps (`addApp` names
+        // each one to both runs) - and its `--check` in `check`, so an app added without rewriting them fails there.
+        if (config.editor_configs) {
+            const write_run: *Run = editorConfigsRun(b, engine.editor_configs_exe, config.port);
+            const check_run: *Run = editorConfigsRun(b, engine.editor_configs_exe, config.port);
+            check_run.addArg("--check");
+            // It reads the four files, which are not declared inputs: never trust a cached pass.
+            check_run.has_side_effects = true;
+            const editor_configs_step: *Step = b.step(
+                "editor-configs",
+                "Write .vscode/ and .zed/: a web and a Windows debug config for every app, and their build tasks",
+            );
+            editor_configs_step.dependOn(&write_run.step);
+            p.check_step.dependOn(&check_run.step);
+            p.editor_configs_runs = b.allocator.dupe(*Run, &.{ write_run, check_run }) catch @panic("OOM");
+        }
+
         if (config.lint) |lint| {
             const lint_step: *Step = b.step("lint", "Run zimr's linter over the project's sources");
             const lint_files: []const LazyPath = zigFilesUnder(b, lint.dirs);
@@ -3029,6 +3116,15 @@ pub const Project = struct {
             fix_step.dependOn(&fmt_after_fix.step);
         }
         return p;
+    }
+
+    /// A run of zimr's editor-config writer from the project's root, in its project form: steps and outputs spelled as
+    /// the apps are named, the dev server the project's `serve` on `port`. The apps come later, from `addApp`.
+    fn editorConfigsRun(b: *std.Build, writer_exe: *Compile, port: []const u8) *Run {
+        const run: *Run = b.addRunArtifact(writer_exe);
+        run.addArgs(&.{ "--project", b.fmt("--port={s}", .{port}) });
+        run.setCwd(b.path("."));
+        return run;
     }
 
     /// What an app's `run-<name>` does once `app_step` has built the app: runs the installed `program`, or - an app
@@ -3102,9 +3198,13 @@ pub const Project = struct {
         if (p.lint_step) |lint_step| {
             app_step.dependOn(lint_step);
         }
+        // Whatever `-Dplatform` this build is for, the app builds for both, so the editor configs debug it on both.
+        for (p.editor_configs_runs) |editor_configs_run| {
+            editor_configs_run.addArgs(&.{ app.name, b.fmt("--windows={s}", .{app.name}) });
+        }
         if (p.platform == .windows) {
             // Natively, background jobs run in the program itself, so no kernel wasm is built.
-            const windows_exe: *Compile = nativeAppExe(ctx, user_mod, app.name);
+            const windows_exe: *Compile = nativeAppExe(ctx, user_mod, app.name, app.own_frame);
             const windows_install: *InstallArtifact = installWindowsApp(b, ctx, windows_exe);
             b.getInstallStep().dependOn(&windows_install.step);
             app_step.dependOn(&windows_install.step);
@@ -3794,6 +3894,14 @@ pub fn build(b: *std.Build) void {
         "Print the robot tests' measurement tables (otherwise a passing run is silent)",
     ) orelse false;
     build_opts.addOption(bool, "test_report", test_report);
+    // `-Dparked-tests`: also run the PARKED tests - slow ones that check something real but were set aside while the
+    // suite was trimmed (Oct 12). `report.parked` in `src/test_report.zig`; `grep -n "report.parked()" src` lists them.
+    const parked_tests: bool = b.option(
+        bool,
+        "parked-tests",
+        "Also run the parked tests: slow, set aside for now (with -Dslow-tests)",
+    ) orelse false;
+    build_opts.addOption(bool, "parked_tests", parked_tests);
     // `-Dtrain-chunk`: run the TRAINING tests - a few minutes of learning that resume from a
     // checkpoint on disk and save one when they finish. Never part of the slow suite: a test suite
     // that takes a different amount of time depending on what is lying in `train/` is not a test
@@ -4124,10 +4232,10 @@ pub fn build(b: *std.Build) void {
     native_plot_png_step.dependOn(&native_plot_png_run.step);
 
     // robot-bench: the section 4g speed acceptance measurement, and the source of the
-    // numbers README.md quotes.  It has to be a build step, not a file with a
+    // numbers readme.html quotes.  It has to be a build step, not a file with a
     // `main` nobody can reach: a benchmark that takes a hand-rolled `build-exe`
     // with a stubbed build_options to run is a number nobody can check, and
-    // README.md leads with it.  ReleaseFast because the thing being measured is
+    // readme.html quotes it.  ReleaseFast because the thing being measured is
     // the engine at the speed it ships, and the cases assert their own premise
     // (case 4 fails the step if the Go1 is not actually holding its pose), so a
     // red exit here means the measurement was nonsense rather than merely slow.
@@ -4596,6 +4704,18 @@ pub fn build(b: *std.Build) void {
         }),
     });
     native_wgsl_check_exe.root_module.addImport("cli", cli_mod);
+    // pdb_void_workaround: not a check but a Zig compiler bug's workaround, which every Windows program's PDB goes
+    // through so LLDB sees the program's `void` functions (`tools/pdb_void_workaround.zig`). It fails the build once
+    // Zig is fixed; then delete the tool and every `pdb_void_workaround` here.
+    const pdb_void_workaround_exe: *Compile = b.addExecutable(.{
+        .name = "pdb_void_workaround",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/pdb_void_workaround.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+    pdb_void_workaround_exe.root_module.addImport("cli", cli_mod);
     // bridge_import_check: the check every web page's wasm passes - every function it imports is one the bridge
     // registers (`tools/bridge_import_check.zig`), so a missing one fails the build rather than the page's load.
     const bridge_import_check_exe: *Compile = b.addExecutable(.{
@@ -4637,9 +4757,11 @@ pub fn build(b: *std.Build) void {
         // The same test for Windows, to run on a Windows machine's GPU: real parallel dispatches, real atomics, a real
         // driver's precision - what lavapipe, which runs a command buffer's dispatches one after another, cannot show.
         const windows_host_test_exe: *Compile = addVulkanHostTest(b, windows_target, host_test_inputs);
-        const windows_host_test_install: *InstallArtifact = b.addInstallArtifact(windows_host_test_exe, .{
-            .dest_dir = .{ .override = .{ .custom = "windows" } },
-        });
+        const windows_host_test_install: *InstallArtifact = installWindowsProgram(
+            b,
+            windows_host_test_exe,
+            pdb_void_workaround_exe,
+        );
         const windows_host_test_check: *Step.Run = addNativeWgslCheck(b, native_wgsl_check_exe, windows_host_test_exe);
         windows_host_test_install.step.dependOn(&windows_host_test_check.step);
         const windows_host_test_step: *Step = b.step(
@@ -4741,11 +4863,12 @@ pub fn build(b: *std.Build) void {
     windows_app_ctx.shader_cache = &windows_shader_cache;
     windows_app_ctx.vulkan_shaders = true;
     windows_app_ctx.native_wgsl_check = native_wgsl_check_exe;
+    windows_app_ctx.pdb_void_workaround = pdb_void_workaround_exe;
     windows_app_ctx.engine_shader_embeds = native_engine_embeds.items;
     // A project's build.zig (see `Project`) runs after this function has returned,
     // and reaches the engine through this handle - so it is published ABOVE the
     // phase split, the last point a dependency's build() gets to.
-    publishEngine(b, wgpu_app_ctx, windows_app_ctx, serve_exe, tools.zbuild);
+    publishEngine(b, wgpu_app_ctx, windows_app_ctx, serve_exe, tools.zbuild, tools.editor_configs);
 
     // ========================================================================
     // PHASE SPLIT - everything above is what a CONSUMER needs: the exposed
@@ -5215,6 +5338,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "monitors", .title = "zimr - monitors" },
         .{ .name = "input_gamepad", .title = "zimr - gamepads" },
         .{ .name = "audio_mixer", .title = "zimr - the mixer" },
+        .{ .name = "audio_keyboard", .title = "zimr - keyboard" },
         .{ .name = "ui_shortcuts", .title = "zimr - ui shortcuts (B2 capstone)" },
         .{ .name = "ui_mouse_drag", .title = "zimr - ui mouse drag (B1 capstone)" },
         .{ .name = "ui_custom_rendering", .title = "zimr - UI custom rendering" },
@@ -5249,6 +5373,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "random_values", .title = "zimr - core - generate random values" },
         .{ .name = "random_sequence", .title = "zimr - core - random sequence" },
         .{ .name = "delta_time", .title = "zimr - core - delta time" },
+        .{ .name = "profiler_flamegraph", .title = "zimr - profiler flamegraph" },
         .{ .name = "text_font_loading", .title = "zimr - text - font loading" },
         .{ .name = "undo_redo", .title = "zimr - core - undo / redo" },
         .{ .name = "smooth_pixelperfect", .title = "zimr - core - smooth pixel-perfect" },
@@ -5593,8 +5718,9 @@ pub fn build(b: *std.Build) void {
         },
         .{ .name = "decal_sw", .title = "zimr - WebGPU - one decal shader: CPU | GPU" },
         // Own-frame 3D demos: the example IS the exe and drives its own GPU
-        // frame; `.own_frame` routes finishWgpuApp to root the exe at the demo
-        // instead of the shared runner. Same declarative glue otherwise.
+        // frame; `.own_frame` routes finishWgpuApp (and natively `nativeAppExe`)
+        // to root the exe at the demo instead of the shared runner. Same
+        // declarative glue otherwise.
         .{
             .name = "cube_demo",
             .title = "zimr · WebGPU · 3D depth-tested cube",
@@ -6329,7 +6455,12 @@ pub fn build(b: *std.Build) void {
                 continue;
             }
             const example_mod: *Module = windows_app_ctx.buildAppModule(wgpu_app);
-            const example_install: *Step.InstallArtifact = addWindowsApp(windows_app_ctx, example_mod, wgpu_app.name);
+            const example_install: *Step.InstallArtifact = addWindowsApp(
+                windows_app_ctx,
+                example_mod,
+                wgpu_app.name,
+                wgpu_app.own_frame,
+            );
             windows_builds.put(wgpu_app.name, example_install) catch @panic("oom");
         }
         var pending_names: [windows_pending.len][]const u8 = undefined;
@@ -6344,7 +6475,12 @@ pub fn build(b: *std.Build) void {
         const gallery_mod: *Module = windows_app_ctx.buildUserModShared("zimr_gallery");
         gallery_mod.addOptions("gallery_options", gallery_options);
         gallery_mod.addAnonymousImport("examples_manifest", .{ .root_source_file = b.path("src/web/manifest.json") });
-        const gallery_install: *Step.InstallArtifact = addWindowsApp(windows_app_ctx, gallery_mod, "zimr_gallery");
+        const gallery_install: *Step.InstallArtifact = addWindowsApp(
+            windows_app_ctx,
+            gallery_mod,
+            "zimr_gallery",
+            false,
+        );
         windows_builds.put("zimr_gallery", gallery_install) catch @panic("oom");
     }
     // The launcher's examples, one name each; `examples/launcher` imports each as `ex_<name>`.
@@ -6392,6 +6528,7 @@ pub fn build(b: *std.Build) void {
             windows_app_ctx,
             launcher_windows_mod,
             "launcher",
+            false,
         );
         windows_builds.put("launcher", launcher_windows_install) catch @panic("oom");
     }
@@ -6409,6 +6546,7 @@ pub fn build(b: *std.Build) void {
             headless_app_ctx,
             launcher_headless_mod,
             "launcher",
+            false,
             script_path,
         );
         // `flagships-check`: the launcher runs every flagship in turn, each for 40 frames, captured into
@@ -6528,8 +6666,8 @@ pub fn build(b: *std.Build) void {
 
     // ---- One step per app: `zig build <app>` builds it for `-Dplatform` - the web build (served page and single
     // file) or the native program - or, on a machine zimr has no platform for, fails naming the choices. An app
-    // without a build for the chosen platform fails naming the reason. `all-examples` builds every app for the
-    // platform, and natively the gallery that starts them. The steps that ship something are listed for the lint
+    // without a build for the chosen platform fails naming the reason. `all-examples` builds every app the platform
+    // has, natively the gallery that starts them included. The steps that ship something are listed for the lint
     // gate below.
     var artifact_step_names: ArrayList([]const u8) = .empty;
     {
@@ -6564,7 +6702,16 @@ pub fn build(b: *std.Build) void {
             const app_build: *Step = appBuildFor(b, platform, name, &web_builds, &windows_builds);
             const app_step: *Step = b.step(dash_name, b.fmt("Build {s} for -Dplatform (web or windows)", .{name}));
             app_step.dependOn(app_build);
-            all_examples_step.dependOn(app_build);
+            // `all-examples` builds the apps the platform has; one it lacks (the gallery on the web, an app still
+            // pending natively) is left out, and its own step says why. With no platform at all every app's step
+            // fails naming the choices, and `all-examples` fails with them.
+            const in_all_examples: bool = if (platform) |chosen| switch (chosen) {
+                .web => web_builds.contains(name),
+                .windows => windows_builds.contains(name),
+            } else true;
+            if (in_all_examples) {
+                all_examples_step.dependOn(app_build);
+            }
             artifact_step_names.append(b.allocator, dash_name) catch @panic("oom");
             // `run-<app>` builds it as `<app>` does - lint gate included - then runs it.
             const run_step: *Step = b.step(
@@ -6811,6 +6958,56 @@ pub fn build(b: *std.Build) void {
     const canary_run: *Run = b.addSystemCommand(&.{ "node", "webtests/c2js_canary.mjs" });
     canary_run.addFileArg(canary_js);
     canary_step.dependOn(&canary_run.step);
+
+    // THE AUDIO WORKLET'S PROGRAM, run in Node against a module that plays both parts of a page
+    // (`src/audio_worklet_test_module.zig`): the program as the pages embed it, the module built for the browser's
+    // instance shape - freestanding, no entry point, its entry points exported. See
+    // `tools/c2js_cases/audio_worklet_test.cjs`.
+    const audio_worklet_test_step: *Step = b.step(
+        "audio-worklet-test",
+        "run the audio worklet's program in Node: commands from a real mixer, blocks against a local renderer",
+    );
+    const audio_test_target: ResolvedTarget = b.resolveTargetQuery(.{
+        .cpu_arch = .wasm32,
+        .os_tag = .freestanding,
+    });
+    const audio_test_zm_mod: *Module = b.createModule(.{
+        .root_source_file = b.path("src/zimrmath.zig"),
+        .target = audio_test_target,
+        .optimize = .ReleaseSmall,
+    });
+    audio_test_zm_mod.addOptions("build_options", build_opts_zm);
+    const audio_test_mod: *Module = b.createModule(.{
+        .root_source_file = b.path("src/audio_worklet_test_module.zig"),
+        .target = audio_test_target,
+        .optimize = .ReleaseSmall,
+    });
+    audio_test_mod.addImport("zm", audio_test_zm_mod);
+    const audio_test_exe: *Compile = b.addExecutable(.{
+        .name = "audio_worklet_test_module",
+        .root_module = audio_test_mod,
+    });
+    audio_test_exe.entry = .disabled;
+    audio_test_exe.rdynamic = true;
+    const audio_worklet_program: LazyPath = buildAudioWorkletJs(b, c2js_exe);
+    const audio_worklet_test_run: *Run = b.addSystemCommand(&.{ "node", "tools/c2js_cases/audio_worklet_test.cjs" });
+    audio_worklet_test_run.addFileArg(audio_worklet_program);
+    audio_worklet_test_run.addArtifactArg(audio_test_exe);
+    audio_worklet_test_step.dependOn(&audio_worklet_test_run.step);
+
+    // THE PAGE'S SIDE OF THE SOUND, run in Node against a stand-in browser that follows Chrome where Chrome is
+    // stricter than the specification - `process` kept only on exactly `true`, a processor's error fired as
+    // `processorerror` - with the page's sound output (`page_audio.zig`, transpiled on its own), the worklet's program
+    // and the test module as the app. See `tools/c2js_cases/audio_page_test.cjs`.
+    const audio_page_test_step: *Step = b.step(
+        "audio-page-test",
+        "run the page's sound path in Node against a Chrome-strict stand-in: a held note must sound to the end",
+    );
+    const audio_page_test_run: *Run = b.addSystemCommand(&.{ "node", "tools/c2js_cases/audio_page_test.cjs" });
+    audio_page_test_run.addFileArg(buildPageAudioJs(b, c2js_exe));
+    audio_page_test_run.addFileArg(audio_worklet_program);
+    audio_page_test_run.addArtifactArg(audio_test_exe);
+    audio_page_test_step.dependOn(&audio_page_test_run.step);
 
     // SPIR-V -> WGSL transpiler wasm exposed for the corpus test.
     // Standalone wasm that JS can call repeatedly with different
@@ -7160,20 +7357,25 @@ pub fn build(b: *std.Build) void {
     const dag_check_step: *Step = b.step("dag-check", "Verify src/*.zig import graph is a DAG");
     dag_check_step.dependOn(&dag_check.step);
 
-    // editor-configs: write the VS Code and Zed debug/build configs for every app with a web build. The names come
-    // from the registry (`web_builds`), not from a list kept by hand beside it, so no app can be missing from the
-    // editors and no config can name an app that is not there. What can still go stale is the four checked-in files
-    // - an app added and the configs never regenerated - and `check` runs the same tool with `--check` for that.
-    // The tool sorts the apps itself, so the map's order does not matter here.
+    // editor-configs: write the VS Code and Zed debug/build configs for every app with a web build, and a Zed native
+    // debug scenario for every app with a Windows program. The names come from the registries (`web_builds`,
+    // `windows_builds`), not from a list kept by hand beside them, so no app can be missing from the editors and no
+    // config can name an app that is not there. What can still go stale is the four checked-in files - an app added
+    // and the configs never regenerated - and `check` runs the same tool with `--check` for that.
+    // The tool sorts the apps itself, so the maps' order does not matter here.
     var editor_config_apps: ArrayList([]const u8) = .empty;
     var web_app_names: StringHashMap(*Step).KeyIterator = web_builds.keyIterator();
     while (web_app_names.next()) |name| {
         editor_config_apps.append(b.allocator, name.*) catch @panic("oom");
     }
+    var windows_app_names: StringHashMap(*Step.InstallArtifact).KeyIterator = windows_builds.keyIterator();
+    while (windows_app_names.next()) |name| {
+        editor_config_apps.append(b.allocator, b.fmt("--windows={s}", .{name.*})) catch @panic("oom");
+    }
     const editor_configs_run: *Run = b.addRunArtifact(tools.editor_configs);
     editor_configs_run.addArgs(editor_config_apps.items);
     editor_configs_run.setCwd(b.path("."));
-    editor_configs_run.step.name = "editor-configs (.vscode/.zed configs for every web app)";
+    editor_configs_run.step.name = "editor-configs (.vscode/.zed configs for every web and Windows app)";
     const editor_configs_step: *Step = b.step("editor-configs", "Regenerate the VS Code and Zed debug+task configs");
     editor_configs_step.dependOn(&editor_configs_run.step);
     const editor_configs_check: *Run = b.addRunArtifact(tools.editor_configs);
@@ -7182,7 +7384,7 @@ pub fn build(b: *std.Build) void {
     editor_configs_check.setCwd(b.path("."));
     // It reads the four files, which are not declared inputs: never trust a cached pass.
     editor_configs_check.has_side_effects = true;
-    editor_configs_check.step.name = "editor-configs --check (the checked-in configs match every web app)";
+    editor_configs_check.step.name = "editor-configs --check (the checked-in configs match every web and Windows app)";
 
     // files-md: regenerate src/notes/files.md, the per-file atlas (Zig port
     // of scripts/gen_files_md.py).
@@ -7249,7 +7451,8 @@ pub fn build(b: *std.Build) void {
     );
     wgpu_check.dependOn(&transpiler_corpus_cmd.step);
     wgpu_check.dependOn(&wgpu_smoke_cmd.step);
-    // The checked-in VS Code and Zed configs cover every web app (`editor-configs` writes them).
+    // The checked-in VS Code and Zed configs cover every web app, and Zed's every Windows app (`editor-configs`
+    // writes them).
     wgpu_check.dependOn(&editor_configs_check.step);
 
     // -- zm's GPU branch, actually verified rather than asserted --
@@ -7421,6 +7624,15 @@ pub fn build(b: *std.Build) void {
     });
     native_wgsl_check_test.root_module.addImport("cli", cli_mod);
     tools_test_step.dependOn(&b.addRunArtifact(native_wgsl_check_test).step);
+    const pdb_void_workaround_test: *Compile = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/pdb_void_workaround.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+    pdb_void_workaround_test.root_module.addImport("cli", cli_mod);
+    tools_test_step.dependOn(&b.addRunArtifact(pdb_void_workaround_test).step);
     const bridge_import_check_test: *Compile = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("tools/bridge_import_check.zig"),
@@ -7561,15 +7773,23 @@ pub fn build(b: *std.Build) void {
             // `src/notes/zimrnum_plan.md` section 3 - do not collapse the two files.
             "src/zimrnum.zig",
             // `zimrrl.zig` - the reinforcement-learning library, built on zimrnum. Its closure is `zm`, `zn` and
-            // `std`, shader-free for the same reason, so it belongs to this tier; `zig build zn-zimrrl` runs it alone.
+            // `std`, shader-free for the same reason, so it belongs to this tier; `zig build test-zimrrl` runs it
+            // alone.
             "src/zimrrl.zig",
             // `spv_vulkan.zig` - the Vulkan host's SPIR-V reading, checking and legalizing (vulkan_port_plan_v2.md
             // 5.5). Std only, so it runs here on every platform; its tests carry real modules from the compiler.
             "src/spv_vulkan.zig",
+            // `page_audio.zig` - the page's sound output, written for the bridge but kept apart to be tested: its
+            // tests touch no JavaScript handle (the panel's text builder), so they run here; what does touch them runs
+            // in Node (`audio-page-test`). `zig build test-page_audio` runs it alone.
+            "src/page_audio.zig",
             // `gpu.zig` - the descriptor encoders, whose tests round-trip every blob through `gpu_abi.zig`'s decoders
             // (the Vulkan host's reading). Its closure (`wgpu.zig`, `shader_introspect.zig`, `shader_interface`) is
             // shader-free.
             "src/gpu.zig",
+            // `sound.zig` - the mixer, its renderer, the instrument and the worklet's entry points. Its closure is
+            // shader-free; `zig build test-sound` runs it alone, in seconds.
+            "src/sound.zig",
             "src/robot.zig",
             "src/robot_physics.zig",
             "src/robot_control.zig",
@@ -7732,13 +7952,13 @@ pub fn build(b: *std.Build) void {
             //
             // Working on zimrnum means recompiling zimrmath, robot, codecs and physics
             // alongside it for no reason: 71-212 s against 43 s for the one module that
-            // changed, 7 s with `-Dtest-filter`. The step name is the file stem, so
-            // `src/zimrnum.zig` gives `zig build zn-zimrnum`.
+            // changed, 7 s with `-Dtest-filter`. The step name is `test-` and the file stem, so
+            // `src/zimrnum.zig` gives `zig build test-zimrnum` and `src/sound.zig` `zig build test-sound`.
             //
             // * These are for ITERATION. `zig build test-fast` is what the gate runs, and it
             // is what catches a break in a module you did not think you had touched - which
             // has happened more than once this arc.
-            const one_name: []const u8 = b.fmt("zn-{s}", .{stem});
+            const one_name: []const u8 = b.fmt("test-{s}", .{stem});
             const one_desc: []const u8 = b.fmt("Tests for {s} ALONE - the fast iteration loop", .{root});
             const one_step: *Step = b.step(one_name, one_desc);
             for (fast_runs.items) |fast_run| {
@@ -8500,6 +8720,10 @@ pub fn build(b: *std.Build) void {
     gate_step.dependOn(lint_coverage_step);
     gate_step.dependOn(test_fast_step);
     gate_step.dependOn(wgpu_check);
+    // The audio worklet's program against a real mixer's commands: nothing in a browser-free sandbox runs it otherwise.
+    gate_step.dependOn(audio_worklet_test_step);
+    // The page's side of it, against a stand-in browser as strict as Chrome.
+    gate_step.dependOn(audio_page_test_step);
     // The two projects that depend on this checkout the way a user's does. Neither is in
     // `check` (about a minute cold, too slow for the turn loop), and a consumer build no
     // aggregate step ran is how zimr_template drifted.

@@ -32,7 +32,6 @@ const common = @import("example_common");
 /// build once a handler existed.
 pub const panic = std.debug.FullPanic(common.reportPanic);
 const Allocator = std.mem.Allocator;
-const bufPrint = std.fmt.bufPrint;
 
 const z = @import("zimr");
 const zm = @import("zm");
@@ -420,28 +419,29 @@ fn update(f: *z.Frame, s: *State) void {
         .{ .size = 11 * ui, .color = dim_col, .font = &s.font },
     );
 
-    var buf: [128]u8 = undefined;
     const maximal_now: f32 = maximalJointError(s);
-    const left_line: []const u8 = bufPrint(
-        &buf,
+    const left_col: Color = if (s.worst_maximal > 1.0e-4) alarm else maximal;
+    gl.textf(
+        layout.label[0],
         "ENFORCED by a solver: error {d:.6} m  (worst {d:.6})",
         .{ maximal_now, s.worst_maximal },
-    ) catch "";
-    const left_col: Color = if (s.worst_maximal > 1.0e-4) alarm else maximal;
-    gl.text(layout.label[0], left_line, .{ .size = 12 * ui, .color = left_col, .font = &s.font });
+        .{ .size = 12 * ui, .color = left_col, .font = &s.font },
+    );
 
-    var buf2: [128]u8 = undefined;
     // Not a stored number: recomputed the same way as the left, so the zero is earned.
-    const right_line: []const u8 = bufPrint(
-        &buf2,
+    gl.textf(
+        layout.label[1],
         "ARE the coordinates: error {d:.6} m  (worst {d:.6})",
         .{ generalizedJointError(s), s.worst_generalized },
-    ) catch "";
-    gl.text(layout.label[1], right_line, .{ .size = 12 * ui, .color = generalized, .font = &s.font });
+        .{ .size = 12 * ui, .color = generalized, .font = &s.font },
+    );
 
-    var buf3: [96]u8 = undefined;
-    const clock: []const u8 = bufPrint(&buf3, "t = {d:.1} s", .{s.elapsed}) catch "";
-    gl.text(vec2(16 * ui, h - 64 * ui), clock, .{ .size = 12 * ui, .color = dim_col, .font = &s.font });
+    gl.textf(
+        vec2(16 * ui, h - 64 * ui),
+        "t = {d:.1} s",
+        .{s.elapsed},
+        .{ .size = 12 * ui, .color = dim_col, .font = &s.font },
+    );
 
     const reset_box: z.Rectangle = .{
         .x = 16 * ui,

@@ -20,7 +20,6 @@ const z = @import("zimr");
 // House form: bind the zm name once at file scope rather than qualifying it in a body.
 const zm = @import("zm");
 const clamp = zm.clamp;
-const bufPrint = std.fmt.bufPrint;
 const eql = std.mem.eql;
 const indexOf = std.mem.indexOf;
 // The sweep's table, its CPU reference and the comparison now live in the engine:
@@ -399,9 +398,7 @@ fn textRow(
     comptime fmt: []const u8,
     args: anytype,
 ) void {
-    var buf: [160]u8 = undefined;
-    const text: []const u8 = bufPrint(&buf, fmt, args) catch return;
-    f.gl.text(.{ 12, y.* }, text, .{ .size = size, .color = color, .font = &s.font });
+    f.gl.textf(.{ 12, y.* }, fmt, args, .{ .size = size, .color = color, .font = &s.font });
     y.* += size + 4;
 }
 

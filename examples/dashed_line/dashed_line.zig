@@ -12,7 +12,6 @@ const common = @import("example_common");
 
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
-const bufPrint = std.fmt.bufPrint;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 /// raylib's palette for this sample (RED, ORANGE, GOLD, GREEN, BLUE, VIOLET, PINK, SKYBLUE).
@@ -119,13 +118,12 @@ fn update(f: *z.Frame, s: *State) void {
     f.gl.rect(.{ .x = 10, .y = 40, .width = 250, .height = 78 }, .{ .color = panel });
     f.gl.rect(.{ .x = 10, .y = 40, .width = 250, .height = 78 }, .{ .color = border, .outline = 1.0 });
 
-    var buf: [96]u8 = undefined;
-    const readout: []const u8 = bufPrint(
-        &buf,
+    f.gl.textf(
+        .{ 22, 52 },
         "Dash: {d:.0}  |  Space: {d:.0}",
         .{ dash, gap },
-    ) catch "Dash: --  |  Space: --";
-    f.gl.text(.{ 22, 52 }, readout, .{ .size = 14, .color = common.palette.ink, .font = &s.font });
+        .{ .size = 14, .color = common.palette.ink, .font = &s.font },
+    );
     f.gl.text(.{ 22, 74 }, "tap: cycle colour", .{ .size = 13, .color = common.palette.ink_dim, .font = &s.font });
     f.gl.text(.{ 22, 94 }, "drag: aim the line", .{ .size = 13, .color = common.palette.ink_dim, .font = &s.font });
 

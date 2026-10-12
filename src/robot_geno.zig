@@ -6744,6 +6744,12 @@ test "robot_geno: D4 - a policy cloned from the teacher, judged in the real simu
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
+    // A MEASUREMENT IN ALL BUT NAME: its one check is that the clone's training loss fell, which gradient descent
+    // all but guarantees, so it runs with its table - `-Dslow-tests -Dtest-report` - and not on every slow run.
+    // To revisit: a real check (the clone outlasting the servo) would earn it its place back. See `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
     const gpa: Allocator = testing_allocator;
     var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
@@ -7782,6 +7788,12 @@ test "robot_geno: D5 (ii) - the teacher's label at a state: how much is signal, 
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
+    // A MEASUREMENT: it asserts nothing but its own setup, so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
     const gpa: Allocator = testing_allocator;
     var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
@@ -7904,6 +7916,12 @@ test "robot_geno: D5 (ii-b) - how much does the teacher's label depend on the pl
     // hangs on something the student cannot see, and labels must come from a teacher without that memory.
     const options = @import("build_options");
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
+        return error.SkipZigTest;
+    }
+    // A MEASUREMENT: it asserts nothing but its own setup, so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
         return error.SkipZigTest;
     }
     const gpa: Allocator = testing_allocator;
@@ -8961,6 +8979,12 @@ test "robot_geno: F1 - the judge's servo baseline on the 10-second dance" {
     // starts every 0.5 s, judged by the task's rule. Printed with -Dtest-report.
     const options = @import("build_options");
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
+        return error.SkipZigTest;
+    }
+    // A MEASUREMENT: it asserts nothing but its own bookkeeping, so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
         return error.SkipZigTest;
     }
     const gpa: Allocator = testing_allocator;

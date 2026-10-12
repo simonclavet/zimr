@@ -63,7 +63,7 @@ extern fn js_set(
 ) void;
 /// `object[index]`.
 extern fn js_get_index(object: Handle, index: u32) Handle;
-/// `object.name()`, `object.name(a)`, `object.name(a, b)`: the result as a handle.
+/// `object.name()`, `object.name(a)`, `object.name(a, b)`, `object.name(a, b, c)`: the result as a handle.
 extern fn js_call0(
     object: Handle,
     name_pointer: [*]const u8,
@@ -82,6 +82,27 @@ extern fn js_call2(
     first_argument: Handle,
     second_argument: Handle,
 ) Handle;
+extern fn js_call3(
+    object: Handle,
+    name_pointer: [*]const u8,
+    name_length: u32,
+    first_argument: Handle,
+    second_argument: Handle,
+    third_argument: Handle,
+) Handle;
+/// `object.name(...arguments)` inside a `try`: `is_ok` says whether it returned, and the handle is its result - or,
+/// when it threw, the exception.
+/// `object.name(argument)` inside a `try`, building no argument array: as `js_try_call`, for one argument.
+extern fn js_try_call1(
+    object: Handle,
+    name_pointer: [*]const u8,
+    name_length: u32,
+    argument: Handle,
+    is_ok: *u32,
+) Handle;
+/// A JavaScript function of exactly three arguments calling the Zig function `function` with their handles - as
+/// `js_func`, but building no array on each call, for the callback called on every block (`process`).
+extern fn js_func3(function: *const anyopaque) Handle;
 /// The same, the result discarded.
 extern fn js_call1v(
     object: Handle,
@@ -125,6 +146,8 @@ extern fn js_array() Handle;
 extern fn js_push(array: Handle, value: Handle) Handle;
 /// The number a value holds: `+value`.
 extern fn js_to_num(value: Handle) f64;
+/// 1 when `value` is truthy, else 0.
+extern fn js_truthy(value: Handle) u32;
 /// `value.length`.
 extern fn js_len(value: Handle) u32;
 /// Whether a value is null or undefined: 1 or 0.
@@ -147,6 +170,25 @@ extern fn js_free(value: Handle) void;
 /// and so one state.
 const ProgramState = struct {
     is_ready: bool = false,
+    /// Blocks rendered since the processor started, for its reports to the page (`postStats`).
+    blocks_rendered: f64 = 0,
+    /// Views of the rendered block in the instance's memory, one a channel, made once and kept
+    /// (`renderedChannelView`): a new view each block would make two objects a block on the audio thread, for its
+    /// garbage collector to find. Made again only when stale - the block at another address or of another length, or
+    /// the instance's memory grown, which detaches the buffer the views were made over (a detached view's length reads
+    /// 0, the test miniaudio makes for its own view).
+    left_view: Handle = 0,
+    right_view: Handle = 0,
+    views_address: f64 = 0,
+    views_frame_count: f64 = 0,
+    /// The worklet's clock - `performance` where the browser gives a worklet one, else `Date` - and what this second's
+    /// blocks took: the longest a block's call lasted, and the longest gap from one block's start to the next's
+    /// (`postStats`). A long block is this program's work, or a collection, or a function compiled on its first call; a
+    /// long gap with short blocks is the thread not being run in time.
+    clock: Handle = 0,
+    last_block_start_ms: f64 = 0,
+    longest_block_ms: f64 = 0,
+    longest_gap_ms: f64 = 0,
     instance_exports: Handle = 0,
     instance_memory: Handle = 0,
     processor_port: Handle = 0,
@@ -203,6 +245,22 @@ fn callExport(comptime name: []const u8, arguments: []const f64) f64 {
             const second_argument: Handle = js_num(arguments[1]);
             defer js_free(second_argument);
             break :call2 js_call2(instance_exports, name.ptr, name.len, first_argument, second_argument);
+        },
+        3 => call3: {
+            const first_argument: Handle = js_num(arguments[0]);
+            defer js_free(first_argument);
+            const second_argument: Handle = js_num(arguments[1]);
+            defer js_free(second_argument);
+            const third_argument: Handle = js_num(arguments[2]);
+            defer js_free(third_argument);
+            break :call3 js_call3(
+                instance_exports,
+                name.ptr,
+                name.len,
+                first_argument,
+                second_argument,
+                third_argument,
+            );
         },
         else => unreachable,
     };
@@ -325,6 +383,15 @@ fn acceptSamples(data: Handle) void {
     _ = callExport(worklet_abi.register_samples, &.{samples_id});
 }
 
+/// `{ kind: "note", key, isDown, velocity }`: a key's event, queued for the instrument at the next block. A key's
+/// handler on the main thread posts one as the key moves, so its note waits for no frame: only for the next block.
+fn acceptNote(data: Handle) void {
+    const key: f64 = numberProperty(data, message.key_field);
+    const is_down: f64 = numberProperty(data, message.is_down_field);
+    const velocity: f64 = numberProperty(data, message.velocity_field);
+    _ = callExport(worklet_abi.accept_note, &.{ key, is_down, velocity });
+}
+
 /// The port's message handler: one message from the main thread, `event_handle.data`, by its kind.
 fn handleMessage(event_handle: Handle) void {
     const data: Handle = property(event_handle, "data");
@@ -335,6 +402,8 @@ fn handleMessage(event_handle: Handle) void {
         acceptCommands(data);
     } else if (isString(kind, message.samples_kind)) {
         acceptSamples(data);
+    } else if (isString(kind, message.note_kind)) {
+        acceptNote(data);
     }
 }
 
@@ -372,22 +441,135 @@ fn sendNotices() void {
     js_call2v(program_state.processor_port, "postMessage", "postMessage".len, notices_message, transfer_list);
 }
 
+/// The worklet's clock, in milliseconds: `performance.now()` where the browser gives a worklet `performance`, else
+/// `Date.now()`, whole milliseconds.
+fn clockMilliseconds() f64 {
+    const now: Handle = js_call0(program_state.clock, "now", "now".len);
+    defer js_free(now);
+    return js_to_num(now);
+}
+
+/// How often the processor reports to the page: at its first block, so that the page sees at once that `process`
+/// runs, then every 375 blocks of 128 frames - a second at 48 000 Hz - so that it sees it keeps running.
+const blocks_per_report: f64 = 375;
+
+/// Tells the page how many blocks the processor has rendered and the loudest sample since its last report
+/// (`{ kind: "stats", blocks, peak }`): the page's diagnostics show from it whether the renderer runs, and whether it
+/// makes any sound.
+fn postStats() void {
+    const stats_message: Handle = js_obj();
+    defer js_free(stats_message);
+    const kind_value: Handle = string(message.stats_kind);
+    defer js_free(kind_value);
+    const blocks_value: Handle = js_num(program_state.blocks_rendered);
+    defer js_free(blocks_value);
+    const peak_value: Handle = js_num(callExport(worklet_abi.take_peak, &.{}));
+    defer js_free(peak_value);
+    // The worklet's own clock, `currentFrame`: the frame its blocks have reached on the context's timeline.
+    const global_scope: Handle = js_global();
+    const frame_value: Handle = property(global_scope, "currentFrame");
+    defer js_free(frame_value);
+    setProperty(stats_message, message.kind_field, kind_value);
+    setProperty(stats_message, message.blocks_field, blocks_value);
+    setProperty(stats_message, message.peak_field, peak_value);
+    setProperty(stats_message, "frame", frame_value);
+    const longest_block_value: Handle = js_num(program_state.longest_block_ms);
+    defer js_free(longest_block_value);
+    setProperty(stats_message, "longestBlockMs", longest_block_value);
+    const longest_gap_value: Handle = js_num(program_state.longest_gap_ms);
+    defer js_free(longest_gap_value);
+    setProperty(stats_message, "longestGapMs", longest_gap_value);
+    program_state.longest_block_ms = 0;
+    program_state.longest_gap_ms = 0;
+    js_call1v(program_state.processor_port, "postMessage", "postMessage".len, stats_message);
+}
+
+/// Makes the two channel views of the rendered block again when they are stale (`ProgramState.left_view`): not made
+/// yet, made for another address or length, or detached by the instance's memory growing. Otherwise keeps them: a
+/// block then makes no object.
+fn keepViewsFresh(rendered_address: f64, frame_count: f64) void {
+    const has_views: bool = program_state.left_view != 0;
+    const is_same_block: bool = rendered_address == program_state.views_address and
+        frame_count == program_state.views_frame_count;
+    const is_detached: bool = has_views and js_len(program_state.left_view) == 0;
+    if (has_views and is_same_block and !is_detached) {
+        return;
+    }
+    if (has_views) {
+        js_free(program_state.left_view);
+        js_free(program_state.right_view);
+    }
+    const float32_constructor: Handle = program_state.float32_array_constructor;
+    const bytes_per_sample: f64 = 4;
+    const right_address: f64 = rendered_address + frame_count * bytes_per_sample;
+    program_state.left_view = viewOfInstanceMemory(float32_constructor, rendered_address, frame_count);
+    program_state.right_view = viewOfInstanceMemory(float32_constructor, right_address, frame_count);
+    program_state.views_address = rendered_address;
+    program_state.views_frame_count = frame_count;
+}
+
+/// Calls the instance's render (`worklet_abi.render`) for `frame_count` frames inside a `try`: the address of the
+/// rendered block, or null when it threw - the exception then sent to the page as `{ kind: "failed", message }`, and
+/// the processor stopped (`is_ready` false), so that one failure is reported once, with its text.
+fn renderCaught(frame_count: f64) ?f64 {
+    const frame_count_handle: Handle = js_num(frame_count);
+    defer js_free(frame_count_handle);
+    var is_ok: u32 = 0;
+    const name: []const u8 = worklet_abi.render;
+    const result: Handle = js_try_call1(
+        program_state.instance_exports,
+        name.ptr,
+        name.len,
+        frame_count_handle,
+        &is_ok,
+    );
+    defer js_free(result);
+    if (is_ok == 1) {
+        return js_to_num(result);
+    }
+    program_state.is_ready = false;
+    const failure_message: Handle = js_obj();
+    defer js_free(failure_message);
+    const kind_value: Handle = string(message.failed_kind);
+    defer js_free(kind_value);
+    // As text: an exception object need not survive being posted.
+    const global_scope: Handle = js_global();
+    const failure_text: Handle = js_call1(global_scope, "String", "String".len, result);
+    defer js_free(failure_text);
+    setProperty(failure_message, message.kind_field, kind_value);
+    setProperty(failure_message, "message", failure_text);
+    js_call1v(program_state.processor_port, "postMessage", "postMessage".len, failure_message);
+    return null;
+}
+
 /// The processor's `process`, called by the browser for each block of 128 frames: renders the block in the app's
 /// instance, copies each channel to the output - one `set` for each, from a view of the instance's memory - and sends
 /// the renderer's notices to the main thread. `outputs_handle` is the processor's outputs: an array of outputs, each
-/// an array of channels, each a `Float32Array` of the block's samples. Returns 1: keep calling.
+/// an array of channels, each a `Float32Array` of the block's samples. Returns `true`: keep calling. It must be the
+/// boolean - c2js gives a Zig `bool` back as one - and not a number: the specification converts the result with
+/// `ToBoolean`, but Chrome keeps a processor with no inputs alive only while it returns exactly `true` (its
+/// `IsTrue()`), and a 1 there plays a single block, then silence, with no error.
 fn processBlock(
     inputs_handle: Handle,
     outputs_handle: Handle,
     parameters_handle: Handle,
-) u32 {
+) bool {
     _ = inputs_handle;
     _ = parameters_handle;
-    const keep_calling: u32 = 1;
+    const keep_calling: bool = true;
     // Not linked yet: the output stays as the browser hands it, silent.
     if (!program_state.is_ready) {
         return keep_calling;
     }
+    // The gap since the last block's start: the browser asks for blocks in bursts, a device period apart, so the
+    // usual longest gap is about a period; one much longer means the thread was not run in time.
+    const block_start_ms: f64 = clockMilliseconds();
+    const has_last_block: bool = program_state.last_block_start_ms != 0;
+    if (has_last_block) {
+        const gap_ms: f64 = block_start_ms - program_state.last_block_start_ms;
+        program_state.longest_gap_ms = @max(program_state.longest_gap_ms, gap_ms);
+    }
+    program_state.last_block_start_ms = block_start_ms;
     const first_output: Handle = js_get_index(outputs_handle, 0);
     defer js_free(first_output);
     const output_channel_count: u32 = js_len(first_output);
@@ -397,23 +579,39 @@ fn processBlock(
     const left_channel: Handle = js_get_index(first_output, 0);
     defer js_free(left_channel);
     const frame_count: f64 = @floatFromInt(js_len(left_channel));
-    // The block, rendered: the left channel's samples, then the right channel's (`worklet_abi.render`).
-    const rendered_address: f64 = callExport(worklet_abi.render, &.{frame_count});
-    const float32_constructor: Handle = program_state.float32_array_constructor;
-    const left_samples: Handle = viewOfInstanceMemory(float32_constructor, rendered_address, frame_count);
-    defer js_free(left_samples);
-    js_call1v(left_channel, "set", "set".len, left_samples);
-    // A second channel, when the output has one: the right samples follow the left, 4 bytes each.
+    // The block, rendered: the left channel's samples, then the right channel's (`worklet_abi.render`). A throw from
+    // the instance is caught and sent to the page, and the processor plays silence from then on.
+    const rendered_address: f64 = renderCaught(frame_count) orelse return keep_calling;
+    keepViewsFresh(rendered_address, frame_count);
+    js_call1v(left_channel, "set", "set".len, program_state.left_view);
+    // A second channel, when the output has one: the right samples follow the left.
     if (output_channel_count >= 2) {
         const right_channel: Handle = js_get_index(first_output, 1);
         defer js_free(right_channel);
-        const right_address: f64 = rendered_address + frame_count * 4;
-        const right_samples: Handle = viewOfInstanceMemory(float32_constructor, right_address, frame_count);
-        defer js_free(right_samples);
-        js_call1v(right_channel, "set", "set".len, right_samples);
+        js_call1v(right_channel, "set", "set".len, program_state.right_view);
     }
     sendNotices();
+    const block_ms: f64 = clockMilliseconds() - block_start_ms;
+    program_state.longest_block_ms = @max(program_state.longest_block_ms, block_ms);
+    program_state.blocks_rendered += 1;
+    const is_first_block: bool = program_state.blocks_rendered == 1;
+    const is_report_due: bool = is_first_block or @mod(program_state.blocks_rendered, blocks_per_report) == 0;
+    if (is_report_due) {
+        postStats();
+    }
     return keep_calling;
+}
+
+/// Tells the main thread how the processor's start went: `{ kind: "ready" }` once the module is linked and the renderer
+/// started, `{ kind: "failed" }` when the renderer could not start. The page shows it; a processor that never says
+/// either threw while linking, and the node reports that itself (`processorerror`).
+fn postStatus(comptime kind: []const u8) void {
+    const status_message: Handle = js_obj();
+    defer js_free(status_message);
+    const kind_value: Handle = string(kind);
+    defer js_free(kind_value);
+    setProperty(status_message, message.kind_field, kind_value);
+    js_call1v(program_state.processor_port, "postMessage", "postMessage".len, status_message);
 }
 
 /// The processor's constructor, after the base class's: `this_handle` is the new processor, and `options_handle` the
@@ -441,9 +639,14 @@ fn initializeProcessor(this_handle: Handle, options_handle: Handle) void {
     program_state.instance_memory = property(program_state.instance_exports, "memory");
     program_state.processor_port = property(this_handle, "port");
     program_state.float32_array_constructor = property(global_scope, "Float32Array");
+    // The finest clock the worklet has: `performance` where the browser gives a worklet one, else `Date`.
+    const performance: Handle = property(global_scope, "performance");
+    const has_performance_clock: bool = js_truthy(performance) == 1;
+    program_state.clock = if (has_performance_clock) performance else property(global_scope, "Date");
     program_state.uint8_array_constructor = property(global_scope, "Uint8Array");
     const has_started: bool = callExport(worklet_abi.start, &.{}) == 1;
     if (!has_started) {
+        postStatus(message.failed_kind);
         return;
     }
     program_state.command_buffer_address = callExport(worklet_abi.command_buffer, &.{});
@@ -452,6 +655,7 @@ fn initializeProcessor(this_handle: Handle, options_handle: Handle) void {
     defer js_free(message_handler);
     setProperty(program_state.processor_port, "onmessage", message_handler);
     program_state.is_ready = true;
+    postStatus(message.ready_kind);
 }
 
 // ---- The entry point ----
@@ -469,7 +673,8 @@ export fn start() void {
     defer js_free(processor_class);
     const prototype: Handle = property(processor_class, "prototype");
     defer js_free(prototype);
-    const process_function: Handle = js_func(&processBlock);
+    // `js_func3`: `process` is called on every block, and builds no array that way.
+    const process_function: Handle = js_func3(&processBlock);
     defer js_free(process_function);
     setProperty(prototype, "process", process_function);
     const processor_name: Handle = string(worklet_abi.processor_name);
@@ -480,4 +685,13 @@ export fn start() void {
 comptime {
     // `start` must survive optimisation: it is the program's only entry point.
     _ = &start;
+    // `process`'s result reaches the browser as c2js gives it back: a Zig `bool` as a JavaScript boolean, any number
+    // as a number. Chrome calls a processor with no inputs again only while `process` returns exactly `true` - the
+    // specification's `ToBoolean` would accept a 1, Chrome's `IsTrue()` does not - so anything but `bool` here plays
+    // one block, then silence, with no error.
+    const process_return_type: ?type = @typeInfo(@TypeOf(processBlock)).@"fn".return_type;
+    if (process_return_type != bool) {
+        @compileError("processBlock must return bool: Chrome keeps calling `process` only while it returns exactly " ++
+            "`true`, and c2js returns a number as a number");
+    }
 }

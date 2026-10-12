@@ -28,7 +28,6 @@ const common = @import("example_common");
 /// build once a handler existed.
 pub const panic = std.debug.FullPanic(common.reportPanic);
 const Allocator = std.mem.Allocator;
-const bufPrint = std.fmt.bufPrint;
 
 const z = @import("zimr");
 const zm = @import("zm");
@@ -219,7 +218,6 @@ fn update(f: *z.Frame, s: *State) void {
     else
         0.0;
 
-    var buf: [128]u8 = undefined;
     // Only `.rk4` and `.euler` are reachable - the toggle below flips between those two. The
     // other arms exist because this switch is EXHAUSTIVE ON PURPOSE: `.implicit` was added to
     // `rbt.Integrator` and broke this line, which is the behaviour we want. An `else` here
@@ -230,12 +228,12 @@ fn update(f: *z.Frame, s: *State) void {
         .implicit => "implicit",
         .implicitfast => "implicit (fast)",
     };
-    const line: []const u8 = bufPrint(
-        &buf,
+    gl.textf(
+        vec2(16, 24),
         "{s}  |  t = {d:.1} s  |  energy drift {c}{d:.3} %",
         .{ label, s.elapsed, @as(u8, if (drift < 0) '-' else '+'), @abs(drift) },
-    ) catch "readout unavailable";
-    gl.text(vec2(16, 24), line, .{ .size = 18, .color = text_color, .font = &s.font });
+        .{ .size = 18, .color = text_color, .font = &s.font },
+    );
     gl.text(
         vec2(16, 48),
         "two numbers describe this machine - tap to re-throw",

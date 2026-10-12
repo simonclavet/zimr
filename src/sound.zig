@@ -37,6 +37,7 @@
 
 const std = @import("std");
 const ArrayList = std.ArrayList;
+const bufPrint = std.fmt.bufPrint;
 const expect = std.testing.expect;
 const expectApproxEqAbs = std.testing.expectApproxEqAbs;
 const expectEqual = std.testing.expectEqual;
@@ -56,7 +57,11 @@ const assert = zm.assert;
 const asBytes = std.mem.asBytes;
 const clamp = zm.clamp;
 const cache_line = std.atomic.cache_line;
+const copyForwards = std.mem.copyForwards;
+const sliceAsBytes = std.mem.sliceAsBytes;
+const indexOfScalar = std.mem.indexOfScalar;
 const float = zm.float;
+const exp2 = zm.exp2;
 
 // lint:off browser-call: WebAudio; native audio comes with C5
 const web = @import("web.zig");
@@ -71,13 +76,14 @@ const Music = types.Music;
 const AudioStream = types.AudioStream;
 
 // ============================================================================
-// SECTION - mixer (the engine's one mixer: voices read from their sources, mixed each frame, pushed to the platform)
+// SECTION - mixer (the engine's one mixer: voices read from their sources, mixed as the output asks for them)
 // ============================================================================
 // Every sound the engine plays is a voice: a source of samples, read as it is needed, with its own volume, pan and
-// pitch. Once a frame, after the app's update, the mixer tops the platform's queue up to a margin (`render_ahead`):
-// it mixes that many frames of every playing voice into one block, and queues the block. The platform plays its queue
-// on its own clock - a device's, or a headless run's - so the mixer runs on the main thread, owns its voices alone,
-// and mixes the same samples on every run of the same frames.
+// pitch. The app asks for sounds from the main thread - a play, a stop, a note - and each request travels to the
+// renderer as a command. The output asks the renderer for each block of frames when its device needs it - from a
+// device's audio thread on Windows, from the browser's audio worklet or script processor in a page, at each frame's
+// time in a headless run - and the renderer applies the commands waiting, then mixes every playing voice into the
+// block. Nothing waits in a queue between the renderer and the speaker, so a request is heard from the next block.
 //
 // The format is fixed: 48 000 frames a second, two channels, 32-bit float samples, interleaved - left, right, left,
 // right. A frame is one moment of sound: one sample per channel.
@@ -96,50 +102,74 @@ pub const mixer = struct {
     /// The most voices playing at once. A sound asked for when every voice is playing is not played: `play` returns
     /// `Voice.none`.
     pub const voice_capacity: usize = 64;
+    /// The slots kept for the instrument's notes (`Instrument`): the last `instrument_voice_count` of the
+    /// `voice_capacity`. The main side never plays in them (`Mixer.play` looks below `first_instrument_slot`), so a
+    /// note can start without the main side naming its voice first - from wherever the key's event arrives, at the
+    /// moment it arrives. Sixteen notes sound at once: ten fingers, and the tails of notes just released.
+    pub const instrument_voice_count: usize = 16;
+    pub const first_instrument_slot: usize = voice_capacity - instrument_voice_count;
+    /// How many measured starts the main side keeps (`Mixer.recentStarts`).
+    pub const recent_start_capacity: usize = 10;
 
-    /// The margin kept queued, in frames, follows the gaps between the app's frames. Between two frames the output
-    /// plays what is queued, and the next frame tops it up: the margin must outlast the longest gap, or the output runs
-    /// dry - an underrun, heard as a gap in the sound. Each frame measures the gap since the last by the output's own
-    /// clock - the frames it played since the last top-up - and the mixer keeps the longest gap of the last thirty
-    /// seconds of playing (`gap_bucket_count` buckets of `gap_bucket_frames`). The margin is that gap and 25 ms more,
-    /// never less than 50 ms nor more than 200 ms. A stall that recurs is then ridden out before it ever empties the
-    /// queue, and thirty seconds after the stalls stop the margin is back at 50 ms. A larger margin does not delay a
-    /// new sound, which begins inside the queue (`late_start_lead_frames`).
-    pub const render_ahead_initial_frames: u32 = 2_400;
-    pub const render_ahead_safety_frames: u32 = 1_200;
-    pub const render_ahead_most_frames: u32 = 9_600;
-    pub const gap_bucket_frames: u32 = 48_000;
-    pub const gap_bucket_count: usize = 30;
-    /// How far after the output's play position a voice started this frame begins, inside the queue: 10 ms. An
-    /// output knows its play position only approximately - a browser's worklet reports what it played every 256
-    /// frames, a device's thread copies a period at a time - so a start any closer could fall on frames already
-    /// played and lose its first milliseconds.
-    pub const late_start_lead_frames: u32 = 480;
+    /// The most frames the renderer renders at once: 9 600, 200 ms. An output may ask for more in one request - a
+    /// headless run catching up on a long frame - and the mixer then renders it in blocks of this size
+    /// (`renderForPullingOutput`). A voice's scratch block holds this many frames, allocated once at `start`, so that
+    /// rendering allocates nothing.
+    pub const render_block_most_frames: u32 = 9_600;
+    /// The most commands a forwarded message holds (`Mixer.forward_batch`): a frame's commands travel together, and a
+    /// frame with more sends more messages.
+    pub const forward_batch_command_capacity: usize = 32;
 
-    /// The platform's output, as the mixer uses it: the contract's audio requests - those of a pushed output, and the
-    /// one that opens a pulled output. They are held as function
-    /// pointers so that only a program that starts sound compiles the platform's own (`platformOutput`) - a platform
-    /// whose output is not written yet refuses at compile time - and so that a test can stand in an output of its own.
+    /// The platform's output, as the mixer uses it: the contract's audio requests. Every output pulls - it asks the
+    /// mixer's renderer for each block when its device needs it (`start_pulling`) - or, where the platform offers a
+    /// renderer in another memory, is forwarded to (`forwarding`). They are held as function pointers so that only a
+    /// program that starts sound compiles the platform's own (`platformOutput`) - a platform whose output is not
+    /// written yet refuses at compile time - and so that a test can stand in an output of its own.
     pub const Output = struct {
-        start: *const fn (wanted: contract.AudioFormat) contract.AudioFormat,
-        queue: *const fn (samples: []const f32) void,
-        queued_frames: *const fn () u32,
-        mix_into_queued: *const fn (samples: []const f32) void,
+        /// Opens the output so that it pulls its frames from the renderer, handing it `render_callback`, and returns
+        /// the format granted (`contract.startAudioPull`).
+        start_pulling: *const fn (
+            wanted: contract.AudioFormat,
+            render_callback: contract.AudioRenderCallback,
+        ) contract.AudioFormat,
+        /// The clock sound is timed by (`contract.audioClockMilliseconds`): requests are stamped with it, and the
+        /// output's timing of each block is on it, so the lag of each start can be measured (`LatencySample`).
+        clock_ms: *const fn () f64,
+        /// What lies past the output's queue, and the output's name (`contract.audioOutputLatencyMilliseconds`,
+        /// `audioOutputName`): the readout's last column, and which of a platform's paths plays.
+        latency_ms: *const fn () f64,
+        name: *const fn () []const u8,
         stop: *const fn () void,
         /// Whether the output calls the renderer from a thread of its own - a device's audio thread - rather than
         /// from the main thread. Then the main side never runs the renderer itself: it waits for a full queue to empty
         /// (`Mixer.sendToRenderer`), and frees samples only once the renderer lets them go (`Mixer.releaseSamples`).
         calls_renderer_from_another_thread: bool = false,
-        /// Opens the output so that it pulls its frames from the renderer (`contract.AudioOutputKind.pull`); null for
-        /// an output the mixer pushes to.
-        start_pulling: ?*const fn (
-            wanted: contract.AudioFormat,
-            render_callback: contract.AudioRenderCallback,
-        ) contract.AudioFormat = null,
+        /// A renderer in another memory the platform may offer - the browser's audio worklet - which the mixer then
+        /// forwards to instead of rendering itself (`ForwardingOutput`); null where there is none.
+        forwarding: ?ForwardingOutput = null,
     };
 
-    /// The output of the platform the program was built for (`platform.current`), pulled from when the platform says
-    /// its output pulls (`audio_output_kind`).
+    /// An output whose renderer runs in another memory, reached only by messages: the browser's audio worklet, a second
+    /// instance of the app's module (`RendererHost`, `worklet_abi`). The mixer forwards each frame's commands to it
+    /// (`forwardCommands`) and reads the notices it sends back (`acceptNoticeBytes`); its own renderer stays unused.
+    pub const ForwardingOutput = struct {
+        /// Starts the renderer's output, and returns the format it plays at; null when the platform cannot forward
+        /// after all - the page's worklet did not load - and the mixer then starts the platform's other output (the
+        /// page's: pulled on the main thread, `startAudioPull`).
+        start: *const fn (wanted: contract.AudioFormat) ?contract.AudioFormat,
+        /// A command's bytes, as `CommandSink.send_command_bytes` hands them.
+        send_command_bytes: *const fn (command_bytes: []const u8) void,
+        /// Samples to register under an id, as `CommandSink.send_samples` hands them.
+        send_samples: *const fn (samples_id: SamplesId, samples: []const f32) void,
+        /// A key's event for the instrument, as plain values - a platform cannot name the mixer's types.
+        send_note: *const fn (key: u8, is_down: bool, velocity: f32) void,
+        /// Copies into `notice_bytes` as many whole notices, of `notice_byte_count` bytes each, as came back and fit,
+        /// and says how many bytes it wrote.
+        take_notice_bytes: *const fn (notice_bytes: []u8, notice_byte_count: usize) usize,
+    };
+
+    /// The output of the platform the program was built for (`platform.current`), on the thread its kind names
+    /// (`audio_output_kind`).
     pub fn platformOutput() Output {
         return outputOf(platform.current);
     }
@@ -148,15 +178,20 @@ pub const mixer = struct {
     /// whatever system they run on.
     fn outputOf(comptime Platform: type) Output {
         const output_kind: contract.AudioOutputKind = comptime Platform.audio_output_kind;
-        const pulls: bool = output_kind != .push;
         return .{
-            .start = &Platform.startAudio,
-            .queue = &Platform.queueAudio,
-            .queued_frames = &Platform.queuedAudioFrames,
-            .mix_into_queued = &Platform.mixIntoQueuedAudio,
+            .start_pulling = &Platform.startAudioPull,
+            .clock_ms = &Platform.audioClockMilliseconds,
+            .latency_ms = &Platform.audioOutputLatencyMilliseconds,
+            .name = &Platform.audioOutputName,
             .stop = &Platform.stopAudio,
-            .start_pulling = if (pulls) &Platform.startAudioPull else null,
             .calls_renderer_from_another_thread = output_kind == .pull_on_audio_thread,
+            .forwarding = if (@hasDecl(Platform, "startAudioForwarding")) .{
+                .start = &Platform.startAudioForwarding,
+                .send_command_bytes = &Platform.forwardAudioCommandBytes,
+                .send_samples = &Platform.forwardAudioSamples,
+                .send_note = &Platform.forwardAudioNote,
+                .take_notice_bytes = &Platform.takeAudioNoticeBytes,
+            } else null,
         };
     }
 
@@ -218,10 +253,138 @@ pub const mixer = struct {
     /// The most bytes a generator's state may hold (`Generator.initial_state`): it travels inside the play command.
     pub const generator_state_capacity: usize = 64;
 
+    /// The frequency of a MIDI key: each key a semitone, a twelfth of an octave, from key 69, the A at 440 Hz. An
+    /// octave doubles the frequency, so `n` semitones multiply it by 2 to the power `n / 12`.
+    pub fn frequencyOfKey(key: u8) f32 {
+        const semitones_from_a440: f32 = float(key) - 69;
+        return 440 * exp2(semitones_from_a440 / 12);
+    }
+
+    /// The simplest instrument: a sine at the key's frequency, struck at the key's velocity, held while the key is
+    /// down, then fading by half every 50 ms once it is up - an exponential release, as a string or a filter's
+    /// output dies away. A note falls silent when its level is below 1/10 000 (-80 dB). Its state is a
+    /// `SineNoteState`.
+    pub const sine_instrument: Instrument = .{
+        .generate = &generateSineNote,
+        .start_note = &startSineNote,
+        .release_note = &releaseSineNote,
+        .has_fallen_silent = &hasSineNoteFallenSilent,
+    };
+
+    /// A sine note's state: where it is in its cycle, how far it moves each frame, its level now, and the factor the
+    /// level is multiplied by each frame - 1 while held, a little under 1 once released.
+    ///
+    /// The phase is kept here, in turns, and wrapped back below one turn at every frame, rather than computed from
+    /// the frame's number. Computed as `frequency x frame / rate`, it grows without end: after 20 seconds at 440 Hz it
+    /// is 8 800 turns, where a 32-bit float can only tell values apart every thousandth of a turn - and that rounding
+    /// is heard as noise, 46 dB below the note (measured). Wrapped, it never passes one turn, and kept in 64 bits the
+    /// step's own rounding takes days to amount to anything.
+    const SineNoteState = struct {
+        phase_turns: f64,
+        phase_step_turns: f64,
+        level: f32,
+        level_factor_per_frame: f32,
+    };
+    /// The release's half-life: 50 ms, 2 400 frames. Halving every 2 400 frames is multiplying by 2^(-1/2400) each
+    /// frame.
+    const sine_release_half_life_frames: f32 = 2_400;
+    const silent_level: f32 = 1.0e-4;
+
+    fn startSineNote(state: *anyopaque, key: u8, velocity: f32) void {
+        const note: *SineNoteState = @ptrCast(@alignCast(state));
+        const frequency: f64 = frequencyOfKey(key);
+        const phase_step_turns: f64 = frequency / float64(sample_rate);
+        note.* = .{
+            .phase_turns = 0,
+            .phase_step_turns = phase_step_turns,
+            .level = velocity,
+            .level_factor_per_frame = 1,
+        };
+    }
+
+    fn releaseSineNote(state: *anyopaque) void {
+        const note: *SineNoteState = @ptrCast(@alignCast(state));
+        note.level_factor_per_frame = exp2(-1 / sine_release_half_life_frames);
+    }
+
+    fn hasSineNoteFallenSilent(state: *anyopaque) bool {
+        const note: *const SineNoteState = @ptrCast(@alignCast(state));
+        return note.level < silent_level;
+    }
+
+    /// The sine at the note's phase, which carries over from block to block in the state, so that the note is
+    /// continuous across blocks; each frame's sample is the sine times the level, then the phase moves by its step,
+    /// wrapped below one turn, and the level by its factor. The frame number is not needed: the state knows where the
+    /// note is.
+    fn generateSineNote(state: *anyopaque, frames: []f32, first_frame: u64) void {
+        _ = first_frame;
+        const note: *SineNoteState = @ptrCast(@alignCast(state));
+        const frame_count: usize = frames.len / channel_count;
+        for (0..frame_count) |frame_offset| {
+            const phase_turns: f32 = @floatCast(note.phase_turns);
+            const value: f32 = note.level * sinTurns(phase_turns);
+            frames[frame_offset * channel_count] = value;
+            frames[frame_offset * channel_count + 1] = value;
+            const next_phase_turns: f64 = note.phase_turns + note.phase_step_turns;
+            note.phase_turns = next_phase_turns - @floor(next_phase_turns);
+            note.level *= note.level_factor_per_frame;
+        }
+    }
+
+    comptime {
+        if (@sizeOf(SineNoteState) > generator_state_capacity) {
+            @compileError("a sine note's state must fit in a voice's generator state");
+        }
+    }
+
     /// What a voice plays.
     pub const Source = union(enum) {
         samples: Samples,
         generator: Generator,
+    };
+
+    /// An instrument: what plays a note while its key is held, and after. It runs on the renderer's side, in the
+    /// instrument's slots (`first_instrument_slot`), so that a key's note starts at the next block the output asks
+    /// for - not at the app's next frame, which may be a whole frame and its drawing away. Each note is a voice
+    /// playing a generator, `generate`, whose state - the note's own, `generator_state_capacity` bytes - the other
+    /// three functions fill and read:
+    ///
+    ///     key down    start_note(state, key, velocity)   the note's state made: its frequency, its envelope
+    ///     each block  generate(state, frames, first)     the note's frames, as any generator's (`Generator`)
+    ///     key up      release_note(state)                its envelope turns to its release
+    ///     each block  has_fallen_silent(state)           true once the release has died away: the slot is freed
+    ///
+    /// The functions are function pointers, and so the same functions in the browser's worklet instance as in the
+    /// app's (`Generator` explains why). A note's frames are mono: both samples of a frame alike, placed at the centre.
+    pub const Instrument = struct {
+        generate: *const fn (state: *anyopaque, frames: []f32, first_frame: u64) void,
+        start_note: *const fn (state: *anyopaque, key: u8, velocity: f32) void,
+        release_note: *const fn (state: *anyopaque) void,
+        has_fallen_silent: *const fn (state: *anyopaque) bool,
+    };
+
+    /// A key going down or up, for the instrument. `key` numbers the notes as MIDI does: 60 is middle C, 69 the A
+    /// above it at 440 Hz, one step per semitone. `velocity`, from 0 to 1, is how hard the key went down; a key going
+    /// up carries none.
+    pub const NoteEvent = struct {
+        key: u8,
+        is_down: bool,
+        velocity: f32 = 1,
+        /// When the key moved, on the output's clock (`Output.clock_ms`): set by an input thread from the key's own
+        /// time; `sendNote` stamps a note sent without one with the time it is sent. 0 is no time known.
+        requested_at_ms: f64 = 0,
+    };
+
+    /// What a start of sound took, measured: when it was asked for, when the renderer applied it - the start of the
+    /// block that began it - and when that block's first frame reaches the output. All three are on the output's clock,
+    /// so `applied - requested` is the wait for the renderer and `out - applied` the sound queued ahead of it; past the
+    /// output lie only the driver and the speaker. The renderer records one for each play and note it starts, when its
+    /// output says when blocks are heard (`contract.AudioRenderTiming`).
+    pub const LatencySample = struct {
+        kind: enum { play, note },
+        requested_at_ms: f64,
+        applied_at_ms: f64,
+        first_frame_out_ms: f64,
     };
 
     /// How a voice starts: its volume (1 plays the source as recorded), its pan (-1 left, 0 centre, 1 right; see
@@ -275,7 +438,8 @@ pub const mixer = struct {
         /// Moves on each time the slot's voice ends (`endVoice`), so that an old name no longer matches.
         generation: u24 = 0,
         is_playing: bool = false,
-        /// Started since the last frame's mix: its first frames go inside the queue (`startNewVoicesInsideQueue`).
+        /// Started and not yet mixed: nothing of it has been heard, so a stop or a pause before its first block ends
+        /// it at once, with no fade (`stopVoice`, `pauseVoice`).
         is_new: bool = false,
         /// Paused (`pauseVoice`): the voice keeps its slot and its place in its source, and is not mixed.
         is_paused: bool = false,
@@ -305,6 +469,10 @@ pub const mixer = struct {
         /// The gains the last mixed block ended with. The next block moves from them to the gains its volume and pan
         /// ask for, a step each frame, so that a change of either makes no click (`mixVoiceInto`).
         last_block_gains: StereoGains = .{ .left = 0, .right = 0 },
+        /// For a note of the instrument: the key it sounds for, and whether that key is still held - a released
+        /// note goes on sounding through its release, but a key going up again reaches only a held note.
+        note_key: u8 = 0,
+        is_note_held: bool = false,
     };
 
     /// How a voice's pan places it between the two speakers, by what its source holds.
@@ -556,6 +724,8 @@ pub const mixer = struct {
         /// Its volume, pan and pitch to start at.
         options: PlayOptions,
         generator_state: [generator_state_capacity]u8 align(16) = undefined,
+        /// When `Mixer.play` was called, on the output's clock; 0 when no output was started.
+        requested_at_ms: f64 = 0,
     };
 
     /// Samples entering the registry under an id. It is the one command that holds an address - where the samples lie
@@ -585,6 +755,8 @@ pub const mixer = struct {
         set_looping: VoiceLoopingChange,
         /// The volume of all the sound at once.
         set_master_volume: f32,
+        /// The instrument the notes play from now on; the notes of the one before end at once.
+        set_instrument: Instrument,
         /// Take these samples into the registry, under their id.
         register_samples: SamplesToRegister,
         /// Let go of the samples registered under this id: every voice reading them copies what it still needs and
@@ -613,6 +785,16 @@ pub const mixer = struct {
     const notice_queue_capacity: usize = 1024;
     const RendererNoticeQueue = SingleProducerSingleConsumerQueue(RendererNotice, notice_queue_capacity);
 
+    /// The note queue: the keys' events, from wherever they arrive to the renderer, which takes them all at each
+    /// block. It is a queue of its own, not the commands', because each queue has exactly one producer: the
+    /// commands' is the main side, and the notes' may be a thread that does nothing but read the keyboard. 256
+    /// events is more than any player makes between two blocks.
+    pub const NoteQueue = SingleProducerSingleConsumerQueue(NoteEvent, 256);
+
+    /// The queue of measurements, renderer to main side. Unlike the notices it may fill - a burst of starts - and a
+    /// measurement that finds it full is dropped: it costs nothing to lose one.
+    pub const LatencyQueue = SingleProducerSingleConsumerQueue(LatencySample, 64);
+
     comptime {
         const most_notices_waiting: usize = voice_capacity + samples_registry_capacity;
         if (most_notices_waiting > notice_queue_capacity) {
@@ -620,10 +802,18 @@ pub const mixer = struct {
         }
     }
 
-    /// The two queues between the sides.
+    /// The queues between the sides. Each has exactly one producer and one consumer, which is what lets it work
+    /// without a lock (`SingleProducerSingleConsumerQueue`): commands from the main side, notices from the renderer,
+    /// and two queues of notes - one from the main side (`Mixer.sendNote`), for keys an app reads at its frame, and
+    /// one from an input thread (`Mixer.sendNoteFromInputThread`), for keys read the moment they move. Two threads
+    /// writing one queue would race for its places; each producer has its own queue, and the renderer takes from
+    /// both.
     pub const RendererQueues = struct {
         commands: RendererCommandQueue = .{},
         notices: RendererNoticeQueue = .{},
+        notes: NoteQueue = .{},
+        input_thread_notes: NoteQueue = .{},
+        latency: LatencyQueue = .{},
     };
 
     /// The rendering side: the voices, mixed block by block (`render`).
@@ -654,6 +844,18 @@ pub const mixer = struct {
         registered_samples: [samples_registry_capacity][]const f32 = @splat(&.{}),
         /// One voice's frames, read from its source before its gains are applied, with room for the largest block.
         voice_scratch_samples: []f32 = &.{},
+        /// What the notes play (`set_instrument`); null until the main side sets one, and notes until then are dropped.
+        instrument: ?Instrument = null,
+        /// The fade of a note that gave up its slot to a new one (`keepFadeOfStolenNote`): its next `fade_out_frames`
+        /// frames, ramped down to silence, waiting to be added into the blocks that follow - the first
+        /// `stolen_tail_frames_left` of them, from the start. Past those, every sample is zero, so a second note
+        /// stolen before the first fade is done adds its fade on top.
+        stolen_note_tail: [fade_out_frames * channel_count]f32 = @splat(0),
+        stolen_tail_frames_left: u32 = 0,
+        /// When the block being rendered was asked for and when it will be heard, as its output said; null for an
+        /// output that does not say, and between blocks. Each start in the block is measured against it
+        /// (`recordStart`).
+        current_block_timing: ?contract.AudioRenderTiming = null,
 
         /// Renders one block: applies the commands waiting - so that a sound asked for since the last block starts in
         /// this one - then mixes every playing voice into `mix_block`.
@@ -663,7 +865,9 @@ pub const mixer = struct {
             mix_block: []f32,
         ) void {
             renderer.applyCommands(renderer_queues);
+            renderer.applyNotes(renderer_queues);
             renderer.mixInto(renderer_queues, mix_block);
+            renderer.endSilentNotes();
         }
 
         /// Applies every command waiting, in the order the main side sent them.
@@ -683,7 +887,7 @@ pub const mixer = struct {
             renderer_command: RendererCommand,
         ) void {
             switch (renderer_command) {
-                .play => |voice_to_start| renderer.startVoice(voice_to_start),
+                .play => |voice_to_start| renderer.startVoice(renderer_queues, voice_to_start),
                 .stop => |voice| renderer.stopVoice(renderer_queues, voice),
                 .pause => |voice| renderer.pauseVoice(voice),
                 .resume_voice => |voice| renderer.resumeVoice(voice),
@@ -709,6 +913,13 @@ pub const mixer = struct {
                     }
                 },
                 .set_master_volume => |new_master_volume| renderer.master_volume = new_master_volume,
+                .set_instrument => |new_instrument| {
+                    // The notes playing hold states the new instrument cannot read: they end now.
+                    for (first_instrument_slot..voice_capacity) |slot_index| {
+                        renderer.endVoice(renderer_queues, slot_index);
+                    }
+                    renderer.instrument = new_instrument;
+                },
                 .register_samples => |samples_to_register| {
                     const samples_id: SamplesId = samples_to_register.samples_id;
                     renderer.registered_samples[samples_id] = samples_to_register.samples;
@@ -744,7 +955,11 @@ pub const mixer = struct {
         /// their id in the renderer's own registry, and a generator's state is copied into the slot. The voice starts
         /// at the gains its volume and pan ask for, with no ramp up from silence, so that a sound's attack - a drum's
         /// hit - stays sharp.
-        fn startVoice(renderer: *Renderer, voice_to_start: VoiceToStart) void {
+        fn startVoice(
+            renderer: *Renderer,
+            renderer_queues: *RendererQueues,
+            voice_to_start: VoiceToStart,
+        ) void {
             const slot_index: usize = voice_to_start.voice.slotIndex();
             const voice_slot: *VoiceSlot = &renderer.voice_slots[slot_index];
             // The main side gives a slot a new voice only after the renderer said its last one ended.
@@ -781,6 +996,28 @@ pub const mixer = struct {
                 .last_block_gains = starting_gains,
             };
             voice_slot.generator_state = voice_to_start.generator_state;
+            renderer.recordStart(renderer_queues, .play, voice_to_start.requested_at_ms);
+        }
+
+        /// Measures a start in the block being rendered (`LatencySample`), when the block's output said when it would
+        /// be heard and the request said when it was made; dropped when the measurements' queue is full.
+        fn recordStart(
+            renderer: *const Renderer,
+            renderer_queues: *RendererQueues,
+            kind: @FieldType(LatencySample, "kind"),
+            requested_at_ms: f64,
+        ) void {
+            const timing: contract.AudioRenderTiming = renderer.current_block_timing orelse return;
+            if (requested_at_ms == 0) {
+                return;
+            }
+            const latency_sample: LatencySample = .{
+                .kind = kind,
+                .requested_at_ms = requested_at_ms,
+                .applied_at_ms = timing.asked_at_ms,
+                .first_frame_out_ms = timing.first_frame_out_ms,
+            };
+            _ = renderer_queues.latency.push(latency_sample);
         }
 
         /// Stops a voice. Cutting a sound off in the middle of its wave would jump the output to zero between two
@@ -898,9 +1135,224 @@ pub const mixer = struct {
             }
             voice_slot.is_playing = false;
             voice_slot.generation +%= 1;
+            // The instrument's slots were never named by the main side, which has nothing to free for them.
+            const is_instrument_slot: bool = slot_index >= first_instrument_slot;
+            if (is_instrument_slot) {
+                return;
+            }
             const ended_notice: RendererNotice = .{ .voice_ended = @intCast(slot_index) };
             const is_noticed: bool = renderer_queues.notices.push(ended_notice);
             assert(is_noticed, @src());
+        }
+
+        /// Applies every key event waiting, from both note queues - each in the order its keys moved. Without an
+        /// instrument they are dropped.
+        fn applyNotes(renderer: *Renderer, renderer_queues: *RendererQueues) void {
+            renderer.applyNoteQueue(renderer_queues, &renderer_queues.notes);
+            renderer.applyNoteQueue(renderer_queues, &renderer_queues.input_thread_notes);
+        }
+
+        fn applyNoteQueue(
+            renderer: *Renderer,
+            renderer_queues: *RendererQueues,
+            note_queue: *NoteQueue,
+        ) void {
+            while (note_queue.pop()) |note_event| {
+                const instrument: Instrument = renderer.instrument orelse continue;
+                if (note_event.is_down) {
+                    renderer.startNote(instrument, note_event);
+                    renderer.recordStart(renderer_queues, .note, note_event.requested_at_ms);
+                } else {
+                    renderer.releaseNote(instrument, note_event.key);
+                }
+            }
+        }
+
+        /// Starts a note in an instrument slot. The same key struck again while its note is held releases that note
+        /// first: it rings on in its release beside the new one, as a piano's string does when struck again, and a key
+        /// holds one note at a time - a trill does not pile up held voices. The slot is the first free one; with all
+        /// sixteen sounding, the one `noteSlotToSteal` names gives its note up, which fades out over 5 ms from a copy
+        /// made before its slot is reused (`keepFadeOfStolenNote`), so that it ends without a click.
+        fn startNote(
+            renderer: *Renderer,
+            instrument: Instrument,
+            note_event: NoteEvent,
+        ) void {
+            renderer.releaseNote(instrument, note_event.key);
+            const chosen_slot_index: usize = renderer.freeNoteSlot() orelse renderer.noteSlotToSteal(note_event.key);
+            const voice_slot: *VoiceSlot = &renderer.voice_slots[chosen_slot_index];
+            if (voice_slot.is_playing) {
+                renderer.keepFadeOfStolenNote(voice_slot);
+            }
+            // A note starts at full gain, centred, with no ramp: its attack is the instrument's to shape.
+            const centre_gains: StereoGains = gainsForPan(1, 0, .constant_power);
+            voice_slot.* = .{
+                .generation = voice_slot.generation +% 1,
+                .is_playing = true,
+                .is_new = true,
+                .pan_law = .constant_power,
+                .source = .{ .generator = .{ .generate = instrument.generate, .channels = 1 } },
+                .last_block_gains = centre_gains,
+                .note_key = note_event.key,
+                .is_note_held = true,
+            };
+            instrument.start_note(&voice_slot.generator_state, note_event.key, note_event.velocity);
+        }
+
+        /// The first instrument slot sounding nothing; null when all sixteen sound.
+        fn freeNoteSlot(renderer: *const Renderer) ?usize {
+            for (first_instrument_slot..voice_capacity) |slot_index| {
+                if (!renderer.voice_slots[slot_index].is_playing) {
+                    return slot_index;
+                }
+            }
+            return null;
+        }
+
+        /// The slot a new note of `key` takes when all sixteen sound, chosen as JUCE's synthesiser chooses
+        /// (`Synthesiser::findVoiceToSteal`), "longest-sounding" meaning the most frames generated:
+        ///
+        ///     1. the longest-sounding note of the same key - its own earlier sound
+        ///     2. else the longest-sounding released note - one no finger holds
+        ///     3. else the longest-sounding held note other than the lowest and the highest held - a chord keeps
+        ///        its bass and its top
+        ///     4. else the highest held note, and the lowest last
+        ///
+        /// A held note is lost only when every other choice is gone, and the notes that carry a chord - its
+        /// lowest and its highest - last of all.
+        fn noteSlotToSteal(renderer: *const Renderer, key: u8) usize {
+            // The lowest and the highest held notes, which are protected.
+            var lowest_held_slot: ?usize = null;
+            var highest_held_slot: ?usize = null;
+            for (first_instrument_slot..voice_capacity) |slot_index| {
+                const voice_slot: *const VoiceSlot = &renderer.voice_slots[slot_index];
+                if (!voice_slot.is_note_held) {
+                    continue;
+                }
+                const is_lower: bool = if (lowest_held_slot) |lowest_slot|
+                    voice_slot.note_key < renderer.voice_slots[lowest_slot].note_key
+                else
+                    true;
+                const is_higher: bool = if (highest_held_slot) |highest_slot|
+                    voice_slot.note_key > renderer.voice_slots[highest_slot].note_key
+                else
+                    true;
+                if (is_lower) {
+                    lowest_held_slot = slot_index;
+                }
+                if (is_higher) {
+                    highest_held_slot = slot_index;
+                }
+            }
+            // A single held note is both the lowest and the highest: it is the lowest, protected to the last.
+            if (highest_held_slot == lowest_held_slot) {
+                highest_held_slot = null;
+            }
+            // The longest-sounding slot of each kind.
+            var same_key_slot: ?usize = null;
+            var released_slot: ?usize = null;
+            var unprotected_held_slot: ?usize = null;
+            for (first_instrument_slot..voice_capacity) |slot_index| {
+                const voice_slot: *const VoiceSlot = &renderer.voice_slots[slot_index];
+                if (voice_slot.note_key == key and isLongerSounding(renderer, slot_index, same_key_slot)) {
+                    same_key_slot = slot_index;
+                }
+                const is_protected: bool = slot_index == lowest_held_slot or slot_index == highest_held_slot;
+                if (!voice_slot.is_note_held and isLongerSounding(renderer, slot_index, released_slot)) {
+                    released_slot = slot_index;
+                }
+                const is_unprotected_held: bool = voice_slot.is_note_held and !is_protected;
+                if (is_unprotected_held and isLongerSounding(renderer, slot_index, unprotected_held_slot)) {
+                    unprotected_held_slot = slot_index;
+                }
+            }
+            return same_key_slot orelse released_slot orelse unprotected_held_slot orelse
+                highest_held_slot orelse lowest_held_slot.?;
+        }
+
+        /// Whether the note in `slot_index` has sounded longer than the one in `other_slot_index` - true against
+        /// no slot at all.
+        fn isLongerSounding(
+            renderer: *const Renderer,
+            slot_index: usize,
+            other_slot_index: ?usize,
+        ) bool {
+            const other_index: usize = other_slot_index orelse return true;
+            const frames: u64 = renderer.voice_slots[slot_index].generated_frame_count;
+            const other_frames: u64 = renderer.voice_slots[other_index].generated_frame_count;
+            return frames > other_frames;
+        }
+
+        /// Keeps the fade of a note about to lose its slot. A note cut off between two samples would jump to zero,
+        /// heard as a click; a stopped voice avoids it by fading in its own slot (`stopVoice`), but a stolen note's
+        /// slot is needed now. So its next `fade_out_frames` frames are generated here, at the gains its last block
+        /// ended with, ramped from full to zero - frame `n` of `F` scaled by `1 - (n + 1) / F` - and added into the
+        /// tail that the next blocks mix in (`addStolenNoteTail`). The note's generator continues exactly where its
+        /// last block stopped, so the fade begins at the very frame the note would have played next.
+        fn keepFadeOfStolenNote(renderer: *Renderer, voice_slot: *VoiceSlot) void {
+            const tail_sample_count: usize = renderer.stolen_note_tail.len;
+            const voice_samples: []f32 = renderer.voice_scratch_samples[0..tail_sample_count];
+            _ = readVoiceSource(voice_slot, voice_samples);
+            const gains: StereoGains = voice_slot.last_block_gains;
+            const fade_frame_count: f32 = float(fade_out_frames);
+            for (0..fade_out_frames) |frame_index| {
+                const remaining_fraction: f32 = 1 - float(frame_index + 1) / fade_frame_count;
+                const left_index: usize = frame_index * channel_count;
+                const right_index: usize = left_index + 1;
+                renderer.stolen_note_tail[left_index] += voice_samples[left_index] * gains.left * remaining_fraction;
+                renderer.stolen_note_tail[right_index] += voice_samples[right_index] * gains.right * remaining_fraction;
+            }
+            renderer.stolen_tail_frames_left = fade_out_frames;
+        }
+
+        /// Adds the waiting fade of stolen notes into the start of `mix_block`, as much of it as the block holds;
+        /// what is left moves to the front of the tail, for the next block, and the room it leaves is zeroed.
+        fn addStolenNoteTail(renderer: *Renderer, mix_block: []f32) void {
+            const frames_left: u32 = renderer.stolen_tail_frames_left;
+            if (frames_left == 0) {
+                return;
+            }
+            const block_frame_count: usize = mix_block.len / channel_count;
+            const frames_added: usize = @min(frames_left, block_frame_count);
+            const samples_added: usize = frames_added * channel_count;
+            const tail: []f32 = &renderer.stolen_note_tail;
+            for (mix_block[0..samples_added], tail[0..samples_added]) |*mixed_sample, tail_sample| {
+                mixed_sample.* += tail_sample;
+            }
+            const frames_still_left: usize = frames_left - frames_added;
+            const samples_still_left: usize = frames_still_left * channel_count;
+            copyForwards(f32, tail[0..samples_still_left], tail[samples_added..][0..samples_still_left]);
+            @memset(tail[samples_still_left..], 0);
+            renderer.stolen_tail_frames_left = @intCast(frames_still_left);
+        }
+
+        /// Releases the held note of `key`: its envelope turns to its release, and it sounds on until it has fallen
+        /// silent (`endSilentNotes`).
+        fn releaseNote(
+            renderer: *Renderer,
+            instrument: Instrument,
+            key: u8,
+        ) void {
+            for (first_instrument_slot..voice_capacity) |slot_index| {
+                const voice_slot: *VoiceSlot = &renderer.voice_slots[slot_index];
+                const is_held_note_of_key: bool = voice_slot.is_playing and voice_slot.is_note_held and
+                    voice_slot.note_key == key;
+                if (is_held_note_of_key) {
+                    voice_slot.is_note_held = false;
+                    instrument.release_note(&voice_slot.generator_state);
+                }
+            }
+        }
+
+        /// Frees the slot of every note that has fallen silent, after the block that made its last sound.
+        fn endSilentNotes(renderer: *Renderer) void {
+            const instrument: Instrument = renderer.instrument orelse return;
+            for (first_instrument_slot..voice_capacity) |slot_index| {
+                const voice_slot: *VoiceSlot = &renderer.voice_slots[slot_index];
+                if (voice_slot.is_playing and instrument.has_fallen_silent(&voice_slot.generator_state)) {
+                    voice_slot.is_playing = false;
+                }
+            }
         }
 
         /// Ends every voice at once: the output is closing.
@@ -920,6 +1372,7 @@ pub const mixer = struct {
             mix_block: []f32,
         ) void {
             @memset(mix_block, 0);
+            renderer.addStolenNoteTail(mix_block);
             for (&renderer.voice_slots, 0..) |*voice_slot, slot_index| {
                 const is_audible: bool = voice_slot.is_playing and !voice_slot.is_paused;
                 if (is_audible) {
@@ -931,34 +1384,6 @@ pub const mixer = struct {
                 const held_sample: f32 = clamp(scaled_sample, -1, 1);
                 mixed_sample.* = held_sample;
             }
-        }
-
-        /// For an output the mixer pushes blocks to (`Mixer.startNewVoicesInsideQueue`): mixes only the voices started
-        /// since the last frame into `inside_block`, scaled by the master volume, and says whether there were any.
-        fn mixNewVoicesInto(
-            renderer: *Renderer,
-            renderer_queues: *RendererQueues,
-            inside_block: []f32,
-        ) bool {
-            @memset(inside_block, 0);
-            var has_new_voice: bool = false;
-            for (0..voice_capacity) |slot_index| {
-                const voice_slot: *VoiceSlot = &renderer.voice_slots[slot_index];
-                if (!voice_slot.is_new) {
-                    continue;
-                }
-                voice_slot.is_new = false;
-                const is_audible: bool = voice_slot.is_playing and !voice_slot.is_paused;
-                if (inside_block.len == 0 or !is_audible) {
-                    continue;
-                }
-                renderer.mixVoiceInto(renderer_queues, slot_index, inside_block);
-                has_new_voice = true;
-            }
-            for (inside_block) |*inside_sample| {
-                inside_sample.* *= renderer.master_volume;
-            }
-            return has_new_voice;
         }
 
         /// Adds one voice's frames for this block into `mix_block`.
@@ -1125,6 +1550,10 @@ pub const mixer = struct {
         samples_registry: [samples_registry_capacity]RegisteredSamplesRecord = @splat(.{}),
         /// The master volume asked for, as the renderer will apply it (`setMasterVolume`).
         master_volume: f32 = 1,
+        /// The last `recent_start_capacity` starts the renderer measured (`LatencySample`), in a ring: the one at
+        /// `recent_start_count - 1` (modulo the capacity) is the newest (`recentStarts`).
+        recent_starts: [recent_start_capacity]LatencySample = undefined,
+        recent_start_count: usize = 0,
 
         // The renderer and the two queues to it - in the browser, a renderer in another memory is reached instead
         // (`RendererHost`), and this one stays unused.
@@ -1136,9 +1565,14 @@ pub const mixer = struct {
 
         /// The output the mixer plays through; null until `start`, and after `stop`.
         output: ?Output = null,
-        /// Whether the output pulls its frames from the renderer (`renderForPullingOutput`), rather than being pushed
-        /// blocks.
-        is_output_pulling: bool = false,
+        /// The renderer in another memory the commands are forwarded to, while the output forwards
+        /// (`Output.forwarding`); null otherwise.
+        forwarding: ?ForwardingOutput = null,
+        /// A frame's forwarded commands, gathered to travel as one message (`sendForwardBatch`) - as JUCE's
+        /// `MidiBuffer` keeps a block's events in one array of bytes: a message per command would cost the page a
+        /// `postMessage`, and a buffer, each. `forward_batch_length` bytes of it are waiting.
+        forward_batch: [forward_batch_command_capacity * @sizeOf(RendererCommand)]u8 = undefined,
+        forward_batch_length: usize = 0,
         /// Whether the renderer runs on another thread than this one (`Output.calls_renderer_from_another_thread`).
         is_renderer_on_another_thread: bool = false,
         /// What allocated the blocks, to free them at `stop`.
@@ -1147,26 +1581,12 @@ pub const mixer = struct {
         // For an output the mixer pushes blocks to only: the margin it keeps queued ahead of the device, and what
         // decides it (`mixFrame`).
 
-        /// The margin kept queued, in frames (`render_ahead_initial_frames`).
-        render_ahead_frames: u32 = render_ahead_initial_frames,
-        /// Whether a block was queued since the start: an empty queue is an underrun only after the first block.
-        has_queued_any_block: bool = false,
-        /// How often the queue ran dry: each time, a gap was heard.
-        underrun_count: u32 = 0,
-        /// Frames queued just after the last frame's top-up: what the output played since is the gap between frames.
-        queued_after_last_top_up: u32 = 0,
-        /// The longest gap between frames, in frames, in each of the last `gap_bucket_count` seconds of playing: the
-        /// current second's is `gap_buckets[gap_bucket_index]`, and `frames_in_gap_bucket` counts its frames so far.
-        gap_buckets: [gap_bucket_count]u32 = @splat(0),
-        gap_bucket_index: usize = 0,
-        frames_in_gap_bucket: u32 = 0,
-        /// The block mixed each frame, interleaved stereo, with room for the largest margin; allocated at `start`.
-        mix_block_samples: []f32 = &.{},
-
         /// Opens `output` at the mixer's format: 48 000 frames a second, stereo. The platform grants it - Windows and a
         /// browser convert from it to their device's own format - so the mixer mixes at its own rate whatever the
-        /// device's. The blocks are allocated here, once, so that mixing allocates nothing. A mixer already started is
-        /// stopped first.
+        /// device's. Where the platform offers a renderer in another memory (`Output.forwarding`) and it starts, the
+        /// commands go there; otherwise the output pulls from the renderer here, handed `renderForPullingOutput`. The
+        /// renderer's scratch block is allocated here, once, so that rendering allocates nothing. A mixer already
+        /// started is stopped first.
         pub fn start(
             engine_mixer: *Mixer,
             allocator: Allocator,
@@ -1174,10 +1594,8 @@ pub const mixer = struct {
         ) Allocator.Error!void {
             // Started again: the earlier output is closed and its blocks freed first, so that nothing leaks.
             engine_mixer.stop();
-            const largest_block_frame_count: usize = render_ahead_most_frames;
+            const largest_block_frame_count: usize = render_block_most_frames;
             const largest_block_sample_count: usize = largest_block_frame_count * channel_count;
-            engine_mixer.mix_block_samples = try allocator.alloc(f32, largest_block_sample_count);
-            errdefer allocator.free(engine_mixer.mix_block_samples);
             engine_mixer.renderer.voice_scratch_samples = try allocator.alloc(f32, largest_block_sample_count);
             engine_mixer.allocator = allocator;
             const wanted_format: contract.AudioFormat = .{ .sample_rate = sample_rate, .channels = channel_count };
@@ -1187,12 +1605,19 @@ pub const mixer = struct {
                 .context = engine_mixer,
                 .render = &renderForPullingOutput,
             };
-            engine_mixer.is_output_pulling = output.start_pulling != null;
             engine_mixer.is_renderer_on_another_thread = output.calls_renderer_from_another_thread;
-            const granted_format: contract.AudioFormat = if (output.start_pulling) |start_pulling|
-                start_pulling(wanted_format, render_callback)
+            // A renderer in another memory, when the platform has one and it started: the commands go there, and the
+            // renderer here stays unused. It counts as on another thread: samples wait for its notice to be freed.
+            const forwarded_format: ?contract.AudioFormat = if (output.forwarding) |forwarding|
+                forwarding.start(wanted_format)
             else
-                output.start(wanted_format);
+                null;
+            if (forwarded_format != null) {
+                engine_mixer.forwarding = output.forwarding;
+                engine_mixer.is_renderer_on_another_thread = true;
+            }
+            const granted_format: contract.AudioFormat = forwarded_format orelse
+                output.start_pulling(wanted_format, render_callback);
             const is_rate_granted: bool = granted_format.sample_rate == sample_rate;
             const are_channels_granted: bool = granted_format.channels == channel_count;
             if (!is_rate_granted or !are_channels_granted) {
@@ -1202,28 +1627,48 @@ pub const mixer = struct {
                 });
             }
             engine_mixer.output = output;
-            engine_mixer.has_queued_any_block = false;
-            engine_mixer.render_ahead_frames = render_ahead_initial_frames;
         }
 
         /// Closes the output, applies the commands not yet applied - so that a release among them still frees its
-        /// samples - ends every voice, and frees the blocks.
+        /// samples - ends every voice, and frees the renderer's scratch block.
         pub fn stop(engine_mixer: *Mixer) void {
             const output: Output = engine_mixer.output orelse return;
             output.stop();
             engine_mixer.output = null;
-            engine_mixer.is_output_pulling = false;
+            if (engine_mixer.forwarding != null) {
+                engine_mixer.stopForwarding();
+            }
             engine_mixer.is_renderer_on_another_thread = false;
             // The output is stopped, so nothing renders any more: this thread may take the renderer's part.
             engine_mixer.renderer.applyCommands(&engine_mixer.renderer_queues);
             engine_mixer.renderer.endEveryVoice(&engine_mixer.renderer_queues);
             engine_mixer.readRendererNotices();
             if (engine_mixer.allocator) |allocator| {
-                allocator.free(engine_mixer.mix_block_samples);
                 allocator.free(engine_mixer.renderer.voice_scratch_samples);
             }
-            engine_mixer.mix_block_samples = &.{};
             engine_mixer.renderer.voice_scratch_samples = &.{};
+        }
+
+        /// Ends forwarding with the output closed: the renderer in the other memory is gone, and the notices it would
+        /// have sent never come. So every voice it held is ended here, by name, and the samples waiting for its notice
+        /// of release are freed now - the other memory held only its own copies of them.
+        fn stopForwarding(engine_mixer: *Mixer) void {
+            engine_mixer.forwarding = null;
+            engine_mixer.forward_batch_length = 0;
+            for (&engine_mixer.voice_names) |*voice_name| {
+                if (voice_name.is_slot_held) {
+                    voice_name.* = .{ .generation = voice_name.generation +% 1 };
+                }
+            }
+            for (&engine_mixer.samples_registry) |*record| {
+                if (record.release_allocator) |release_allocator| {
+                    release_allocator.free(record.samples);
+                }
+                record.* = .{};
+            }
+            // Commands and notes not yet forwarded are dropped with the renderer they were for.
+            while (engine_mixer.renderer_queues.commands.pop()) |_| {}
+            while (engine_mixer.renderer_queues.notes.pop()) |_| {}
         }
 
         pub fn isStarted(engine_mixer: *const Mixer) bool {
@@ -1263,7 +1708,8 @@ pub const mixer = struct {
             const voice_name: *VoiceNameRecord = &engine_mixer.voice_names[slot_index];
             voice_name.* = .{ .generation = voice_name.generation, .is_slot_held = true, .is_name_live = true };
             const voice: Voice = .ofSlot(slot_index, voice_name.generation);
-            const voice_to_start: VoiceToStart = voiceToStartOf(voice, source, samples_id, options);
+            var voice_to_start: VoiceToStart = voiceToStartOf(voice, source, samples_id, options);
+            voice_to_start.requested_at_ms = engine_mixer.clockMilliseconds();
             const is_sent: bool = engine_mixer.sendToRenderer(.{ .play = voice_to_start });
             if (!is_sent) {
                 // The renderer takes no commands: the name is given back, and nothing plays.
@@ -1295,9 +1741,11 @@ pub const mixer = struct {
             }
         }
 
-        /// The first slot the renderer does not hold; null when it holds them all.
+        /// The first of the main side's slots - those below `first_instrument_slot` - that the renderer does not hold;
+        /// null when it holds them all.
         fn firstFreeSlotIndex(engine_mixer: *const Mixer) ?usize {
-            for (engine_mixer.voice_names, 0..) |voice_name, slot_index| {
+            const main_side_names: []const VoiceNameRecord = engine_mixer.voice_names[0..first_instrument_slot];
+            for (main_side_names, 0..) |voice_name, slot_index| {
                 if (!voice_name.is_slot_held) {
                     return slot_index;
                 }
@@ -1432,6 +1880,88 @@ pub const mixer = struct {
             _ = engine_mixer.sendToRenderer(.{ .set_master_volume = volume });
         }
 
+        /// Sets what the notes play (`Instrument`), from the renderer's next block; notes sounding then end.
+        pub fn setInstrument(engine_mixer: *Mixer, instrument: Instrument) void {
+            _ = engine_mixer.sendToRenderer(.{ .set_instrument = instrument });
+        }
+
+        /// Sends a key's event to the instrument, from the main thread; the renderer applies it at its next block,
+        /// before mixing. False when the queue is full, which takes a player pressing 256 keys between two blocks.
+        pub fn sendNote(engine_mixer: *Mixer, note_event: NoteEvent) bool {
+            var stamped_note: NoteEvent = note_event;
+            if (stamped_note.requested_at_ms == 0) {
+                stamped_note.requested_at_ms = engine_mixer.clockMilliseconds();
+            }
+            return engine_mixer.renderer_queues.notes.push(stamped_note);
+        }
+
+        /// The output's clock now (`Output.clock_ms`); 0 before the output starts, which no measurement uses.
+        fn clockMilliseconds(engine_mixer: *const Mixer) f64 {
+            const output: Output = engine_mixer.output orelse return 0;
+            return output.clock_ms();
+        }
+
+        /// The latest measured starts, newest first, copied into `out_samples` - as many as it holds, up to the
+        /// `recent_start_capacity` kept - and the part of it filled.
+        pub fn recentStarts(engine_mixer: *const Mixer, out_samples: []LatencySample) []LatencySample {
+            const kept_count: usize = @min(engine_mixer.recent_start_count, recent_start_capacity);
+            const copied_count: usize = @min(kept_count, out_samples.len);
+            for (0..copied_count) |newest_offset| {
+                const ring_index: usize = (engine_mixer.recent_start_count - 1 - newest_offset) % recent_start_capacity;
+                out_samples[newest_offset] = engine_mixer.recent_starts[ring_index];
+            }
+            return out_samples[0..copied_count];
+        }
+
+        /// What lies past the output's queue, in milliseconds, as the platform can tell (`Output.latency_ms`); 0
+        /// before the output starts.
+        pub fn outputLatencyMilliseconds(engine_mixer: *const Mixer) f64 {
+            const output: Output = engine_mixer.output orelse return 0;
+            return output.latency_ms();
+        }
+
+        /// The output's name: which of the platform's paths plays (`Output.name`).
+        pub fn outputName(engine_mixer: *const Mixer) []const u8 {
+            const output: Output = engine_mixer.output orelse return "no output";
+            return output.name();
+        }
+
+        /// The latency readout's header, above its lines (`formatLatencyLine`), in milliseconds.
+        pub const latency_readout_header: []const u8 = "        wait  queued    past   total  (ms)";
+
+        /// One measured start as a line of the latency readout, under `latency_readout_header`:
+        ///
+        ///             wait  queued    past   total  (ms)
+        ///     note     0.9    10.0    43.4    54.3
+        ///
+        /// `wait` is the wait for the renderer, `t2` (requested to applied); `queued` the sound ahead of it in the
+        /// output's queue, `t3` (applied to its first frame out); `past` what lies past the queue as the platform
+        /// reports it now (`outputLatencyMilliseconds`, `t4`); `total` their sum - the whole lag but the frame's wait
+        /// before the request and whatever the platform cannot report. A headless run renders after the fact, so its
+        /// `queued` reads negative, by up to a frame.
+        pub fn formatLatencyLine(
+            latency_sample: LatencySample,
+            past_output_ms: f64,
+            line_buffer: []u8,
+        ) []const u8 {
+            const wait_ms: f64 = latency_sample.applied_at_ms - latency_sample.requested_at_ms;
+            const queued_ms: f64 = latency_sample.first_frame_out_ms - latency_sample.applied_at_ms;
+            const total_ms: f64 = wait_ms + queued_ms + past_output_ms;
+            return bufPrint(line_buffer, "{t:<5} {d:>6.1}  {d:>6.1}  {d:>6.1}  {d:>6.1}", .{
+                latency_sample.kind,
+                wait_ms,
+                queued_ms,
+                past_output_ms,
+                total_ms,
+            }) catch line_buffer[0..0];
+        }
+
+        /// The same, from the one thread that reads the keyboard as its keys move (a platform's input thread): its
+        /// own queue, since the main thread writes the other. No other thread may call it.
+        pub fn sendNoteFromInputThread(engine_mixer: *Mixer, note_event: NoteEvent) bool {
+            return engine_mixer.renderer_queues.input_thread_notes.push(note_event);
+        }
+
         /// The id `samples` is registered under; null when it is not registered, or is being released. A buffer is the
         /// very same one when it starts at the same address and has the same length - two buffers holding equal
         /// samples are two buffers.
@@ -1521,6 +2051,13 @@ pub const mixer = struct {
             if (command_queue.push(renderer_command)) {
                 return true;
             }
+            // Forwarding, a full queue is this side's own backlog: forwarded now, it has room again.
+            if (engine_mixer.forwarding != null) {
+                engine_mixer.forwardToOtherMemory();
+                const is_sent: bool = command_queue.push(renderer_command);
+                assert(is_sent, @src());
+                return true;
+            }
             if (!engine_mixer.is_renderer_on_another_thread) {
                 engine_mixer.renderer.applyCommands(&engine_mixer.renderer_queues);
                 const is_sent: bool = command_queue.push(renderer_command);
@@ -1539,10 +2076,16 @@ pub const mixer = struct {
             return false;
         }
 
-        /// Reads the renderer's notices. A voice ended frees its slot for the next play; and a voice that ended by
+        /// Reads the renderer's measurements of starts, keeping the latest (`recentStarts`), then its notices. A voice
+        /// ended frees its slot for the next play; and a voice that ended by
         /// itself - its sound finished, `stopVoice` never called - also has its name die here, so `isPlaying` says
         /// false from now on. A release of samples frees them: no voice reads them any more.
         fn readRendererNotices(engine_mixer: *Mixer) void {
+            while (engine_mixer.renderer_queues.latency.pop()) |latency_sample| {
+                const ring_index: usize = engine_mixer.recent_start_count % recent_start_capacity;
+                engine_mixer.recent_starts[ring_index] = latency_sample;
+                engine_mixer.recent_start_count += 1;
+            }
             const notice_queue: *RendererNoticeQueue = &engine_mixer.renderer_queues.notices;
             while (notice_queue.pop()) |renderer_notice| {
                 switch (renderer_notice) {
@@ -1567,17 +2110,29 @@ pub const mixer = struct {
 
         /// Renders the frames an output that pulls asks for (`contract.AudioRenderCallback`), in blocks no larger than
         /// the renderer's scratch room: a device may ask for more at once - after a long stall, say.
-        fn renderForPullingOutput(context: *anyopaque, samples: []f32) void {
+        fn renderForPullingOutput(
+            context: *anyopaque,
+            samples: []f32,
+            timing: contract.AudioRenderTiming,
+        ) void {
             const engine_mixer: *Mixer = @ptrCast(@alignCast(context));
             const largest_block_sample_count: usize = engine_mixer.renderer.voice_scratch_samples.len;
+            const milliseconds_per_sample: f64 = 1000.0 / float64(@as(u32, sample_rate) * channel_count);
             var first_sample: usize = 0;
             while (first_sample < samples.len) {
                 const samples_left: usize = samples.len - first_sample;
                 const block_sample_count: usize = @min(samples_left, largest_block_sample_count);
                 const block: []f32 = samples[first_sample..][0..block_sample_count];
+                // Each block is heard after the ones before it in the same request.
+                const block_out_ms: f64 = timing.first_frame_out_ms + float64(first_sample) * milliseconds_per_sample;
+                engine_mixer.renderer.current_block_timing = .{
+                    .asked_at_ms = timing.asked_at_ms,
+                    .first_frame_out_ms = block_out_ms,
+                };
                 engine_mixer.renderer.render(&engine_mixer.renderer_queues, block);
                 first_sample += block_sample_count;
             }
+            engine_mixer.renderer.current_block_timing = null;
         }
 
         /// Renders `mix_block` on this thread and reads the notices: for an output that is not running, and for tests.
@@ -1586,98 +2141,82 @@ pub const mixer = struct {
             engine_mixer.readRendererNotices();
         }
 
-        /// Once a frame, after the app's update. With an output that pulls, the device asks the renderer for blocks
-        /// itself, and the frame has only the renderer's notices to read.
-        ///
-        /// With an output the mixer pushes blocks to, it tops the output's queue up to the margin. The output has
-        /// played some of the queue since the last frame; the mixer mixes exactly what it played, plus whatever the
-        /// margin has grown by, so the queue holds `render_ahead_frames` again. An empty queue after the first block
-        /// means the output ran dry since the last frame and played silence - an underrun - and the margin grows by a
-        /// step, up to its most.
+        /// Once a frame, after the app's update. The renderer is asked for its blocks by the output itself, as the
+        /// device needs them, so the frame only exchanges what the two sides have for each other: forwarding, it sends
+        /// the frame's commands, registrations and notes to the renderer in the other memory and takes the notices
+        /// that came back; pulled, it reads the renderer's notices - a voice ended, samples let go.
         pub fn mixFrame(engine_mixer: *Mixer) void {
-            const output: Output = engine_mixer.output orelse return;
-            // A pulled output renders as its device asks: the frame has only the renderer's notices to read.
-            if (engine_mixer.is_output_pulling) {
-                engine_mixer.readRendererNotices();
+            if (engine_mixer.output == null) {
                 return;
             }
-            const queued_frame_count: u32 = output.queued_frames();
-            const has_run_dry: bool = queued_frame_count == 0 and engine_mixer.has_queued_any_block;
-            if (has_run_dry) {
-                engine_mixer.underrun_count += 1;
-            }
-            if (engine_mixer.has_queued_any_block) {
-                // The gap since the last frame, by the output's clock: the frames it played meanwhile. Run dry, it
-                // played everything and then silence for a while it cannot tell, so the gap counts the safety more.
-                const frames_played_since_last_frame: u32 = engine_mixer.queued_after_last_top_up -| queued_frame_count;
-                const dry_gap_frames: u32 = frames_played_since_last_frame + render_ahead_safety_frames;
-                const gap_frames: u32 = if (has_run_dry) dry_gap_frames else frames_played_since_last_frame;
-                engine_mixer.noteGapBetweenFrames(gap_frames, frames_played_since_last_frame);
-            }
-            engine_mixer.renderer.applyCommands(&engine_mixer.renderer_queues);
-            engine_mixer.startNewVoicesInsideQueue(output, queued_frame_count);
-            defer engine_mixer.readRendererNotices();
-            if (queued_frame_count >= engine_mixer.render_ahead_frames) {
-                engine_mixer.queued_after_last_top_up = queued_frame_count;
+            if (engine_mixer.forwarding != null) {
+                engine_mixer.forwardToOtherMemory();
                 return;
             }
-            const frames_to_mix: usize = engine_mixer.render_ahead_frames - queued_frame_count;
-            const block_sample_count: usize = frames_to_mix * channel_count;
-            const mix_block: []f32 = engine_mixer.mix_block_samples[0..block_sample_count];
-            engine_mixer.renderer.render(&engine_mixer.renderer_queues, mix_block);
-            output.queue(mix_block);
-            engine_mixer.has_queued_any_block = true;
-            engine_mixer.queued_after_last_top_up = engine_mixer.render_ahead_frames;
+            engine_mixer.readRendererNotices();
         }
 
-        /// Voices started since the last frame (`play`) begin inside the queue rather than after it. The output holds
-        /// `queued_frame_count` frames not yet played. A new voice's first frames are mixed onto the last of them
-        /// (`Output.mix_into_queued`, aligned to the queue's end), so that the voice begins `late_start_lead_frames`
-        /// after the play position; the voice then continues past the queue's end, like every voice, with no seam.
-        /// Mixing is addition, so the frames already queued need no other change. Without this a new sound would wait
-        /// out the whole margin before reaching the speaker.
-        ///
-        ///     queued:      | play position ... lead | new voice's first frames ......| queue end
-        ///     this frame's top-up:                                                    | new voice continues ...
-        fn startNewVoicesInsideQueue(
-            engine_mixer: *Mixer,
-            output: Output,
-            queued_frame_count: u32,
-        ) void {
-            const frames_past_lead: u32 = queued_frame_count -| late_start_lead_frames;
-            const frames_inside: usize = @min(frames_past_lead, render_ahead_most_frames);
-            const inside_block: []f32 = engine_mixer.mix_block_samples[0 .. frames_inside * channel_count];
-            const renderer_queues: *RendererQueues = &engine_mixer.renderer_queues;
-            const has_new_voice: bool = engine_mixer.renderer.mixNewVoicesInto(renderer_queues, inside_block);
-            if (has_new_voice) {
-                output.mix_into_queued(inside_block);
+        /// Forwards everything waiting to the renderer in the other memory (`forwardCommands`, through the output's
+        /// sink), then takes the notices it sent back and reads them as any renderer's.
+        fn forwardToOtherMemory(engine_mixer: *Mixer) void {
+            const command_sink: CommandSink = .{
+                .context = engine_mixer,
+                .send_command_bytes = &forwardedCommandBytes,
+                .send_samples = &forwardedSamples,
+                .send_note = &forwardedNote,
+            };
+            forwardCommands(engine_mixer, command_sink);
+            engine_mixer.sendForwardBatch();
+            const forwarding: ForwardingOutput = engine_mixer.forwarding.?;
+            var notice_bytes: [64 * @sizeOf(RendererNotice)]u8 = undefined;
+            while (true) {
+                const byte_count: usize = forwarding.take_notice_bytes(&notice_bytes, @sizeOf(RendererNotice));
+                if (byte_count == 0) {
+                    break;
+                }
+                acceptNoticeBytes(engine_mixer, notice_bytes[0..byte_count]);
             }
+            engine_mixer.readRendererNotices();
         }
 
-        /// Keeps the longest gap between frames of each second of playing, the last thirty of them, and sets the margin
-        /// from the longest: that gap and 25 ms more, held to 50..200 ms. A second passes by the frames played, so the
-        /// window moves with the sound, not with the app's frames.
-        fn noteGapBetweenFrames(
-            engine_mixer: *Mixer,
-            gap_frames: u32,
-            frames_played: u32,
+        /// Sends the commands gathered (`forward_batch`) as one message, and empties the batch.
+        fn sendForwardBatch(engine_mixer: *Mixer) void {
+            if (engine_mixer.forward_batch_length == 0) {
+                return;
+            }
+            const gathered_bytes: []const u8 = engine_mixer.forward_batch[0..engine_mixer.forward_batch_length];
+            engine_mixer.forwarding.?.send_command_bytes(gathered_bytes);
+            engine_mixer.forward_batch_length = 0;
+        }
+
+        /// A command to forward: gathered with the frame's others, the batch sent first when it has no room.
+        fn forwardedCommandBytes(context: *anyopaque, command_bytes: []const u8) void {
+            const engine_mixer: *Mixer = @ptrCast(@alignCast(context));
+            const room_bytes: usize = engine_mixer.forward_batch.len - engine_mixer.forward_batch_length;
+            if (room_bytes < command_bytes.len) {
+                engine_mixer.sendForwardBatch();
+            }
+            const batch_end: usize = engine_mixer.forward_batch_length + command_bytes.len;
+            @memcpy(engine_mixer.forward_batch[engine_mixer.forward_batch_length..batch_end], command_bytes);
+            engine_mixer.forward_batch_length = batch_end;
+        }
+
+        fn forwardedSamples(
+            context: *anyopaque,
+            samples_id: SamplesId,
+            samples: []const f32,
         ) void {
-            const current_bucket: *u32 = &engine_mixer.gap_buckets[engine_mixer.gap_bucket_index];
-            current_bucket.* = @max(current_bucket.*, gap_frames);
-            engine_mixer.frames_in_gap_bucket += frames_played;
-            if (engine_mixer.frames_in_gap_bucket >= gap_bucket_frames) {
-                engine_mixer.frames_in_gap_bucket = 0;
-                engine_mixer.gap_bucket_index = (engine_mixer.gap_bucket_index + 1) % gap_bucket_count;
-                engine_mixer.gap_buckets[engine_mixer.gap_bucket_index] = 0;
-            }
-            var longest_recent_gap_frames: u32 = 0;
-            for (engine_mixer.gap_buckets) |bucket_gap_frames| {
-                longest_recent_gap_frames = @max(longest_recent_gap_frames, bucket_gap_frames);
-            }
-            const wanted_margin_frames: u32 = longest_recent_gap_frames + render_ahead_safety_frames;
-            const least_margin_frames: u32 = render_ahead_initial_frames;
-            const most_margin_frames: u32 = render_ahead_most_frames;
-            engine_mixer.render_ahead_frames = clamp(wanted_margin_frames, least_margin_frames, most_margin_frames);
+            const engine_mixer: *Mixer = @ptrCast(@alignCast(context));
+            // What was gathered goes first, so that the other side meets everything in the order it was sent.
+            engine_mixer.sendForwardBatch();
+            engine_mixer.forwarding.?.send_samples(samples_id, samples);
+        }
+
+        fn forwardedNote(context: *anyopaque, note_event: NoteEvent) void {
+            const engine_mixer: *Mixer = @ptrCast(@alignCast(context));
+            // A note after its frame's commands - after `setInstrument`, say - as it was sent.
+            engine_mixer.sendForwardBatch();
+            engine_mixer.forwarding.?.send_note(note_event.key, note_event.is_down, note_event.velocity);
         }
     };
 
@@ -1846,6 +2385,8 @@ pub const mixer = struct {
             samples_id: SamplesId,
             samples: []const f32,
         ) void,
+        /// A key's event for the instrument (`Mixer.sendNote`), sent on the main side.
+        send_note: *const fn (context: *anyopaque, note_event: NoteEvent) void,
     };
 
     /// Takes every command waiting on the main side and hands each to `command_sink`, in the order they were sent. The
@@ -1866,6 +2407,13 @@ pub const mixer = struct {
                 },
             }
         }
+        // The notes sent on the main side, after the commands: an instrument set this frame plays this frame's notes.
+        // A key's event read in the browser's own event handler goes to the worklet directly instead, without
+        // waiting for the frame; these are the ones read at the frame.
+        const main_side_notes: *NoteQueue = &engine_mixer.renderer_queues.notes;
+        while (main_side_notes.pop()) |note_event| {
+            command_sink.send_note(command_sink.context, note_event);
+        }
     }
 
     /// Hands the main side the notices of a renderer in another memory, as its host took them
@@ -1877,6 +2425,23 @@ pub const mixer = struct {
         for (renderer_notices) |renderer_notice| {
             const is_accepted: bool = main_side_notices.push(renderer_notice);
             assert(is_accepted, @src());
+        }
+    }
+
+    /// The notices of a renderer in another memory as a message brings them: bytes, whole notices one after another,
+    /// each laid out as this side's `RendererNotice` - the worklet's instance is the same module, so the layout is the
+    /// same (`worklet_abi.notice_byte_count` bytes each). The bytes may sit at any address, so each notice is copied
+    /// out into a notice of its own before it is read, then handed to `acceptNotices`.
+    pub fn acceptNoticeBytes(engine_mixer: *Mixer, notice_bytes: []const u8) void {
+        const notice_byte_count: usize = @sizeOf(RendererNotice);
+        const holds_whole_notices: bool = notice_bytes.len % notice_byte_count == 0;
+        assert(holds_whole_notices, @src());
+        var notice_start: usize = 0;
+        while (notice_start < notice_bytes.len) : (notice_start += notice_byte_count) {
+            var one_notice: [1]RendererNotice = undefined;
+            const notice_storage: []u8 = asBytes(&one_notice);
+            @memcpy(notice_storage, notice_bytes[notice_start..][0..notice_byte_count]);
+            acceptNotices(engine_mixer, &one_notice);
         }
     }
 
@@ -1892,16 +2457,19 @@ pub const mixer = struct {
         /// notices waiting to go back. The worklet's one thread both pushes and pops them.
         renderer_queues: RendererQueues = .{},
         /// The block rendered at each request: interleaved stereo - for each frame, a left sample and then a right
-        /// one - with room for the largest block a request may ask for (`render_ahead_most_frames`).
+        /// one - with room for the largest block a request may ask for (`render_block_most_frames`).
         render_block_samples: []f32 = &.{},
         /// This memory's copies of the main side's samples, each under its id; empty where an id is not in use.
         uploaded_samples: [samples_registry_capacity][]f32 = @splat(&.{}),
         allocator: ?Allocator = null,
+        /// The loudest sample rendered since the worklet's program last took it (`takePeak`): its report to the page
+        /// says whether the renderer makes any sound at all.
+        peak_since_taken: f32 = 0,
 
         /// Allocates the blocks, once: from then on rendering allocates nothing, since the audio thread must never
         /// wait - and asking for memory can mean waiting.
         pub fn start(renderer_host: *RendererHost, allocator: Allocator) Allocator.Error!void {
-            const largest_block_frame_count: usize = render_ahead_most_frames;
+            const largest_block_frame_count: usize = render_block_most_frames;
             const largest_block_sample_count: usize = largest_block_frame_count * channel_count;
             renderer_host.render_block_samples = try allocator.alloc(f32, largest_block_sample_count);
             errdefer allocator.free(renderer_host.render_block_samples);
@@ -1978,7 +2546,23 @@ pub const mixer = struct {
             assert(is_within_room, @src());
             const rendered_block: []f32 = renderer_host.render_block_samples[0..sample_count];
             renderer_host.renderer.render(&renderer_host.renderer_queues, rendered_block);
+            for (rendered_block) |rendered_sample| {
+                renderer_host.peak_since_taken = @max(renderer_host.peak_since_taken, @abs(rendered_sample));
+            }
             return rendered_block;
+        }
+
+        /// The loudest sample rendered since the last call, and the count starts again.
+        pub fn takePeak(renderer_host: *RendererHost) f32 {
+            const peak: f32 = renderer_host.peak_since_taken;
+            renderer_host.peak_since_taken = 0;
+            return peak;
+        }
+
+        /// Queues a key's event for the renderer's next block, where the instrument starts or releases its note. False
+        /// when the note queue is full - 256 events between two blocks - and the event is dropped.
+        pub fn acceptNote(renderer_host: *RendererHost, note_event: NoteEvent) bool {
+            return renderer_host.renderer_queues.notes.push(note_event);
         }
 
         /// Takes the renderer's notices into `renderer_notices`, as many as fit, and says how many it took. A release
@@ -2033,6 +2617,8 @@ pub const mixer = struct {
         pub const render = "zimr_audio_worklet_render";
         pub const take_notices = "zimr_audio_worklet_take_notices";
         pub const notices_buffer = "zimr_audio_worklet_notices_buffer";
+        pub const accept_note = "zimr_audio_worklet_accept_note";
+        pub const take_peak = "zimr_audio_worklet_take_peak";
         /// The bytes of one command and of one notice, as both sides lay them out: the worklet's program copies whole
         /// ones.
         pub const command_byte_count: usize = @sizeOf(RendererCommand);
@@ -2045,6 +2631,10 @@ pub const mixer = struct {
         ///
         ///     main thread -> worklet   { kind: "commands", bytes }          whole commands, one after another
         ///     main thread -> worklet   { kind: "samples", samplesId, samples }  samples to register under the id
+        ///     main thread -> worklet   { kind: "note", key, isDown, velocity }   a key's event, for the instrument
+        ///     worklet -> main thread   { kind: "ready" }                     the module linked, the renderer started
+        ///     worklet -> main thread   { kind: "failed" }                    the renderer could not start (memory)
+        ///     worklet -> main thread   { kind: "stats", blocks, peak }       each second: blocks rendered, loudest
         ///     worklet -> main thread   { kind: "notices", bytes }           whole notices, one after another
         ///
         /// They are taken in the order sent, so samples sent before a command that plays them are registered first.
@@ -2056,6 +2646,15 @@ pub const mixer = struct {
             pub const bytes_field = "bytes";
             pub const samples_id_field = "samplesId";
             pub const samples_field = "samples";
+            pub const note_kind = "note";
+            pub const ready_kind = "ready";
+            pub const failed_kind = "failed";
+            pub const stats_kind = "stats";
+            pub const blocks_field = "blocks";
+            pub const peak_field = "peak";
+            pub const key_field = "key";
+            pub const is_down_field = "isDown";
+            pub const velocity_field = "velocity";
         };
     };
 
@@ -2077,7 +2676,7 @@ pub const mixer = struct {
         /// thread.
         notices: [notice_queue_capacity]RendererNotice = undefined,
         /// Each block rendered, one channel after the other (`workletRender`).
-        channel_samples: [render_ahead_most_frames * channel_count]f32 = undefined,
+        channel_samples: [render_block_most_frames * channel_count]f32 = undefined,
     };
     // lint:off module-var: the worklet instance's one state - its exported functions can share nothing else
     var worklet_state: WorkletState = .{};
@@ -2093,6 +2692,8 @@ pub const mixer = struct {
         @export(&workletRender, .{ .name = worklet_abi.render });
         @export(&workletTakeNotices, .{ .name = worklet_abi.take_notices });
         @export(&workletNoticesBuffer, .{ .name = worklet_abi.notices_buffer });
+        @export(&workletAcceptNote, .{ .name = worklet_abi.accept_note });
+        @export(&workletTakePeak, .{ .name = worklet_abi.take_peak });
     }
 
     /// Allocates the host's blocks: 1 when it could, 0 when memory ran out.
@@ -2109,6 +2710,21 @@ pub const mixer = struct {
     /// Queues the command whose bytes are in the command buffer, for the renderer's next block.
     fn workletAcceptCommand() callconv(.c) void {
         worklet_state.renderer_host.acceptCommandBytes(&worklet_state.command_bytes);
+    }
+
+    /// The loudest sample rendered since the last call (`RendererHost.takePeak`).
+    fn workletTakePeak() callconv(.c) f32 {
+        return worklet_state.renderer_host.takePeak();
+    }
+
+    /// A key's event, as plain numbers - its key (0 to 127), 1 for down or 0 for up, its velocity - queued for the
+    /// instrument at the next block. A key past 127 is no MIDI key, and is dropped.
+    fn workletAcceptNote(key: u32, is_down: u32, velocity: f32) callconv(.c) void {
+        if (key > 127) {
+            return;
+        }
+        const note_event: NoteEvent = .{ .key = @intCast(key), .is_down = is_down != 0, .velocity = velocity };
+        _ = worklet_state.renderer_host.acceptNote(note_event);
     }
 
     /// Room for the `sample_count` samples the main side registered under `samples_id`, in this memory: its address,
@@ -2159,22 +2775,12 @@ pub const mixer = struct {
 
     /// Allocates a mixer's blocks, for tests that mix by hand (`Mixer.mixInto`) without an output.
     fn allocateTestBlocks(engine_mixer: *Mixer) Allocator.Error!void {
-        const block_sample_count: usize = @as(usize, render_ahead_most_frames) * channel_count;
-        engine_mixer.mix_block_samples = try testing_allocator.alloc(f32, block_sample_count);
+        const block_sample_count: usize = @as(usize, render_block_most_frames) * channel_count;
         engine_mixer.renderer.voice_scratch_samples = try testing_allocator.alloc(f32, block_sample_count);
     }
 
     fn freeTestBlocks(engine_mixer: *Mixer) void {
-        testing_allocator.free(engine_mixer.mix_block_samples);
         testing_allocator.free(engine_mixer.renderer.voice_scratch_samples);
-    }
-
-    /// The headless output pushed to rather than pulling - its queue, not the renderer called - for the tests of the
-    /// push path, which the platforms that do not pull yet still use.
-    fn headlessPushOutput() Output {
-        var output: Output = outputOf(platform.headless);
-        output.start_pulling = null;
-        return output;
     }
 
     /// A test generator whose state is a count: each call adds one to it and writes it, over 64 - exact in binary, and
@@ -2199,6 +2805,11 @@ pub const mixer = struct {
             frames[frame_offset * channel_count] = value;
             frames[frame_offset * channel_count + 1] = value;
         }
+    }
+
+    /// The name of a test's stand-in output.
+    fn standInName() []const u8 {
+        return "a test's stand-in";
     }
 
     /// How many times the left channel rises through zero - from below to at or above it. Over one second of a pure
@@ -2345,106 +2956,6 @@ pub const mixer = struct {
             .channels = 2,
         } };
         try expectEqual(PanLaw.balance, panLawOf(stereo_generator));
-    }
-
-    test "a voice started between frames begins inside the queue, 10 ms after its frame, without a seam" {
-        var engine_mixer: Mixer = .{};
-        try engine_mixer.start(testing_allocator, headlessPushOutput());
-        defer engine_mixer.stop();
-        var tone_frequency: f32 = 440;
-        const tone_source: Source = .{ .generator = .{
-            .generate = &generateTestSine,
-            .initial_state = asBytes(&tone_frequency),
-        } };
-        var frame_number: usize = 0;
-        while (frame_number <= 60) : (frame_number += 1) {
-            const frame_number_float: f64 = @floatFromInt(frame_number);
-            platform.headless.playAudioUntil(frame_number_float * 1000.0 / 60.0);
-            if (frame_number == 30) {
-                _ = engine_mixer.play(tone_source, .{});
-            }
-            engine_mixer.mixFrame();
-        }
-        const played_samples: []const f32 = platform.headless.playedAudio();
-        // Frame 30 is at 500 ms: sound frame 24 000 was playing. The voice begins 480 frames later; its first sample is
-        // sin(0) = 0, so the first that sounds is the next.
-        var first_sounding_frame: usize = 0;
-        while (played_samples[first_sounding_frame * channel_count] == 0) {
-            first_sounding_frame += 1;
-        }
-        try expectEqual(@as(usize, 24_000 + 480 + 1), first_sounding_frame);
-        // Where the part mixed inside the queue meets the part mixed after it - sound frame 25 600, the voice's frame
-        // 1 120 - the tone goes on as one sine.
-        const voice_frame_at_join: f32 = 1_120;
-        const rate: f32 = @floatFromInt(sample_rate);
-        const expected_at_join: f32 = 0.5 * 0.70710678 * sinTurns(440 * voice_frame_at_join / rate);
-        const join_sample_index: usize = 25_600 * @as(usize, channel_count);
-        try expectApproxEqAbs(expected_at_join, played_samples[join_sample_index], 0.0001);
-        try expectEqual(@as(u32, 0), engine_mixer.underrun_count);
-    }
-
-    test "a stall that recurs is ridden out: the margin follows the longest gap between frames of the last seconds" {
-        var engine_mixer: Mixer = .{};
-        try engine_mixer.start(testing_allocator, headlessPushOutput());
-        defer engine_mixer.stop();
-        var frame_time_ms: f64 = 0;
-        var frame_number: usize = 0;
-        while (frame_number < 10) : (frame_number += 1) {
-            frame_time_ms += 1000.0 / 60.0;
-            platform.headless.playAudioUntil(frame_time_ms);
-            engine_mixer.mixFrame();
-        }
-        try expectEqual(render_ahead_initial_frames, engine_mixer.render_ahead_frames);
-        // A frame 45 ms after the last: the 50 ms queued outlasts it, and the margin becomes the gap and 25 ms - 70 ms.
-        frame_time_ms += 45;
-        platform.headless.playAudioUntil(frame_time_ms);
-        engine_mixer.mixFrame();
-        try expectEqual(@as(u32, 0), engine_mixer.underrun_count);
-        const margin_after_45_ms: i64 = engine_mixer.render_ahead_frames;
-        try expect(@abs(margin_after_45_ms - (45 * 48 + render_ahead_safety_frames)) <= 1);
-        // A frame 60 ms after the last: longer than the old 50 ms margin, shorter than the new 70 ms - no underrun.
-        frame_time_ms += 60;
-        platform.headless.playAudioUntil(frame_time_ms);
-        engine_mixer.mixFrame();
-        try expectEqual(@as(u32, 0), engine_mixer.underrun_count);
-        // Thirty-one steady seconds: the stalls leave the thirty-second window, and the margin is back at 50 ms.
-        frame_number = 0;
-        while (frame_number < 31 * 60) : (frame_number += 1) {
-            frame_time_ms += 1000.0 / 60.0;
-            platform.headless.playAudioUntil(frame_time_ms);
-            engine_mixer.mixFrame();
-        }
-        try expectEqual(render_ahead_initial_frames, engine_mixer.render_ahead_frames);
-        try expectEqual(@as(u32, 0), engine_mixer.underrun_count);
-    }
-
-    test "a frame later than the whole margin runs the output dry once, and the margin then covers that gap" {
-        var engine_mixer: Mixer = .{};
-        try engine_mixer.start(testing_allocator, headlessPushOutput());
-        defer engine_mixer.stop();
-        var frame_time_ms: f64 = 0;
-        var frame_number: usize = 0;
-        while (frame_number < 10) : (frame_number += 1) {
-            frame_time_ms += 1000.0 / 60.0;
-            platform.headless.playAudioUntil(frame_time_ms);
-            engine_mixer.mixFrame();
-        }
-        // 100 ms late: the 50 ms queued runs out. The gap is taken as everything queued and the safety - 75 ms -
-        // and the margin as that and the safety again: 100 ms.
-        frame_time_ms += 100;
-        platform.headless.playAudioUntil(frame_time_ms);
-        engine_mixer.mixFrame();
-        try expectEqual(@as(u32, 1), engine_mixer.underrun_count);
-        const expected_margin: u32 = render_ahead_initial_frames + 2 * render_ahead_safety_frames;
-        try expectEqual(expected_margin, engine_mixer.render_ahead_frames);
-        // The same stall again is ridden out.
-        frame_time_ms += 1000.0 / 60.0;
-        platform.headless.playAudioUntil(frame_time_ms);
-        engine_mixer.mixFrame();
-        frame_time_ms += 90;
-        platform.headless.playAudioUntil(frame_time_ms);
-        engine_mixer.mixFrame();
-        try expectEqual(@as(u32, 1), engine_mixer.underrun_count);
     }
 
     test "a looping source stepping past its whole length wraps by the remainder, reading only its own frames" {
@@ -2597,12 +3108,18 @@ pub const mixer = struct {
                 @memcpy(room[0..samples.len], samples);
                 workletRegisterSamples(samples_id);
             }
+
+            fn sendNote(context: *anyopaque, note_event: NoteEvent) void {
+                _ = context;
+                workletAcceptNote(note_event.key, @intFromBool(note_event.is_down), note_event.velocity);
+            }
         };
         var unused_context: u8 = 0;
         const command_sink: CommandSink = .{
             .context = &unused_context,
             .send_command_bytes = &EntryPointSink.sendCommandBytes,
             .send_samples = &EntryPointSink.sendSamples,
+            .send_note = &EntryPointSink.sendNote,
         };
         // The same sounds on both: a ramp of samples - the other side's own buffer, to be released - and a tone.
         var local_ramp: [960]f32 = undefined;
@@ -2678,11 +3195,18 @@ pub const mixer = struct {
                     zm.assertUnreachable(@src(), "the host had no room for samples {d}", .{samples_id});
                 };
             }
+
+            fn sendNote(context: *anyopaque, note_event: NoteEvent) void {
+                const host: *RendererHost = @ptrCast(@alignCast(context));
+                const is_queued: bool = host.acceptNote(note_event);
+                assert(is_queued, @src());
+            }
         };
         const command_sink: CommandSink = .{
             .context = &renderer_host,
             .send_command_bytes = &HostSink.sendCommandBytes,
             .send_samples = &HostSink.sendSamples,
+            .send_note = &HostSink.sendNote,
         };
         // The same sounds on both: a ramp of samples - the other side's own buffer, to be released - and a tone.
         var local_ramp: [960]f32 = undefined;
@@ -2721,6 +3245,452 @@ pub const mixer = struct {
         acceptNotices(&main_side, renderer_notices[0..notice_count]);
         main_side.readRendererNotices();
         try expect(!main_side.samples_registry[0].is_registered);
+    }
+
+    test "a key's note starts at the next block, sounds at its key's frequency, and ends quietly after its release" {
+        var engine_mixer: Mixer = .{};
+        try allocateTestBlocks(&engine_mixer);
+        defer freeTestBlocks(&engine_mixer);
+        engine_mixer.setInstrument(sine_instrument);
+        try expect(engine_mixer.sendNote(.{ .key = 69, .is_down = true }));
+        // One second, in the blocks of 128 frames a worklet asks for: 375 of them.
+        const quantum_sample_count: usize = @as(usize, 128) * channel_count;
+        const one_second: []f32 = try testing_allocator.alloc(f32, @as(usize, sample_rate) * channel_count);
+        defer testing_allocator.free(one_second);
+        var first_sample: usize = 0;
+        while (first_sample < one_second.len) : (first_sample += quantum_sample_count) {
+            engine_mixer.mixInto(one_second[first_sample..][0..quantum_sample_count]);
+        }
+        // The note sounds in the first block: its frame 0 is the sine's zero, its frame 1 is not.
+        try expectEqual(@as(f32, 0), one_second[0]);
+        try expect(one_second[1 * channel_count] != 0);
+        // Key 69 is the A at 440 Hz: 440 rising crossings in the second, less the first, at frame 0, which no sample
+        // below zero comes before. The peak is the centre's gain, 0.707, at velocity 1.
+        try expectEqual(@as(usize, 439), countRisingZeroCrossings(one_second));
+        var peak: f32 = 0;
+        for (one_second) |mixed_sample| {
+            peak = @max(peak, @abs(mixed_sample));
+        }
+        try expectApproxEqAbs(@as(f32, 0.7071), peak, 0.001);
+        // Released, it halves every 50 ms and is silent below -80 dB, some 665 ms later: after a second, its slot
+        // is free, and the main side was never told of a slot it never named.
+        try expect(engine_mixer.sendNote(.{ .key = 69, .is_down = false }));
+        first_sample = 0;
+        while (first_sample < one_second.len) : (first_sample += quantum_sample_count) {
+            engine_mixer.mixInto(one_second[first_sample..][0..quantum_sample_count]);
+        }
+        for (first_instrument_slot..voice_capacity) |slot_index| {
+            try expect(!engine_mixer.renderer.voice_slots[slot_index].is_playing);
+        }
+        try expectEqual(@as(u32, 0), engine_mixer.playingVoiceCount());
+        const last_quantum: []const f32 = one_second[one_second.len - quantum_sample_count ..];
+        for (last_quantum) |mixed_sample| {
+            try expectEqual(@as(f32, 0), mixed_sample);
+        }
+    }
+
+    test "a sine note held for twenty seconds is still the exact sine, to a millionth" {
+        // The A at 440 Hz, struck at full level and held: 20 seconds generated in blocks of 128 frames, then the 21st
+        // second compared, frame by frame, with the sine computed in 64-bit floats from the frame's number.
+        var note_state: [generator_state_capacity]u8 align(16) = undefined;
+        startSineNote(&note_state, 69, 1);
+        var block: [@as(usize, 128) * channel_count]f32 = undefined;
+        const block_frame_count: u64 = 128;
+        const held_frame_count: u64 = 20 * @as(u64, sample_rate);
+        var first_frame: u64 = 0;
+        while (first_frame < held_frame_count) : (first_frame += block_frame_count) {
+            generateSineNote(&note_state, &block, first_frame);
+        }
+        const compared_frame_count: u64 = sample_rate;
+        var worst_error: f64 = 0;
+        while (first_frame < held_frame_count + compared_frame_count) : (first_frame += block_frame_count) {
+            generateSineNote(&note_state, &block, first_frame);
+            for (0..block_frame_count) |frame_offset| {
+                const frame_number: f64 = float64(first_frame + frame_offset);
+                const exact_phase_turns: f64 = 440 * frame_number / float64(sample_rate);
+                const exact_sample: f64 = sinTurns(exact_phase_turns - @floor(exact_phase_turns));
+                const generated_sample: f64 = block[frame_offset * channel_count];
+                worst_error = @max(worst_error, @abs(generated_sample - exact_sample));
+            }
+        }
+        try expectApproxEqAbs(@as(f64, 0), worst_error, 1.0e-6);
+    }
+
+    test "notes from the main thread and from an input thread both reach the instrument, each in its own queue" {
+        var engine_mixer: Mixer = .{};
+        try allocateTestBlocks(&engine_mixer);
+        defer freeTestBlocks(&engine_mixer);
+        engine_mixer.setInstrument(sine_instrument);
+        // An input thread presses and releases keys 60 to 67 while the main thread presses key 72 and holds it: two
+        // producers at once, one queue each.
+        const InputThread = struct {
+            fn pressAndRelease(mixer_of_test: *Mixer) void {
+                for (60..68) |key| {
+                    const note_key: u8 = @intCast(key);
+                    _ = mixer_of_test.sendNoteFromInputThread(.{ .key = note_key, .is_down = true });
+                    _ = mixer_of_test.sendNoteFromInputThread(.{ .key = note_key, .is_down = false });
+                }
+                _ = mixer_of_test.sendNoteFromInputThread(.{ .key = 64, .is_down = true });
+            }
+        };
+        const input_thread: std.Thread = try .spawn(.{}, InputThread.pressAndRelease, .{&engine_mixer});
+        try expect(engine_mixer.sendNote(.{ .key = 72, .is_down = true }));
+        input_thread.join();
+        var block: [@as(usize, 128) * channel_count]f32 = undefined;
+        engine_mixer.mixInto(&block);
+        // Sounding now: key 72, held; key 64, pressed last; and the eight released notes in their release.
+        var held_keys: [2]u8 = undefined;
+        var held_count: usize = 0;
+        var sounding_count: usize = 0;
+        for (first_instrument_slot..voice_capacity) |slot_index| {
+            const voice_slot: *const VoiceSlot = &engine_mixer.renderer.voice_slots[slot_index];
+            if (!voice_slot.is_playing) {
+                continue;
+            }
+            sounding_count += 1;
+            if (voice_slot.is_note_held) {
+                held_keys[held_count] = voice_slot.note_key;
+                held_count += 1;
+            }
+        }
+        try expectEqual(@as(usize, 10), sounding_count);
+        try expectEqual(@as(usize, 2), held_count);
+        try expectEqual(@as(u8, 72), held_keys[0]);
+        try expectEqual(@as(u8, 64), held_keys[1]);
+    }
+
+    test "a note giving up its slot to a new one fades out, with no jump" {
+        var engine_mixer: Mixer = .{};
+        try allocateTestBlocks(&engine_mixer);
+        defer freeTestBlocks(&engine_mixer);
+        engine_mixer.setInstrument(sine_instrument);
+        var block: [@as(usize, 128) * channel_count]f32 = undefined;
+        // The note to be stolen: the oldest, loud, and low - 32.7 Hz, whose own steps between frames are small.
+        try expect(engine_mixer.sendNote(.{ .key = 24, .is_down = true, .velocity = 1 }));
+        engine_mixer.mixInto(&block);
+        // Fifteen quiet notes fill the other slots: key 12 below it and keys 61 to 74 above, so that the lowest and
+        // the highest held notes - which stealing protects (`noteSlotToSteal`) - are quiet ones, and the loud note is
+        // the oldest of the rest.
+        try expect(engine_mixer.sendNote(.{ .key = 12, .is_down = true, .velocity = 0.001 }));
+        for (61..75) |key| {
+            try expect(engine_mixer.sendNote(.{ .key = @intCast(key), .is_down = true, .velocity = 0.001 }));
+        }
+        // Blocks until the loud note is far from zero at a block's end, where a cut would jump the most.
+        var last_left_sample: f32 = 0;
+        var block_count: usize = 0;
+        while (@abs(last_left_sample) < 0.4) : (block_count += 1) {
+            try expect(block_count < 100);
+            engine_mixer.mixInto(&block);
+            last_left_sample = block[block.len - channel_count];
+        }
+        // A seventeenth key: the loud note gives up its slot.
+        try expect(engine_mixer.sendNote(.{ .key = 80, .is_down = true, .velocity = 0.001 }));
+        const quantum_sample_count: usize = @as(usize, 128) * channel_count;
+        var after_steal: [2 * quantum_sample_count]f32 = undefined;
+        engine_mixer.mixInto(after_steal[0..quantum_sample_count]);
+        engine_mixer.mixInto(after_steal[quantum_sample_count..]);
+        var largest_step: f32 = @abs(after_steal[0] - last_left_sample);
+        for (1..fade_out_frames + 8) |frame_index| {
+            const step: f32 = after_steal[frame_index * channel_count] - after_steal[(frame_index - 1) * channel_count];
+            largest_step = @max(largest_step, @abs(step));
+        }
+        try expect(largest_step < 0.01);
+        // And the fade ends: past it, only the quiet notes sound.
+        const after_fade_sample: f32 = after_steal[(fade_out_frames + 8) * channel_count];
+        try expect(@abs(after_fade_sample) < 0.02);
+    }
+
+    test "a start is measured: asked for, applied at the start of its block, and heard after what was queued ahead" {
+        // A stand-in output that pulls, on a clock that reads 100 ms: a play and a note are stamped with that time.
+        const StandInOutput = struct {
+            fn startPulling(
+                wanted: contract.AudioFormat,
+                render_callback: contract.AudioRenderCallback,
+            ) contract.AudioFormat {
+                _ = render_callback;
+                return wanted;
+            }
+
+            fn clockMilliseconds() f64 {
+                return 100;
+            }
+
+            fn stop() void {}
+        };
+        const stand_in_output: Output = .{
+            .start_pulling = &StandInOutput.startPulling,
+            .clock_ms = &StandInOutput.clockMilliseconds,
+            .latency_ms = &StandInOutput.clockMilliseconds,
+            .name = &standInName,
+            .stop = &StandInOutput.stop,
+            .calls_renderer_from_another_thread = true,
+        };
+        var engine_mixer: Mixer = .{};
+        try engine_mixer.start(testing_allocator, stand_in_output);
+        defer engine_mixer.stop();
+        engine_mixer.setInstrument(sine_instrument);
+        var tone_frequency: f32 = 440;
+        const tone_source: Source = .{ .generator = .{
+            .generate = &generateTestSine,
+            .initial_state = asBytes(&tone_frequency),
+        } };
+        // The play, rendered by a block asked for at 105 ms and heard at 115 - 10 ms of sound queued ahead of it.
+        _ = engine_mixer.play(tone_source, .{});
+        var block: [@as(usize, 128) * channel_count]f32 = undefined;
+        Mixer.renderForPullingOutput(&engine_mixer, &block, .{ .asked_at_ms = 105, .first_frame_out_ms = 115 });
+        // The note, by a block asked for at 205 ms and heard at 207.5.
+        try expect(engine_mixer.sendNote(.{ .key = 69, .is_down = true }));
+        Mixer.renderForPullingOutput(&engine_mixer, &block, .{ .asked_at_ms = 205, .first_frame_out_ms = 207.5 });
+        // The frame reads them, newest first.
+        engine_mixer.mixFrame();
+        var recent: [recent_start_capacity]LatencySample = undefined;
+        const measured: []LatencySample = engine_mixer.recentStarts(&recent);
+        try expectEqual(@as(usize, 2), measured.len);
+        try expectEqual(.note, measured[0].kind);
+        try expectEqual(@as(f64, 100), measured[0].requested_at_ms);
+        try expectEqual(@as(f64, 205), measured[0].applied_at_ms);
+        try expectEqual(@as(f64, 207.5), measured[0].first_frame_out_ms);
+        try expectEqual(.play, measured[1].kind);
+        try expectEqual(@as(f64, 100), measured[1].requested_at_ms);
+        try expectEqual(@as(f64, 105), measured[1].applied_at_ms);
+        try expectEqual(@as(f64, 115), measured[1].first_frame_out_ms);
+    }
+
+    test "forwarding: commands reach the renderer in the other memory, its notices return, the local one rests" {
+        // A stand-in for the browser's worklet: a renderer host in this process, reached only through the output's
+        // functions, which - as a platform's - take no context.
+        const StandInWorklet = struct {
+            // lint:off module-var: a stand-in platform's state - a platform's functions take no context
+            var host: RendererHost = .{};
+
+            fn startForwarding(wanted: contract.AudioFormat) ?contract.AudioFormat {
+                host.start(testing_allocator) catch return null;
+                return wanted;
+            }
+
+            // lint:off module-var: the stand-in's count of what reached it, as a platform's state
+            var command_message_count: usize = 0;
+            // lint:off module-var: the stand-in's count of what reached it, as a platform's state
+            var last_message_command_count: usize = 0;
+
+            /// A message of commands, split into its commands as the worklet's program splits it.
+            fn sendCommandBytes(command_bytes: []const u8) void {
+                const command_byte_count: usize = @sizeOf(RendererCommand);
+                assert(command_bytes.len % command_byte_count == 0, @src());
+                command_message_count += 1;
+                last_message_command_count = command_bytes.len / command_byte_count;
+                var command_start: usize = 0;
+                while (command_start < command_bytes.len) : (command_start += command_byte_count) {
+                    host.acceptCommandBytes(command_bytes[command_start..][0..command_byte_count]);
+                }
+            }
+
+            fn sendSamples(samples_id: SamplesId, samples: []const f32) void {
+                host.acceptSamples(samples_id, samples) catch {
+                    zm.assertUnreachable(@src(), "the stand-in had no room for samples {d}", .{samples_id});
+                };
+            }
+
+            fn sendNote(key: u8, is_down: bool, velocity: f32) void {
+                _ = host.acceptNote(.{ .key = key, .is_down = is_down, .velocity = velocity });
+            }
+
+            fn takeNoticeBytes(notice_bytes: []u8, notice_byte_count: usize) usize {
+                assert(notice_byte_count == @sizeOf(RendererNotice), @src());
+                const notice_room: usize = notice_bytes.len / @sizeOf(RendererNotice);
+                var notices: [64]RendererNotice = undefined;
+                const taken_count: usize = host.takeNotices(notices[0..@min(notice_room, notices.len)]);
+                const taken_bytes: []const u8 = sliceAsBytes(notices[0..taken_count]);
+                @memcpy(notice_bytes[0..taken_bytes.len], taken_bytes);
+                return taken_bytes.len;
+            }
+
+            /// Never called: the forwarding starts, and a mixer that forwards does not pull.
+            fn startPulling(
+                wanted: contract.AudioFormat,
+                render_callback: contract.AudioRenderCallback,
+            ) contract.AudioFormat {
+                _ = render_callback;
+                zm.assertUnreachable(@src(), "the stand-in's forwarding started, so its output is not pulled", .{});
+                return wanted;
+            }
+
+            fn zeroMilliseconds() f64 {
+                return 0;
+            }
+
+            fn stop() void {
+                host.stop();
+            }
+        };
+        const forwarding_output: Output = .{
+            .start_pulling = &StandInWorklet.startPulling,
+            .clock_ms = &StandInWorklet.zeroMilliseconds,
+            .latency_ms = &StandInWorklet.zeroMilliseconds,
+            .name = &standInName,
+            .stop = &StandInWorklet.stop,
+            .forwarding = .{
+                .start = &StandInWorklet.startForwarding,
+                .send_command_bytes = &StandInWorklet.sendCommandBytes,
+                .send_samples = &StandInWorklet.sendSamples,
+                .send_note = &StandInWorklet.sendNote,
+                .take_notice_bytes = &StandInWorklet.takeNoticeBytes,
+            },
+        };
+        var engine_mixer: Mixer = .{};
+        try engine_mixer.start(testing_allocator, forwarding_output);
+        defer engine_mixer.stop();
+        try expect(engine_mixer.forwarding != null);
+        // A buffer of the main side's, played, then released while it plays.
+        const owned_ramp: []f32 = try testing_allocator.alloc(f32, 960);
+        for (owned_ramp, 0..) |*ramp_sample, ramp_index| {
+            ramp_sample.* = float(ramp_index) / 2048;
+        }
+        const ramp_voice: Voice = engine_mixer.play(.{ .samples = .{
+            .samples = owned_ramp,
+            .channels = 1,
+            .sample_rate = 24_000,
+        } }, .{});
+        try expect(ramp_voice != .none);
+        // A second command in the same frame: the frame's commands travel as one message.
+        engine_mixer.setVolume(ramp_voice, 0.5);
+        engine_mixer.mixFrame();
+        try expectEqual(@as(usize, 1), StandInWorklet.command_message_count);
+        try expectEqual(@as(usize, 2), StandInWorklet.last_message_command_count);
+        // The renderer over there plays it; the one here never heard of it.
+        const rendered: []const f32 = StandInWorklet.host.render(128);
+        var loudest: f32 = 0;
+        for (rendered) |rendered_sample| {
+            loudest = @max(loudest, @abs(rendered_sample));
+        }
+        try expect(loudest > 0);
+        for (engine_mixer.renderer.voice_slots) |voice_slot| {
+            try expect(!voice_slot.is_playing);
+        }
+        // Released: the main side's buffer is freed only once the other side's notice is read.
+        engine_mixer.releaseSamples(testing_allocator, owned_ramp);
+        engine_mixer.mixFrame();
+        try expect(engine_mixer.samples_registry[0].is_registered);
+        _ = StandInWorklet.host.render(128);
+        engine_mixer.mixFrame();
+        try expect(!engine_mixer.samples_registry[0].is_registered);
+        // The voice fades over its copy of the last 5 ms - 240 frames - and its end is noticed after.
+        try expect(engine_mixer.isPlaying(ramp_voice));
+        _ = StandInWorklet.host.render(128);
+        _ = StandInWorklet.host.render(128);
+        engine_mixer.mixFrame();
+        try expect(!engine_mixer.isPlaying(ramp_voice));
+    }
+
+    /// The keys of the instrument's notes sounding now, and of those held, for the stealing tests below.
+    const SoundingNotes = struct {
+        sounding: [instrument_voice_count]u8 = undefined,
+        sounding_count: usize = 0,
+        held: [instrument_voice_count]u8 = undefined,
+        held_count: usize = 0,
+
+        fn of(renderer: *const Renderer) SoundingNotes {
+            var notes: SoundingNotes = .{};
+            for (first_instrument_slot..voice_capacity) |slot_index| {
+                const voice_slot: *const VoiceSlot = &renderer.voice_slots[slot_index];
+                if (!voice_slot.is_playing) {
+                    continue;
+                }
+                notes.sounding[notes.sounding_count] = voice_slot.note_key;
+                notes.sounding_count += 1;
+                if (voice_slot.is_note_held) {
+                    notes.held[notes.held_count] = voice_slot.note_key;
+                    notes.held_count += 1;
+                }
+            }
+            return notes;
+        }
+
+        fn isSounding(notes: *const SoundingNotes, key: u8) bool {
+            return indexOfScalar(u8, notes.sounding[0..notes.sounding_count], key) != null;
+        }
+
+        fn isHeld(notes: *const SoundingNotes, key: u8) bool {
+            return indexOfScalar(u8, notes.held[0..notes.held_count], key) != null;
+        }
+    };
+
+    test "a key struck again releases its held note, which rings on beside the new one" {
+        var engine_mixer: Mixer = .{};
+        try allocateTestBlocks(&engine_mixer);
+        defer freeTestBlocks(&engine_mixer);
+        engine_mixer.setInstrument(sine_instrument);
+        var block: [@as(usize, 128) * channel_count]f32 = undefined;
+        try expect(engine_mixer.sendNote(.{ .key = 60, .is_down = true }));
+        engine_mixer.mixInto(&block);
+        try expect(engine_mixer.sendNote(.{ .key = 60, .is_down = true }));
+        engine_mixer.mixInto(&block);
+        const notes: SoundingNotes = .of(&engine_mixer.renderer);
+        try expectEqual(@as(usize, 2), notes.sounding_count);
+        try expectEqual(@as(usize, 1), notes.held_count);
+    }
+
+    test "with every slot sounding, a released note gives up its slot before a held one" {
+        var engine_mixer: Mixer = .{};
+        try allocateTestBlocks(&engine_mixer);
+        defer freeTestBlocks(&engine_mixer);
+        engine_mixer.setInstrument(sine_instrument);
+        var block: [@as(usize, 128) * channel_count]f32 = undefined;
+        // Fifteen held notes, the oldest first, then a sixteenth struck and released: the youngest, but no finger
+        // holds it.
+        for (40..55) |key| {
+            try expect(engine_mixer.sendNote(.{ .key = @intCast(key), .is_down = true }));
+            engine_mixer.mixInto(&block);
+        }
+        try expect(engine_mixer.sendNote(.{ .key = 70, .is_down = true }));
+        engine_mixer.mixInto(&block);
+        try expect(engine_mixer.sendNote(.{ .key = 70, .is_down = false }));
+        engine_mixer.mixInto(&block);
+        try expect(engine_mixer.sendNote(.{ .key = 80, .is_down = true }));
+        engine_mixer.mixInto(&block);
+        const notes: SoundingNotes = .of(&engine_mixer.renderer);
+        try expect(!notes.isSounding(70));
+        try expect(notes.isHeld(80));
+        for (40..55) |key| {
+            try expect(notes.isHeld(@intCast(key)));
+        }
+    }
+
+    test "with every note held, the oldest gives up its slot, but not the lowest or the highest" {
+        var engine_mixer: Mixer = .{};
+        try allocateTestBlocks(&engine_mixer);
+        defer freeTestBlocks(&engine_mixer);
+        engine_mixer.setInstrument(sine_instrument);
+        var block: [@as(usize, 128) * channel_count]f32 = undefined;
+        // Sixteen held notes, key 40 the oldest and the lowest, key 55 the highest.
+        for (40..56) |key| {
+            try expect(engine_mixer.sendNote(.{ .key = @intCast(key), .is_down = true }));
+            engine_mixer.mixInto(&block);
+        }
+        try expect(engine_mixer.sendNote(.{ .key = 60, .is_down = true }));
+        engine_mixer.mixInto(&block);
+        const notes: SoundingNotes = .of(&engine_mixer.renderer);
+        // Key 41 - the oldest that is neither the lowest nor the highest - gave its slot up.
+        try expect(!notes.isSounding(41));
+        try expect(notes.isHeld(40));
+        try expect(notes.isHeld(55));
+        try expect(notes.isHeld(60));
+        try expectEqual(@as(usize, 16), notes.held_count);
+    }
+
+    test "the main side plays only in the slots below the instrument's" {
+        var engine_mixer: Mixer = .{};
+        try allocateTestBlocks(&engine_mixer);
+        defer freeTestBlocks(&engine_mixer);
+        var tone_frequency: f32 = 440;
+        const tone_source: Source = .{ .generator = .{
+            .generate = &generateTestSine,
+            .initial_state = asBytes(&tone_frequency),
+        } };
+        for (0..first_instrument_slot) |_| {
+            try expect(engine_mixer.play(tone_source, .{}) != .none);
+        }
+        try expectEqual(Voice.none, engine_mixer.play(tone_source, .{}));
     }
 
     test "a sample buffer is registered the first time it plays, and named by that id after" {
@@ -2879,7 +3849,7 @@ pub const mixer = struct {
         var engine_mixer: Mixer = .{};
         try engine_mixer.start(testing_allocator, outputOf(platform.headless));
         defer engine_mixer.stop();
-        try expect(engine_mixer.is_output_pulling);
+        try expect(engine_mixer.forwarding == null);
         // Thirty frames at 60 Hz, a constant sound played during frame 10's update.
         var constant_samples: [48_000]f32 = @splat(0.5);
         const constant_source: Source = .{ .samples = .{
@@ -2901,10 +3871,9 @@ pub const mixer = struct {
         const first_sound_frame: usize = 8_000;
         try expectEqual(@as(f32, 0), played_samples[(first_sound_frame - 1) * 2]);
         try expectApproxEqAbs(@as(f32, 0.5), played_samples[first_sound_frame * 2], 0.0001);
-        try expectEqual(@as(u32, 0), platform.headless.audioUnderrunCount());
     }
 
-    test "the mixer through the headless output: a second of a tone, a frame at a time, no underrun" {
+    test "the mixer through the headless output: a second of a tone, a frame at a time" {
         var engine_mixer: Mixer = .{};
         try engine_mixer.start(testing_allocator, outputOf(platform.headless));
         defer engine_mixer.stop();
@@ -2914,8 +3883,8 @@ pub const mixer = struct {
             .initial_state = asBytes(&tone_frequency),
         } };
         _ = engine_mixer.play(tone_source, .{});
-        // Sixty frames at 60 Hz, as a run draws them: the output plays what is due by each frame's time, then the
-        // mixer tops the queue up again.
+        // Sixty frames at 60 Hz, as a run draws them: at each frame's time the output asks the renderer for the
+        // frames that came due, then the frame reads the renderer's notices.
         var frame_number: usize = 0;
         while (frame_number <= 60) : (frame_number += 1) {
             const frame_number_float: f64 = @floatFromInt(frame_number);
@@ -2925,8 +3894,6 @@ pub const mixer = struct {
         }
         const played_samples: []const f32 = platform.headless.playedAudio();
         try expectEqual(@as(usize, 48_000 * 2), played_samples.len);
-        try expectEqual(@as(u32, 0), engine_mixer.underrun_count);
-        try expectEqual(@as(u32, 0), platform.headless.audioUnderrunCount());
         const crossing_count: usize = countRisingZeroCrossings(played_samples);
         try expect(crossing_count >= 439 and crossing_count <= 440);
     }
@@ -2993,22 +3960,38 @@ pub const audio_device = struct {
             };
             return;
         }
-        const id: web.audio.ContextId = web.audio.createContext();
-        if (id == 0) {
-            // AudioContext creation failed (very old browser / Web
-            // Audio disabled).  Stay un-ready; callers see all
-            // sound ops as no-ops via `isReady` checks.
-            return;
-        }
-        const sr: f32 = web.audio.getSampleRate(id);
+        // The older browser-graph layer's context is made when `music` or `streams` first need it
+        // (`olderLayerContext`), not here: a page that plays only through the mixer then holds one audio context.
         state.* = .{
-            .ctx_id = id,
+            .ctx_id = 0,
             .ready = true,
-            .sample_rate = @trunc(sr),
+            .sample_rate = mixer.sample_rate,
             .engine_mixer = state.engine_mixer,
             .mixer_allocator = state.mixer_allocator,
             .is_showing_diagnostics = state.is_showing_diagnostics,
         };
+    }
+
+    /// The older browser-graph layer's audio context, which `music` and `streams` still play through, and the master
+    /// volume asked for before it existed. It is made on first use (`olderLayerContext`) rather than at `init`: each
+    /// running audio context keeps an output stream open on the device, and a page that plays only through the mixer
+    /// - the renderer worklet, or the script processor - needs none of it. The layer, and these two, go when music and
+    /// streams move onto the mixer.
+    // lint:off module-var: the older layer's one context, made on first use by functions handed the device as const
+    var older_layer_context_id: web.audio.ContextId = 0;
+    // lint:off module-var: the volume asked for before the older layer's context existed, given to it when it is made
+    var older_layer_volume: f32 = 1;
+
+    /// The older layer's context, made the first time it is asked for, with the master volume asked for so far; 0 when
+    /// the browser has no Web Audio.
+    fn olderLayerContext() web.audio.ContextId {
+        if (older_layer_context_id == 0) {
+            older_layer_context_id = web.audio.createContext();
+            if (older_layer_context_id != 0) {
+                web.audio.setMasterVolume(older_layer_context_id, older_layer_volume);
+            }
+        }
+        return older_layer_context_id;
     }
 
     /// Shows the sound's state where it can be read on the device - for finding glitches: in the browser, a panel at
@@ -3030,7 +4013,7 @@ pub const audio_device = struct {
         const engine_mixer: *mixer.Mixer = state.engine_mixer orelse return;
         if (comptime is_wasm) {
             const voice_count: u32 = engine_mixer.playingVoiceCount();
-            web.dom.audio_output_note_mixer(engine_mixer.render_ahead_frames, engine_mixer.underrun_count, voice_count);
+            web.dom.audio_output_note_mixer(voice_count);
         }
     }
 
@@ -3054,7 +4037,10 @@ pub const audio_device = struct {
             engine_mixer.stop();
         }
         if (comptime is_wasm) {
-            web.audio.closeContext(state.ctx_id);
+            if (older_layer_context_id != 0) {
+                web.audio.closeContext(older_layer_context_id);
+                older_layer_context_id = 0;
+            }
         }
         state.ctx_id = 0;
         state.ready = false;
@@ -3079,7 +4065,7 @@ pub const audio_device = struct {
         if (comptime !is_wasm) {
             return 1.0;
         }
-        return web.audio.getMasterVolume(state.ctx_id);
+        return older_layer_volume;
     }
 
     /// Set the master volume.  Clamped to `[0, 10]` (matches the
@@ -3096,16 +4082,30 @@ pub const audio_device = struct {
             engine_mixer.setMasterVolume(clamp(volume, 0, 10));
         }
         if (comptime is_wasm) {
-            web.audio.setMasterVolume(state.ctx_id, volume);
+            older_layer_volume = volume;
+            if (older_layer_context_id != 0) {
+                web.audio.setMasterVolume(older_layer_context_id, volume);
+            }
         }
     }
 
     /// Internal accessors for sibling namespaces.  Not part of the
     /// raylib parity surface.
     pub fn getContextId(state: *const AudioDeviceState) web.audio.ContextId {
+        if (comptime is_wasm) {
+            return olderLayerContext();
+        }
         return state.ctx_id;
     }
+    /// The older layer's rate, which `music` and `streams` resample to - its context made, when it is asked for.
     pub fn getSampleRate(state: *const AudioDeviceState) u32 {
+        if (comptime is_wasm) {
+            const context_id: web.audio.ContextId = olderLayerContext();
+            if (context_id == 0) {
+                return state.sample_rate;
+            }
+            return @trunc(web.audio.getSampleRate(context_id));
+        }
         return state.sample_rate;
     }
 
@@ -3118,7 +4118,9 @@ pub const audio_device = struct {
             return;
         }
         if (comptime is_wasm) {
-            web.audio.resumeContext(state.ctx_id);
+            if (older_layer_context_id != 0) {
+                web.audio.resumeContext(older_layer_context_id);
+            }
         }
     }
 
@@ -3196,7 +4198,7 @@ pub const analyser = struct {
 
     /// Attach an analyser to the device's master bus.
     pub fn attach(device: *const audio_device.AudioDeviceState, fft_size: u32) Analyser {
-        const id: web.audio.AnalyserId = web.audio.createAnalyser(device.ctx_id, fft_size);
+        const id: web.audio.AnalyserId = web.audio.createAnalyser(audio_device.getContextId(device), fft_size);
         if (id == 0) {
             return .{};
         }
@@ -3214,14 +4216,14 @@ pub const analyser = struct {
         if (a.id == 0) {
             return 0;
         }
-        return web.audio.getFrequencyData(device.ctx_id, a.id, out);
+        return web.audio.getFrequencyData(audio_device.getContextId(device), a.id, out);
     }
 
     pub fn detach(device: *const audio_device.AudioDeviceState, a: Analyser) void {
         if (a.id == 0) {
             return;
         }
-        web.audio.destroyAnalyser(device.ctx_id, a.id);
+        web.audio.destroyAnalyser(audio_device.getContextId(device), a.id);
     }
 };
 
@@ -4425,7 +5427,7 @@ pub const streams = struct {
     /// counts other than 1 (mono) and 2 (stereo) are accepted
     /// but get downmixed to stereo on upload.
     /// Reads `device.is_ready` (early-out on closed device),
-    /// `device.ctx_id` (Web Audio context for chunk uploads).
+    /// the older layer's context (`audio_device.getContextId`, for chunk uploads).
     /// Mutates `state.entries` (allocates one slot on success).
     /// Returns an empty AudioStream (`.buffer = null`) if the
     /// device isn't ready or the table is full.
@@ -4964,7 +5966,7 @@ pub const music = struct {
     /// Web Audio buffer), async for OGG (kicks off
     /// `web.audio.decodeOggBytes`; entry sits in "loading" until
     /// `isReady` promotes it).
-    /// Reads `device.ctx_id` (sample-rate target + Web Audio context
+    /// Reads the older layer's context (`audio_device.getContextId` - its sample rate, and the context
     /// for buffer upload), `device.is_ready` (early-out on closed
     /// device).  Mutates `state.entries` (allocates one slot per
     /// successful load).  Mutates `waves_state.entries` for the WAV

@@ -4,7 +4,6 @@
 //! gamepads only once a button is pressed while the page has the focus.
 
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
@@ -77,9 +76,12 @@ fn drawTrigger(
 /// One slot's panel at `corner`: its buttons, sticks and triggers. Its south button rumbles it.
 fn drawGamepad(f: *z.Frame, s: *State, slot: i32, corner: Vec2) void {
     f.gl.rect(.{ .x = corner[0], .y = corner[1], .width = 440, .height = 230 }, .{ .color = panel });
-    var title_bytes: [32]u8 = undefined;
-    const title: []const u8 = bufPrint(&title_bytes, "gamepad {d}", .{slot}) catch "gamepad";
-    f.gl.text(.{ corner[0] + 12, corner[1] + 8 }, title, .{ .size = 16, .color = text_color, .font = &s.font });
+    f.gl.textf(
+        .{ corner[0] + 12, corner[1] + 8 },
+        "gamepad {d}",
+        .{slot},
+        .{ .size = 16, .color = text_color, .font = &s.font },
+    );
     for (shown_buttons, 0..) |shown, index| {
         const column: f32 = float(index % 7);
         const row: f32 = float(index / 7);

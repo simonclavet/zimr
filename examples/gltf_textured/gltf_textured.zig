@@ -84,4 +84,7 @@ pub fn main() !void {
             .depth_format = .depth24_plus,
         },
     }, State, initState, update);
+    // A native program calls its frames itself, until the window closes; on the web this returns at once, and the
+    // browser calls them.
+    zimr_app.runNative();
 }

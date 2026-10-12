@@ -13,7 +13,6 @@ const common = @import("example_common");
 
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
-const bufPrint = std.fmt.bufPrint;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const mode_count: usize = 3;
@@ -81,25 +80,26 @@ fn update(f: *z.Frame, s: *State) void {
     f.gl.rect(.{ .x = 10, .y = 40, .width = 268, .height = 96 }, .{ .color = panel });
     f.gl.rect(.{ .x = 10, .y = 40, .width = 268, .height = 96 }, .{ .color = border, .outline = 1.0 });
 
-    var buf: [64]u8 = undefined;
-    const mode_line: []const u8 = bufPrint(&buf, "mode: {s}", .{mode_names[s.mode]}) catch "mode: ?";
-    f.gl.text(.{ 22, 52 }, mode_line, .{ .size = 14, .color = common.palette.accent, .font = &s.font });
+    f.gl.textf(
+        .{ 22, 52 },
+        "mode: {s}",
+        .{mode_names[s.mode]},
+        .{ .size = 14, .color = common.palette.accent, .font = &s.font },
+    );
 
-    var buf2: [80]u8 = undefined;
-    const ang_line: []const u8 = bufPrint(
-        &buf2,
+    f.gl.textf(
+        .{ 22, 74 },
         "span: {d:.0} deg  segs: {d}",
         .{ span, segments },
-    ) catch "span: --";
-    f.gl.text(.{ 22, 74 }, ang_line, .{ .size = 13, .color = common.palette.ink, .font = &s.font });
+        .{ .size = 13, .color = common.palette.ink, .font = &s.font },
+    );
 
-    var buf3: [80]u8 = undefined;
-    const rad_line: []const u8 = bufPrint(
-        &buf3,
+    f.gl.textf(
+        .{ 22, 94 },
         "inner: {d:.0}  outer: {d:.0}",
         .{ inner, outer },
-    ) catch "inner: --";
-    f.gl.text(.{ 22, 94 }, rad_line, .{ .size = 13, .color = common.palette.ink, .font = &s.font });
+        .{ .size = 13, .color = common.palette.ink, .font = &s.font },
+    );
     f.gl.text(.{ 22, 114 }, "tap: cycle mode", .{ .size = 13, .color = common.palette.ink_dim, .font = &s.font });
 
     common.caption(f.gl, s.font, "ring drawing");

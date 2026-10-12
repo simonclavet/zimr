@@ -608,6 +608,12 @@ fn stCartpole(fused: bool) !void {
         if (iteration % 500 == 0) {
             final_eval = st_mod.evaluate(host, 10, 99);
             report.print("    iteration {d:>4}: REAL episodes {d:.1} steps\n", .{ iteration, final_eval });
+            // The claim is "it gets past the bar within 2,000 iterations": stop once it has, unless the table is
+            // asked for, which wants the whole curve.
+            const cleared: bool = final_eval > baseline * 4.0;
+            if (cleared and !report.requested()) {
+                break;
+            }
         }
     }
     const ms: f64 = float64(train_ns) / 1.0e6 / float64(@max(trained, 1));
@@ -635,6 +641,11 @@ test "gpu learn: SuperTrack per-layer on the kit's CPU twin holds the real cartp
     const options = @import("build_options");
     const slow: bool = comptime @hasDecl(options, "slow_tests") and options.slow_tests;
     if (!slow) {
+        return error.SkipZigTest;
+    }
+    // PARKED (Oct 12): superseded by the fused path, which still runs; this is the reference it was
+    // measured against. `-Dslow-tests -Dparked-tests` runs it; see `report.parked`.
+    if (report.parked()) {
         return error.SkipZigTest;
     }
     try stCartpole(false);

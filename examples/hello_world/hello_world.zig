@@ -6,7 +6,6 @@
 // load/bake/draw path, not in any UI layer above.
 
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
@@ -67,13 +66,12 @@ fn update(f: *z.Frame, s: *State) void {
 
     f.gl.text(.{ cx - 90, cy - 18 }, "Hello, World!", .{ .size = 32, .color = white, .font = &s.font });
 
-    var dim_buf: [64]u8 = undefined;
-    const dim_text: []const u8 = bufPrint(
-        &dim_buf,
+    f.gl.textf(
+        .{ cx - 110, cy + 30 },
         "viewport: {d} x {d} CSS px",
         .{ sw, sh },
-    ) catch "viewport: ?";
-    f.gl.text(.{ cx - 110, cy + 30 }, dim_text, .{ .size = 14, .color = dim, .font = &s.font });
+        .{ .size = 14, .color = dim, .font = &s.font },
+    );
 
     f.gl.text(
         .{ 16, sh - 24 },

@@ -72,7 +72,10 @@ pub const dom = struct {
     }
 
     // ----- Time
-    extern "dom" fn js_now_ms() f64;
+    // The page's clock is registered once, in the "wgpu" import object, where the engine's own clock reads it
+    // (`wgpu.nowMs`); declared here under that module, it is the same import. A browser binds an import by its module
+    // and its name together: declared under "dom", the page would be refused at load.
+    extern "wgpu" fn js_now_ms() f64;
     extern "dom" fn js_epoch_ms() f64;
     extern "dom" fn js_tz_offset_min() f64;
 
@@ -216,51 +219,79 @@ pub const dom = struct {
     extern "dom" fn js_get_dpi_scale() f32;
     extern "dom" fn js_screen_width() f32;
     extern "dom" fn js_gamepad_state(slot: u32, out: [*]f32) u32;
-    extern "dom" fn js_audio_output_start(sample_rate: u32, channel_count: u32) u32;
-    extern "dom" fn js_audio_output_queue(samples: [*]const f32, sample_count: u32) void;
-    extern "dom" fn js_audio_output_queued_frames() u32;
-    extern "dom" fn js_audio_output_mix_into_queued(samples: [*]const f32, sample_count: u32) void;
     extern "dom" fn js_audio_output_stop() void;
     extern "dom" fn js_audio_output_show_diagnostics() void;
-    extern "dom" fn js_audio_output_note_mixer(
-        margin_frames: u32,
-        underrun_count: u32,
-        voice_count: u32,
+    extern "dom" fn js_audio_output_latency_ms() f64;
+    extern "dom" fn js_audio_output_uses_worklet() u32;
+    extern "dom" fn js_audio_forward_start(sample_rate: u32, channel_count: u32) u32;
+    extern "dom" fn js_audio_output_start_pulled(sample_rate: u32, channel_count: u32) u32;
+    extern "dom" fn js_audio_forward_command(bytes: [*]const u8, byte_count: u32) void;
+    extern "dom" fn js_audio_forward_samples(
+        samples_id: u32,
+        samples: [*]const f32,
+        sample_count: u32,
     ) void;
-
-    /// The page's sound output, an AudioWorklet (`bridge.zig`, `audio_output_program`): opened at `sample_rate` and
-    /// `channel_count`; returns the rate granted, 0 without an AudioWorklet.
-    pub fn audio_output_start(sample_rate: u32, channel_count: u32) u32 {
-        return js_audio_output_start(sample_rate, channel_count);
-    }
-
-    /// Queues interleaved samples on the sound output.
-    pub fn audio_output_queue(samples: []const f32) void {
-        js_audio_output_queue(samples.ptr, @intCast(samples.len));
-    }
-
-    /// Frames queued on the sound output and not yet played.
-    pub fn audio_output_queued_frames() u32 {
-        return js_audio_output_queued_frames();
-    }
-
-    /// Adds interleaved samples onto the frames queued on the sound output, aligned to the queue's end.
-    pub fn audio_output_mix_into_queued(samples: []const f32) void {
-        js_audio_output_mix_into_queued(samples.ptr, @intCast(samples.len));
-    }
+    extern "dom" fn js_audio_forward_note(key: u32, is_down: u32, velocity: f32) void;
+    extern "dom" fn js_audio_take_notice_bytes(
+        target: [*]u8,
+        capacity: u32,
+        notice_byte_count: u32,
+    ) u32;
+    extern "dom" fn js_audio_output_note_mixer(voice_count: u32) void;
 
     /// Shows the sound's diagnostics panel at the top of the page.
     pub fn audio_output_show_diagnostics() void {
         js_audio_output_show_diagnostics();
     }
 
-    /// Hands the diagnostics panel the mixer's margin, underrun count and voice count.
-    pub fn audio_output_note_mixer(
-        margin_frames: u32,
-        underrun_count: u32,
-        voice_count: u32,
-    ) void {
-        js_audio_output_note_mixer(margin_frames, underrun_count, voice_count);
+    /// How long a frame the output counted as played still takes to be heard, in milliseconds: the script processor's
+    /// buffer when it plays, and the context's `baseLatency + outputLatency` (`page_audio.outputLatencyMilliseconds`).
+    pub fn audio_output_latency_ms() f64 {
+        return js_audio_output_latency_ms();
+    }
+
+    /// Which path plays the sound (`page_audio.pathCode`): 0 the script processor, or no output yet; the renderer
+    /// worklet, which the mixer forwards to - 2 while its processor starts, 3 running, 4 failed (its error in the
+    /// page's log), 5 with the audio context still suspended, before the first tap or key.
+    pub fn audio_output_path() u32 {
+        return js_audio_output_uses_worklet();
+    }
+
+    /// Starts the output pulled on the main thread (`page_audio.startPulled`): a script processor whose
+    /// callback asks the app's renderer for each block through the module's export `zimr_audio_pull_block`. Returns
+    /// the rate granted, or 0 when the browser has no script processor either.
+    pub fn audio_output_start_pulled(sample_rate: u32, channel_count: u32) u32 {
+        return js_audio_output_start_pulled(sample_rate, channel_count);
+    }
+
+    /// Starts the renderer worklet loaded at boot (`page_audio.prepareRenderer`): the rate granted, or 0 when it did
+    /// not load and the mixer must pull through the script processor instead.
+    pub fn audio_forward_start(sample_rate: u32, channel_count: u32) u32 {
+        return js_audio_forward_start(sample_rate, channel_count);
+    }
+
+    /// Posts a command's bytes, samples to register, or a key's event to the renderer worklet.
+    pub fn audio_forward_command(command_bytes: []const u8) void {
+        js_audio_forward_command(command_bytes.ptr, @intCast(command_bytes.len));
+    }
+
+    pub fn audio_forward_samples(samples_id: u32, samples: []const f32) void {
+        js_audio_forward_samples(samples_id, samples.ptr, @intCast(samples.len));
+    }
+
+    pub fn audio_forward_note(key: u32, is_down: bool, velocity: f32) void {
+        js_audio_forward_note(key, @intFromBool(is_down), velocity);
+    }
+
+    /// Copies the notices the renderer worklet sent back into `target`, whole notices of `notice_byte_count` bytes
+    /// only, and returns the bytes copied.
+    pub fn audio_take_notice_bytes(target: []u8, notice_byte_count: u32) usize {
+        return js_audio_take_notice_bytes(target.ptr, @intCast(target.len), notice_byte_count);
+    }
+
+    /// Hands the diagnostics panel the mixer's count of playing voices.
+    pub fn audio_output_note_mixer(voice_count: u32) void {
+        js_audio_output_note_mixer(voice_count);
     }
 
     /// Closes the sound output.

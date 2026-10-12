@@ -9,11 +9,14 @@
     //                                   locals map to .zig source lines.
     //   ziglang.vscode-zig              Zig language support: syntax,
     //                                   formatter, ZLS integration.
+    //   vadimcn.vscode-lldb             CodeLLDB: the "(windows)" configs
+    //                                   debug the native program with it.
     //
     // zimr's src/notes/vscode-debugging.md has the full walkthrough.
     "recommendations": [
         "ms-vscode.js-debug",
         "ms-vscode.wasm-dwarf-debugging",
-        "ziglang.vscode-zig"
+        "ziglang.vscode-zig",
+        "vadimcn.vscode-lldb"
     ]
 }

@@ -38,7 +38,6 @@ const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const Color = zm.Color;
 const c = Color;
 const Vec2 = zm.Vec2;
-const bufPrint = std.fmt.bufPrint;
 
 const text_size: f32 = 20.0;
 
@@ -48,7 +47,6 @@ const State = struct {
     ui_font: z.Font,
     rng: Random.DefaultPrng,
     rand_col: Color = .{ .r = 230, .g = 41, .b = 55, .a = 255 },
-    line_buf: [96]u8 = undefined,
     fade: f32 = 255.0, // base alpha - proves tag colors inherit it
 };
 
@@ -284,17 +282,16 @@ fn update(f: *z.Frame, s: *State) void {
     y += 44;
 
     // Colors can be built at runtime - the tag is just text.
-    const line: []const u8 = bufPrint(
-        &s.line_buf,
+    const line: z.Str(96) = .print(
         "Let's be [c{X:0>2}{X:0>2}{X:0>2}FF]CREATIVE[r] !!!",
         .{ s.rand_col.r, s.rand_col.g, s.rand_col.b },
-    ) catch "?";
-    drawStyled(f.gl, &s.font, line, .{ 16, y }, base);
+    );
+    drawStyled(f.gl, &s.font, line.slice(), .{ 16, y }, base);
 
     // measureStyled must agree with what was drawn: underline the line above at
     // its measured width. If the underline over/undershoots, the two walks have
     // diverged.
-    const wline: f32 = measureStyled(&s.font, line, base);
+    const wline: f32 = measureStyled(&s.font, line.slice(), base);
     f.gl.rect(
         .{ .x = 16, .y = y + text_size + 4.0, .width = wline, .height = 2 },
         .{ .color = .{ .r = 150, .g = 150, .b = 160, .a = 255 } },

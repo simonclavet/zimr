@@ -27,7 +27,6 @@ const ui = z.ui_real;
 
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
-const bufPrint = std.fmt.bufPrint;
 const clamp01 = zm.clamp01;
 
 const chan_cursor = 0; // unreliable, unordered
@@ -317,10 +316,8 @@ fn update(f: *z.Frame, s: *State) void {
         const col: Color = peerColor(p.id);
         const center: Vec2 = .{ p.nx * w, p.ny * h };
         drawCursor(f, center, col);
-        var label: [24]u8 = undefined;
-        const txt: []const u8 = bufPrint(&label, "peer {d}", .{p.id}) catch "peer";
         const label_pos: Vec2 = .{ center[0] + 12.0, center[1] - 6.0 };
-        f.gl.text(label_pos, txt, .{ .size = 13, .color = col, .font = &s.font });
+        f.gl.textf(label_pos, "peer {d}", .{p.id}, .{ .size = 13, .color = col, .font = &s.font });
     }
 
     // my own cursor (a hollow ring so it reads as "me")

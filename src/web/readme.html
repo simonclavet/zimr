@@ -6,10 +6,7 @@
         <title>zimr</title>
         <meta
             name="description"
-            content="A zig port of raylib, imgui, implot, box2d / jolt physics and MuJoCo-style robot dynamics for wasm/webgpu and native Windows (Vulkan).
-            Reads FBX and BVH for models and animation, retargets motion capture onto robots, and carries a numpy/jax/pandas-shaped
-            numerics library that trains neural networks — attention, transformers, PPO and SAC — on the GPU via compute shaders in zig.
-            Includes transpilers from zig to wgsl (gpu) and javascript (web) so we can live in a pure zig world."
+            content="Zig ports of raylib, Dear ImGui, ImPlot, Box2D, Jolt and MuJoCo, with a numpy/pandas/PyTorch-style numerics library, for WebGPU and native Windows."
         />
 <!--docfmt:style-->
     </head>
@@ -17,95 +14,23 @@
         <div class="blog-container">
             <h1 class="title">zimr</h1>
             <h2 class="subtitle">
-                A zig port of raylib, imgui, implot2d/3d and box2d / jolt
-                physics for wasm/webgpu and native Windows (Vulkan), with MuJoCo-style robot dynamics, FBX
-                and BVH loading for models and animation, motion-capture
-                retargeting onto those robots, and a numerics library shaped
-                like numpy, jax and pandas that trains neural networks &mdash;
-                attention and transformer blocks, the distributions generative
-                models are built from, PPO and SAC for reinforcement learning
-                &mdash; on the GPU, through compute shaders written in the same
-                zig. Transpilers from zig to wgsl and to javascript, and
-                peer-to-peer multiplayer over WebRTC whose browser host, web
-                workers and signaling server are Zig too, are what make that one
-                language all the way down.
+                A Zig port of raylib, Dear ImGui, ImPlot, Box2D, Jolt and
+                MuJoCo, with a numerics library in the style of numpy, pandas
+                and PyTorch. The same app runs in the browser on WebGPU and
+                natively on Windows on Vulkan. Everything is Zig, down to the
+                shaders (we have a <code>spv2wgsl</code> transpiler for WebGPU,
+                using the compiler's SPIR-V target) and the browser glue (we
+                have a <code>c2js</code> transpiler using the compiler's C
+                target), so the Zig compiler is the only dependency.
             </h2>
 
-            <nav class="toplinks">
-                <a class="offsite" href="index.html">example gallery &rarr;</a>
-                <a href="#what">what this is</a>
-                <a href="#pure">one language</a>
-                <a href="#app">app model</a>
-                <a href="#twod">2d</a>
-                <a href="#inputmath">input &amp; math</a>
-                <a href="#shaders">zig shaders</a>
-                <a href="#demos">building the demos</a>
-                <a href="#compute">gpu compute</a>
-                <a href="#numerics">numerics and rl</a>
-                <a href="#jobs">web workers</a>
-                <a href="#threed">3d &amp; assets</a>
-                <a href="#shapes">procedural shapes</a>
-                <a href="#imgui">imgui</a>
-                <a href="#plot">plots</a>
-                <a href="#physics">physics</a>
-                <a href="#mocap">mocap &amp; retargeting</a>
-                <a href="#instruments">profiler &amp; friends</a>
-                <a href="#networking">multiplayer</a>
-                <a href="#machinery">under the hood</a>
-                <a href="#layout">source layout</a>
-                <a href="#build">building</a>
-                <a href="#docs">tutorials</a>
-                <a href="#walkthroughs">walkthroughs</a>
-                <a href="#examples">examples</a>
-                <a href="#limits">status</a>
-                <a href="cheatsheet.html">cheatsheet</a>
-            </nav>
-
-            <div class="wip-warning">
-                <strong>Work in progress</strong>
-                The API surface, build steps, and example list change often.
-                This page describes the current state of the repository. It is
-                not a stable contract and not a recommendation. The
-                <a href="cheatsheet.html">cheatsheet</a> lists the API as it is
-                today: it is generated from the source on every build.
-            </div>
-
-            <div class="wip-warning" style="border-left-color: var(--accent-color)">
-                <strong>New to graphics?</strong>
-                This page is a reference. If shaders, WebGPU, and the GPU are new
-                to you, start with the
-                <a href="tutorial.html">from-scratch tutorial</a> instead — it
-                teaches the whole stack through zimr, from drawing a circle to
-                reading a raymarched-metaball shader, one idea at a time.
-            </div>
-
-            <h3 id="what">What this is</h3>
-
-            <p>
-                zimr is a port of
-                <a href="https://www.raylib.com/">raylib</a>,
-                <a href="https://github.com/ocornut/imgui">Dear&nbsp;ImGui</a>,
-                <a href="https://github.com/epezent/implot">ImPlot</a> /
-                <a href="https://github.com/brenocq/implot3d">ImPlot3D</a>,
-                <a href="https://github.com/jrouwe/JoltPhysics">Jolt</a>, and
-                <a href="https://github.com/erincatto/box2d">Box2D</a>
-                to <a href="https://ziglang.org/">Zig</a>, compiled to
-                <code>wasm32-wasi</code> and rendered through WebGPU in a
-                browser. The same apps also build as native Windows programs
-                (<code>-Dplatform=windows</code>) from the same source, their
-                shaders embedded as SPIR-V and drawn through Vulkan &mdash; see
-                <a href="backends-tutorial.html">graphics backends</a>. Zig moves fast so it is difficult to get dependencies to 
-                agree on which zig version of zig to use, so I prefer a giant monorepo
-                where everything moves to new zig versions at the same time.
-                There are no third-party libraries. The renderer, the
-                math, the UI, the 2D and 3D plotting, the physics, the glTF
-                loader, the TTF font loader, the shader toolchain, the GPU
-                compute layer, the software rasterizer, the
-                <a href="#jobs">web workers</a>, the
-                <a href="#networking">peer-to-peer networking</a>, and the
-                browser host are all in this repository, all in Zig. There is
-                no hand-written JavaScript anywhere in the engine &mdash; not in
-                the host, and not in the worker.
+            <p class="lede">
+                A shader written in Zig runs unchanged on the GPU (natively on
+                Vulkan, or in the browser on WebGPU), on the CPU in a software
+                renderer, and even at compile time. The demos include ray
+                tracing, physically based rendering and fractals. Neural
+                networks work the same way: debug the training on the CPU, then
+                run the same code on the GPU.
             </p>
 
             <figure class="demo-embed full-bleed">
@@ -118,68 +43,86 @@
                 <figcaption>
                     Live &mdash; the launcher, running here in your browser. Tap
                     the pill (&#9666;&nbsp;&#9656;) to switch between the flagship
-                    apps. Its wasm is a separate file, fetched only when this frame
-                    scrolls into view, so the page itself stays small &mdash;
-                    nothing is inlined. These are a handful of the demos &mdash;
-                    the rest are in the <a href="index.html">example gallery</a>.
+                    apps. These are a handful of the demos &mdash; the rest are in
+                    the <a href="index.html">example gallery</a>.
                 </figcaption>
             </figure>
 
+            <nav class="toplinks">
+                <a class="offsite" href="index.html">example gallery &rarr;</a>
+                <a href="#contents">contents</a>
+                <a href="#docs">tutorials</a>
+                <a href="#examples">examples</a>
+                <a href="#limits">status</a>
+                <a href="cheatsheet.html">cheatsheet</a>
+            </nav>
+
+            <div class="wip-warning">
+                <strong>Work in progress</strong>
+                The API changes often. The <a href="cheatsheet.html">cheatsheet</a>
+                lists it as it is today, generated from the source on every
+                build. New to graphics? Start with the
+                <a href="tutorial.html">from-scratch tutorial</a>.
+            </div>
+
+            <h3 id="what">What this is</h3>
+
             <p>
-                The only dependency is the Zig compiler. The build shells out
-                to nothing else: the steps that matter &mdash; Zig to SPIR-V to
-                WGSL for shaders and compute, and the host's Zig to C to
-                JavaScript &mdash; are done by tools written in Zig and living
-                in <code>tools/</code>. The dev server is also a Zig program.
+                zimr ports
+                <a href="https://www.raylib.com/">raylib</a>,
+                <a href="https://github.com/ocornut/imgui">Dear&nbsp;ImGui</a>,
+                <a href="https://github.com/epezent/implot">ImPlot</a> /
+                <a href="https://github.com/brenocq/implot3d">ImPlot3D</a>,
+                <a href="https://github.com/erincatto/box2d">Box2D</a>,
+                <a href="https://github.com/jrouwe/JoltPhysics">Jolt</a> and
+                <a href="https://mujoco.org/">MuJoCo</a>
+                to <a href="https://ziglang.org/">Zig</a>, and adds a
+                <a href="#numerics">numerics library</a> in the style of numpy,
+                pandas and PyTorch. Apps compile to <code>wasm32-wasi</code> and
+                draw through WebGPU in a browser. The same source also builds
+                native Windows programs (<code>-Dplatform=windows</code>), their
+                shaders embedded as SPIR-V and drawn through Vulkan &mdash; see
+                <a href="backends-tutorial.html">graphics backends</a>.
             </p>
 
             <p>
-                Size, for calibration: about 308,000 lines of Zig under
-                <code>src/</code> (83 top-level files plus a
-                <code>src/shaders/</code> directory of 118), 297 example
-                programs, about 2,700 <code>test</code> blocks, and a locked
-                SPIR-V&rarr;WGSL fixture corpus of 190 entries run via
-                <code>zig build corpus</code>. The transpilers are themselves
-                large: <code>src/spv2wgsl.zig</code> is ~11,900 lines and
-                <code>tools/c2js.zig</code> is ~9,800. The toolchain is pinned
-                to a specific <strong>Zig 0.17 dev</strong> build; other
-                versions are not expected to work.
+                The only dependency is the Zig compiler, and there are no
+                third-party libraries. The renderer, math, UI, plotting,
+                physics, asset loaders, shader toolchain, GPU compute, software
+                rasterizer, <a href="#jobs">web workers</a>,
+                <a href="#networking">networking</a> and browser host are all in
+                this repository, all in Zig. The build shells out to nothing
+                else: Zig to SPIR-V to WGSL for shaders and compute, and Zig to C
+                to JavaScript for the browser host, are done by tools written in
+                Zig in <code>tools/</code>. There is no hand-written JavaScript
+                anywhere in the engine.
             </p>
 
-            <p>
-                What is ported is the <em>behaviour</em>, not the API. The
-                algorithms, the numerical choices and the visual results are
-                faithful &mdash; that is what "port" means here &mdash; but the
-                surface has diverged, deliberately and substantially, and code
-                does not carry across.
-            </p>
-
-            <p>
-                The clearest break is that raylib's global state is gone. There is
-                no <code>DrawCircleV(center, radius, color)</code> reaching for a
-                hidden context: 2D primitives are methods on an explicit
-                <a href="#twod">sink</a> (<code>circle</code>, <code>rect</code>,
-                <code>text</code>&hellip;), which is what lets the same drawing
-                routine run unchanged on four different backends. Dear&nbsp;ImGui
-                keeps its immediate-mode rhythm and its ID rules, but calls take
-                Zig format strings rather than printf ones &mdash;
-                <code>u.text("{d} spp", .{samples})</code> &mdash; and errors come
-                back as error unions instead of out-params. Colors, vectors and
-                matrices belong to <code>zimrmath</code> rather than to any one
-                library. Options arrive as designated struct literals; buffers are
-                slices, not pointer-plus-count.
-            </p>
-
-            <p>
-                So upstream <em>knowledge</em> transfers &mdash; if you know how an
-                ImGui ID stack behaves, or what raylib's fog fold does, you already
-                know how this behaves &mdash; but upstream <em>code</em> does not.
-                What did survive wholesale is the example set: the shader demos on
-                this page (fog, cel shading, deferred rendering, the texture-effect
-                gallery) are raylib's own examples rebuilt on this stack, usually
-                with the keyboard toggles turned into touch UI, and
-                <code>zimrphysics2d-demo</code> carries Box2D's 137 sample scenes.
-            </p>
+            <nav class="toplinks" id="contents">
+                <a href="#pure">one language</a>
+                <a href="#app">app model</a>
+                <a href="#coming-from">coming from raylib or imgui</a>
+                <a href="#twod">2d</a>
+                <a href="#inputmath">input &amp; math</a>
+                <a href="#shaders">zig shaders</a>
+                <a href="#demos">building the demos</a>
+                <a href="#compute">gpu compute</a>
+                <a href="#numerics">numerics and ml</a>
+                <a href="#jobs">web workers</a>
+                <a href="#threed">3d &amp; assets</a>
+                <a href="#shapes">procedural shapes</a>
+                <a href="#imgui">imgui</a>
+                <a href="#plot">plots</a>
+                <a href="#physics">physics</a>
+                <a href="#mocap">mocap &amp; retargeting</a>
+                <a href="#instruments">profiler &amp; friends</a>
+                <a href="#networking">multiplayer</a>
+                <a href="#machinery">under the hood</a>
+                <a href="#docs">tutorials</a>
+                <a href="#walkthroughs">walkthroughs</a>
+                <a href="#examples">examples</a>
+                <a href="#limits">status</a>
+            </nav>
 
             <h3 id="pure">One language, several outputs</h3>
 
@@ -351,6 +294,43 @@ fn update(f: *z.Frame, s: *State) void {
                 total clock.
             </p>
 
+            <h3 id="coming-from">Coming from raylib or ImGui</h3>
+
+            <p>
+                What is ported is the <em>behaviour</em>, not the API. The
+                algorithms, the numerical choices and the visual results are
+                faithful &mdash; that is what "port" means here &mdash; but the
+                surface has diverged, deliberately and substantially, and code
+                does not carry across.
+            </p>
+
+            <p>
+                The clearest break is that raylib's global state is gone. There is
+                no <code>DrawCircleV(center, radius, color)</code> reaching for a
+                hidden context: 2D primitives are methods on an explicit
+                <a href="#twod">sink</a> (<code>circle</code>, <code>rect</code>,
+                <code>text</code>&hellip;), which is what lets the same drawing
+                routine run unchanged on four different backends. Dear&nbsp;ImGui
+                keeps its immediate-mode rhythm and its ID rules, but calls take
+                Zig format strings rather than printf ones &mdash;
+                <code>u.text("{d} spp", .{samples})</code> &mdash; and errors come
+                back as error unions instead of out-params. Colors, vectors and
+                matrices belong to <code>zimrmath</code> rather than to any one
+                library. Options arrive as designated struct literals; buffers are
+                slices, not pointer-plus-count.
+            </p>
+
+            <p>
+                So upstream <em>knowledge</em> transfers &mdash; if you know how an
+                ImGui ID stack behaves, or what raylib's fog fold does, you already
+                know how this behaves &mdash; but upstream <em>code</em> does not.
+                What did survive wholesale is the example set: the shader demos on
+                this page (fog, cel shading, deferred rendering, the texture-effect
+                gallery) are raylib's own examples rebuilt on this stack, usually
+                with the keyboard toggles turned into touch UI, and
+                <code>zimrphysics2d-demo</code> carries Box2D's 137 sample scenes.
+            </p>
+
             <h3 id="twod">2D drawing</h3>
 
             <p>
@@ -402,6 +382,7 @@ f.gl.rect(.{ .x = 100, .y = 100, .width = 60, .height = 40 }, .{ .color = zm.Col
 f.gl.line(.{ 0, 0 }, s.pos, .{ .color = zm.Color.red, .thickness = 3 });
 f.gl.circle(s.pos, 20, .{ .color = zm.Color.maroon, .outline = 2 });
 f.gl.text(.{ 10, 10 }, "hello", .{ .size = 20, .color = zm.Color.gray, .font = &s.font });
+f.gl.textf(.{ 10, 34 }, "{d} fps", .{s.fps}, .{ .size = 20, .color = zm.Color.gray, .font = &s.font });
 z.endMode2D(f.gl);
 z.endDrawing(f.gl);</code></pre>
 
@@ -418,6 +399,16 @@ z.endDrawing(f.gl);</code></pre>
 drawScene(f.gl, s);                 // GPU
 var sw = z.SwGl.init(&s.sw_ctx);    // CPU software rasterizer, side by side
 drawScene(&sw, s);</code></pre>
+
+            <p>
+                <code>textf</code> formats and draws in one call, for a label drawn once.
+                When the text is needed twice &mdash; measured, then drawn &mdash;
+                <code>z.Str(N)</code> holds it: a string of at most <code>N</code> bytes
+                inside the value, no allocator and no separate buffer.
+                <code>const t: z.Str(32) = .print("{d} fps", .{fps});</code> then
+                <code>t.slice()</code>. Text past <code>N</code> is cut off, and debug and
+                release builds assert.
+            </p>
 
 
 
@@ -2083,6 +2074,24 @@ robot.solvePointCloud(&amp;model, &amp;data, samples[0..n], opts);</code></pre>
                     to record what breaks along the way. Read the source and
                     the example list before deciding whether any of it is
                     useful to you.
+                </p>
+                <p>
+                    Zig moves fast, so it is hard to get separate libraries to
+                    agree on which Zig version to use. I prefer one big
+                    monorepo where everything moves to a new Zig version at the
+                    same time. The toolchain is pinned to a specific
+                    <strong>Zig 0.17 dev</strong> build; other versions are not
+                    expected to work.
+                </p>
+                <p>
+                    Size, for calibration: about 308,000 lines of Zig under
+                    <code>src/</code> (83 top-level files plus a
+                    <code>src/shaders/</code> directory of 118), 297 example
+                    programs, about 2,700 <code>test</code> blocks, and a locked
+                    SPIR-V&rarr;WGSL fixture corpus of 190 entries run via
+                    <code>zig build corpus</code>. The transpilers are themselves
+                    large: <code>src/spv2wgsl.zig</code> is ~11,900 lines and
+                    <code>tools/c2js.zig</code> is ~9,800.
                 </p>
             </div>
         </div>

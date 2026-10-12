@@ -9,7 +9,7 @@
 //! does the same - so editing an example here IS editing the tutorial, and the two can't drift.
 //!
 //! Run them from the repository root, where the capture files are found by relative path:
-//! `zig build zn-robot_mocap_tutorial -Dtest-filter="tutorial"`.
+//! `zig build test-robot_mocap_tutorial -Dtest-filter="tutorial"`.
 
 const std = @import("std");
 const zm = @import("zm");

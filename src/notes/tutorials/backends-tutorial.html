@@ -150,7 +150,9 @@ that ships. A closed fold opens with a click; the prose reads straight through w
         <li><a href="#soundsum">Summing voices</a></li>
         <li><a href="#soundheadless">Sound without a speaker</a></li>
         <li><a href="#soundothers">How other engines arrange it</a></li>
-        <li><a href="#soundoutputs">The outputs</a></li></ol></li>
+        <li><a href="#soundoutputs">The outputs</a></li>
+        <li><a href="#soundkeypath">From a key to its sound</a></li>
+        <li><a href="#soundinstrument">The instrument</a></li></ol></li>
   <li>Android</li>
   <li>macOS and iOS</li>
   <li>Verification</li>
@@ -7105,6 +7107,207 @@ most one margin of held sound reaches the speaker: a sound never plays late. The
 anywhere on the page resumes the audio context - for a tap, as the finger lifts: for touch, a page is granted
 the right to start sound when the press ends (<code>pointerup</code>, <code>touchend</code>), not when it
 begins.</p>
+
+<h3 id="soundkeypath">14.14 From a key to its sound</h3>
+
+<p>A keyboard played through the engine must sound when its key goes down, and a player hears any delay past about
+ten milliseconds as the instrument lagging behind the hand. The time from a key to its sound passes through four
+stages, each with its own floor:</p>
+
+<table>
+<tr><th>stage</th><th>Windows, low-latency stream</th><th>Windows, standard stream</th></tr>
+<tr><td>the keyboard scans its keys and the USB host polls it</td><td>1 - 8 ms</td><td>1 - 8 ms</td></tr>
+<tr><td>the key's event reaches code that acts on it</td><td>under 1 ms, if nothing waits</td><td>up to a frame, and its
+drawing</td></tr>
+<tr><td>the note waits for the next audio block</td><td>up to one period: 2.7 ms</td><td>up to one period: 10 ms</td></tr>
+<tr><td>the device's buffer, the driver, the converter</td><td>about one or two periods</td><td>about one or two
+periods</td></tr>
+</table>
+
+<p>The first and last rows belong to the hardware and the system. The third depends on the stream Windows grants:
+the low-latency one (<code>IAudioClient3</code>, Windows 10 and later) asks for a block every 128 frames at 48 000 Hz,
+the standard one every 480. The second row belongs to the engine, and it is the largest when the key's event goes
+through the frame loop.</p>
+
+<p>The frame loop handles the window's messages once per pass, then updates and draws. A key pressed just after a pass
+has handled its messages waits in the window's queue for the whole update, drawing and presentation - up to a frame,
+16.7 ms at 60 Hz - before any code sees it:</p>
+
+<pre class="sketch"><code>   time (ms)    0          3                            16.7      17.7     19.4
+   frame loop   | messages | update, draw, present ...  | messages | update ...
+   key down                ^ waits in the window's queue ...      ^ read: note sent to the renderer
+   audio blocks |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  ^ the note starts (next block)
+
+   the same key on an input thread:
+   key down                ^ read at once: note sent to the renderer
+   audio blocks |  |  |  |  ^ the note starts (next block, 2.7 ms later at most)</code></pre>
+
+<p>Updating the app faster than it draws - at 120 Hz while presenting at 60, as fixed-step simulations do - would
+halve that wait. Taking notes off the frame path removes it. A key's event goes to the renderer the moment it
+arrives: on Windows from a thread that does nothing but read the keyboard, in the browser from the key's own event
+handler, which posts the note to the audio worklet without waiting for the next animation frame. The frame loop then
+only draws the key lit. Software synthesizers arrange their input the same way, and JUCE is the textbook case:
+MIDI input arrives on a thread of its own, each message timestamped, and is collected into a queue that the audio
+callback empties at the start of each block (<code>MidiMessageCollector</code>).</p>
+
+<table>
+<tr><th></th><th>where keys are read</th><th>where a key's sound starts</th></tr>
+<tr><td>raylib</td><td>once a frame, when the frame ends (<code>PollInputEvents</code>)</td><td>at the app's next
+update, then the device's next period</td></tr>
+<tr><td>SDL3</td><td>when the app pumps events, usually once a frame</td><td>at the app's next update, then the device's
+next period</td></tr>
+<tr><td>sokol</td><td><code>sokol_app</code>'s event callback, from the frame's message loop</td><td>whatever the
+program's own audio callback does</td></tr>
+<tr><td>JUCE</td><td>MIDI messages on their own thread, timestamped</td><td>in the next block, at the sample the
+timestamp names</td></tr>
+<tr><td>zimr</td><td>an input thread on Windows, the key's handler in the browser</td><td>in the next block</td></tr>
+</table>
+
+<p>A note can start at the very next block, or at the sample its timestamp names plus a fixed delay. The first is
+the least latency, and its timing varies by up to one block - 2.7 ms - from note to note. The second is steadier, by
+a block's delay: every note reaches the speaker the same time after its key. The engine starts a note at the next
+block; the timestamped placement is an option of the instrument, for players who feel the variation more than the
+delay.</p>
+
+<h3 id="soundinstrument">14.15 The instrument</h3>
+
+<p>An instrument plays notes: a key goes down and a note starts, the key comes up and the note dies away. It runs on
+the renderer's side, so that a note starts in the renderer's next block without any frame between. Each note is a
+voice playing a generator, whose state - the note's own frequency, phase and level - four functions make and read:</p>
+
+<pre class="sketch"><code>   key down     start_note(state, key, velocity)    the note's state made: its frequency, its level
+   each block   generate(state, frames, first)      the note's frames, as any generator's
+   key up       release_note(state)                 its level turns to its release
+   each block   has_fallen_silent(state)            true once the release has died away: the slot is freed</code></pre>
+
+<details class="src-fold" data-src="src/sound.zig" data-decl="pub const Instrument = struct"><summary><code>Instrument</code></summary><pre><code class="zig">/// An instrument: what plays a note while its key is held, and after. It runs on the renderer's side, in the
+/// instrument's slots (`first_instrument_slot`), so that a key's note starts at the next block the output asks
+/// for - not at the app's next frame, which may be a whole frame and its drawing away. Each note is a voice
+/// playing a generator, `generate`, whose state - the note's own, `generator_state_capacity` bytes - the other
+/// three functions fill and read:
+///
+///     key down    start_note(state, key, velocity)   the note's state made: its frequency, its envelope
+///     each block  generate(state, frames, first)     the note's frames, as any generator's (`Generator`)
+///     key up      release_note(state)                its envelope turns to its release
+///     each block  has_fallen_silent(state)           true once the release has died away: the slot is freed
+///
+/// The functions are function pointers, and so the same functions in the browser's worklet instance as in the
+/// app's (`Generator` explains why). A note's frames are mono: both samples of a frame alike, placed at the centre.
+pub const Instrument = struct {
+    generate: *const fn (state: *anyopaque, frames: []f32, first_frame: u64) void,
+    start_note: *const fn (state: *anyopaque, key: u8, velocity: f32) void,
+    release_note: *const fn (state: *anyopaque) void,
+    has_fallen_silent: *const fn (state: *anyopaque) bool,
+};</code></pre></details>
+
+<p>Keys are numbered as MIDI numbers them: 60 is middle C, 69 the A above it at 440 Hz, one step per semitone. An
+octave doubles a frequency and holds twelve semitones, so each semitone multiplies it by the twelfth root of two:</p>
+
+<pre class="sketch"><code>   frequency(key) = 440 x 2^((key - 69) / 12)
+
+   key 69 (A4)   440 x 2^0         = 440.00 Hz
+   key 72 (C5)   440 x 2^(3/12)    = 523.25 Hz
+   key 60 (C4)   440 x 2^(-9/12)   = 261.63 Hz</code></pre>
+
+<p>Notes come from two places at once: the main thread, for keys an app reads at its frame (<code>sendNote</code>),
+and an input thread, for keys read the moment they move (<code>sendNoteFromInputThread</code>). A queue without a lock
+(14.11) works only with one thread pushing into it, so each producer has a queue of its own, and the renderer empties
+both at the start of each block, before it mixes:</p>
+
+<pre class="sketch"><code>   main thread      sendNote                 ---> notes               \
+                                                                       ---> renderer, each block:
+   input thread     sendNoteFromInputThread  ---> input_thread_notes  /      apply the commands,
+                                                                               then both note queues,
+                                                                               then mix</code></pre>
+
+<details class="src-fold" data-src="src/sound.zig" data-decl="fn applyNotes("><summary><code>applyNotes</code></summary><pre><code class="zig">/// Applies every key event waiting, from both note queues - each in the order its keys moved. Without an
+/// instrument they are dropped.
+fn applyNotes(renderer: *Renderer, renderer_queues: *RendererQueues) void {
+    renderer.applyNoteQueue(&amp;renderer_queues.notes);
+    renderer.applyNoteQueue(&amp;renderer_queues.input_thread_notes);
+}</code></pre></details>
+
+<p>The main side names a voice when it plays one, and only then sends the renderer the command to start it; a note
+cannot wait for that, since it may come from a thread that knows nothing of the main side's names. So the instrument
+has slots of its own: the last 16 of the renderer's 64. The main side plays only in the first 48, and the renderer
+starts a note in a free slot among the last 16 without asking anyone. A note's slot is never named on the main side,
+so when it ends the renderer sends no notice of it.</p>
+
+<pre class="sketch"><code>   slot   0 ............................................ 47 | 48 ............ 63
+          voices the main side plays and names (Mixer.play)  | the instrument's notes</code></pre>
+
+<p>The engine's instrument is a sine: struck at the key's velocity, held at that level while the key is down, and
+then fading by half every 50 ms. A fall by the same fraction in each equal stretch of time is an exponential decay,
+the way a plucked string or a resonant filter dies away; per frame it is one multiplication by a constant:</p>
+
+<pre class="sketch"><code>   halving every 2 400 frames (50 ms)   factor per frame = 2^(-1/2400) = 0.999711
+
+   from velocity 0.5 down to 0.0001 (-80 dB, where the note is counted silent):
+     0.5 / 0.0001 = 5 000 = 2^12.3        12.3 halvings x 50 ms = 614 ms of release</code></pre>
+
+<p>The sine's phase - how far into its cycle the note is, in turns - is kept in the note's state and moved on by a
+fixed step every frame, wrapped back below one turn. It could instead be computed from the frame's number, as
+<code>frequency x frame / rate</code>, but that grows without end: after 20 seconds at 440 Hz it is 8 800 turns, and
+a 32-bit float between 8 192 and 16 384 can only tell values apart every 2^-10 turn, about a thousandth. Rounded to
+that, a sample is off by up to 0.3% of the note's level - noise about 50 dB below it, there on every held note. Kept
+below one turn, the phase never loses that precision; kept in 64 bits, the rounding of the step itself takes days to
+amount to anything:</p>
+
+<pre class="sketch"><code>   each frame:    sample = level x sin(phase)        phase in [0, 1) turns
+                  phase  = phase + step               step = frequency / 48 000 = 0.0091667 at 440 Hz
+                  phase  = phase - floor(phase)       back below one turn</code></pre>
+
+<details class="src-fold" data-src="src/sound.zig" data-decl="fn generateSineNote("><summary><code>generateSineNote</code></summary><pre><code class="zig">/// The sine at the note's phase, which carries over from block to block in the state, so that the note is
+/// continuous across blocks; each frame's sample is the sine times the level, then the phase moves by its step,
+/// wrapped below one turn, and the level by its factor. The frame number is not needed: the state knows where the
+/// note is.
+fn generateSineNote(state: *anyopaque, frames: []f32, first_frame: u64) void {
+    _ = first_frame;
+    const note: *SineNoteState = @ptrCast(@alignCast(state));
+    const frame_count: usize = frames.len / channel_count;
+    for (0..frame_count) |frame_offset| {
+        const phase_turns: f32 = @floatCast(note.phase_turns);
+        const value: f32 = note.level * sinTurns(phase_turns);
+        frames[frame_offset * channel_count] = value;
+        frames[frame_offset * channel_count + 1] = value;
+        const next_phase_turns: f64 = note.phase_turns + note.phase_step_turns;
+        note.phase_turns = next_phase_turns - @floor(next_phase_turns);
+        note.level *= note.level_factor_per_frame;
+    }
+}</code></pre></details>
+
+<p>With every one of the 16 slots sounding, a new key takes the slot of the note that has sounded longest. That note
+cannot simply stop: cut off between two samples, its wave would jump to zero, heard as a click. A stopped voice
+avoids the click by fading over 5 ms in its own slot, but the stolen note's slot is needed now. So before the slot is
+reused, the note's next 240 frames (5 ms) are generated, ramped from its full level down to zero, and kept aside; the
+next blocks add them in before mixing the voices. The note's generator continues from where its last block stopped,
+so the fade begins at the very frame the note would have played next:</p>
+
+<pre class="sketch"><code>   frame n of the fade (F = 240):   kept[n] = generated[n] x gain x (1 - (n + 1) / F)
+
+   n = 0     x 0.996        n = 119   x 0.500        n = 239   x 0.000</code></pre>
+
+<details class="src-fold" data-src="src/sound.zig" data-decl="fn keepFadeOfStolenNote("><summary><code>keepFadeOfStolenNote</code></summary><pre><code class="zig">/// Keeps the fade of a note about to lose its slot. A note cut off between two samples would jump to zero,
+/// heard as a click; a stopped voice avoids it by fading in its own slot (`stopVoice`), but a stolen note's
+/// slot is needed now. So its next `fade_out_frames` frames are generated here, at the gains its last block
+/// ended with, ramped from full to zero - frame `n` of `F` scaled by `1 - (n + 1) / F` - and added into the
+/// tail that the next blocks mix in (`addStolenNoteTail`). The note's generator continues exactly where its
+/// last block stopped, so the fade begins at the very frame the note would have played next.
+fn keepFadeOfStolenNote(renderer: *Renderer, voice_slot: *VoiceSlot) void {
+    const tail_sample_count: usize = renderer.stolen_note_tail.len;
+    const voice_samples: []f32 = renderer.voice_scratch_samples[0..tail_sample_count];
+    _ = readVoiceSource(voice_slot, voice_samples);
+    const gains: StereoGains = voice_slot.last_block_gains;
+    const fade_frame_count: f32 = float(fade_out_frames);
+    for (0..fade_out_frames) |frame_index| {
+        const remaining_fraction: f32 = 1 - float(frame_index + 1) / fade_frame_count;
+        const left_index: usize = frame_index * channel_count;
+        const right_index: usize = left_index + 1;
+        renderer.stolen_note_tail[left_index] += voice_samples[left_index] * gains.left * remaining_fraction;
+        renderer.stolen_note_tail[right_index] += voice_samples[right_index] * gains.right * remaining_fraction;
+    }
+    renderer.stolen_tail_frames_left = fade_out_frames;
+}</code></pre></details>
 
 </body>
 </html>

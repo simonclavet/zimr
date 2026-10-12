@@ -13,7 +13,6 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const bufPrint = std.fmt.bufPrint;
 const z = @import("zimr");
 const common = @import("example_common");
 const zm = @import("zm");
@@ -133,18 +132,17 @@ fn update(f: *z.Frame, s: *State) void {
     const height: f32 = f.window.heightf();
     drawView(f, s, width, height);
 
-    var buffers: [5][48]u8 = undefined;
     const lock_text: []const u8 = if (is_locked) "held - Escape releases it" else "not held - click to lock";
     panelLine(f, s, 0, "pointer lock", lock_text);
     panelLine(f, s, 1, "pointer over the window", if (z.isCursorOnScreen(f.input)) "yes" else "no");
     panelLine(f, s, 2, "window has focus", if (f.window.focused) "yes" else "no");
-    const delta_text: []const u8 = bufPrint(&buffers[0], "{d:.1}, {d:.1}", .{ delta[0], delta[1] }) catch "?";
-    panelLine(f, s, 3, "mouse delta this frame", delta_text);
+    const delta_text: z.Str(48) = .print("{d:.1}, {d:.1}", .{ delta[0], delta[1] });
+    panelLine(f, s, 3, "mouse delta this frame", delta_text.slice());
     const position: Vec2 = z.getMousePosition(f.input);
-    const position_text: []const u8 = bufPrint(&buffers[1], "{d:.0}, {d:.0}", .{ position[0], position[1] }) catch "?";
-    panelLine(f, s, 4, "mouse position", position_text);
-    const view_text: []const u8 = bufPrint(&buffers[2], "heading {d:.0}, tilt {d:.0}", .{ s.yaw, s.pitch }) catch "?";
-    panelLine(f, s, 5, "view", view_text);
+    const position_text: z.Str(48) = .print("{d:.0}, {d:.0}", .{ position[0], position[1] });
+    panelLine(f, s, 4, "mouse position", position_text.slice());
+    const view_text: z.Str(48) = .print("heading {d:.0}, tilt {d:.0}", .{ s.yaw, s.pitch });
+    panelLine(f, s, 5, "view", view_text.slice());
     common.caption(f.gl, s.font, "input_pointer_lock: click to lock the pointer, move to turn, Escape to release");
 }
 

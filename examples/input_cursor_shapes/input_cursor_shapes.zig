@@ -8,7 +8,6 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const bufPrint = std.fmt.bufPrint;
 const z = @import("zimr");
 const common = @import("example_common");
 const zm = @import("zm");
@@ -100,10 +99,9 @@ fn update(f: *z.Frame, s: *State) void {
     }
     if (hovered != s.hovered) {
         s.hovered = hovered;
-        var title_buffer: [64]u8 = undefined;
         const label: []const u8 = if (hovered) |index| tiles[index].label else "none";
-        const title: []const u8 = bufPrint(&title_buffer, "zimr - cursor: {s}", .{label}) catch "zimr - cursor";
-        z.setWindowTitle(title);
+        const title: z.Str(64) = .print("zimr - cursor: {s}", .{label});
+        z.setWindowTitle(title.slice());
     }
 
     z.clearViewport(f, background);

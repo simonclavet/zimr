@@ -270,10 +270,9 @@ fn drawHud(f: *z.Frame, s: *State, vw: f32, vh: f32) void {
         @memcpy(joined[w .. w + take], t[0..take]);
         w += take;
     }
-    var hud: [1100]u8 = undefined;
-    const line: []const u8 = bufPrint(&hud, "{d} chips  |  {s}", .{ s.count, joined[0..w] }) catch joined[0..w];
+    const line: z.Str(1100) = .print("{d} chips  |  {s}", .{ s.count, joined[0..w] });
     f.gl.rect(.{ .x = 0, .y = vh - 64, .width = vw, .height = 64 }, .{ .color = hud_bg });
-    label(f, s, .{ 20, vh - 44 }, line, 17, hud_col);
+    label(f, s, .{ 20, vh - 44 }, line.slice(), 17, hud_col);
 }
 
 fn drawScene(f: *z.Frame, s: *State, vw: f32, vh: f32) void {

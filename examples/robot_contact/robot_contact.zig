@@ -37,7 +37,6 @@ const common = @import("example_common");
 /// build once a handler existed.
 pub const panic = std.debug.FullPanic(common.reportPanic);
 const Allocator = std.mem.Allocator;
-const bufPrint = std.fmt.bufPrint;
 
 const z = @import("zimr");
 const zm = @import("zm");
@@ -415,14 +414,13 @@ fn update(f: *z.Frame, s: *State) void {
         .{ .size = 12 * ui, .color = dim_col, .font = &s.font },
     );
 
-    var buf: [160]u8 = undefined;
-    const line: []const u8 = bufPrint(
-        &buf,
+    const col: Color = if (s.data.constraint_count > 0) hit_col else dim_col;
+    gl.textf(
+        vec2(16 * ui, 80 * ui),
         "contacts {d}  rows {d}  solver {d} it  force {d:.1} N  peak {d:.1} N",
         .{ s.data.contact_count, s.data.constraint_count, s.data.solver_iterations, total_force, s.peak_force },
-    ) catch "";
-    const col: Color = if (s.data.constraint_count > 0) hit_col else dim_col;
-    gl.text(vec2(16 * ui, 80 * ui), line, .{ .size = 12 * ui, .color = col, .font = &s.font });
+        .{ .size = 12 * ui, .color = col, .font = &s.font },
+    );
 
     // ---- controls ----
     const sweep_box: z.Rectangle = .{ .x = 16 * ui, .y = h - 54 * ui, .width = 150 * ui, .height = 42 * ui };

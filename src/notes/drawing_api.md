@@ -350,6 +350,7 @@ radians, all colors `Color`, all rects `Rectangle`.
 sink.rect(r: Rectangle, opts: RectOpts) void
 sink.image(dst: Rectangle, tex: Texture, opts: ImageOpts) void
 sink.text(pos: Vec2, str: []const u8, opts: TextOpts) void
+sink.textf(pos: Vec2, comptime fmt: []const u8, args: anytype, opts: TextOpts) void  // formats into a draw2d.TextLine first
 sink.line(a: Vec2, b: Vec2, opts: LineOpts) void
 sink.circle(center: Vec2, radius: f32, opts: CircleOpts) void
 sink.triangle(a: Vec2, b: Vec2, c: Vec2, opts: ShapeOpts) void

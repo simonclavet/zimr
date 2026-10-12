@@ -402,6 +402,19 @@ pub fn text(
     }
 }
 
+/// `text`, formatting the string first. The line lives on this call's stack, which is
+/// enough - `text` paints the glyphs before returning. Up to `draw2d.TextLine`'s capacity.
+pub fn textf(
+    self: *Canvas,
+    pos: Vec2,
+    comptime fmt: []const u8,
+    args: anytype,
+    opts: draw2d.TextOpts,
+) void {
+    const formatted: draw2d.TextLine = .print(fmt, args);
+    self.text(pos, formatted.slice(), opts);
+}
+
 // ---- resolve / export --------------------------------------------------
 
 /// Box-downsample the supersampled buffer into a fresh logical-size RGBA8

@@ -7,6 +7,8 @@
 // number of big files rather than fan out into many small ones.
 //
 // What lives here:
+//   - Str (a short string held inside the value - the labels a frame
+//     formats and draws)
 //   - BoundedArray / BoundedArrayAligned (vendored from std,
 //     reinstated for our use after it moved out of 0.16 std)
 //
@@ -23,9 +25,12 @@ const std = @import("std");
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const expectError = std.testing.expectError;
+const expectEqualStrings = std.testing.expectEqualStrings;
+const isError = std.meta.isError;
 const builtin = @import("builtin");
 const zm = @import("zm");
 const assert = zm.assert;
+const assertf = zm.assertf;
 const Alignment = std.mem.Alignment;
 const Io = std.Io;
 
@@ -167,6 +172,46 @@ pub inline fn todo(
         "[zimr TODO] {s}:{d}: {s}",
         .{ src.file, src.line, msg },
     );
+}
+
+// ============================================================================
+// SECTION 1E - Str (a short string held inside the value)
+// ============================================================================
+
+/// A string of at most `capacity` bytes, held inside the value: no allocator and no
+/// separate buffer to declare. Made for the labels a frame formats and draws:
+///
+///     const fps_text: z.Str(32) = .print("{d} fps", .{fps});
+///     f.gl.text(.{ 8, 8 }, fps_text.slice(), opts);
+///
+/// Bind it to a local before calling `slice`: the slice points into the value.
+pub fn Str(comptime capacity: usize) type {
+    return struct {
+        const FixedStr = @This();
+
+        bytes: [capacity]u8 = undefined,
+        len: usize = 0,
+
+        /// Formats `args` into a new string. Text past `capacity` is cut off, and debug and
+        /// release builds assert, naming the format: a label that does not fit means the
+        /// capacity is too small, and a stand-in string would only hide that. (Ship builds
+        /// keep the cut-off text and say nothing.)
+        pub fn print(comptime fmt: []const u8, args: anytype) FixedStr {
+            var out: FixedStr = .{};
+            var writer: Io.Writer = .fixed(&out.bytes);
+            const fits: bool = !isError(writer.print(fmt, args));
+            if (comptime zm.allow_assert) {
+                assertf(fits, @src(), "Str({d}) is too small for \"{s}\"", .{ capacity, fmt });
+            }
+            out.len = writer.buffered().len;
+            return out;
+        }
+
+        /// The formatted text. Points into `self`, so it lives as long as the value does.
+        pub fn slice(self: *const FixedStr) []const u8 {
+            return self.bytes[0..self.len];
+        }
+    };
 }
 
 /// A structure with an array, length and alignment, that can be used as a
@@ -592,6 +637,14 @@ test "features: comptime flag struct exists and has expected names" {
 //     }
 //     try std.testing.expectEqual(@as(usize, 10), i);
 // }
+
+test "Str: print formats into the value, slice reads it back" {
+    const label: Str(32) = .print("{d} x {d}", .{ 640, 480 });
+    try expectEqualStrings("640 x 480", label.slice());
+    // Filling the capacity exactly still fits.
+    const full: Str(5) = .print("{s}", .{"12345"});
+    try expectEqualStrings("12345", full.slice());
+}
 
 test "BoundedArray basic init / slice / resize" {
     var a = try BoundedArray(u8, 64).init(32);

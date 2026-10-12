@@ -25,7 +25,6 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const bufPrint = std.fmt.bufPrint;
 const z = @import("zimr");
 const common = @import("example_common");
 const zm = @import("zm");
@@ -196,11 +195,9 @@ fn paintChain(f: *z.Frame, s: *State) void {
             }
         }
         if (size >= 32) {
-            var label_buffer: [8]u8 = undefined;
-            const label: []const u8 = bufPrint(&label_buffer, "{d}", .{level}) catch "?";
             const label_size: f32 = float(size) * 0.4;
             const label_position: [2]f32 = .{ float(size) * 0.32, float(size) * 0.28 };
-            f.gl.text(label_position, label, .{ .size = label_size, .color = text_color, .font = &s.font });
+            f.gl.textf(label_position, "{d}", .{level}, .{ .size = label_size, .color = text_color, .font = &s.font });
         }
         z.endTextureMode(f.gl);
     }
@@ -218,9 +215,7 @@ fn paintLayers(f: *z.Frame, s: *State) void {
         const bar_width: f32 = float(layer_size) * 0.25;
         const bar_x: f32 = phase * (float(layer_size) + bar_width) - bar_width;
         f.gl.rect(.{ .x = bar_x, .y = 0, .width = bar_width, .height = float(layer_size) }, .{ .color = color });
-        var label_buffer: [16]u8 = undefined;
-        const label: []const u8 = bufPrint(&label_buffer, "layer {d}", .{layer}) catch "layer";
-        f.gl.text(.{ 10, 10 }, label, .{ .size = 22, .color = text_color, .font = &s.font });
+        f.gl.textf(.{ 10, 10 }, "layer {d}", .{layer}, .{ .size = 22, .color = text_color, .font = &s.font });
         z.endTextureMode(f.gl);
     }
 }

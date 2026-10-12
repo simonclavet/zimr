@@ -17,7 +17,6 @@ const Vec2 = zm.Vec2;
 const Color = zm.Color;
 const distance = zm.distance;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
-const bufPrint = std.fmt.bufPrint;
 
 const str_max = 16384;
 const max_generations = 4;
@@ -175,13 +174,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     drawPenrose(f, s);
 
-    var buf: [48]u8 = undefined;
-    const line: []const u8 = bufPrint(
-        &buf,
-        "penrose l-system - generation {d} (tap to advance)",
-        .{s.generations},
-    ) catch "";
-    common.caption(f.gl, s.font, line);
+    common.captionf(f.gl, s.font, "penrose l-system - generation {d} (tap to advance)", .{s.generations});
     z.endDrawing(f.gl);
 }
 

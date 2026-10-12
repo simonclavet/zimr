@@ -3899,6 +3899,20 @@ pub const DrawListHandle = struct {
         self.list.addText(self.gpa, opts.font, str, pos, opts.size, opts.spacing, 0, opts.color.toWire());
     }
 
+    /// `text`, formatting the string first. The line lives on this call's stack, which is
+    /// enough - `addText` copies the string into the draw list for replay. Up to
+    /// `draw2d.TextLine`'s capacity.
+    pub fn textf(
+        self: DrawListHandle,
+        pos: Vec2,
+        comptime fmt: []const u8,
+        args: anytype,
+        opts: draw2d.TextOpts,
+    ) void {
+        const formatted: draw2d.TextLine = .print(fmt, args);
+        self.text(pos, formatted.slice(), opts);
+    }
+
     /// Unified primitive: draw `sprite` at `dst`. Recorded now; residency (upload
     /// + cache) resolves at replay via the backend's `image`, so the sprite's
     /// pixels must outlive the frame (true for the per-frame DrawList).
@@ -10184,6 +10198,8 @@ pub const SameLineOpts = struct {
 pub const ButtonOpts = struct {
     /// Override size. Zero on either axis means "auto-fit to label".
     size: Vec2 = .{ 0, 0 },
+    /// Fire on the mouse button's down, not its release (`ButtonBehaviorOpts.pressed_on_click`).
+    pressed_on_click: bool = false,
 };
 
 /// Direction the triangle glyph of an `arrowButton` points.
@@ -17759,6 +17775,12 @@ pub const Ui = struct {
         /// 50ms repeat thereafter. Same machinery as
         /// `ItemFlags.button_repeat` on built-in widgets.
         repeat: bool = false,
+        /// When true, `pressed` fires on the frame the mouse button goes down over the widget, not on the frame it
+        /// comes back up: for a button whose action must not wait - one that plays a sound, where the time between
+        /// press and release (a tenth of a second, often) would be heard as lag. The widget still holds its active
+        /// claim until release, so it is drawn held, and `repeat` still runs; the release then fires nothing, so one
+        /// click is one press. ImGui: `ImGuiButtonFlags_PressedOnClick`.
+        pressed_on_click: bool = false,
     };
 
     /// Run the press / release / repeat / keyboard-activation
@@ -17795,18 +17817,22 @@ pub const Ui = struct {
         var just_activated: bool = false;
         var just_deactivated: bool = false;
 
-        // Mouse-down inside rect -> claim active_id.
+        // Mouse-down inside rect -> claim active_id; a button pressed on click fires now.
         if (hovered and ctx.input.mouse_left_clicked) {
             ctx.active_id = id;
             ctx.active_id_just_activated = true;
             ctx.active_id_press_time = ctx.frame_time_seconds;
             ctx.active_id_last_repeat_time = ctx.frame_time_seconds;
             just_activated = true;
+            if (opts.pressed_on_click) {
+                pressed = true;
+            }
         }
         // Mouse-up while we own active_id -> fire pressed if still
-        // hovered; release the claim either way.
+        // hovered (unless it fired at the click); release the claim either way.
         if (ctx.active_id == id and ctx.input.mouse_left_released) {
-            if (hovered) {
+            const fires_on_release: bool = hovered and !opts.pressed_on_click;
+            if (fires_on_release) {
                 pressed = true;
             }
             ctx.active_id = 0;
@@ -21240,6 +21266,41 @@ test "Q3: buttonBehavior fires pressed on click-then-release inside rect" {
     w = u.window("t", .{}) orelse unreachable;
     r = u.buttonBehavior(rect, id, .{});
     try expect(r.pressed);
+    try expect(r.just_deactivated);
+    w.close();
+}
+
+test "buttonBehavior with pressed_on_click fires on the click, held until release, and not again at release" {
+    var env = TestEnv.init(testing_allocator);
+    defer env.deinit();
+    const id: Id = 0x1234;
+    const rect: Rectangle = .{ .x = 80, .y = 80, .width = 50, .height = 50 };
+    const on_click: Ui.ButtonBehaviorOpts = .{ .pressed_on_click = true };
+
+    // Frame 1: the click inside -> pressed at once, and held.
+    var snap: InputSnapshot = .{ .mouse_pos = .{ 100, 100 }, .mouse_left_down = true, .mouse_left_clicked = true };
+    var u: Ui = env.beginFrameWith(snap);
+    var w: WindowHandle = u.window("t", .{}) orelse unreachable;
+    var r: Ui.ButtonResult = u.buttonBehavior(rect, id, on_click);
+    try expect(r.pressed);
+    try expect(r.held);
+    w.close();
+
+    // Frame 2: still down -> held, no second press.
+    snap = .{ .mouse_pos = .{ 100, 100 }, .mouse_left_down = true };
+    u = env.beginFrameWith(snap);
+    w = u.window("t", .{}) orelse unreachable;
+    r = u.buttonBehavior(rect, id, on_click);
+    try expect(!r.pressed);
+    try expect(r.held);
+    w.close();
+
+    // Frame 3: the release inside -> the claim let go, and nothing fires: one click is one press.
+    snap = .{ .mouse_pos = .{ 100, 100 }, .mouse_left_released = true };
+    u = env.beginFrameWith(snap);
+    w = u.window("t", .{}) orelse unreachable;
+    r = u.buttonBehavior(rect, id, on_click);
+    try expect(!r.pressed);
     try expect(r.just_deactivated);
     w.close();
 }
@@ -29073,7 +29134,10 @@ fn buttonImpl(
         return false;
     }
 
-    const r: Ui.ButtonResult = u.buttonBehavior(rect, id, .{ .repeat = item_flags.button_repeat });
+    const r: Ui.ButtonResult = u.buttonBehavior(rect, id, .{
+        .repeat = item_flags.button_repeat,
+        .pressed_on_click = opts.pressed_on_click,
+    });
 
     const bg: Color = if (r.held)
         ctx.style.button_active

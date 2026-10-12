@@ -26,7 +26,6 @@
 // HUD shows the current easing names + (t, d) values.
 
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
@@ -237,21 +236,23 @@ fn update(f: *z.Frame, state: *State) void {
     z.clearViewport(f, c.raywhite);
 
     // Top-left info block.
-    var buf: [128]u8 = undefined;
-    f.gl.text(
+    f.gl.textf(
         .{ 20, font_size },
-        bufPrint(&buf, "Easing x: {s}", .{easings_table[state.ease_x].name}) catch "x",
+        "Easing x: {s}",
+        .{easings_table[state.ease_x].name},
         .{ .size = font_size, .color = c.darkgray, .font = &state.font },
     );
-    f.gl.text(
+    f.gl.textf(
         .{ 20, font_size * 2 },
-        bufPrint(&buf, "Easing y: {s}", .{easings_table[state.ease_y].name}) catch "y",
+        "Easing y: {s}",
+        .{easings_table[state.ease_y].name},
         .{ .size = font_size, .color = c.darkgray, .font = &state.font },
     );
     const bound_marker: u8 = if (state.bounded_t) 'b' else 'u';
-    f.gl.text(
+    f.gl.textf(
         .{ 20, font_size * 3 },
-        bufPrint(&buf, "t ({c}) = {d:.2}   d = {d:.2}", .{ bound_marker, state.t, state.duration }) catch "t",
+        "t ({c}) = {d:.2}   d = {d:.2}",
+        .{ bound_marker, state.t, state.duration },
         .{ .size = font_size, .color = c.darkgray, .font = &state.font },
     );
 

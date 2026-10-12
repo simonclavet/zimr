@@ -15,7 +15,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
-const bufPrint = std.fmt.bufPrint;
 const Random = std.Random;
 const z = @import("zimr");
 const zm = @import("zm");
@@ -183,13 +182,12 @@ fn update(f: *z.Frame, s: *State) void {
         }
     }
 
-    var status_buf: [64]u8 = undefined;
-    const status: []const u8 = bufPrint(
-        &status_buf,
+    f.gl.textf(
+        .{ 12, height - 28 },
         "balls: {d}    {s}",
         .{ s.balls.items.len, if (s.paused) "PAUSED" else "running" },
-    ) catch "balls: ?";
-    f.gl.text(.{ 12, height - 28 }, status, .{ .size = 18, .color = colors.slate_400, .font = &s.font });
+        .{ .size = 18, .color = colors.slate_400, .font = &s.font },
+    );
 
     drawPanel(u, f, s);
 }

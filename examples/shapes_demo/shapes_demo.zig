@@ -10,7 +10,6 @@
 // Standalone: zig build wgpu-shapes-standalone
 
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
@@ -115,11 +114,10 @@ fn update(f: *z.Frame, s: *State) void {
         "zimr WebGPU - text works",
         .{ .size = 32, .color = .{ .r = 20, .g = 20, .b = 30, .a = 255 }, .font = &s.font },
     );
-    var buf: [64]u8 = undefined;
-    const fps_label: []const u8 = bufPrint(&buf, "frame {d}", .{f.time.frame_count}) catch "frame ?";
-    f.gl.text(
+    f.gl.textf(
         .{ 40, 540 },
-        fps_label,
+        "frame {d}",
+        .{f.time.frame_count},
         .{ .size = 24, .color = .{ .r = 60, .g = 90, .b = 160, .a = 255 }, .font = &s.font },
     );
 

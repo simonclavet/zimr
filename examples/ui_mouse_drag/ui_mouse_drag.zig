@@ -18,7 +18,6 @@
 //   - Bottom: live readout of mouse pos, button state, drag state.
 
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
@@ -176,28 +175,34 @@ fn update(f: *z.Frame, s: *State) void {
     u.setMouseCursor(cursor_for_this_frame);
 
     // Bottom: live readout.
-    var buf: [128]u8 = undefined;
     const mp: Vec2 = z.getMousePosition(f.input);
     const lmb: bool = f.input.mouse.current_button[0] != 0;
     const dragging: bool = u.isMouseDragging(.left, -1);
     const d: Vec2 = u.getMouseDragDelta(.left, -1);
 
-    const line1: []const u8 = bufPrint(&buf, "mouse: ({d:.0}, {d:.0})  left: {s}  dragging: {s}", .{
-        mp[0],
-        mp[1],
-        if (lmb) "DOWN" else "up",
-        if (dragging) "YES" else "no",
-    }) catch "?";
-    f.gl.text(.{ 24, sh - 56 }, line1, .{ .size = 12, .color = dim, .font = &s.font });
+    f.gl.textf(
+        .{ 24, sh - 56 },
+        "mouse: ({d:.0}, {d:.0})  left: {s}  dragging: {s}",
+        .{
+            mp[0],
+            mp[1],
+            if (lmb) "DOWN" else "up",
+            if (dragging) "YES" else "no",
+        },
+        .{ .size = 12, .color = dim, .font = &s.font },
+    );
 
-    var buf2: [128]u8 = undefined;
-    const line2: []const u8 = bufPrint(&buf2, "drag delta: ({d:.1}, {d:.1})  square: ({d:.0}, {d:.0})", .{
-        d[0],
-        d[1],
-        s.draggable_pos[0],
-        s.draggable_pos[1],
-    }) catch "?";
-    f.gl.text(.{ 24, sh - 36 }, line2, .{ .size = 12, .color = dim, .font = &s.font });
+    f.gl.textf(
+        .{ 24, sh - 36 },
+        "drag delta: ({d:.1}, {d:.1})  square: ({d:.0}, {d:.0})",
+        .{
+            d[0],
+            d[1],
+            s.draggable_pos[0],
+            s.draggable_pos[1],
+        },
+        .{ .size = 12, .color = dim, .font = &s.font },
+    );
 }
 
 pub const app: z.AppSpec(State) = .{

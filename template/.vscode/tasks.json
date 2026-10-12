@@ -2,24 +2,19 @@
     "version": "2.0.0",
     "tasks": [
         {
-            // Long-lived dev server. Started once per VS Code session
-            // (instanceLimit: 1) and reused by every later launch.
-            //
-            // `background.endsPattern` is how VS Code learns the server is
-            // up, so F5 can proceed: it matches the line zimr's
-            // tools/serve.zig prints once the port is bound. A server task
-            // never exits, so without a match F5 would wait forever.
             "label": "zig: serve (background)",
             "type": "shell",
             "command": "zig",
-            "args": ["build", "serve"],
+            "args": [
+                "build",
+                "serve",
+                "-Dplatform=web"
+            ],
             "isBackground": true,
             "problemMatcher": {
                 "owner": "zig-serve",
                 "pattern": [
                     {
-                        // Catch-all pattern: the matcher is only here for
-                        // its background-detection feature.
                         "regexp": "^(.*)$",
                         "file": 1,
                         "location": 1,
@@ -42,18 +37,17 @@
             }
         },
         {
-            // Rebuild in debug mode (the default) before every launch. The
-            // server reads files from disk on each request, so reloading
-            // the page picks up the new wasm without restarting it.
-            "label": "zig: build (debug)",
+            "label": "zig: build myproject1",
             "type": "shell",
             "command": "zig",
-            "args": ["build"],
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            },
-            "dependsOn": ["zig: serve (background)"],
+            "args": [
+                "build",
+                "myproject1",
+                "-Dplatform=web"
+            ],
+            "dependsOn": [
+                "zig: serve (background)"
+            ],
             "presentation": {
                 "reveal": "silent",
                 "panel": "dedicated",
@@ -62,11 +56,150 @@
             "problemMatcher": []
         },
         {
-            // ReleaseSmall with zimr's asserts kept: the build to share.
+            "label": "zig: release myproject1",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "myproject1",
+                "-Dplatform=web",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build myproject2",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "myproject2",
+                "-Dplatform=web"
+            ],
+            "dependsOn": [
+                "zig: serve (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: release myproject2",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "myproject2",
+                "-Dplatform=web",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build myproject3",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "myproject3",
+                "-Dplatform=web"
+            ],
+            "dependsOn": [
+                "zig: serve (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: release myproject3",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "myproject3",
+                "-Dplatform=web",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build myproject1 (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "myproject1",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build myproject2 (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "myproject2",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build myproject3 (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "myproject3",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "zig: build (release)",
             "type": "shell",
             "command": "zig",
-            "args": ["build", "-Dmode=release"],
+            "args": [
+                "build",
+                "-Dmode=release"
+            ],
             "group": "build",
             "presentation": {
                 "reveal": "silent",
@@ -79,7 +212,12 @@
             "label": "zig: test",
             "type": "shell",
             "command": "zig",
-            "args": ["build", "test", "--summary", "all"],
+            "args": [
+                "build",
+                "test",
+                "--summary",
+                "all"
+            ],
             "group": {
                 "kind": "test",
                 "isDefault": true

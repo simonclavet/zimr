@@ -4,7 +4,6 @@
 //! the full 2D camera (offset / target / zoom / rotation) via `beginMode2D`. The GL
 //! original was mouse-driven; this animates itself. Viewport-relative under `.responsive`.
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
@@ -66,13 +65,12 @@ fn update(f: *z.Frame, s: *State) void {
     drawWorld(f.gl);
     z.endMode2D(f.gl);
 
-    var buf: [56]u8 = undefined;
-    const lbl: []const u8 = bufPrint(
-        &buf,
+    f.gl.textf(
+        .{ 12, 12 },
         "Camera2D  zoom {d:.2}  rot {d:.0}",
         .{ cam.zoom, @mod(cam.rotation, 360.0) },
-    ) catch "?";
-    f.gl.text(.{ 12, 12 }, lbl, .{ .size = 16, .color = c.init(210, 214, 224, 230), .font = &s.font });
+        .{ .size = 16, .color = c.init(210, 214, 224, 230), .font = &s.font },
+    );
     z.endDrawing(f.gl);
 }
 

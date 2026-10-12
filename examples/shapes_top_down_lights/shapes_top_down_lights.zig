@@ -37,7 +37,6 @@ const c = Color;
 const Vec2 = zm.Vec2;
 const float = zm.float;
 const normalize = zm.normalize;
-const bufPrint = std.fmt.bufPrint;
 
 const max_boxes: usize = 6;
 const max_lights: usize = 3;
@@ -251,9 +250,8 @@ fn update(f: *z.Frame, s: *State) void {
         u.text("Drag: move the warm light.", .{});
         u.separator();
         for (0..s.light_count) |i| {
-            var buf: [24]u8 = undefined;
-            const lbl: []const u8 = bufPrint(&buf, "light {d}", .{i}) catch "light";
-            if (u.button(lbl, .{})) {
+            const lbl: z.Str(24) = .print("light {d}", .{i});
+            if (u.button(lbl.slice(), .{})) {
                 s.lights[i].on = !s.lights[i].on;
             }
             if (i + 1 < s.light_count) {

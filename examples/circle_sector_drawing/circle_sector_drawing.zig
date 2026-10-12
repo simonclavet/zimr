@@ -13,7 +13,6 @@ const common = @import("example_common");
 
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
-const bufPrint = std.fmt.bufPrint;
 const radFromDeg = zm.radFromDeg;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -90,25 +89,19 @@ fn update(f: *z.Frame, s: *State) void {
     f.gl.rect(.{ .x = 10, .y = 40, .width = 270, .height = 96 }, .{ .color = panel });
     f.gl.rect(.{ .x = 10, .y = 40, .width = 270, .height = 96 }, .{ .color = border, .outline = 1.0 });
 
-    var buf: [80]u8 = undefined;
-    const seg_line: []const u8 = bufPrint(
-        &buf,
+    f.gl.textf(
+        .{ 22, 52 },
         "segments: {d}  ({s})",
         .{ segments, if (manual) "MANUAL" else "AUTO" },
-    ) catch "segments: ?";
-    f.gl.text(
-        .{ 22, 52 },
-        seg_line,
         .{ .size = 14, .color = if (manual) common.palette.accent2 else common.palette.ink_dim, .font = &s.font },
     );
 
-    var buf2: [80]u8 = undefined;
-    const ang_line: []const u8 = bufPrint(
-        &buf2,
+    f.gl.textf(
+        .{ 22, 74 },
         "span: {d:.0} deg  radius: {d:.0}",
         .{ span, radius },
-    ) catch "span: --";
-    f.gl.text(.{ 22, 74 }, ang_line, .{ .size = 13, .color = common.palette.ink, .font = &s.font });
+        .{ .size = 13, .color = common.palette.ink, .font = &s.font },
+    );
     const hint: []const u8 = if (s.show_verts) "tap: hide vertices" else "tap: show vertices";
     f.gl.text(.{ 22, 96 }, hint, .{ .size = 13, .color = common.palette.ink_dim, .font = &s.font });
 

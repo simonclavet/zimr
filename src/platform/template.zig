@@ -104,29 +104,22 @@ pub fn removeValue(key: []const u8) void {
     @compileError("template platform: `removeValue` is not written");
 }
 
-pub fn startAudio(wanted: AudioFormat) AudioFormat {
-    _ = wanted;
-    @compileError("template platform: `startAudio` is not written");
-}
-
 pub fn startAudioPull(wanted: AudioFormat, render_callback: AudioRenderCallback) AudioFormat {
     _ = wanted;
     _ = render_callback;
     @compileError("template platform: `startAudioPull` is not written");
 }
 
-pub fn queueAudio(samples: []const f32) void {
-    _ = samples;
-    @compileError("template platform: `queueAudio` is not written");
+pub fn audioClockMilliseconds() f64 {
+    @compileError("template platform: `audioClockMilliseconds` is not written");
 }
 
-pub fn queuedAudioFrames() u32 {
-    @compileError("template platform: `queuedAudioFrames` is not written");
+pub fn audioOutputLatencyMilliseconds() f64 {
+    @compileError("template platform: `audioOutputLatencyMilliseconds` is not written");
 }
 
-pub fn mixIntoQueuedAudio(samples: []const f32) void {
-    _ = samples;
-    @compileError("template platform: `mixIntoQueuedAudio` is not written");
+pub fn audioOutputName() []const u8 {
+    @compileError("template platform: `audioOutputName` is not written");
 }
 
 pub fn stopAudio() void {

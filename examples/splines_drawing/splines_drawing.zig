@@ -14,7 +14,6 @@ const distance = zm.distance;
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
-const bufPrint = std.fmt.bufPrint;
 
 const point_count = 5;
 const grab_radius = 16.0;
@@ -143,18 +142,15 @@ fn update(f: *z.Frame, s: *State) void {
         const r: f32 = if (is_focus) 12.0 else 8.0;
         const ring: Color = if (is_focus) common.palette.accent else common.palette.accent2;
         f.gl.circle(p, r, .{ .color = ring, .outline = 1 });
-        var buf: [32]u8 = undefined;
-        const label: []const u8 = bufPrint(&buf, "[{d:.0}, {d:.0}]", .{ p[0], p[1] }) catch "";
-        f.gl.text(.{ p[0] + 12, p[1] - 6 }, label, .{ .size = 12, .color = common.palette.ink_dim, .font = &s.font });
+        f.gl.textf(
+            .{ p[0] + 12, p[1] - 6 },
+            "[{d:.0}, {d:.0}]",
+            .{ p[0], p[1] },
+            .{ .size = 12, .color = common.palette.ink_dim, .font = &s.font },
+        );
     }
 
-    var hud: [64]u8 = undefined;
-    const line: []const u8 = bufPrint(
-        &hud,
-        "spline: {s} - drag points, tap to cycle",
-        .{type_names[s.spline_type]},
-    ) catch "";
-    common.caption(f.gl, s.font, line);
+    common.captionf(f.gl, s.font, "spline: {s} - drag points, tap to cycle", .{type_names[s.spline_type]});
     z.endDrawing(f.gl);
 }
 

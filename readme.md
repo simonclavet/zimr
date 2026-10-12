@@ -1,17 +1,25 @@
-A zig port of raylib, imgui, implot, box2d / jolt physics, and MuJoCo-style robot
-dynamics, for wasm/webgpu and natively on Windows (Vulkan). Reads FBX and BVH for models and animation, and retargets
-motion capture onto the robots. Carries a numerics library shaped like numpy, jax and
-pandas that trains neural networks — attention and transformer blocks, the distributions
-generative models are built from, PPO and SAC — on the GPU through compute shaders
-written in the same zig. Includes transpilers from zig to wgsl (gpu) and javascript
-(web) so we can live in a pure zig world. Work in progress.
+# zimr
 
-Live demo gallery: https://simonclavet.github.io/zimr/
+A Zig port of raylib, Dear ImGui, ImPlot, Box2D, Jolt and MuJoCo, with a numerics library
+in the style of numpy, pandas and PyTorch. The same app runs in the browser on WebGPU and
+natively on Windows on Vulkan. Everything is Zig, down to the shaders (we have a spv2wgsl 
+transpiler for webgpu, using the compiler's spv target) and the browser glue (we have a c2js 
+transpiler using the compiler's c target), so the Zig compiler is the only dependency.
 
-The long writeup, with the launcher running live in the page: https://simonclavet.github.io/zimr/readme.html
+A shader written in Zig runs unchanged on the GPU (natively on Vulkan, or in the browser on
+WebGPU), on the CPU in a software renderer, and even at compile time. The demos include ray
+tracing, physically based rendering and fractals. Neural networks work the same way: debug
+the training on the CPU, then run the same code on the GPU.
 
-To start a project of your own, begin from `template/`, a starter with two small apps.
-It builds in place, right after a clone:
+Work in progress: the API changes often.
+
+- Live demos: https://simonclavet.github.io/zimr/
+- Overview, with demos running in the page: https://simonclavet.github.io/zimr/readme.html
+
+## Start a project
+
+Begin from `template/`, a starter with two small apps. It builds in place, right after
+a clone:
 
     git clone https://github.com/simonclavet/zimr
     cd zimr/template

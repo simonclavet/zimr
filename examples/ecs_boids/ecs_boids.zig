@@ -8,7 +8,6 @@
 //! components by type, so two components of the same type collide into one - reading Pos
 //! would return Vel data. Each component needs its own nominal type.
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const Random = std.Random;
 const z = @import("zimr");
@@ -222,9 +221,12 @@ fn update(f: *z.Frame, s: *State) void {
     while (draw_it.next(&s.es)) |view| {
         drawBoid(f.gl, view.p.*, view.v.*);
     }
-    var buf: [40]u8 = undefined;
-    const lbl: []const u8 = bufPrint(&buf, "ECS boids: {d} entities", .{n}) catch "?";
-    f.gl.text(.{ 12, 12 }, lbl, .{ .size = 16, .color = c.init(210, 214, 224, 220), .font = &s.font });
+    f.gl.textf(
+        .{ 12, 12 },
+        "ECS boids: {d} entities",
+        .{n},
+        .{ .size = 16, .color = c.init(210, 214, 224, 220), .font = &s.font },
+    );
 }
 
 /// Descriptor-only: the runner (standalone) or a launcher drives this.

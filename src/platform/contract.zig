@@ -28,15 +28,9 @@
 //! its own source, one function at a time.
 
 const std = @import("std");
-const zm = @import("zm");
-const clamp = zm.clamp;
-const assert = zm.assert;
-const cache_line = std.atomic.cache_line;
 const types = @import("../types.zig");
-const expect = std.testing.expect;
 const startsWith = std.mem.startsWith;
 const eql = std.mem.eql;
-const expectEqualSlices = std.testing.expectEqualSlices;
 
 /// A key, by its physical position: the DOM's `KeyboardEvent.code` names, the same on every keyboard layout.
 pub const KeyboardKey = types.KeyboardKey;
@@ -270,25 +264,39 @@ pub const AudioFormat = struct {
     channels: u8,
 };
 
-/// How a platform's output gets its frames, as the platform declares it (`audio_output_kind`).
+/// On which thread a platform's output asks the mixer's renderer for its frames (`startAudioPull`), as the platform
+/// declares it (`audio_output_kind`). Every output pulls: it asks for each block when its device needs it, so nothing
+/// waits in a queue between the renderer and the speaker.
 pub const AudioOutputKind = enum {
-    /// The mixer renders ahead, on the main thread, and queues blocks that the device plays (`startAudio`,
-    /// `queueAudio`, `queuedAudioFrames`, `mixIntoQueuedAudio`): it keeps a margin queued, and a sound waits for the
-    /// frame that starts it.
-    push,
-    /// The output asks the mixer's renderer for the frames it needs (`startAudioPull`), on the main thread: a run's
-    /// clock, at each frame - the headless output.
+    /// On the main thread: a headless run's clock, at each frame; a page's script processor, between frames.
     pull_on_main_thread,
     /// The output asks the mixer's renderer for the frames its device needs, on the device's audio thread, as it
     /// needs them (`startAudioPull`): no queue, no margin, and a sound starts in the next block the device asks for.
     pull_on_audio_thread,
 };
 
-/// What an output that pulls its frames calls for them: `render(context, samples)` fills `samples` with interleaved
-/// whole frames at the granted format, on whatever thread the output's device asks from.
+/// When an output asks for a block, and when that block will be heard: what the engine measures a sound's lag by.
+/// Both times are on the output's clock (`audioClockMilliseconds`), the same clock a request is stamped with, so a
+/// difference between them is a duration whichever thread took each.
+pub const AudioRenderTiming = struct {
+    /// When the output asked for the block.
+    asked_at_ms: f64,
+    /// When the block's first frame reaches the output - after the frames already queued in the device ahead of it,
+    /// or, for an output that renders after the fact on a run's clock, when that clock passed it. Past the output lie
+    /// only the driver and the speaker.
+    first_frame_out_ms: f64,
+};
+
+/// What an output that pulls its frames calls for them: `render(context, samples, timing)` fills `samples` with
+/// interleaved whole frames at the granted format, on whatever thread the output's device asks from, `timing` saying
+/// when it asked and when the block will reach the output.
 pub const AudioRenderCallback = struct {
     context: *anyopaque,
-    render: *const fn (context: *anyopaque, samples: []f32) void,
+    render: *const fn (
+        context: *anyopaque,
+        samples: []f32,
+        timing: AudioRenderTiming,
+    ) void,
 };
 
 /// A gamepad's buttons by position, not label - south is A on an Xbox pad, cross on a PlayStation pad, B on a
@@ -557,22 +565,27 @@ pub const requests = [_]Request{
     // types there - the key at the US Q is "A" on a French keyboard - and for the others the layout's own name for
     // them; null for no key, or a label longer than `buffer`.
     .{ .name = "keyName", .signature = fn (key: KeyboardKey, buffer: []u8) ?[]const u8 },
-    // Audio output, pushed. The engine mixes on the main thread, a frame's worth at a time, and the platform plays what
-    // it is given on its own clock. `startAudio` opens the output at the format the engine asks for and returns the
-    // format granted - the engine mixes in that one; output that was already started starts again, its queue emptied.
-    // `queueAudio` appends samples, interleaved, one per channel per frame, whole frames only; before `startAudio` or
-    // after `stopAudio` they are dropped. `queuedAudioFrames` is how many frames have been queued and not yet played -
-    // what the engine tops up to its margin each frame. When the queue runs dry, the output plays silence (an
-    // underrun) and goes on: a frame queued late plays late, never in place of the silence. `stopAudio` closes the
-    // output, dropping what was queued. `mixIntoQueuedAudio` adds samples onto frames already queued, aligned to the
-    // queue's end - its last frame onto the queue's last - each sum held to -1..1; the part that would land on frames
-    // already played, or too close to playing for the output to change, is dropped. Mixing is addition, so a sound
-    // started this frame can begin inside the queue rather than after it.
-    .{ .name = "startAudio", .signature = fn (wanted: AudioFormat) AudioFormat },
-    .{ .name = "queueAudio", .signature = fn (samples: []const f32) void },
-    .{ .name = "queuedAudioFrames", .signature = fn () u32 },
-    .{ .name = "mixIntoQueuedAudio", .signature = fn (samples: []const f32) void },
+    // Audio output, pulled. `startAudioPull` opens the output at the format the engine asks for and returns the format
+    // granted - the engine mixes in that one; an output already started starts again. From then on the output calls
+    // `render_callback` for each block its device needs, on the thread the platform's `audio_output_kind` names,
+    // with the block's timing (`AudioRenderTiming`); the renderer fills it with every voice playing. `stopAudio`
+    // closes the output: no call to the renderer follows its return.
+    .{
+        .name = "startAudioPull",
+        .signature = fn (wanted: AudioFormat, render_callback: AudioRenderCallback) AudioFormat,
+    },
     .{ .name = "stopAudio", .signature = fn () void },
+    // The clock sound is timed by, in milliseconds from any fixed start: a request to play is stamped with it, and an
+    // output reports when it asked for a block and when the block will be heard on it (`AudioRenderTiming`). It is
+    // read from the main thread and from a device's audio thread alike, so it is the system's monotonic clock - or a
+    // headless run's own clock, which the run's frames move.
+    .{ .name = "audioClockMilliseconds", .signature = fn () f64 },
+    // What lies past the output, for the latency readout: how long a block's first frame, once out
+    // (`AudioRenderTiming`), still takes to be heard, as far as the platform can tell - a browser's own buffers and
+    // the latency it reports, a stream's latency as the system reports it; and the output's name, which says which
+    // of a platform's paths is playing.
+    .{ .name = "audioOutputLatencyMilliseconds", .signature = fn () f64 },
+    .{ .name = "audioOutputName", .signature = fn () []const u8 },
     // The gamepad in a slot, or null when none is connected there.
     .{ .name = "gamepad", .signature = fn (slot: GamepadSlot) ?Gamepad },
     .{ .name = "setGamepadRumble", .signature = fn (slot: GamepadSlot, rumble: Rumble) void },
@@ -606,322 +619,4 @@ pub fn requirePlatform(comptime Platform: type) void {
     if (problems.len != 0) {
         @compileError("platform " ++ @typeName(Platform) ++ " breaks the contract:\n" ++ problems);
     }
-}
-
-// ---- The audio ring: between the mixer's thread and a device's ----
-
-/// A single-producer, single-consumer ring of interleaved samples between two threads: the main thread, where the
-/// mixer queues each frame's block (`write`) and mixes new sounds into what is queued (`mixInto`), and a device's audio
-/// thread, which takes frames as the device asks for them (`read`). Every native output keeps one.
-///
-/// The ring holds `capacity_frames` frames - a power of two - in `samples`. Each side's place is a counter of frames
-/// since the start, not a position in the ring: `written_frames`, moved only by the main thread, and `read_frames`,
-/// moved only by the audio thread. Their difference is the frames waiting, and a counter's position in the ring is its
-/// value modulo the capacity - a mask, the capacity being a power of two. 64 bits never wrap: at 48 000 frames a second
-/// they would last twelve million years. A side publishes its counter with a release store after touching the
-/// samples, and reads the other side's with an acquire load before touching them, so it sees every sample the other
-/// wrote before moving its counter: no lock, and neither side ever waits for the other.
-///
-///     samples:   [ . . R # # # # # W . . . . . . . ]     # waiting, R = read_frames, W = written_frames (mod 16)
-///     main thread:   writes at W, then stores W (release)        audio thread: loads W (acquire), reads from R,
-///     waiting = W - R          room = capacity - waiting                       then stores R (release)
-///
-/// Each side's state sits on a cache line of its own (`WriterSide`, `ReaderSide`), as in Erik Rigtorp's queue. A
-/// processor core keeps a line it writes in its own cache; were both counters on one line, each write of either would
-/// take the line from the other core, which would fetch it back to read its own counter - though neither touched the
-/// other's - a cost called false sharing. And each side keeps the other's counter as it last loaded it, loading the
-/// real one only when that copy says the ring is too full (for the writer) or holds too few frames (for the reader).
-/// A copy can only lag the real counter, and a lagging copy only understates the room or the frames waiting, so it is
-/// always safe; and most calls then touch no line the other core writes. Each copy sits with its owner's counter, on
-/// the line only its owner writes.
-///
-///     cache line of the main thread:   written_frames, read_frames_seen
-///     cache line of the audio thread:  read_frames, written_frames_seen, underrun_count
-///
-/// One overlap remains: `mixInto` changes frames already written, which the audio thread may be reading meanwhile.
-/// Those samples are loaded and stored atomically - relaxed, which costs nothing more than a plain access on the
-/// targets the engine runs on, so that a sample is read whole, old or new - and `mixInto` leaves alone the frames
-/// within `guard_frames` of the read position, which the audio thread may be about to take.
-pub const AudioRing = struct {
-    /// Set once by `init`, then only read, by both threads.
-    samples: []f32,
-    capacity_frames: u32,
-    channel_count: u8,
-    /// The main thread's cache line.
-    writer: WriterSide align(cache_line) = .{},
-    /// The audio thread's cache line. The ring's alignment rounds its size up to a whole number of lines, so nothing
-    /// after the ring shares this one.
-    reader: ReaderSide align(cache_line) = .{},
-
-    const WriterSide = struct {
-        /// Frames written since the start: stored by the main thread, loaded by the audio thread.
-        written_frames: std.atomic.Value(u64) = .{ .raw = 0 },
-        /// `read_frames` as the main thread last loaded it, never ahead of the real one. Main thread only.
-        read_frames_seen: u64 = 0,
-    };
-
-    const ReaderSide = struct {
-        /// Frames read since the start: stored by the audio thread, loaded by the main thread.
-        read_frames: std.atomic.Value(u64) = .{ .raw = 0 },
-        /// `written_frames` as the audio thread last loaded it, never ahead of the real one. Audio thread only.
-        written_frames_seen: u64 = 0,
-        /// How often `read` found fewer frames waiting than it was asked for, once anything had been written, and gave
-        /// silence for the rest. Stored by the audio thread, loaded by any (`underrunCount`).
-        underrun_count: std.atomic.Value(u32) = .{ .raw = 0 },
-    };
-
-    /// Some frames as they lie in `samples`, in one piece: the index of the first sample, and how many samples.
-    const SampleRun = struct {
-        first_sample: usize,
-        sample_count: usize,
-    };
-
-    comptime {
-        const line_distance: usize = @offsetOf(AudioRing, "reader") - @offsetOf(AudioRing, "writer");
-        if (line_distance < cache_line) {
-            @compileError("the audio ring's two sides share a cache line");
-        }
-    }
-
-    /// A ring over `samples`, which holds `capacity_frames` frames - a power of two - of `channel_count` samples each.
-    pub fn init(samples: []f32, capacity_frames: u32, channel_count: u8) AudioRing {
-        // A power of two has one bit set: clearing its lowest set bit leaves nothing.
-        const is_power_of_two: bool = capacity_frames != 0 and (capacity_frames & (capacity_frames - 1)) == 0;
-        assert(is_power_of_two, @src());
-        assert(samples.len == @as(usize, capacity_frames) * channel_count, @src());
-        return .{ .samples = samples, .capacity_frames = capacity_frames, .channel_count = channel_count };
-    }
-
-    /// The `frame_count` frames from frame `first_frame` on, as they lie in `samples`: one run, or two when they pass
-    /// the ring's end - the second starting at its beginning (with no samples when there is no second).
-    fn runsOf(ring: *const AudioRing, first_frame: u64, frame_count: u64) [2]SampleRun {
-        const frame_mask: u64 = ring.capacity_frames - 1;
-        const first_slot: u64 = first_frame & frame_mask;
-        const frames_before_end: u64 = ring.capacity_frames - first_slot;
-        const first_run_frames: u64 = @min(frame_count, frames_before_end);
-        const second_run_frames: u64 = frame_count - first_run_frames;
-        const channel_count: u64 = ring.channel_count;
-        const first_run: SampleRun = .{
-            .first_sample = @intCast(first_slot * channel_count),
-            .sample_count = @intCast(first_run_frames * channel_count),
-        };
-        const second_run: SampleRun = .{
-            .first_sample = 0,
-            .sample_count = @intCast(second_run_frames * channel_count),
-        };
-        return .{ first_run, second_run };
-    }
-
-    /// Frames written and not yet read. Main thread.
-    pub fn queuedFrames(ring: *const AudioRing) u32 {
-        const written: u64 = ring.writer.written_frames.load(.monotonic);
-        const read_so_far: u64 = ring.reader.read_frames.load(.acquire);
-        return @intCast(written - read_so_far);
-    }
-
-    /// How often the audio thread found the ring dry since the start.
-    pub fn underrunCount(ring: *const AudioRing) u32 {
-        return ring.reader.underrun_count.load(.monotonic);
-    }
-
-    /// Appends the whole frames of `samples` that fit; returns how many frames it wrote. The room is first judged by
-    /// the reader's counter as last seen; only if that shows too little is the real one loaded. The slots written hold
-    /// frames the audio thread has already read - the room ensures it - so plain copies suffice, in at most two runs,
-    /// and the release store of the counter then makes them visible together. Main thread.
-    pub fn write(ring: *AudioRing, samples: []const f32) usize {
-        const written: u64 = ring.writer.written_frames.load(.monotonic);
-        const offered_frames: u64 = samples.len / ring.channel_count;
-        var room_frames: u64 = ring.capacity_frames - (written - ring.writer.read_frames_seen);
-        if (room_frames < offered_frames) {
-            ring.writer.read_frames_seen = ring.reader.read_frames.load(.acquire);
-            room_frames = ring.capacity_frames - (written - ring.writer.read_frames_seen);
-        }
-        const frames_to_write: u64 = @min(offered_frames, room_frames);
-        const runs: [2]SampleRun = ring.runsOf(written, frames_to_write);
-        var source_sample: usize = 0;
-        for (runs) |run| {
-            const destination: []f32 = ring.samples[run.first_sample..][0..run.sample_count];
-            @memcpy(destination, samples[source_sample..][0..run.sample_count]);
-            source_sample += run.sample_count;
-        }
-        ring.writer.written_frames.store(written + frames_to_write, .release);
-        return @intCast(frames_to_write);
-    }
-
-    /// Adds `samples` onto the frames waiting, aligned to their end - the last frame of `samples` onto the last frame
-    /// written, and back from there - each sum held to -1..1. Frames within `guard_frames` of the read position, which
-    /// the audio thread may be about to take, and frames before it, are left alone: what would land there is dropped.
-    /// The read position must be the real one here, so its counter is loaded every time. Main thread.
-    pub fn mixInto(ring: *AudioRing, samples: []const f32, guard_frames: u32) void {
-        const written: u64 = ring.writer.written_frames.load(.monotonic);
-        const read_so_far: u64 = ring.reader.read_frames.load(.acquire);
-        ring.writer.read_frames_seen = read_so_far;
-        const first_changeable_frame: u64 = @min(read_so_far + guard_frames, written);
-        const changeable_frames: u64 = written - first_changeable_frame;
-        const offered_frames: u64 = samples.len / ring.channel_count;
-        const frames_to_add: u64 = @min(offered_frames, changeable_frames);
-        const runs: [2]SampleRun = ring.runsOf(written - frames_to_add, frames_to_add);
-        var source_sample: usize = @intCast((offered_frames - frames_to_add) * ring.channel_count);
-        for (runs) |run| {
-            for (ring.samples[run.first_sample..][0..run.sample_count]) |*queued_sample| {
-                const queued_value: f32 = @atomicLoad(f32, queued_sample, .monotonic);
-                const held_sum: f32 = clamp(queued_value + samples[source_sample], -1, 1);
-                @atomicStore(f32, queued_sample, held_sum, .monotonic);
-                source_sample += 1;
-            }
-        }
-    }
-
-    /// Copies waiting frames into `destination` (interleaved, whole frames), then silence for whatever it lacks - an
-    /// underrun, counted once anything was ever written: a device that opens before the first block is not running
-    /// dry. The frames waiting are first judged by the writer's counter as last seen; only if that shows too few is
-    /// the real one loaded. Each sample is loaded atomically, `mixInto` possibly changing it meanwhile. Returns how
-    /// many frames it took. Audio thread.
-    pub fn read(ring: *AudioRing, destination: []f32) usize {
-        const read_so_far: u64 = ring.reader.read_frames.load(.monotonic);
-        const wanted_frames: u64 = destination.len / ring.channel_count;
-        var waiting_frames: u64 = ring.reader.written_frames_seen - read_so_far;
-        if (waiting_frames < wanted_frames) {
-            ring.reader.written_frames_seen = ring.writer.written_frames.load(.acquire);
-            waiting_frames = ring.reader.written_frames_seen - read_so_far;
-        }
-        const frames_to_read: u64 = @min(waiting_frames, wanted_frames);
-        const runs: [2]SampleRun = ring.runsOf(read_so_far, frames_to_read);
-        var destination_sample: usize = 0;
-        for (runs) |run| {
-            for (ring.samples[run.first_sample..][0..run.sample_count]) |*queued_sample| {
-                destination[destination_sample] = @atomicLoad(f32, queued_sample, .monotonic);
-                destination_sample += 1;
-            }
-        }
-        @memset(destination[destination_sample..], 0);
-        ring.reader.read_frames.store(read_so_far + frames_to_read, .release);
-        const has_run_dry: bool = frames_to_read < wanted_frames and ring.reader.written_frames_seen > 0;
-        if (has_run_dry) {
-            _ = ring.reader.underrun_count.fetchAdd(1, .monotonic);
-        }
-        return @intCast(frames_to_read);
-    }
-
-    /// Takes up to `frame_count` waiting frames without copying them anywhere: played to nowhere, as an output with no
-    /// device plays them, so that the mixer still sees its queue drain at the real rate. Audio thread.
-    pub fn discard(ring: *AudioRing, frame_count: u64) void {
-        const read_so_far: u64 = ring.reader.read_frames.load(.monotonic);
-        ring.reader.written_frames_seen = ring.writer.written_frames.load(.acquire);
-        const frames_to_discard: u64 = @min(ring.reader.written_frames_seen - read_so_far, frame_count);
-        ring.reader.read_frames.store(read_so_far + frames_to_discard, .release);
-    }
-};
-
-test "the audio ring keeps frames in order across its end, and gives silence when dry" {
-    var samples: [8 * 2]f32 = undefined;
-    var ring: AudioRing = .init(&samples, 8, 2);
-    const six_frames: [12]f32 = .{ 1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6 };
-    try expect(ring.write(&six_frames) == 6);
-    var four: [8]f32 = undefined;
-    try expect(ring.read(&four) == 4);
-    try expectEqualSlices(f32, &.{ 1, -1, 2, -2, 3, -3, 4, -4 }, &four);
-    // Six more: the ring holds 2, so these wrap past its end.
-    try expect(ring.write(&six_frames) == 6);
-    try expect(ring.queuedFrames() == 8);
-    // A full ring takes nothing more.
-    try expect(ring.write(&six_frames) == 0);
-    var ten: [20]f32 = undefined;
-    try expect(ring.read(&ten) == 8);
-    try expectEqualSlices(f32, &.{ 5, -5, 6, -6, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6 }, ten[0..16]);
-    try expectEqualSlices(f32, &.{ 0, 0, 0, 0 }, ten[16..20]);
-    try expect(ring.underrunCount() == 1);
-}
-
-test "the audio ring mixes in aligned to its end, past the guard, held to -1..1" {
-    var samples: [8 * 2]f32 = undefined;
-    var ring: AudioRing = .init(&samples, 8, 2);
-    const quarter: [16]f32 = @splat(0.25);
-    _ = ring.write(&quarter);
-    var first: [2]f32 = undefined;
-    _ = ring.read(&first);
-    // Seven frames wait; the first two past the read position are guarded. Ten frames offered: only the last five
-    // reach the ring, onto its last five frames.
-    const addition: [20]f32 = @splat(0.875);
-    ring.mixInto(&addition, 2);
-    var rest: [14]f32 = undefined;
-    _ = ring.read(&rest);
-    try expectEqualSlices(f32, &.{ 0.25, 0.25, 0.25, 0.25, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 }, &rest);
-}
-
-test "the audio ring, written by one thread and read by another, delivers every frame once, in order" {
-    const frame_total: u32 = 200_000;
-    var samples: [256 * 2]f32 = undefined;
-    var ring: AudioRing = .init(&samples, 256, 2);
-    const Producer = struct {
-        fn run(target: *AudioRing) void {
-            var next_frame: u32 = 0;
-            while (next_frame < frame_total) {
-                var chunk: [37 * 2]f32 = undefined;
-                const chunk_frames: u32 = @min(37, frame_total - next_frame);
-                for (0..chunk_frames) |offset| {
-                    const value: f32 = @floatFromInt(next_frame + offset);
-                    chunk[offset * 2] = value;
-                    chunk[offset * 2 + 1] = -value;
-                }
-                next_frame += @intCast(target.write(chunk[0 .. chunk_frames * 2]));
-            }
-        }
-    };
-    const producer: std.Thread = try .spawn(.{}, Producer.run, .{&ring});
-    var expected_frame: u32 = 0;
-    var destination: [53 * 2]f32 = undefined;
-    while (expected_frame < frame_total) {
-        const frames_read: usize = ring.read(&destination);
-        for (0..frames_read) |offset| {
-            const expected_value: f32 = @floatFromInt(expected_frame);
-            try expect(destination[offset * 2] == expected_value);
-            try expect(destination[offset * 2 + 1] == -expected_value);
-            expected_frame += 1;
-        }
-    }
-    producer.join();
-}
-
-test "the audio ring, mixed into as another thread reads it, keeps every frame exact and in order" {
-    const frame_total: u32 = 100_000;
-    var samples: [256 * 2]f32 = undefined;
-    var ring: AudioRing = .init(&samples, 256, 2);
-    const Frames = struct {
-        /// A frame's value: within -1..1, so that the clamp of a sum never changes it.
-        fn valueOf(frame_number: u32) f32 {
-            const step: f32 = @floatFromInt(frame_number % 1000);
-            return step / 1000.0;
-        }
-
-        /// Writes the frames in uneven chunks; after each, adds silence onto every frame waiting, with no guard - each
-        /// value stays bit for bit what it was, but the frames the reader may be copying are loaded and stored.
-        fn write(target: *AudioRing) void {
-            const silence: [256 * 2]f32 = @splat(0);
-            var next_frame: u32 = 0;
-            while (next_frame < frame_total) {
-                var chunk: [37 * 2]f32 = undefined;
-                const chunk_frames: u32 = @min(37, frame_total - next_frame);
-                for (0..chunk_frames) |offset| {
-                    const frame_number: u32 = next_frame + @as(u32, @intCast(offset));
-                    chunk[offset * 2] = valueOf(frame_number);
-                    chunk[offset * 2 + 1] = -valueOf(frame_number);
-                }
-                next_frame += @intCast(target.write(chunk[0 .. chunk_frames * 2]));
-                target.mixInto(&silence, 0);
-            }
-        }
-    };
-    const writer: std.Thread = try .spawn(.{}, Frames.write, .{&ring});
-    var expected_frame: u32 = 0;
-    var destination: [53 * 2]f32 = undefined;
-    while (expected_frame < frame_total) {
-        const frames_read: usize = ring.read(&destination);
-        for (0..frames_read) |offset| {
-            try expect(destination[offset * 2] == Frames.valueOf(expected_frame));
-            try expect(destination[offset * 2 + 1] == -Frames.valueOf(expected_frame));
-            expected_frame += 1;
-        }
-    }
-    writer.join();
 }

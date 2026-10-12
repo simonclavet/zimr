@@ -1216,8 +1216,220 @@ The migration of `platform_api.md` (section 8), each step leaving both platforms
      pitches above 1, folds some back as aliasing; a low-pass before it (as miniaudio's), or cubic interpolation, when
      a capture shows it. The clamp: many loud voices summed past 1 are cut flat, a harsh distortion; a limiter on the
      master - a gain that follows the peak down quickly and recovers slowly - in its place.
-  **C5 from here (Oct 11).** The order of the work that remains, each step with its files, how it is verified, and
-  when it is done; it replaces the "Next" lines in the journal above.
+  **C5 from here (Oct 12, made precise).** The order of the work that remains, each step with its files, how it is
+  verified, and when it is done.
+
+  **The goal: the sound examples' lag, cut to what the hardware allows - on Windows first, then in the browser.** Every
+  sound example plays through the mixer (`sounds.play` and `Mixer.play` alike), on the outputs written: Windows pulls
+  (`pull_on_audio_thread`, WASAPI), the browser pushes (`push`, a worklet fed blocks from the main thread), headless
+  pulls on the main thread. A sound's lag is a sum of terms, each set by one piece of the code; the target for a key's
+  note is 16 ms at most, about 10 where the device permits.
+
+  **The latency model.** The symbols: `F` the frame period (16.7 ms at 60 Hz); `P` the device's period (WASAPI calls
+  the render thread once a period); `B` the device buffer (`GetBufferSize`); `M` the push path's margin; `L` the
+  push path's lead for a new voice (`late_start_lead_frames`, 480 frames, 10 ms); `D` what lies past the engine's
+  reach - the driver, the converter, the speaker's own latency (WASAPI reports part of it, `GetStreamLatency`; a page
+  reports it as `baseLatency + outputLatency`). Each term, from the code:
+
+      term                       Windows (pulled)                          browser (pushed)
+      t1 key or click reaches    0 .. F: the loop blocks in the present    0 .. F: the app reads input at its
+         the app's update        (FIFO, 2 frames in flight), then reads    animation frame; `keydown` itself runs at
+                                 the window's messages (native_loop.zig    once, but nothing acts on it before then
+                                 `serviceWindow`)
+      t2 the command waits for   0 .. P: commands apply at the start of    0 .. 2.7 ms: the block is posted, and the
+         the renderer            the renderer's next call                  worklet takes messages between quanta
+      t3 queued ahead of the     B - P: the render thread fills all the    L, less the play position's staleness:
+         new sound's first frame room each event (`streamUntilChange`),    the main side's count of what played is
+                                 so at an event `padding` is B - P         reported every 256 frames, so 4.7 .. 10 ms
+      t4 past the engine         D                                         D
+      a change - stop, release,  t1 + t2 + t3 + t4, the same as a start    t1 + M + D: M is 50 ms at least, up to 200,
+      volume, pan, pitch                                                   since the change waits behind the margin
+
+  Today, at 60 Hz, before `D`:
+
+      Windows, standard stream (P = 10 ms, B = 20 ms asked)   start 10 .. 37 ms, 23 on average
+      Windows, low-latency stream (P = 2.7 ms, B unknown)     start 0 .. 16.7 + 2.7 + (B - P); B is Simon's to read
+      browser                                                 start 5 .. 30 ms; a change 50 .. 217 ms
+
+  So the terms in order of size: the browser's margin `M` for every change (the worst, 50 ms at least - a key's
+  release rings on that long); the frame wait `t1` on both (8.3 ms on average, 16.7 at worst); the Windows buffer
+  residue `B - P` (10 ms on the standard stream); the browser's lead `L`. `D` is the floor.
+
+  **What each step removes.**
+
+      step                                        removes                         for
+      4 the latency readout                       nothing: it measures each term  every sound example
+      5 the Windows device buffer                 most of B - P                   every sound, on Windows
+      6 the note thread on Windows                t1                              keys' notes, on Windows
+      7 the browser's worklet pulls               M (to 2.7 ms), L                every sound, in the browser
+        and keys' handlers send notes             t1                              keys' notes, in the browser
+
+  A click on a UI button keeps `t1`: the UI is laid out and hit-tested at the frame (`pressed_on_click` already fires
+  at the press's frame, not the release's). So does a sound an app plays from its update. Only a note sent from where
+  the input arrives escapes the frame (decision below).
+
+  **Decided: the app's update stays at the display's rate** (Oct 11): notes leave the frame path instead.
+  **Decided: a note starts at the next block by default**; the timestamp's placement is the instrument's option.
+  **Decided (Oct 12, Simon): the input path, both halves, in this order.** Inputs are polled, so a key waits for
+  the next frame (`t1`, 8.3 ms on average at 60 Hz) - with the worklet path in place, one of the largest terms left.
+  (1) *Bindings, resolved without app code:* the app tells the engine once what a key plays - a note, or a sound -
+  and the engine resolves the key wherever it arrives: on Windows on the input thread, in the browser in the key's
+  handler, posting to the worklet; no app code runs off the main thread, so nothing in it can race. The app still
+  sees the key at its next frame, polled, to draw it. JUCE's on-screen keyboard works so: a key-to-note table and a
+  key state, apart from the app's logic. (2) *A callback for app code, on the main thread:* `on_input` beside
+  `update`, called as each key or pointer event arrives, between frames - the app's state and the mixer are its to
+  use (one thread, no locks); it must not draw; the event is still recorded for the next frame's polling. The
+  browser calls it from the event's handler; Windows needs the loop to wait on input and the frame's readiness
+  together rather than block in the present. sokol's event callback and SDL's event watchers are the same shape.
+
+  **The order from here (Oct 12, evening - revised after the wiring and Simon's glitches), every remaining step,
+  superseding the "Next" lines in the journal below:**
+
+      done   the push path deleted; page audio in Zig and wired (`page_audio.zig`, the JavaScript program deleted, a
+             frame's commands in one message); a steady worklet block allocates nothing; the second audio context
+             made only for music, streams and the analyser; the worklet's timing on the panel
+      1. glitches, by Simon's screenshot     the cause the `worklet:` line shows, fixed; the worklet's module linked
+                                              asynchronously and warmed up (blind spot 6)
+      2. the hot paths' rest                  the voice slot's tail copy out of the slot; the resampling position in a
+                                              local; flush-to-zero on the Windows render thread
+      3. the Shepard instrument               `mixer.shepard_instrument`, with an attack ramp (blind spot 8)
+      4. the scale star (`audio_scale_star`)  the example on Simon's drawing, played with Shepard tones
+      5. streams on the mixer, in one memory  a stream voice reading a ring the game fills; Windows, headless and the
+                                              script processor
+      6. streams across to the worklet        a stream's frames posted to the renderer in the worklet
+      7. music on the mixer                   a Vorbis decoder in Zig (none ships today), its frames fed to a voice as
+                                              it plays; then the older browser-graph layer deleted
+      8. the worklet path measured (7d)       the readout's rows in Chrome; `t1` from the key's own time
+      9. bindings                             the input path's first half - takes in steps 6 and 7e
+     10. `on_input`                           the input path's second half
+     11. the Windows device buffer (step 5)   when Simon's Windows numbers arrive - with blind spots 1 and 2
+     12. the remaining blind spots and debts  5 (a note placed by its time, jitter shown); c2js's `js_free` and its
+                                              dropped `(&x)->field = value`, with a c2js case for each;
+                                              `verify_imports` folded into `bridge_import_check`; the page frame loop's
+                                              handle scope
+     13. chapter 14 rewritten (step 9)        with the latency model, the paths, the instrument, the input path
+
+  **The next five turns, precisely (Oct 12, evening).** Each ends green - the targeted tests named, lint clean, the
+  pages and the Windows build where named - and with a snapshot; the full `gate` runs at the end of turn 2, which
+  touches the mixer's core. What Simon checks is said for each.
+
+  *Turn 1 - the glitches, by what the panel shows; the worklet's start off the audio path.* It begins with Simon's
+  screenshot of the `worklet:` line, taken within a second of a glitch, and reads it by this rule:
+    - a longest block over 2.5 ms: our block outlasted its deadline - first calls compiling, or work that spikes. The
+      fix is part (b) below, and the block's work is profiled in Node to name what spikes (a block's calls timed one by
+      one: render, the two copies, the notices);
+    - short blocks and a longest gap longer than the whole buffer - the base and output latency on the `audio:` line,
+      28 ms on Simon's phone - the worklet's thread was not run in time: a gap that long is an underrun, whatever the
+      device's period (a gap of about a period is ordinary: the browser asks for blocks in bursts). The fix is a
+      larger browser buffer: page audio makes its context with `latencyHint` a number of seconds rather than `"interactive"`, starting
+      at 0.03, shown on the panel's `audio:` line, so that Simon weighs glitches against the latency read beside them;
+    - neither: the glitch is not in the worklet - the main thread's notes arriving late, or the device - and the turn
+      adds the main thread's longest frame to the panel to look there.
+  (b), whatever the screenshot: the worklet's module linked asynchronously and warmed up. `audio_worklet.zig`:
+  `initializeProcessor` asks `WebAssembly.instantiate(module, imports)` - a promise, resolved in a callback - rather
+  than `new WebAssembly.Instance`; `processBlock` plays silence until it resolves; the resolving callback starts the
+  renderer (`worklet_abi.start`), then renders 64 silent blocks and a block with a voice of each kind the renderer
+  knows by itself - a generator, a buffer of samples - each at zero volume, so that the functions a block calls are
+  compiled before the first sound needs them, and only then posts `ready`. The instrument's functions are the app's,
+  and arrive later, with `set_instrument`: they are warmed when that command is applied, by a silent note started and
+  ended in a scratch slot - still before the first key, which comes after the app's `init` has set the instrument.
+  `sound.zig`: `RendererHost.warmUp()` and its export (`worklet_abi.warm_up`), and the instrument's warming in
+  `applyCommand`, each leaving the renderer as it found it (no voice, no notice). Tests: the
+  worklet test - `ready` posted only after the instantiation's promise resolves, silence before, the sine and the
+  ramp bit for bit as before; `test-sound` - `warmUp` leaves no voice playing and no notice queued; the page test
+  unchanged and green. Built: both pages. Simon checks: the glitches - rarer, or gone - and the panel's lines.
+
+  *Turn 2 - the hot paths' rest.* `sound.zig`: `VoiceSlot.tail_samples` moves to `Renderer.tail_copies:
+  [voice_capacity][fade_out_frames * channel_count]f32`, indexed by slot - the same memory, out of the slot - so that a
+  slot is the state a block reads (a comptime check: `@sizeOf(VoiceSlot) <= 256`; it is 2 080 today);
+  `readSampleSource` reads the position into a local and writes it back after its loop. `platform/windows.zig`: the
+  render thread sets flush-to-zero and denormals-are-zero (MXCSR bits 15 and 6) when it starts, through inline
+  assembly on x86-64, a comptime branch leaving other targets as they are. Tests: every existing test unchanged and
+  green - the fade over a released buffer's copy, the stolen note, the resampling ones - and a new one: two voices fading
+  over their copies at once, in neighbouring slots, each heard as its own - the copies out of the slots, a slot must
+  still find its own by its index. Built: both pages and
+  both examples for Windows; then the full `gate`. Simon checks nothing new by ear; Windows when he can.
+
+  *Turn 3 - the Shepard instrument.* `sound.zig`, beside `sine_instrument`: `shepard_instrument`, as its plan above
+  says - the key's pitch class (`key mod 12`), partials at every octave from 12.5 Hz to 12.8 kHz under a bell
+  centred at 400 Hz, one octave wide; one phase in f64 turns, each partial's `frac(phase x 2^k)`; a release as the
+  sine's; and an attack - a ramp of 2 ms at a note's start, the first instrument to have one (blind spot 8). Tests:
+  each of the twelve pitch classes' centroid in log-frequency within a cent of the bell's centre, and their loudness
+  within 0.1 dB of one another; a note's first block rising from silence with no step over 0.01; its state inside
+  the 64 bytes (comptime); a chord's three notes sounding at once. Nothing built for a page yet.
+
+  *Turn 4 - the scale star.* `examples/audio_scale_star/audio_scale_star.zig`, as its plan above says: the circle in
+  thirds, the star of the scale's steps, the chords outside with their lines; the digits 1 to 7 and taps on the
+  numbers play notes while held, taps on a chord's name its triad while held; what sounds is lit; the Shepard
+  instrument set at `init`. Its build entries (web, Windows, headless). Tests: a headless script pressing 1 to 7 and
+  then each chord, its capture and its frames checked (a chord's three notes in the capture's spectrum, the lit
+  names in the frame). Built: the page and the Windows program. Simon checks: it plays on his phone and on Windows,
+  the notes at one height.
+
+  *Turn 5 - streams on the mixer, in one memory.* `sound.zig`: a stream voice - a source reading a ring of frames
+  (single producer, single consumer, the queue form the mixer already uses) that `streams.update` fills on the main
+  thread and the renderer drains; a ring that runs dry plays silence and counts it; `isProcessed` true while the ring
+  has room for another `update`, as raylib's; play, pause, stop, volume, pitch and pan as any voice's. The `streams`
+  namespace keeps its API and moves off the older layer onto the mixer where the renderer shares the game's memory -
+  Windows, headless, the script processor; the renderer worklet keeps the older layer until turn 6. Tests: a
+  streamed sine through headless, a second of it bit for bit; a ring run dry heard as silence, counted; pause and
+  resume; the `audio_stream_synth` example's headless run, its capture checked. Built: the Windows program of a
+  streaming example. Simon checks: a streaming example plays on Windows, where it was silent.
+
+  *The scale star, in detail (Simon, Oct 12, from his drawing; turns 3 and 4).* An example, `examples/audio_scale_star`, that shows
+  the notes and the chords of the major scale and plays them.
+  *What it draws.* The seven notes of C major on a circle, in thirds: 1 C do, 3 E mi, 5 G sol, 7 B si, 2 D re, 4 F fa,
+  6 A la - each note shown with its degree, its letter and its solfege name. Two neighbours on the circle are a third
+  apart, so each chord of the scale is three neighbours: its root, its third, its fifth. Inside, the scale walked step
+  by step, 1 to 2 to 3 ... to 7 and back to 1 - on a circle of thirds a step skips three places, which draws the
+  seven-pointed star. Outside, the seven chords - I, ii, iii, IV, V, vi, vii (diminished) - each beside its root, with
+  lines to its three notes: I to 1, 3 and 5; ii to 2, 4 and 6; iii to 3, 5 and 7; IV to 4, 6 and 1; V to 5, 7 and 2; vi to
+  6, 1 and 3; vii to 7, 2 and 4. Upper case for a major triad, lower case for a minor one; vii's diminished fifth shown
+  as such.
+  *What it plays.* The digits 1 to 7 play the scale's notes while held, as do a tap or a click on a note's number; a tap
+  or a click on a chord's name plays its triad - its three notes together - while held. A note sounding lights its
+  number; a chord lights its name, its three notes and its three lines.
+  *Shepard tones: a new instrument, `mixer.shepard_instrument`.* Each note is its pitch class sounding in every octave
+  at once: sines at `f, 2f, 4f, ...` over the audible range, each weighted by a bell - a Gaussian in log-frequency,
+  centred on a fixed frequency (about 400 Hz), one octave or more wide. The same bell for every note: so every note has
+  the same average frequency - its spectrum's centroid, in log-frequency, at the bell's centre - and the same loudness,
+  and the notes differ only in pitch class, not in height; a scale played round the circle neither rises nor falls.
+  Why the centroid is the same for each note to a fraction of a cent: the bell, sampled at a note's octaves, has a mean
+  that moves with the sampling's offset only by about `4 pi sigma^2 exp(-2 pi^2 sigma^2)` octaves (Poisson summation)
+  - 3e-8 octaves for a width `sigma` of one octave. That holds for octaves on both sides of the centre without end; cut
+  short, the bell's tails would be cut unevenly, by up to a cent or two. So a note's partials reach five octaves either
+  side of the bell's centre, where its weight has fallen below four millionths: ten or eleven partials, from about
+  12.5 Hz to 12.8 kHz for a centre of 400 Hz - the lowest inaudible, and weighted too little to matter. The key's octave is ignored by design: the instrument reads its pitch class
+  (`key mod 12`). Its state stays inside a voice's 64 bytes (`generator_state_capacity`): one phase, the lowest
+  partial's, in f64 turns, from which each partial's is `frac(phase x 2^k)` - wrapping the lowest phase by whole turns
+  changes no partial's, since `2^k` is whole - and the level, as the sine instrument keeps it. Ten or eleven partials a
+  note, three notes a chord: about thirty sines a frame, inside the budget (`sound_performance_review.md`). Its notes
+  start with a short attack ramp, so that a chord's partials begin without a click - the review's blind spot 8, met
+  here first.
+  *Verified:* for each of the twelve pitch classes, the rendered note's centroid in log-frequency within a cent of the
+  bell's centre, and its loudness (RMS) within 0.1 dB of the others'; a chord press starts three voices and its
+  release ends them; a headless script presses 1 to 7 and each chord in turn, its capture and its frames checked.
+  *Done when* Simon plays it in Chrome on his phone and on Windows, and hears the notes at one height.
+
+  *9, bindings, in detail.* A binding table the app sets from the main thread - a key to a note (key number,
+  velocity) or to a sound (a `Sound` already registered with the renderer, so that the input side never registers
+  samples) - swapped in whole, so that an input thread reads one consistent table. Resolved: on Windows by step 6's
+  input thread (raw input; notes only while the window has the focus; a bitset of the keys it pressed, so that
+  repeats are ignored; every one released when the focus leaves - blind spot 7), sending through
+  `sendNoteFromInputThread` and, for a sound, a fourth queue of its own - a trigger naming registered samples, which
+  the renderer starts in a free main-side slot it then reports, as a note's slot needs no name; in the browser by the
+  key's handler, posting `{ kind: "note" }` to the worklet's port, or applying it on the main thread on the pulled
+  path; elsewhere at the frame. `audio_keyboard` binds its keys; its on-screen keys stay polled. *Verified:* headless,
+  a scripted key with a binding starts its note at its own frame; the page test, a `keydown` posting its note
+  without calling into the app; the readout's `t1` near 0 for bound keys. *Done when* Simon's readout shows it on
+  Windows and in Chrome.
+  *10, `on_input`, in detail.* `AppSpec.on_input: ?fn (*Frame, *State, InputEvent) void`; the frame it is handed
+  allows the mixer and the app's state, not drawing. Browser: called from the bridge's event handlers. Windows: the
+  native loop waits with `MsgWaitForMultipleObjectsEx` on its window's messages and on the swapchain's readiness
+  together, so that a message arriving mid-wait is handled at once. Headless: at each scripted event, so that it is
+  tested by script. An example of its own: `audio_mixer`'s sounds started from `on_input`, the readout showing
+  `t1` against the polled ones. *Done when* both platforms call it between frames, measured.
+
   1. **A sound through the worklet, in Node.** A test module, `src/tests/audio_worklet_module.zig`, built for
      wasm32-freestanding: the worklet's entry points (`exportWorkletEntryPoints`), and test exports that write the
      bytes of commands made by a real `Mixer` - a play of a sine generator, a play of registered samples - so that no
@@ -1226,7 +1438,15 @@ The migration of `platform_api.md` (section 8), each step leaving both platforms
      the centre gain, 0.707, exactly in float32; a ramp of samples at 24 000 Hz equals what a local renderer makes of
      it (a test export renders the same ramp locally); a buffer that ends posts one notice naming its slot; live
      handles unchanged over 2 000 quanta. *Done when* a build step runs it (`zbuild audio-worklet-test`), and the full
-     gate includes it.
+     gate includes it. **Done Oct 11:** the module is `src/audio_worklet_test_module.zig`, beside the program it tests
+     rather than in `src/tests/`, since a module cannot import `../sound.zig` from outside its root's directory. Its
+     first instance starts a real `Mixer` on a stand-in pulled output and records what `forwardCommands` hands over,
+     giving the same to a local `RendererHost`, the reference; the worklet's program instantiates it again. The main
+     side takes the worklet's notices as a message's bytes through `mixer.acceptNoticeBytes`, which the bridge will
+     use too (3e). Measured: 4 quanta of a 1 kHz sine equal the generator's frames times 0.70710677, bit for bit, and
+     the local renderer's; a 24 000 Hz ramp over it equals the local renderer for 17 quanta, then one 4-byte notice
+     ends the ramp's voice and not the sine's (the ramp still plays before it is read); live handles 10 before and
+     after 2 000 quanta. Made red by the worklet ignoring `samples` messages. In `gate`.
   2. **The program built and embedded.** `build.zig`: the program compiled as the jobs worker's is
      (`buildWorkerJs`), with the `zm` module given (`--dep zm -Mroot=src/audio_worklet.zig -Mzm=src/zimrmath.zig`);
      each page carries its text as `window.ZIMR_AUDIO_WORKLET_JS`, as it carries the jobs worker's (c2js's
@@ -1237,8 +1457,421 @@ The migration of `platform_api.md` (section 8), each step leaving both platforms
      self-contained; the program taken from the built `audio_mixer` page is byte for byte a fresh build, and passes
      the Node test. The same day: the five audio examples built for Windows as `zimr_windows_audio_test.zip`, for
      step 6.
-  3. **The main thread's side, in Zig.** `bridge.zig`: the 360 lines of JavaScript in `audio_output_program` replaced
-     by Zig over the bridge's `Value` API.
+  3. **The keyboard instrument, verified headless.** `sound.zig`: an instrument that runs on the renderer's side,
+     with voices of its own, driven by note events - a key down starts a note, a key up releases it - through a
+     note queue of their own, single producer, single consumer, separate from the mixer's commands: the producer is
+     the input's path, which may be a thread other than the main one, and the mixer's command queue has exactly one
+     producer, the main side. Each event carries its time; the renderer starts the note at the next block, or at the
+     timestamp plus the fixed delay. An example, `audio_keyboard`: a row of keys on screen, the computer keyboard's
+     two rows playing them. *Verified:* headless, by the script's clock - a key pressed at a known time, the
+     captured sound's first nonzero frame found in the WAV; the measured delay is the software's share, at most one
+     block from the event's time with the event path, and up to a frame more through the frame path, both measured
+     and both recorded. *Done when* the example plays from scripted keys, headless, with the delay measured.
+     **The instrument, landed (Oct 11):** `mixer.Instrument` (generate, start_note, release_note, has_fallen_silent),
+     `NoteEvent` with MIDI key numbers, `NoteQueue` (256, a third queue in `RendererQueues`), the last 16 of the 64
+     slots kept for notes (`first_instrument_slot`; `Mixer.play` looks below it, and a note's slot ends with no
+     notice), `Mixer.setInstrument` and `Mixer.sendNote`, and `sine_instrument` (struck at the velocity, held, a
+     50 ms half-life release, silent below -80 dB). A full instrument steals the longest-sounding note. Tested: key
+     69 sounds from the first block's frame 1, 439 rising crossings in a second (440 less the one at frame 0), peak
+     0.7071; released, every note slot is free a second later and the last block is zero; the main side plays 48
+     voices and refuses the 49th. All 256 tests of `sound.zig`'s root pass. Next: the browser's worklet takes notes
+     too (`RendererHost`), the `audio_keyboard` example, and the headless measurement.
+     **`audio_keyboard`, landed (Oct 11):** seventeen keys from middle C, the computer keyboard's middle row the white
+     keys and the row above the black (A S D F G H J K L ; and W E T Y U O P), the pointer playing them too, sliding
+     from key to key; the notes go through `Mixer.sendNote`, read at the frame for now. The push path applied notes
+     only in its render, after the new voices had started inside the queue - a note would have waited out the whole
+     margin - so `mixFrame` now applies notes beside the commands. Headless (`zig build audio-keyboard-headless
+     -Dscript=...`, Mesa's software Vulkan: `apt-get install mesa-vulkan-drivers` on a fresh sandbox): H held from
+     frame 30 to 60, then 60 frames more. The captured WAV: the note's frame 0 at output frame 24 000 - 500 ms, the
+     frame its key went down, no frame later; 440 Hz; peak 0.3536 (velocity 0.5 x 0.7071); silent at 1 616.6 ms,
+     614 ms after the release, as 12.3 half-lives of 50 ms predict. The headless output pulls at each frame on the
+     run's clock, so this shows the mixer adds no delay of its own; the frame path's wait and the device's latency
+     are what steps 4 and 5 measure.
+     **Notes through the worklet (Oct 11):** `worklet_abi.accept_note` (key, 1 or 0, velocity - plain numbers), the
+     message `{ kind: "note", key, isDown, velocity }` - the one a key's handler will post in step 5 - handled by the
+     worklet's program (`acceptNote`; `callExport` gained three arguments), `RendererHost.acceptNote`, and the
+     `CommandSink`'s third function, `send_note`: `forwardCommands` hands on the notes sent on the main side after the
+     frame's commands. The Node test sets the instrument and plays key 69 for 8 quanta, releases it for 8 more, each
+     equal to the local renderer bit for bit; made red at the note's first sample by the worklet ignoring `note`.
+     **From the review (Oct 11):** (1) Two producers on one note queue would race - the input thread of step 4 and
+     the main thread both sending notes - so `RendererQueues` has two note queues, `notes` (`Mixer.sendNote`, the
+     main thread) and `input_thread_notes` (`Mixer.sendNoteFromInputThread`), drained one after the other each block.
+     Tested with a real thread sending sixteen events while the main thread sends its own: all ten notes sounding,
+     the two held ones the right keys. In step 4, `audio_keyboard` must not also send the keys the input thread
+     sends. (2) The sine note's phase was `frequency x frame / rate` in `f32`: measured 0.005 from the exact sine
+     after 20 s held (noise 46 dB below the note). It is kept in the note's state now, in `f64`, wrapped below one
+     turn each frame: within a millionth after 20 s. (3) A stolen note fades: before its slot is reused, its next
+     5 ms are generated at its last gains, ramped to zero, and kept as a tail the next blocks add in
+     (`keepFadeOfStolenNote`, `addStolenNoteTail`); tested with a loud low note stolen near its peak - the largest
+     step between frames under 0.01, where the cut (the control) failed it. (4) `sound.zig` is a fast test root:
+     `zig build test-sound`, 264 tests, and in `test-fast` - a planted failure made it red. (5) `audio_keyboard` cross-compiled for
+     Windows (`-Dplatform=windows -Dmode=release`): 2.9 MB; it imports ntdll, KERNEL32, USER32, SHELL32, comdlg32,
+     IMM32, AVRT (the audio thread's Pro Audio class) and ole32 (WASAPI's COM), Vulkan loaded at run time; its PE
+     subsystem is the console (3), Zig's default for a `main` - so a console window opens beside the app, which no
+     decision records. (6) Chapter 14 gains 14.14, from a key to its sound - the four stages and their floors,
+     the frame path's wait drawn against an input thread's, why notes leave the frame path rather than the update
+     running at 120 Hz, the next block against the timestamp's placement, and where raylib, SDL3, sokol, JUCE and zimr
+     read keys and start their sound - and 14.15, the instrument - its four functions, MIDI key numbers, the two note
+     queues, the reserved slots, the exponential release worked to 614 ms, the phase kept below one turn and why, the
+     stolen note's kept fade - with folds of `Instrument`, `applyNotes`, `generateSineNote` and
+     `keepFadeOfStolenNote`. The review's list is done; next, step 4. Known until step 5: on the web's push output, a key's release waits out the
+     margin (50 ms or more).
+  4. **The latency readout - every term measured, on every platform.** `sound.zig`, `windows.zig`, `bridge.zig`: the
+     engine stamps each start - a play's command or a note - with the time its request reached the engine
+     (`t_request`: the key's event time for a note, the call's time for a play) and the time the renderer applied it
+     (`t_applied`, the block's start), and the output says when that block's first frame reaches the speaker
+     (`t_out`): on Windows the event's performance-counter time plus `padding` frames, with `IAudioClock::GetPosition`
+     to check it, plus `GetStreamLatency`; in the browser the context's `getOutputTimestamp()` and `outputLatency`.
+     `audio_device.showDiagnostics` - already in every sound example - shows, for the last ten starts, `t1` (key to
+     request: the frame wait, from the key event's own time), `t2` (request to applied), `t3 + t4` (applied to out),
+     their sum, and the stream: low-latency or standard, `P`, `B`, the padding at the last event. Headless shows the
+     same from its clock. *Verified:* headless, a scripted key at a known time gives the expected terms (`t1` 0 for
+     a key on the frame's start, `t2` and `t3` 0 by its clock); Windows cross-compiled; Simon reads the numbers on
+     Windows and in Chrome for `audio_keyboard` and `audio_mixer`. *Done when* those numbers are in this plan, term
+     by term - they decide step 5. This replaces the old step 6, Simon's Windows audio test.
+     **The measurement, landed (Oct 12):** `t1` needs the key's own time, which the contract's events do not carry:
+     the browser has it (`event.timeStamp`); on Windows `GetMessageTime` has the system tick's resolution, 10 - 16 ms,
+     so a precise `t1` there comes with step 6's thread, stamped from the performance counter. The rest is in:
+     `contract.AudioRenderTiming` (when the output asked for a block, when its first frame reaches the output) passed
+     to every pulled render; the request `audioClockMilliseconds` (Windows the performance counter, the browser
+     `performance.now()`, headless the run's clock, the template a compile error); `Output.clock_ms`; a play's and a
+     note's request time (`VoiceToStart.requested_at_ms`, `NoteEvent.requested_at_ms`); the renderer's `recordStart`
+     into a lossy `LatencyQueue` of 64; the main side keeping the last ten (`Mixer.recentStarts`). Windows passes the
+     event's time plus `padding / rate`; headless, its start plus the frames played - its blocks are rendered after
+     the fact, so its `t3` is negative by up to a frame and `t2 + t3` is the true zero of its clock. Tested with a
+     stand-in output at known times: a play applied at 105 and out at 115, a note at 205 and 207.5, both requested at
+     100, read back exactly, newest first. The push path is measured too: the frame's starts are applied in
+     `mixFrame` and heard where they begin inside the queue, `min(queued, late_start_lead_frames)` frames past the
+     play position the output last reported (tested: 50 ms queued, a start at 100 ms heard at 110). The display:
+     `Mixer.formatLatencyLine` ("note   wait for the renderer 1.4 ms   queued ahead 2.6 ms   total 4.0 ms"), drawn
+     for the last five starts by `audio_keyboard` (under the keys) and `audio_mixer` (under its status). Headless, two
+     scripted notes read wait 16.7, queued -16.7, total 0.0 - its clock's true zero, as the model says. Built for the
+     web and Windows (`zimr_windows_latency_readout.zip`) for Simon's numbers; still to add to the readout: the stream
+     and its `P` and `B` (the console's "windows audio:" line has them meanwhile), the browser's `baseLatency` and
+     `outputLatency` (its diagnostics panel has them), and `t1` from the browser's `event.timeStamp`.
+     **The pages failed to load on Simon's phone (Oct 12):** `Import "dom" "js_now_ms": function import requires a
+     callable`. `audioClockMilliseconds` called `web.dom.now_ms`, whose extern said `"dom"` while the bridge registers
+     `js_now_ms` in `wgpu` (`wgpu.nowMs` is the engine's clock); never called before, the mismatch slept. Fixed at the
+     declaration (`extern "wgpu"` in `web.zig`), and in the check that should have caught it: `bridge_import_check`
+     compared names only, so a name registered in any module passed; it now resolves each registration's module and
+     compares module and name, as a browser binds. Red on the broken page, explaining itself; no false rejection over
+     sixteen cached modules. To do: `verify_imports`, the smoke's own import check, has the same blind spot - fold
+     it into `bridge_import_check`.
+     **Simon's first numbers, phone, Claude's viewer (Oct 12):** wait 0.4 - 0.9 ms, queued 10.x ms - and the page
+     warned that the audio worklet loaded neither from a Blob URL nor from a `data:` URL (an opaque origin: "a
+     dependency or cross-origin script failed to load"), so the sound played through the script processor, whose
+     2 048-frame buffer (42.7 ms) the readout did not count. So the readout gained `t4`: the contract requests
+     `audioOutputLatencyMilliseconds` (the browser: the script processor's buffer when it plays, plus
+     `baseLatency + outputLatency`; Windows: `GetStreamLatency`, past the buffer already in `padding`; headless 0)
+     and `audioOutputName` (which path plays), and the line became a table that fits a phone - `wait queued past
+     total (ms)` under an `output:` line. In this viewer the worklet cannot load at all, so step 7's numbers need a
+     served page (http or https), not a file the viewer opens.
+     **The readout with `t4`, Simon's phone (Oct 12):** in Claude's viewer, `output: a script processor` - wait 0.6 -
+     0.9, queued 10.0, past 70.7 (42.7 the script processor's buffer, 28.0 the context's base and output latency),
+     total about 81.5 ms. In Chrome, opened from `content://`, the worklet loads: wait 0.7, queued 10.0, past 28.0,
+     total 38.7 ms. So on this phone the browser's own 28 ms is the floor; ours is the 10.7 ms of wait and queue, and
+     a change - a release - still waits behind the margin, 50 ms and more. Chrome loads the worklet from a page opened
+     as a file; only Claude's viewer cannot.
+  5. **The Windows device buffer.** `windows.zig`. From step 4's numbers: with the standard stream, `B - P` is 10 ms
+     of the lag; the render thread can fill only up to a target - one period and a small safety, rather than the
+     whole buffer - so that a new sound waits behind about one period, not two; and the standard stream can ask for
+     a smaller buffer. With the low-latency stream, the same policy at its own period. The risk is an underrun when
+     the render thread is late; Windows schedules it as Pro Audio (MMCSS), and the readout counts underruns. *Verified:*
+     cross-compiled; Simon's readout before and after, with the underrun count. *Done when* `t3` is about one period
+     on his machine with no underruns over a minute of playing.
+  6. **A note thread on Windows.** `native_input.zig` and `windows.zig`: raw keyboard input (`RegisterRawInputDevices`
+     with `RIDEV_INPUTSINK`) on a thread of its own, behind a message-only window, timestamped with the performance
+     counter; each key event goes into the input thread's note queue at once (`Mixer.sendNoteFromInputThread`) and is
+     also delivered to the frame as now. `audio_keyboard` then sends the pointer's notes only, the keyboard's coming
+     from the thread - two producers sending one key would sound it twice. *Verified:* cross-compiled; the readout's
+     `t1` for notes about 0 on Simon's machine. *Done when* it is.
+  7. **The browser: the worklet pulls, and keys' handlers send notes.** Done first of the remaining steps (Oct 12):
+     Simon can measure it on his phone today, while step 5 waits for his Windows numbers. The design:
+     a. *The path is decided at boot.* A worklet's module loads asynchronously (`addModule`), and the mixer must know
+        at its start which path it takes. So the page makes its audio context and loads `zimr-renderer`'s module
+        (`window.ZIMR_AUDIO_WORKLET_JS`, from a Blob URL, then a `data:` URL) while the app's module instantiates,
+        before `init` runs; the context stays suspended until the first gesture, as now.
+     b. *Forwarding, a third kind of output.* `Mixer.Output` gains `start_forwarding`: it returns the granted format
+        when the page's worklet loaded, null when it did not - and then the mixer starts the push output as today
+        (Claude's viewer, where no worklet loads). Forwarding, `mixFrame` forwards every command, registration and note
+        (`forwardCommands`) through the output's sink, takes the notices that came back (`acceptNoticeBytes`), and
+        reads them; `sendToRenderer` finding the queue full forwards rather than applying locally; samples are freed
+        only on the renderer's notice, as on an audio thread. The local renderer is unused.
+     c. *The page's side.* The node, `new AudioWorkletNode(context, "zimr-renderer", { numberOfInputs: 0,
+        outputChannelCount: [2], processorOptions: { module } })`, `module` the app's compiled module kept from its
+        instantiation; commands posted as one `commands` message a frame, samples as `samples` messages before them;
+        `notices` messages kept until the frame takes them.
+     d. *Measured.* The worklet's renderer knows its block's frame on the context's clock (`currentFrame`); the page
+        maps context time to `performance.now()` by `getOutputTimestamp()`, so a start's `applied` and `out` land on
+        the main side's clock and the readout covers this path too.
+     e. *Notes from the handlers.* A `keydown` or `pointerdown` the app maps to a note posts `{ kind: "note", key,
+        isDown, velocity }` to the port from the event's own handler - `t1` gone for notes.
+     **7b, the mixer's side, landed (Oct 12):** `Mixer.Output.forwarding` (`ForwardingOutput`: start - null when the
+     platform cannot forward after all, the push output then started - and the sink's four functions), taken by
+     `outputOf` when the platform declares `startAudioForwarding`; `Mixer.forwarding` while it forwards. `mixFrame`
+     forwards (`forwardToOtherMemory`: `forwardCommands` through the sink, then every notice that came back,
+     `acceptNoticeBytes`, then `readRendererNotices`); a full queue is forwarded at once; `stop` ends forwarding -
+     every voice name freed, samples awaiting a notice freed now, unforwarded commands and notes dropped. Tested with
+     a stand-in whose sink feeds a `RendererHost`: a ramp played there and not here, released, freed only after the
+     notice, its voice ended after its 5 ms fade. Next: 7a and 7c, the page's side (`web.zig`, `bridge.zig`).
+     **7a and 7c, the page's side, landed (Oct 12):** boot gains stage 5 between instantiation and the app's start:
+     the compiled module is kept (`Boot.app_module`) and the output program's `prepareRenderer` makes the audio
+     context and loads `ZIMR_AUDIO_WORKLET_JS` with `start()` appended (Blob URL, then `data:` URL), resolving true or
+     false - false at once for an app that imports no sound. The web platform declares the forwarding functions
+     (`startAudioForwarding` - null when the worklet did not load -, `forwardAudioCommandBytes`, `forwardAudioSamples`,
+     `forwardAudioNote`, `takeAudioNoticeBytes`), over five new `dom` imports answered by the bridge
+     (`js_audio_forward_*`, `js_audio_take_notice_bytes`); a note crosses as plain values, since the platform layer
+     cannot name the mixer's types. The output program gained `startForwarding` (the node, `processorOptions.module`,
+     notices kept as they arrive), the four posts, `takeNoticeBytes`, a shared `listenForGesture`; `stop` keeps the
+     renderer's context, suspended, for the next start. This part of the output program is JavaScript, as the rest of
+     it still is; its port to Zig stays part of step 7. Checked in Node against stand-ins (a scratch harness, not yet
+     in the repo): loaded at boot, the node started with the real `audio_keyboard` module, a real play of a ramp
+     sounding at 0.331 (0.468 x 0.707), its notice back. Not yet measured on this path - the renderer in the worklet
+     stamps no timing - so the readout shows only its `output:` line until 7d.
+     **Silent in Chrome (Simon, Oct 12):** `output: zimr's renderer, in the audio worklet`, notes counted, no sound -
+     the page started the path, and the worklet said nothing: a processor that throws dies silently unless the node's
+     `processorerror` is heard. The suspects the code allows: Chrome refusing the compiled module in
+     `processorOptions` on the audio thread, or the linking failing there. Diagnostics added rather than guessed: the
+     worklet program posts `{ kind: "ready" }` once linked and started, `{ kind: "failed" }` when its renderer cannot
+     start (`postStatus`, `worklet_abi.message.ready_kind`, `failed_kind`); the page tracks the state, logs a
+     `processorerror`, and the `output:` line says which holds - starting, running, FAILED (see the log), or suspended
+     until a tap. The Node harness checks the flow (suspended, then running after the processor's `ready`).
+     **Still silent, "a glitch at first" (Simon, Oct 12):** no browser can run in the sandbox (Playwright's download
+     host is blocked), so the page now reports the renderer's whole state in one screenshot: the worklet program posts
+     `{ kind: "stats", blocks, peak }` every 375 blocks - blocks rendered, and the loudest sample since its last report
+     (`RendererHost.takePeak`, `worklet_abi.take_peak`) - and the diagnostics panel, now shown by `audio_keyboard`,
+     prints `renderer: <state> | <n> blocks, loudest <peak> | posted <c> commands, <n> notes, <s> samples` under the
+     context's line. No blocks: the processor does not run; blocks at peak 0: the commands or notes do not arrive or
+     do not sound; a peak with no sound: the output does not reach the speaker.
+     **The references reviewed (Oct 12, `sound_reference_review.md`):** JUCE, miniaudio (in zaudio), sfizz, zoto,
+     groovebasin, against this design. Eight blind spots, now part of the steps: (1) the low-latency WASAPI stream
+     opens only at the engine's own format - ours is fixed at 48 kHz stereo float, so a 44.1 kHz device falls back to
+     the standard stream silently: open it at `GetMixFormat`'s rate and channels (step 5); (2) the standard stream
+     asks 20 ms where JUCE asks one period, 10 (step 5); (3) stealing takes a held note while released ones ring -
+     JUCE's order, or sfizz's quietest-of-the-older (the instrument, next); (4) the same key again stacks voices -
+     release the ringing one first, as JUCE does (the instrument, next); (5) every event starts at the block's start:
+     jitter up to a period, 10 ms on the standard stream - place a note by its time, splitting the block, and show
+     jitter in the readout; (6) the worklet links the 3.9 MB module synchronously on the audio thread - instantiate
+     asynchronously inside the worklet, as Emscripten does (step 7); (7) step 6's raw input sees keys while unfocused,
+     repeats them, and bypasses the release on focus loss - focus-only, a pressed-key bitset, release all on focus
+     loss (step 6); (8) nothing guarantees an attack - a one or two millisecond ramp at a note's start.
+     **Chrome on Android, the renderer's panel (Simon, Oct 12):** `renderer: running | no report yet | posted 1
+     commands, 50 notes`, context running, no error: the processor finished its constructor (`ready`), the
+     instrument and every tap reached its port, and yet it never reached its 375th block, and no `processorerror`.
+     Read line by line again - `start`, the import object, the constructor, `processBlock`, the views, `sendNotices`,
+     the handlers, the page's side, the older layer's own context - nothing found that fails in Chrome and passes in
+     Node. Found on the way, not the cause: the c2js runtime's `js_free` recycles a slot only when its value is not
+     `undefined`, so every handle of `undefined` leaks a slot (the Node test, lacking a worklet's `currentFrame`,
+     leaked one per report; its scope now has it) - to fix in c2js, with a sentinel for a freed slot. The next build
+     tells the remaining cases apart: the processor reports at its first block and every 25 after, with the worklet's
+     `currentFrame`; the render call is made through `js_try_call`, so a throw is posted with its text whatever Chrome
+     does with `processorerror`; the panel shows how long ago the last report came. `no block yet` - `process` never
+     called; one block and then silence - the first call never returns; blocks counting with `loudest 0` - it runs and
+     no note sounds.
+     **Found (Oct 12): `process` returned the number 1.** Simon's panel: `1 blocks (frame 0, 29.0 s ago), loudest
+     0.350` - the first block ran, with his first note in it, and Chrome never called `process` again; no error.
+     `processBlock` returned a `u32`, which c2js gives back as the number 1; the specification converts `process`'s
+     result with `ToBoolean`, but Chrome keeps a processor with no inputs alive only while it returns exactly `true`
+     (`IsTrue()`), and the old push path's hand-written processor returned `true`. The one block was the "glitch at
+     first". Fixed: `processBlock` returns `bool` - c2js emits `return true;` - and the worklet test, which had locked
+     the assumption in (`keepCalling === 1`), now demands exactly `true`; with the number restored it goes red. The
+     page's embedded program checked: only `return true;`. The reports go back to the first block and every second.
+     **Made harder to repeat (Oct 12):** a compile-time check refuses a `processBlock` returning anything but `bool`;
+     `prepareRenderer` now checks what a worklet needs - the module exports `zimr_audio_worklet_start` - not an import;
+     and `zig build audio-page-test` (in `gate`, `tools/c2js_cases/audio_page_test.cjs`) runs the page's output program
+     from bridge.zig, the worklet's program and the test module as the app against a Chrome-strict stand-in browser:
+     a held note through the instrument must sound for 400 blocks, the processor report at block 375 with its
+     `currentFrame`, the context suspend rather than close on `stop`. Red when `process` stops after one block.
+     **The instrument's blind spots 3 and 4, landed (Oct 12):** the same key struck again releases its held note
+     first - it rings on in its release, and a key holds one note at a time; stealing follows JUCE's
+     `findVoiceToSteal` (`noteSlotToSteal`): the longest-sounding note of the same key, else the longest-sounding
+     released note, else the longest-sounding held note other than the lowest and the highest held, else the highest,
+     the lowest last. Tested: a key struck twice - two sounding, one held; fifteen held notes and a released one - the
+     released one taken; sixteen held - key 41 taken, keys 40 and 55 kept. Made red by "the oldest, regardless": both
+     stealing tests fail. The fade test's notes moved so that its loud note is the oldest unprotected one. Next: 7d,
+     the worklet path measured; 7e, notes from the key handlers; blind spot 5, a note placed by its time.
+     **Where the page's code stands (Oct 12):** the renderer worklet plays in Chrome (Simon: 15 000 blocks, still
+     running). Hand-written JavaScript remains in the page: `audio_output_program` in bridge.zig, 632 lines - it was
+     360 when this step was written; the renderer path (`prepareRenderer`, `startForwarding`, the four posts,
+     `takeNoticeBytes`, the status and the diagnostics' renderer line) went in as JavaScript to reach a working phone
+     first - and a 20-line `reporter`. The worklet's program is Zig through c2js. **The order from here, so as to port
+     less:** first delete what the worklet path made unneeded - the push path, its `zimr-output` processor, its
+     blocks, its play-position estimate, its margin and inside-the-queue starts; the fallback where no worklet loads
+     (Claude's viewer) becomes a *pulled* output: the script processor's `onaudioprocess` calling the main thread's
+     own renderer, as headless pulls on the main thread - no queue, no margin. Then port what remains to Zig over the
+     bridge's `Value` API: the context, the module's loading as two boot stages (Blob URL, then `data:` URL), the
+     node and its port handler (`func`), the posts, the notices, the script processor's callback, the diagnostics
+     panel. Step 8 (the push path removed) moves before the port. The Node tests (`audio_worklet_test.cjs`,
+     `audio_page_test.cjs`) stay JavaScript: they stand in for a browser, which only JavaScript can.
+     **Stage 1 of that order, landed (Oct 12): the fallback pulls.** The web platform's output kind is
+     `pull_on_main_thread`, as headless's: where the renderer worklet loaded the mixer forwards to it; where it did
+     not, `startAudioPull` keeps the mixer's render callback and the page's `startPulled` makes a script processor
+     whose `onaudioprocess` calls the app module's new export `zimr_audio_pull_block` (`pullAudioBlock` in
+     platform/web.zig): the mixer's own renderer renders the block then and there, laid out channel after channel for
+     `getChannelData`, and the callback copies each channel out of the app's memory - no queue, no margin, no
+     inside-the-queue start. It plays on the context made at boot when there is one. The export exists only in page
+     builds (checked: not in the worklet test module, not in the renderer program). The page test covers it with
+     stand-in exports: one pull per buffer of 2 048 frames, each channel copied, 70.7 ms past the output (the buffer
+     and the context's latency). **Found while answering Simon (Oct 12): `music` and `streams` do not use the
+     mixer.** They play through the older browser graph (`web.audio`: `loadAudioBuffer`, `decodeOggBytes`,
+     `playBufferAt`, a second audio context made by `audio_device.init`), and off the web `web.audio` does nothing -
+     so on Windows today a game's music and its streamed sound are silent; only `sounds` (the mixer) plays everywhere.
+     Not touched by the push path's removal - they never used it - but it moves "streams and music on the mixer" up:
+     right after the port, before 7d, so that a Windows game has music. A stream becomes a voice reading a ring the
+     game fills at its frame; music a voice fed by a decoder as it plays.
+     Next, stage 2: the push path deleted - from the contract (`startAudio`,
+     `queueAudio`, `queuedAudioFrames`, `mixIntoQueuedAudio`), the mixer (the margin, the gaps, the inside-the-queue
+     starts, `Output`'s push fields), every platform (Windows' ring, headless's pushed capture, the page's
+     `zimr-output` processor and blocks), and the tests that exercise it.
+     **Step 1 of the order, its first half, landed (Oct 12): the mixer no longer pushes.** `Output` keeps
+     `start_pulling` (now required), the clock, the latency, the name, `stop`, and `forwarding`; its `start`, `queue`,
+     `queued_frames` and `mix_into_queued` are gone, and `outputOf` no longer names the platform's push requests.
+     `Mixer.start` forwards or pulls; `mixFrame` forwards, or reads the renderer's notices - nothing else. Deleted: the
+     margin and its gap buckets (`render_ahead_*`, `gap_bucket_*`, `noteGapBetweenFrames`), the inside-the-queue
+     starts (`late_start_lead_frames`, `startNewVoicesInsideQueue`, `Renderer.mixNewVoicesInto`), the underrun count,
+     the per-frame mix block; `render_ahead_most_frames` became `render_block_most_frames`, the largest block the
+     renderer renders at once. `is_new` stays - a voice not yet heard stops with no fade - its doc reworded. The page's
+     mixer report narrowed to the voice count (`js_audio_output_note_mixer`); `audio_mixer` lost its margin line. Four
+     push tests deleted (the inside-the-queue start, the margin following stalls, running dry once, a pushed start's
+     measurement); the stand-in outputs rewritten - the forwarding one's `startPulling` asserts it is never called.
+     `test-sound` 261 of 266, the worklet, page and contract tests green, the pages and Windows built. Second half,
+     next: the contract's push requests and `AudioRing` with its four tests, Windows' ring and its section's account,
+     headless's pushed capture, the web platform's push functions.
+     **Step 1 of the order, done (Oct 12): no output pushes.** The contract: `AudioOutputKind` is `pull_on_main_thread`
+     or `pull_on_audio_thread` - `push` gone; the requests `startAudio`, `queueAudio`, `queuedAudioFrames` and
+     `mixIntoQueuedAudio` gone, `startAudioPull` a required request with its account; `AudioRing` and its four tests
+     deleted. Windows: the ring, its constants and its section's account gone - the section now tells the pulled
+     design; `startAudioPull` is the one start; with no device the thread renders to nowhere at the real rate.
+     Headless: the queue, the underrun count and the push functions gone; `playAudioUntil` renders what came due; its
+     test of a queue running dry became one of the pulled capture (480 frames at 10 ms in one block asked at 10 and out
+     at 0, 960 more at 30 ms out at 10, nothing asked after `stopAudio`); the test of mixing into the queue deleted.
+     Web: the four push functions and their `dom` declarations gone - the bridge still registers the imports, unused,
+     until the port. Template: the four stubs gone. Green: `test-sound`, the contract's, worklet and page tests; both
+     examples built for Windows and the web. Next: stage 3, the output program ported to Zig.
+     **Stage 3, the port, made precise (Oct 12).** Two findings shape it. (1) The bridge's Zig cannot be tested
+     where it lives: bridge.zig is one file by charter, built only for the page, and the smoke runner
+     (`webtests/runner.mjs`) never runs it - it stands in for the app module's imports directly. Today the page test
+     covers the output program only because that program is JavaScript text the test can pull out of bridge.zig;
+     ported into the monolith, it would lose its only test. (2) The page's frame loop (`ZimrBoot.tick`, stage 4)
+     opens no handle scope, unlike the kernel's own loop: handles minted during a page's frames are never reclaimed -
+     a few a frame, for the page's life. Adding a scope is not a one-line fix - bridge tables keep handles created
+     during frames (GPU objects), which a reset would orphan - so it is recorded here, for its own step.
+     *The structure:* page audio becomes `src/page_audio.zig`, a second exception to the one-file charter of the kind
+     the charter already makes for `dom_input.zig` ("that table can [be unit-tested], so it lives apart"). It is
+     written as the worklet's program is - against c2js's handle functions (`js_get`, `js_call*`, `js_new*`,
+     `js_func`, `js_mark`/`js_reset`), not the bridge's `Value` - so that it transpiles on its own. The bridge imports
+     it (declared to `addBridgeSource` as an input, as `dom_input.zig` is) and its `dom` import answers call it; and a
+     build step transpiles it alone for `audio_page_test.cjs`, which then drives the real Zig against the same
+     Chrome-strict stand-ins instead of the JavaScript text. *Its pieces:* the state (context, node, path, the
+     renderer's state and report, the counts posted, the held notices as one JavaScript array - an object holding
+     objects, so that handle scopes reclaim only slots); the renderer's loading at boot with callbacks rather than a
+     returned promise (a Blob URL's `addModule`, then on failure a `data:` URL's), the bridge's boot stage 5 polling
+     `isRendererSettled` each tick; `startForwarding`, the four posts, `takeNoticeBytes`; `startPulled` and its
+     `onaudioprocess`; the gesture listener; `stop`; the latency and the path; the diagnostics panel - its lines
+     formatted in Zig and set as the panel's text every 250 ms, the console's warnings no longer intercepted (the
+     panel shows page audio's own). Every browser callback opens its own handle scope. *Done when* the page test
+     passes against the transpiled `page_audio.zig`, `audio_output_program` is deleted, and Simon's phone plays.
+     **Part 1 written (Oct 12): the loading at boot.** `src/page_audio.zig` - not yet wired, so no page changes: its
+     head (the two paths, the boot's wait, the handle rules), c2js's handle functions declared as the worklet's
+     program declares them, helpers over them, the state (`OutputPath`, `RendererLoading`, `ProcessorState`,
+     `PageAudio`), and the loading - `prepareRenderer` (the module's export checked, the context made, the source given
+     its `start()` call, a Blob URL's `addModule` with callbacks), the four settling callbacks (a `data:` URL tried on
+     the Blob's failure; the browser's reason warned once), `isRendererSettled`. Read bottom-up, vocabulary first,
+     the entry point last; compiled as c2js consumes it; lint clean. Next, part 2: `startForwarding`, the posts,
+     `takeNoticeBytes`, the port's and the node's handlers; then part 3: `startPulled`, the gesture listener, `stop`,
+     the latency and the path, the panel; then the wiring (the bridge's boot and `dom` answers), the page test against
+     the transpiled file, and `audio_output_program` deleted.
+     **Part 2 written (Oct 12): the forwarding path.** `setAppExports`; `startForwarding` (the node with its options -
+     no input, the channels out, `processorOptions.module` - its port's handler and `onprocessorerror` set, connected,
+     the held notices a fresh array, the counts reset, the gesture listened for); `forwardCommandBytes`,
+     `forwardSamples` (each copied out of the app's memory - `appMemoryView`, the buffer read afresh at each use - and
+     the copy's buffer transferred), `forwardNote`; `takeNoticeBytes` (whole notices, a message's remainder kept first
+     in line); `onRendererMessage` (notices, the report, ready, failed), `onProcessorError`; the gesture listener
+     (`onGesture` resumes a context not running; the five activation events, in the capture phase); `stop` (the
+     handler cleared, the node disconnected; the renderer's context suspended, the script processor's closed). The
+     handle rules kept: calls whose result is unused go through the void variants (a call returning `undefined` would
+     leave a handle `js_free` never frees), part 1's three included; every function the app calls during a frame
+     frees each handle it makes, since the page's frame loop reclaims none; the browser's callbacks open their own
+     scope. Compiled as c2js consumes it; lint clean. Next, part 3: `startPulled` and its `onaudioprocess`, the
+     latency and the path, the panel.
+     **Part 3 written (Oct 12): the pulled path, the readout's numbers, the panel.** `startPulled` (the boot's context
+     when there is one, else a new one; a script processor of 2 048 frames, its `onAudioProcess` asking the app's
+     `zimr_audio_pull_block` for each buffer and copying each channel out of the app's memory); `outputLatencyMilliseconds`
+     (the processor's buffer when it plays, and the context's `baseLatency + outputLatency`, NaN read as 0) and
+     `pathCode` (the codes `web.zig` maps: 0, 2 starting, 3 running, 4 failed, 5 the context not running); `noteMixer`;
+     `warn` - page audio keeps its last warning for the panel, since a console's warnings cannot be intercepted without
+     a closure; the panel (`showDiagnostics`, a `<pre>` refreshed every 250 ms by `refreshDiagnostics`), its lines
+     written by `describeOutput` into a `TextBuilder` - std's formatting is not used, as the bridge's own note says it
+     brings a writer's table of functions the transpile cannot take. The builder's test runs natively:
+     `page_audio.zig` joined the fast test roots (`zig build test-page_audio`, 1 of 1). The whole file - with every
+     public function referenced - compiles to C and transpiles through c2js to JavaScript that parses. Next: the
+     wiring - the bridge's boot (stage 5 polling `isRendererSettled`) and its `dom` answers calling `page_audio`; the
+     page test against the transpiled file (exports for Node published only when the file is the root); and
+     `audio_output_program` deleted.
+     **The page test moved onto `page_audio.zig` (Oct 12).** The file publishes its entry points (`page_audio_*`,
+     `callconv(.c)` wrappers) only when it is its program's root (`@import("root") == @This()`); `buildPageAudioJs`
+     transpiles it so, and `audio-page-test` drives it - the bridge still runs the JavaScript program until the wiring.
+     The test now covers: the boot's loading (settled asynchronously), the gesture listener (five events, in the
+     capture phase; a tap resumes the context), the held note for 400 blocks, the panel's text as page audio writes
+     it, a ramp's notice copied into the app's memory, no handle kept by a frame's calls (100 frames), `stop`, the
+     pulled path. Two bugs found by it, both fixed: `startForwarding` set its state after installing the port's
+     handler - a message delivered at once found the state not yet there, and `starting` then overwrote `running`
+     (Chrome delivers asynchronously, so it was latent); and **c2js drops `(&x)->field = value`** - Zig emits it for
+     an optional's null flag when a struct literal is assigned to an optional struct field, so the optional reads as
+     empty after being set (twenty-line repro: `?Report` set from a literal, then `!= null` is false; the JavaScript
+     holds `((1032 + 0)).is_null; false;`). `page_audio` keeps a plain struct and a flag; the transpiler's fix is a
+     debt of step 9.
+     **Wired (Oct 12): the page's sound is Zig.** The bridge imports `page_audio.zig` (its header now names two
+     imports kept apart to be tested; `addBridgeSource` declares the file as an input); boot stage 3 hands page audio
+     the exports and the module (`setAppExports`, `prepareRenderer`), and stage 5 polls `isRendererSettled` each tick
+     instead of a promise; the `dom` answers call page audio; `audio_output_program` - 47 KB of JavaScript, with its
+     push processor, its `audioOutput` and `viewOfAppMemory` - is deleted, with the four push registrations. A frame's
+     forwarded commands travel as one message (`Mixer.forward_batch`, up to 32 commands; sent when full, at the frame's
+     end, and before samples or a note, so that the other side meets everything in the order it was sent); the native
+     forwarding test's stand-in splits a message as the worklet does and counts them - a play and a volume change in
+     one frame arrive as one message of two. Green: `test-sound` (256 of 261 - the platform files' tests, run with it,
+     lost `AudioRing`'s four and a net one of headless's), the page and worklet tests, the smoke run with every import
+     resolved. The page, measured part by part: the bridge's memory image 40 KB smaller (the program lived there as a
+     string), its code 94 KB larger (page audio, transpiled - c2js writes about twice the hand-written size), the app
+     module 3 KB larger: 57 KB more in all, 1.8 %. Next: Simon's phone - Chrome (the worklet) and Claude's viewer (the
+     script processor) - then step 3.
+     **Simon's phone, Chrome (Oct 12): plays, with a glitch once in a while.** The panel: 12 750 blocks, loudest 0.354,
+     57 notes posted - and the context's output latency risen from 24 ms to 88: Chrome on Android enlarges its buffer
+     after it detects underruns, so the glitches cost latency as well. So step 3 began with the worklet's allocations
+     (the performance review's item 4), each a chance of a collection on the audio thread. Counted from c2js's
+     runtime, a block made five objects: `js_func`'s callback wrapper two arrays (its rest parameter and `map`),
+     `js_try_call` one (`__args`), and two views. Now none: c2js's runtime gained `js_func3` (a callback of exactly
+     three arguments, building no array) and `js_try_call1` (one argument, no array) - `process` and the render call
+     use them; the two views are made once and kept (`keepViewsFresh`), made again only when stale - another address
+     or length, or detached by the instance's memory growing, whose views read a length of 0 (miniaudio's test). The
+     worklet test counts the views made over a buffer: a steady block makes none (red when the views are remade each
+     block). And the panel shows the browser's own count where it gives one (`playoutStats`, in Chrome):
+     `playout: 3 glitches, 21 ms filled in | latency 31 ms (24 to 88)` - so that the next screenshot measures what
+     was heard. The c2js canary passes.
+     **Still glitchy (Simon, Oct 12), and measured where it can be.** His Chrome has no `playoutStats` (no `playout:`
+     line); the latency held at 24 ms this time. A steady block allocating nothing, what remains is told apart by
+     timing inside the worklet: a long block is this program, a collection, or a function compiled on its first call;
+     a long gap between blocks with short blocks is the thread not run in time - the page draws with WebGPU at 60
+     frames a second on the same phone. So the worklet keeps, each second, the longest block and the longest gap from
+     one block's start to the next (on `performance.now()` where a worklet has it, else `Date.now()`), and the panel
+     shows them (`worklet: longest block 1.66 ms, longest gap 4.6 ms`). Measured in Node on x86, outside the repo
+     (5 000 blocks): a block's median 3 microseconds silent, 10 with a chord of three notes, the 99th percentile 25 -
+     and rare spikes of 4 to 14 ms, too long for the young collections Node traced (0.1 to 0.8 ms, the harness's own),
+     so the sandbox's scheduling or V8's compiling, which only the phone can tell apart. And the second audio context
+     is gone (the review's item 1): the older layer's context is made on the first use of `music`, `streams` or the
+     analyser (`olderLayerContext`), not at `init` - a page that plays only through the mixer holds one context, one
+     output stream (the smoke run: 4 181 host calls at init, two fewer).
+     **The sound path's performance reviewed (Oct 12, `sound_performance_review.md`).** Clean where it matters - no
+     allocation and no lock on the audio threads, Rigtorp queues, bounded work, zero-copy on Windows, precision that does
+     not drift; the arithmetic is tens of microseconds of a 2.67 ms block. Six costs, folded into the order: the second
+     audio context every sound page makes (the older layer's, for music and streams - lazy, or gone with step 3); the
+     voice slot's inline 1 920-byte tail copy (2 080 bytes a slot; split hot from cold - 12 KB instead of 133 KB); the
+     resampling position kept in memory (a local); the worklet's per-block allocations (views made once); one message
+     per forwarded command (a frame's in one); flush-to-zero on the Windows render thread. One fixed at once:
+     `takeNoticeBytes` no longer makes a view on frames with no notice. Where they go - after the comparison with JUCE and
+     miniaudio (in the review's last section), as the revised order says: the forwarding batch with the wiring (step
+     2); the slot split, the position, the worklet's views, flush-to-zero and the worklet's asynchronous start as step
+     3, the audio threads' hot paths; the second context with music and streams (step 4).
      a. The audio context at 48 000 Hz, resumed at the first click, tap or key.
      b. The worklet's module: the program's text and one line calling `start()`, loaded from a Blob URL - or from a
         `data:` URL where the page's origin is opaque (a file opened from disk, a sandboxed frame).
@@ -1253,25 +1886,26 @@ The migration of `platform_api.md` (section 8), each step leaving both platforms
      g. The web platform declares which of the two its output is. `Mixer` gains the first kind, a renderer in another
         memory: `mixFrame` forwards the commands and reads the notices, and `sendToRenderer`, finding the queue full,
         forwards the commands rather than applying them to the unused local renderer (the design point above).
+     h. The readout of step 4 from the browser's numbers: the context's `baseLatency` and `outputLatency`, and the
+        key's time to its block. The output latency is the browser's floor; on a desktop it can stay under the target,
+        on a phone (Android especially) it is often 20 - 40 ms alone.
      *Verified:* a Node test of both sides together - the bridge's sound code and the worklet's program, joined by a
      pair of stand-in ports - plays `composer_drum`'s kicks 48 000 frames apart; the script-processor path plays the
      same frames; Simon hears `composer_drum` and `audio_mixer` in Chrome and Firefox, and on his phone. *Done when*
      those pass, and no browser output posts blocks of samples any more.
-  4. **The push path removed.** No output pushes: `AudioRing`, the margin and its window of gaps,
+  8. **The push path removed.** No output pushes: `AudioRing`, the margin and its window of gaps,
      `startNewVoicesInsideQueue`, `mixNewVoicesInto`, the contract's `queue`, `queued_frames` and `mix_into_queued`,
      and the push halves of the headless and Windows outputs all go. *Verified:* every sound test, rewritten where it
      drove the push path; the headless timing test (a sound played at frame 10 starts at output frame 8 000); every
      audio example built for the web and Windows. *Done when* none of those names is left in the source.
-  5. **Chapter 14 of the backends tutorial rewritten** for the design as it then is: the two sides and their queues,
+  9. **Chapter 14 of the backends tutorial rewritten** for the design as it then is: the two sides and their queues,
      pulling, the worklet - a second instance of the app's module, its entry points, its messages - and the
      script-processor path; the comparison with raylib, sokol, SDL3, Mach and JUCE brought up to date. *Done when*
      the chapter describes no push path.
-  6. **Simon's Windows test** of the pulled WASAPI output (`zimr_windows_audio_test.zip`): which stream opened - the
-     low-latency one or the standard one - and the buffer it reports. Needs Simon; it does not block steps 1-5.
-  7. **Then, in this order:** streams and music on the mixer (a decoder feeding a voice as it plays); the decoders -
+  10. **Then, in this order:** streams and music on the mixer (a decoder feeding a voice as it plays); the decoders -
      Vorbis, a port of `stb_vorbis`, then QOA (step 6 above); the analyser, an FFT of the mixer's output for a spectrum
-     view (step 7); input to sound and the native loop waking on input (5.b, items 3 and 4); sample-accurate
-     scheduling (5.e); quality when measured - the resampler, a limiter (step 9).
+     view (step 7); sample-accurate scheduling (5.e); quality when measured - the resampler, a limiter (step 9). And
+     `sound.zig`'s header, which still describes the browser's audio graph as the API's path, rewritten for the mixer.
 - **C6.** Text editing: the editor's remaining parts in `ui.zig`; the clipboard; input-method composition
   (`WM_IME_*`).
 - **C7.** Pointer lock (`ClipCursor`, raw input `WM_INPUT`), after GLFW's and sokol's.
@@ -1503,9 +2137,14 @@ raylib's `ToggleBorderlessWindowed` is the borderless kind; its `ToggleFullscree
 Done since Oct 9: C1 (the `isWasm()` audit), C3 (window state, monitors, cursors, `keyName`, `openUrl`) and C8
 (gamepads). Under way: C5, sound.
 
-1. **C5** - sound, by "C5 from here" (in Phase C): a sound through the worklet in Node; the program built into the
-   pages; the main thread's side in Zig; the push path removed; chapter 14 rewritten.
-2. **C5, step 6** - Simon's Windows audio test; whenever Simon can.
+1. **C5** - sound, by "C5 from here" (in Phase C): the sound examples' lag cut to what the hardware allows, and the
+   input path to reach it. Done: the worklet's program, the instrument, `audio_keyboard`, the latency readout, the
+   renderer worklet playing in Chrome, the push path deleted, page audio in Zig. The next five turns are written out
+   turn by turn ("The next five turns, precisely"): the glitches by Simon's screenshot and the worklet's start; the hot
+   paths' rest; the Shepard instrument; the scale star; streams on the mixer. Then streams across to the worklet,
+   music (a Vorbis decoder), the worklet path measured, bindings, `on_input`, the Windows device buffer, the debts,
+   chapter 14.
+2. **C5, the Windows readout on Simon's machine** - whenever Simon can; it decides the device buffer's step.
 3. **Scripts on every platform** - the engine following a growing script file; Simon's runs of the test package.
 4. **C2, C6** - the drag and menu loops, focus regained, AltGr; text editing, the clipboard, input-method
    composition.

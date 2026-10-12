@@ -566,9 +566,10 @@ further would return the next field's data.</p>
                 // `element_count`.
                 const count: usize = self.element_count;
                 const enc: wgpu.CommandEncoderHandle = wgpu.createCommandEncoder(gp.dev);
+                // In MEMORY order, which `unpackPrefixes` relies on (`fields_by_offset`).
                 var packed_at: u32 = 0;
-                inline for (buffer_field_names, 0..) |fname, fi| {
-                    const bytes: u32 = prefixBytes(fname, count);
+                inline for (fields_by_offset) |fi| {
+                    const bytes: u32 = prefixBytes(buffer_field_names[fi], count);
                     if (bytes &gt; 0) {
                         wgpu.copyBufferToBuffer(enc, gp.field_bufs[fi], 0, gp.staging, packed_at, bytes);
                     }

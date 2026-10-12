@@ -17,7 +17,6 @@ const common = @import("example_common");
 /// build once a handler existed.
 pub const panic = std.debug.FullPanic(common.reportPanic);
 const Allocator = std.mem.Allocator;
-const bufPrint = std.fmt.bufPrint;
 
 const z = @import("zimr");
 const zm = @import("zm");
@@ -221,25 +220,27 @@ fn update(f: *z.Frame, s: *State) void {
     }
 
     // ---- HUD ----
-    var buf: [160]u8 = undefined;
-    const title: []const u8 = bufPrint(&buf, "{s} / {s}", .{ scene.category, scene.name }) catch scene.name;
-    gl.text(vec2(16 * ui, 26 * ui), title, .{ .size = 18 * ui, .color = text_col, .font = &s.font });
+    gl.textf(
+        vec2(16 * ui, 26 * ui),
+        "{s} / {s}",
+        .{ scene.category, scene.name },
+        .{ .size = 18 * ui, .color = text_col, .font = &s.font },
+    );
     gl.text(vec2(16 * ui, 48 * ui), scene.blurb, .{ .size = 13 * ui, .color = dim_col, .font = &s.font });
 
-    var buf2: [160]u8 = undefined;
-    const stats: []const u8 = bufPrint(
-        &buf2,
+    gl.textf(
+        vec2(16 * ui, 70 * ui),
         "nv {d}  nu {d}  constraints {d}  solver {d} it  energy {d:.2} J",
         .{ m.nv, m.nu, d.constraint_count, d.solver_iterations, rbt.energy(m, d) },
-    ) catch "";
-    gl.text(vec2(16 * ui, 70 * ui), stats, .{ .size = 13 * ui, .color = dim_col, .font = &s.font });
+        .{ .size = 13 * ui, .color = dim_col, .font = &s.font },
+    );
 
     // A scene's own readout, if it has one: the numbers that scene is actually about.
     if (scene.readout) |readout| {
-        var buf3: [160]u8 = undefined;
+        const readout_text: scenes.ReadoutText = readout(&s.live);
         gl.text(
             vec2(16 * ui, 92 * ui),
-            readout(&s.live, &buf3),
+            readout_text.slice(),
             .{ .size = 13 * ui, .color = accent2, .font = &s.font },
         );
     }

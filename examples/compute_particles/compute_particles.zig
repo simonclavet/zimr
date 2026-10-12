@@ -5,7 +5,6 @@
 //! the GPU path is zero-copy (the kernel writes the very buffer the vertex shader reads)
 //! and the CPU path copies its result into that buffer, then draws the same way.
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const Random = std.Random;
 const sliceAsBytes = std.mem.sliceAsBytes;
@@ -142,13 +141,12 @@ fn update(f: *z.Frame, s: *State) void {
     const is_gpu: bool = s.pipe.backend == .gpu;
     const backend_name: []const u8 = if (is_gpu) "GPU compute" else "CPU compute";
     const render_note: []const u8 = if (is_gpu) "zero-copy" else "host upload";
-    var buf: [112]u8 = undefined;
-    const hud: []const u8 = bufPrint(
-        &buf,
+    f.gl.textf(
+        .{ 10, 10 },
         "backend: {s} | {d} particles | {s} render (auto-toggle)",
         .{ backend_name, particle_count, render_note },
-    ) catch "particles";
-    f.gl.text(.{ 10, 10 }, hud, .{ .size = 18, .color = z.colors.slate_100, .font = &s.font });
+        .{ .size = 18, .color = z.colors.slate_100, .font = &s.font },
+    );
     const cpu_msg: []const u8 = if (s.cpu_ok)
         "same kernel runs on both backends (CPU self-check: OK)"
     else

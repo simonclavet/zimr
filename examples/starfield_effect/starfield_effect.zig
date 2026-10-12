@@ -10,7 +10,6 @@
 //! render modes (lines = streaks / circles = discs) + a z.UiHost "Warp drive"
 //! panel (speed/mode/trail/colour + Hyperjump). Responsive at any size.
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const Random = std.Random;
 const z = @import("zimr");
@@ -153,10 +152,8 @@ fn update(f: *z.Frame, s: *State) void {
         }
     }
 
-    var buf: [32]u8 = undefined;
     const fps: i32 = if (dt > 0.0) @trunc(1.0 / dt) else 0;
-    const label: []const u8 = bufPrint(&buf, "{d} FPS", .{fps}) catch "?";
-    f.gl.text(.{ 10, 10 }, label, .{ .size = 20, .color = c.lime, .font = &s.font });
+    f.gl.textf(.{ 10, 10 }, "{d} FPS", .{fps}, .{ .size = 20, .color = c.lime, .font = &s.font });
 
     drawUiPanel(f, s, rand, hw, hh);
 }

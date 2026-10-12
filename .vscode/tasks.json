@@ -144,6 +144,42 @@
             "problemMatcher": []
         },
         {
+            "label": "zig: build audio-keyboard",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "audio-keyboard",
+                "-Dplatform=web"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: release audio-keyboard",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "audio-keyboard",
+                "-Dplatform=web",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "zig: build audio-mixer",
             "type": "shell",
             "command": "zig",
@@ -457,6 +493,42 @@
             "args": [
                 "build",
                 "bone-socket",
+                "-Dplatform=web",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build bouncing-ball",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "bouncing-ball",
+                "-Dplatform=web"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: release bouncing-ball",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "bouncing-ball",
                 "-Dplatform=web",
                 "-Dmode=release"
             ],
@@ -5569,6 +5641,42 @@
             "args": [
                 "build",
                 "procgen-noise",
+                "-Dplatform=web",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build profiler-flamegraph",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "profiler-flamegraph",
+                "-Dplatform=web"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: release profiler-flamegraph",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "profiler-flamegraph",
                 "-Dplatform=web",
                 "-Dmode=release"
             ],
@@ -11406,6 +11514,5110 @@
             ],
             "presentation": {
                 "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build 3d-probe (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "3d-probe",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build audio-amp-envelope (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "audio-amp-envelope",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build audio-basic (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "audio-basic",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build audio-keyboard (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "audio-keyboard",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build audio-mixer (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "audio-mixer",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build audio-sound-lab (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "audio-sound-lab",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build audio-spectrum-visualizer (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "audio-spectrum-visualizer",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build audio-stream-synth (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "audio-stream-synth",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build balance-flywheel (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "balance-flywheel",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ball-physics (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ball-physics",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build basic (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "basic",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build billboards (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "billboards",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build bone-socket (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "bone-socket",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build bouncing-ball (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "bouncing-ball",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build box-collisions (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "box-collisions",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build bullet-hell (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "bullet-hell",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build camera-controls (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "camera-controls",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build camera2d (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "camera2d",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build cartpole (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "cartpole",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build cartpole-duel (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "cartpole-duel",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build catch (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "catch",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build cel-shading (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "cel-shading",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build cellular-automata (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "cellular-automata",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build chain-ik (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "chain-ik",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build circle-sector-drawing (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "circle-sector-drawing",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build clock-of-clocks (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "clock-of-clocks",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build collision-area (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "collision-area",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build color-wheel (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "color-wheel",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build colors-palette (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "colors-palette",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build composer-drum (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "composer-drum",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build comptime-julia (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "comptime-julia",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build comptime-mandelbrot (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "comptime-mandelbrot",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build compute-particles (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "compute-particles",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build compute-smoke (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "compute-smoke",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build crane (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "crane",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build cube-demo (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "cube-demo",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build cube-sidebyside (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "cube-sidebyside",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build cube3d (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "cube3d",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build cubicmap (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "cubicmap",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build damaged-helmet (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "damaged-helmet",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build dance-track (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "dance-track",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build dashed-line (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "dashed-line",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build decal-sw (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "decal-sw",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build decals (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "decals",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build deferred-render (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "deferred-render",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build delta-time (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "delta-time",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build depth-cue (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "depth-cue",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build depth-rendering (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "depth-rendering",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build depth-writing (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "depth-writing",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build digital-clock (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "digital-clock",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build directional-billboard (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "directional-billboard",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build double-pendulum (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "double-pendulum",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build draw2d-demo (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "draw2d-demo",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build dynamic-mesh (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "dynamic-mesh",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build easings-ball (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "easings-ball",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build easings-box (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "easings-box",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build easings-rectangles (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "easings-rectangles",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build easings-testbed (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "easings-testbed",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ecs-boids (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ecs-boids",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ecs-solar-system (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ecs-solar-system",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ellipse-collision (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ellipse-collision",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build first-person-camera (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "first-person-camera",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build first-person-maze (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "first-person-maze",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build fluid-sort (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "fluid-sort",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build fog-rendering (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "fog-rendering",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build following-eyes (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "following-eyes",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build four-ways (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "four-ways",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build fps-playground (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "fps-playground",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build fractal-tree (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "fractal-tree",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build friction-slope (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "friction-slope",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build gallery (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "gallery",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build gallery-all (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "gallery-all",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build geno-dance (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "geno-dance",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build geno-fit (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "geno-fit",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build geno-ppo (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "geno-ppo",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build geno-track (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "geno-track",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build geno-train (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "geno-train",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build gestures-demo (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "gestures-demo",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build gestures-testbed (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "gestures-testbed",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build getup-frames (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "getup-frames",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build getup-train (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "getup-train",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build gltf-simple (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "gltf-simple",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build gltf-textured (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "gltf-textured",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build gripper (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "gripper",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build heightmap (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "heightmap",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build hello-world (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "hello-world",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build helmet-sw (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "helmet-sw",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build hilbert-curve (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "hilbert-curve",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build humanoid (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "humanoid",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build hybrid-render (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "hybrid-render",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build icosphere-demo (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "icosphere-demo",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build image-editor (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "image-editor",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build imgui-phone-demo (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "imgui-phone-demo",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build input-actions (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "input-actions",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build input-cursor-shapes (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "input-cursor-shapes",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build input-gamepad (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "input-gamepad",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build input-keys (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "input-keys",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build input-mouse (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "input-mouse",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build input-mouse-wheel (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "input-mouse-wheel",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build input-multitouch (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "input-multitouch",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build input-pointer-lock (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "input-pointer-lock",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build input-virtual-controls (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "input-virtual-controls",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build instancing (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "instancing",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build julia (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "julia",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build julia-gallery (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "julia-gallery",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build kaleidoscope (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "kaleidoscope",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build keys (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "keys",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build lambert-demo (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "lambert-demo",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build langton-ant (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "langton-ant",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build launcher (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "launcher",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build life (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "life",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build lines-bezier (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "lines-bezier",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build lines-drawing (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "lines-drawing",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build logo-raylib (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "logo-raylib",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build logo-raylib-anim (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "logo-raylib-anim",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build mandel-julia (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "mandel-julia",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build mandel-sidebyside (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "mandel-sidebyside",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build math-angle-rotation (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "math-angle-rotation",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build math-sine-cosine (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "math-sine-cosine",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build mesh-builder (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "mesh-builder",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build mesh-picking (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "mesh-picking",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build mocap-viewer (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "mocap-viewer",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build models-animation-blend-custom (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "models-animation-blend-custom",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build models-geometric-shapes (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "models-geometric-shapes",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build models3d (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "models3d",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build monitors (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "monitors",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build mpc-cartpole (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "mpc-cartpole",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build mpc-quadruped (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "mpc-quadruped",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build music-streaming (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "music-streaming",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build net-cursors (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "net-cursors",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build net-ws-smoke (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "net-ws-smoke",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build obj-bunny (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "obj-bunny",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build obj-simple (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "obj-simple",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build orthographic-projection (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "orthographic-projection",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build particles (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "particles",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build pbr-demo (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pbr-demo",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build penrose-tile (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "penrose-tile",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build physics-sidebyside (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "physics-sidebyside",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build pie-chart (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pie-chart",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build pipeline-basic (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-basic",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build pipeline-bloom (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-bloom",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build pipeline-instancing (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-instancing",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build pipeline-msaa (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-msaa",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build pipeline-postprocess (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-postprocess",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build pipeline-rendertarget (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-rendertarget",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build pipeline-sampler (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-sampler",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build pipeline-settings (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-settings",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build pipeline-uniforms (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-uniforms",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build platonic-solids (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "platonic-solids",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build plot-demo (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "plot-demo",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build plot3d-demo (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "plot3d-demo",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build plot3d-gallery (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "plot3d-gallery",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build png-demo (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "png-demo",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build point-rendering (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "point-rendering",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build procgen-noise (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "procgen-noise",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build profiler-flamegraph (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "profiler-flamegraph",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build quadruped (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "quadruped",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ragdoll-compare (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ragdoll-compare",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build random-sequence (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "random-sequence",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build random-values (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "random-values",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build raytracer (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "raytracer",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build rectangle-advanced (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "rectangle-advanced",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build rectangle-scaling (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "rectangle-scaling",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build recursive-hud (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "recursive-hud",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build render-texture (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "render-texture",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ring-drawing (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ring-drawing",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build rl-humanoid (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "rl-humanoid",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build robot-3d (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "robot-3d",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build robot-contact (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "robot-contact",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build robot-demo (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "robot-demo",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build robot-pendulum (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "robot-pendulum",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build robot-sidebyside (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "robot-sidebyside",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build rock-demo (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "rock-demo",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build rocket (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "rocket",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build rounded-rectangle (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "rounded-rectangle",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build rt-shader (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "rt-shader",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build rt-sidebyside (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "rt-sidebyside",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build rt-workers (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "rt-workers",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build scissor-test (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "scissor-test",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build shader-effects (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shader-effects",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build shaders-lightmap-rendering (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shaders-lightmap-rendering",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build shaders-multi-texture (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shaders-multi-texture",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build shaders-normalmap-rendering (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shaders-normalmap-rendering",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build shaders-shapes-textures (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shaders-shapes-textures",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build shaders-vertex-displacement (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shaders-vertex-displacement",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build shadow-sidebyside (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shadow-sidebyside",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build shadowmap (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shadowmap",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build shadowmap-sw (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shadowmap-sw",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build shapes-demo (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shapes-demo",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build shapes-gallery (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shapes-gallery",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build shapes-procedural (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shapes-procedural",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build shapes-showcase (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shapes-showcase",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build shapes-top-down-lights (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shapes-top-down-lights",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build shared-smoke (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shared-smoke",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build sidebyside (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "sidebyside",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build simple-particles (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "simple-particles",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build skinned-mesh (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "skinned-mesh",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build skybox (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "skybox",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build smooth-pixelperfect (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "smooth-pixelperfect",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build snake (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "snake",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build sort-smoke (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "sort-smoke",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build sph-fluid-2d (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "sph-fluid-2d",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build splines-drawing (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "splines-drawing",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build split-screen (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "split-screen",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build srcrec-dstrec (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "srcrec-dstrec",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build starfield (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "starfield",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build starfield-effect (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "starfield-effect",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build state-persistence (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "state-persistence",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build tesseract-view (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "tesseract-view",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build text-codepoints-loading (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "text-codepoints-loading",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build text-field (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "text-field",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build text-font-filters (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "text-font-filters",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build text-font-loading (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "text-font-loading",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build text-font-sdf (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "text-font-sdf",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build text-inline-styling (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "text-inline-styling",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build text-layout (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "text-layout",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build text-on-texture (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "text-on-texture",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build text-sprite-fonts (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "text-sprite-fonts",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build text-strings-management (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "text-strings-management",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build text-unicode-ranges (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "text-unicode-ranges",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build texture-readback (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "texture-readback",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build texture-views (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "texture-views",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build textured-cube (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textured-cube",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build textured-curve (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textured-curve",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build textures-background-scrolling (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textures-background-scrolling",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build textures-blend-modes (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textures-blend-modes",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build textures-bunnymark (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textures-bunnymark",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build textures-fog-of-war (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textures-fog-of-war",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build textures-framebuffer-rendering (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textures-framebuffer-rendering",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build textures-gif-player (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textures-gif-player",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build textures-image-channel (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textures-image-channel",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build textures-image-rotate (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textures-image-rotate",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build textures-image-text (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textures-image-text",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build textures-magnifying-glass (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textures-magnifying-glass",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build textures-mouse-painting (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textures-mouse-painting",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build textures-npatch-drawing (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textures-npatch-drawing",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build textures-polygon-drawing (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textures-polygon-drawing",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build textures-raw-data (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textures-raw-data",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build textures-screen-buffer (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textures-screen-buffer",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build textures-sprite-animation (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textures-sprite-animation",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build textures-sprite-button (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textures-sprite-button",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build textures-sprite-explosion (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textures-sprite-explosion",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build textures-sprite-stacking (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textures-sprite-stacking",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build textures-tiled-drawing (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textures-tiled-drawing",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build three-leg (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "three-leg",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build tic-tac-toe (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "tic-tac-toe",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build tile-smoke (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "tile-smoke",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build touch-paint (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "touch-paint",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build track-train (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "track-train",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build tracking (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "tracking",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build trails (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "trails",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build triangle-gradient (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "triangle-gradient",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build triangle-strip (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "triangle-strip",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-animation-gallery (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-animation-gallery",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-canvas-demo (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-canvas-demo",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-clipper (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-clipper",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-code-editor (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-code-editor",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-color-picker (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-color-picker",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-combo-custom (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-combo-custom",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-custom-rendering (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-custom-rendering",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-custom-widget (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-custom-widget",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-data-grid-phone (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-data-grid-phone",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-demo (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-demo",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-dev-tools (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-dev-tools",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-dock-basic (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-dock-basic",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-dock-persistence (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-dock-persistence",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-dock-simple (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-dock-simple",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-drag-drop-demo (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-drag-drop-demo",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-drag-drop-flags-tour (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-drag-drop-flags-tour",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-drag-drop-source (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-drag-drop-source",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-drawlists (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-drawlists",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-full-showcase (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-full-showcase",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-imgui-extras (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-imgui-extras",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-input-callbacks (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-input-callbacks",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-input-flags-zoo-phone (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-input-flags-zoo-phone",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-input-query-demo (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-input-query-demo",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-kanban-board (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-kanban-board",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-log-skeleton (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-log-skeleton",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-log-viewer (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-log-viewer",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-mini-plot-smoke (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-mini-plot-smoke",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-minimal-button (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-minimal-button",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-minimal-one-context (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-minimal-one-context",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-mouse-drag (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-mouse-drag",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-multiselect-finder (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-multiselect-finder",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-notes-phone (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-notes-phone",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-panes (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-panes",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-persistence (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-persistence",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-phone-gestures (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-phone-gestures",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-plot (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-plot",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-plotting-basic (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-plotting-basic",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-polish (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-polish",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-pomodoro-phone (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-pomodoro-phone",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-primitives-zoo-phone (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-primitives-zoo-phone",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-shortcuts (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-shortcuts",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-smoke-button (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-smoke-button",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-tabbar-tour (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-tabbar-tour",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-tables-basic (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-tables-basic",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-tables-demo (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-tables-demo",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-tables-scroll (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-tables-scroll",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-text-editing (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-text-editing",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-widgets-data-types (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-widgets-data-types",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-window-menubar (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-window-menubar",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build undo-redo (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "undo-redo",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build vao-multibuffer (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "vao-multibuffer",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build vector-angle (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "vector-angle",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build vertex-texture-test (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "vertex-texture-test",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build viewport-scaling (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "viewport-scaling",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build voxel (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "voxel",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build waving-cubes (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "waving-cubes",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build window-requests (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "window-requests",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build wireframe (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "wireframe",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build worker-png (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "worker-png",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build writing-anim (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "writing-anim",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build yaw-pitch-roll (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "yaw-pitch-roll",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build zimr-gallery (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "zimr-gallery",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build zimrnum-field (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "zimrnum-field",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build zimrnum-train (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "zimrnum-train",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build zimrphysics-demo (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "zimrphysics-demo",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build zimrphysics2d-demo (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "zimrphysics2d-demo",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
                 "panel": "dedicated",
                 "clear": true
             },

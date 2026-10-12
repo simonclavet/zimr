@@ -25,7 +25,6 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const bufPrint = std.fmt.bufPrint;
 const z = @import("zimr");
 const zm = @import("zm");
 const Color = zm.Color;
@@ -94,14 +93,12 @@ fn update(f: *z.Frame, state: *State) void {
     for (movement_keys, 0..) |key, index| {
         labels[index] = z.keyName(key, &label_bytes[index]) orelse "?";
     }
-    var prompt_bytes: [96]u8 = undefined;
-    const prompt: []const u8 = bufPrint(&prompt_bytes, "move the ball with the arrows, or {s} {s} {s} {s}", .{
-        labels[0],
-        labels[1],
-        labels[2],
-        labels[3],
-    }) catch "move the ball with the arrows";
-    f.gl.text(.{ 10, 10 }, prompt, .{ .size = 20, .color = c.darkgray, .font = &state.font });
+    f.gl.textf(
+        .{ 10, 10 },
+        "move the ball with the arrows, or {s} {s} {s} {s}",
+        .{ labels[0], labels[1], labels[2], labels[3] },
+        .{ .size = 20, .color = c.darkgray, .font = &state.font },
+    );
 
     f.gl.circle(state.pos, ball_radius, .{ .color = c.maroon, .segments = 16 });
     z.endDrawing(f.gl);

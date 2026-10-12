@@ -27,7 +27,6 @@
 //   Touch the screen (any number of fingers, up to 10)
 
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
@@ -70,7 +69,6 @@ fn update(f: *z.Frame, state: *State) void {
     // ---- Render ----------------------------------------------------------
     z.clearViewport(f, c.raywhite);
 
-    var buf: [16]u8 = undefined;
     for (0..t_count) |i| {
         const idx_c: i32 = @intCast(i);
         const tp: Vec2 = z.getTouchPosition(f.input, idx_c);
@@ -85,10 +83,9 @@ fn update(f: *z.Frame, state: *State) void {
         const center: Vec2 = .{ tp[0], tp[1] };
         f.gl.circle(center, touch_radius, .{ .color = c.orange, .segments = 16 });
 
-        const label: []const u8 = bufPrint(&buf, "{d}", .{i}) catch "?";
         const label_x: f32 = tp[0] - 10;
         const label_y: f32 = tp[1] - label_offset_y;
-        f.gl.text(.{ label_x, label_y }, label, .{ .size = 40, .color = c.black, .font = &state.font });
+        f.gl.textf(.{ label_x, label_y }, "{d}", .{i}, .{ .size = 40, .color = c.black, .font = &state.font });
     }
 
     f.gl.text(

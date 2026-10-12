@@ -5,7 +5,6 @@
 //! brighter and thicker. Self-running (no input), viewport-relative under `.responsive`
 //! so it fills the canvas at any aspect.
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const Random = std.Random;
 const z = @import("zimr");
@@ -96,10 +95,8 @@ fn update(f: *z.Frame, s: *State) void {
         f.gl.line(.{ px, py }, .{ sx, sy }, .{ .color = col, .thickness = 1.0 + bright * 2.0 });
     }
 
-    var buf: [32]u8 = undefined;
     const fps: i32 = if (dt > 0.0) @trunc(1.0 / dt) else 0;
-    const label: []const u8 = bufPrint(&buf, "{d} FPS", .{fps}) catch "?";
-    f.gl.text(.{ 12, 12 }, label, .{ .size = 18, .color = c.init(140, 230, 140, 255), .font = &s.font });
+    f.gl.textf(.{ 12, 12 }, "{d} FPS", .{fps}, .{ .size = 18, .color = c.init(140, 230, 140, 255), .font = &s.font });
 
     z.endDrawing(f.gl);
 }

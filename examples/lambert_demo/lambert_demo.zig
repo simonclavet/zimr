@@ -433,4 +433,7 @@ pub fn main() !void {
     try zimr_app.run(.{
         .window = .{ .title = "zimr - WebGPU - Lambert-lit cube", .width = 800, .height = 600 },
     }, State, initState, update);
+    // A native program calls its frames itself, until the window closes; on the web this returns at once, and the
+    // browser calls them.
+    zimr_app.runNative();
 }

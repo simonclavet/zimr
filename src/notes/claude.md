@@ -409,12 +409,15 @@ Prior arc (`src/notes/mocap_plan.md`, §11-12): BVH/FBX loading, skinning, and t
     zig build test                                   EVERY QUICK TEST: src/tests.zig + test-fast + tier-A wasm
     zig build test-fast                              the shader-free half only (zimrnum, zimrmath, robot family)
     zig build test-fast -Dtest-filter="<substring>"  one test by name
-    zig build zn-<stem> -Dtest-filter="<substring>"  one root, one test - the fastest loop
+    zig build test-<stem> -Dtest-filter="<s>"        one root, one test - the fastest loop (`test-sound`,
+                                                     `test-zimrnum`, `test-robot`...; `zn-` until Oct 11, when the
+                                                     zimrnum prefix was found on every root)
     zig build test -Dslow-tests                      also the long simulations and learning curves
-    zig build zn-<stem> -Dtest-report                also print the robot tests' measurement tables,
+    zig build test-<stem> -Dtest-report              also print the robot tests' measurement tables,
                                                      and run the MEASUREMENT tests, which skip otherwise
     zig build test -Dtest-timing                     each fast-tier test process lists its tests of 1 s or more
     zig build test -Dtest-shards=1                   the robot family in one process (default: one per CPU)
+    zig build test -Dslow-tests -Dparked-tests       also the PARKED tests (`grep -n "report.parked()" src`)
 
 ★★★ **THE ROBOT FAMILY'S BINARY RUNS AS `-Dtest-shards` PROCESSES (Oct 11).** The robot family is one
 binary of ~760 tests and Zig runs a binary's tests one after another, so `zig build test` used to
@@ -422,6 +425,17 @@ sit on one core for the whole family after everything else had finished. `src/te
 (std's runner plus `--shard=K/N` and `--timing`) lets one compiled binary run as N processes, each
 taking every Nth test. A slow MEASUREMENT under `-Dslow-tests` also needs `-Dtest-report` now: it
 asserts nothing and, without the report, printed nothing either - P1 LONG alone was 148 s of that.
+★ **TO REVISIT: two very long tests are gated the same way although they assert one thing** - that
+the clone's training loss fell, which gradient descent all but guarantees: `robot_ppo_track: D5
+step 3` (1,084 s) and `robot_geno: D4` (133 s). Each earns its place back with a real check (the
+clone outlasting the servo). Measured Oct 11, the `-Dslow-tests` robot binary was 4,015 s; with
+these 31 gated it is about 240 s in one process, and the shards split that.
+★ **PARKED (Oct 12) - slow tests set aside while the suite is trimmed, to revisit:** the per-layer
+SuperTrack cartpole (24 s, superseded by the fused path), robot_gym P1 (13 s of PPO for one memory
+bound) and robot_mjcf TORSO+PELVIS (21 s, asserts and prints nothing). `report.parked()` gates them
+and `-Dparked-tests` runs them. Four more measurements were gated on the report (D5 (ii), D5 (ii-b),
+F1, the dance's TARGETS), and the SuperTrack cartpole learners now STOP at the first evaluation
+past the bar they assert - unless `-Dtest-report` wants the whole curve.
 
 ★★★ **`test` IS A SUPERSET OF `test-fast` (Sep 26).** One command runs every test that is quick,
 each binary once and in parallel. `src/tests.zig` no longer runs the robot family - it skips
@@ -678,9 +692,10 @@ piece does and WHY it is shaped that way. Tool calls do not count: a Python patc
 buried in the transcript is not "shown". Print the final regions (`sed -n`) before writing the reply;
 doing so caught two stale doc references in the same turn this rule was written.
 
-★★★ **ON THE WINDOWS MACHINE: A DIFF, AND A ZED BUTTON FOR EACH KEY LOCATION (Simon, Oct 11).** Every code change
-appears in the reply as a fenced `diff` block - the exact hunks, with the file and line above each, taken from the
-edits made, not from `git diff` (the working tree carries unrelated uncommitted work). After the diffs, for each
+★★★ **NEW CODE, NOT DIFFS, IN ```zig BLOCKS (Simon, Oct 11, superseding the diff rule).** Every code change appears
+in the reply as the new code itself - the whole new or changed function or region as it stands in the tree, in a
+fenced block tagged with its language (```zig, ```js) so the chat highlights it - with the file and line above each.
+No `diff` blocks, no `+`/`-` prefixes. On the Windows machine, also a Zed button for each key location: After the diffs, for each
 location Simon should look at, one fenced `bash` block holding one command:
 
     zed C:/dev/zimr/src/native_input.zig:1140
@@ -690,7 +705,7 @@ An absolute path with forward slashes works in PowerShell and bash, from any dir
 not every file mentioned. Plain links cannot do this: the app does not hand a `zed://` link to Windows, and
 `zed://file/C:/...` fails inside Zed anyway (os error 123 - the path arrives as `/C:/...`).
 
-★ **ON THE PHONE: THE DIFF, NO ZED BLOCKS** - there is no editor to open there.
+★ **ON THE PHONE: THE CODE, NO ZED BLOCKS** - there is no editor to open there.
 
 ★★ **INSERT A DECLARATION ABOVE THE NEXT ONE'S DOC COMMENT, NEVER BETWEEN THEM (Sep 27, three times in one
 session).** Anchoring a new `pub const X` on the line `pub const Y = struct {` puts X between Y's `///` block and Y:
@@ -1028,7 +1043,7 @@ Ground rules for every call:
   lint) passes. `zig build fix` is the ONE step that rewrites (lint --fix, then zig fmt). **End every turn
   with `zig build fix` (if anything needs it) then `zig build check`.**
 - **NEVER the full `zig build test` inside a turn (Sep 25):** it outlasts a turn - one died mid-run, its finished work
-  unreported. Run the modules touched (`zn-<stem>`), or the main module's tests with `-Dfocus=<example>
+  unreported. Run the modules touched (`test-<stem>`), or the main module's tests with `-Dfocus=<example>
   -Dtest-filter=<name>` (113 s for the timer tests), DETACHED if long. The full suite is Simon's, or a detached run.
 - **`whole-init-first` (lint):** after `x = ...create(T)` or in `init*(self: *T)`, the FIRST write through the pointer is
   `x.* = .{ ... }` - `create`d memory and `= undefined` ignore field defaults. Name a field `= undefined` in the literal
@@ -1091,6 +1106,34 @@ ever run.
 ★★★ **SMOKE SUPPLIES THE VERY IMPORT THE BROWSER LACKS**, which is why it cannot detect this.
 When adding an `extern` namespace, check `bridge.zig` builds it — a passing smoke test says
 nothing about that. (Fixed: `ZimrAudio` in bridge.zig.)
+
+★★★ **C2JS DROPS `(&x)->field = value` (Oct 12).** Zig's C for `state.report = .{ ... }`, where `report` is an
+optional struct, stores the payload's fields one by one and the null flag as `((&(&state)->report))->is_null = false;`.
+c2js turns that last line into two statements that do nothing (`((1032 + 0)).is_null; false;`), so the optional still
+reads as null after being set - no error, anywhere. `?u32` and other optionals assigned whole are unaffected. Until the
+transpiler is fixed (plan, step 9): in a c2js program, keep a plain struct and a flag rather than an optional struct.
+Found because the page test checked the diagnostics panel's text, which said `no block yet` after 400 blocks.
+
+★★★ **A WORKLET'S `process` MUST RETURN EXACTLY `true` IN CHROME (Oct 12).** The specification converts the result with
+`ToBoolean`; Chrome keeps a processor with no inputs alive only on `IsTrue()`. The c2js renderer returned a `u32` 1:
+one block played - heard as a glitch - then silence, no error, for four rounds of guessing. Node and every stand-in
+treat 1 as true, and the worklet test asserted `=== 1`, locking the assumption in. A browser API's contract is
+what the browser does, not what the specification says; a test asserting a value a browser receives asserts the
+exact value and type the strictest browser needs. What found it: the processor reporting from its first block. Now
+guarded three ways: `audio_worklet.zig` refuses at compile time a `processBlock` returning anything but `bool`; the
+worklet test asserts exactly `true`; and `zig build audio-page-test` (in `gate`) runs the page's own output program,
+the worklet's program and the test module against a stand-in browser as strict as Chrome - `process` called again
+only after exactly `true`, a processor's error fired as `processorerror` - and requires a held note to sound for 400
+blocks (red when `process` stops after one).
+
+★★★ **AN IMPORT BINDS BY MODULE AND NAME TOGETHER, AND BOTH CHECKS COMPARED NAMES ONLY (Oct 12).** `web.zig` declared
+`extern "dom" fn js_now_ms` while the bridge registers `js_now_ms` in its `wgpu` object. The declaration slept until
+`audioClockMilliseconds` called it; every sound page then died on the phone with `Import #69 "dom" "js_now_ms":
+function import requires a callable`, while `bridge_import_check` and `verify_imports` both passed it - each found
+the NAME registered somewhere. `bridge_import_check` now resolves each registration's module (`imports.set("m", v)`,
+`Struct.install(v)`) and names the module a missing import's name was registered in instead. Proven red on the
+broken page, no false rejection over sixteen cached modules. `verify_imports` still compares names only: fold it
+into the fixed check.
 
 ### VERIFY A ZIMRMATH CHANGE AGAINST SPIR-V IN ~1 SECOND (build nothing else)
 **When a compiler bump breaks shaders, read `src/notes/zig-spirv-compiler-interface.md`
@@ -1233,7 +1276,7 @@ Converted to Zig:
 
 | was | now |
 |---|---|
-| `scripts/zn.sh` | `zig build zn-<stem>` - one step per fast-test root, twelve of them |
+| `scripts/zn.sh` | `zig build test-<stem>` - one step per fast-test root, twelve of them |
 | `scripts/measure.sh` | `tools/measure.zig`, installed by `zig build measure` |
 
 `measure` is INSTALLED to `tools/zig-out/bin` rather than run through a step, because this
@@ -1280,7 +1323,7 @@ contribute from a Mac.
   build steps.
 
 ★★★ **THE DUPLICATE THAT SURFACED BY ACCIDENT.** Adding a step per fast-test root made
-`zig build` REFUSE TO CONFIGURE - "a top-level step with name zn-zimrmath already exists" -
+`zig build` REFUSE TO CONFIGURE - "a top-level step with name test-zimrmath already exists" -
 because `zimrmath.zig` and `zimrnum.zig` were each listed TWICE in `fast_test_roots`.
 `test-fast` had been building and running both of them twice over, for who knows how long. A
 duplicate in a list of strings is invisible; a duplicate in a list of NAMES is a hard error.
@@ -1627,9 +1670,9 @@ half that is `zig build test`; for zimrnum/zimrmath/robot/codecs/physics it is
 ★★ **FOR ZIMRNUM WORK, SKIP THE BUILD GRAPH ENTIRELY.** `zimrnum.zig` imports `std` and
 `zm` and nothing else, so it can be its own test root:
 
-    zig build zn-<stem> -Dgate=false [-Dtest-filter=…]
+    zig build test-<stem> -Dgate=false [-Dtest-filter=…]
 
-There is one per fast-test root - `zn-zimrnum`, `zn-zimrmath`, `zn-robot`, and nine more.
+There is one per fast-test root - `test-zimrnum`, `test-zimrmath`, `test-robot`, and nine more.
 Measured after a real edit to zimrnum: **21 s filtered, 71 s for all of its tests, ~1 s when
 nothing changed**, against `test-fast`'s 71-212 s for all six modules. `-Dgate=false` skips
 the lint/fmt pass that otherwise precedes every compile.
@@ -2875,7 +2918,7 @@ are invisible to it — and it lives in `tier-a-check`, which nothing runs, so e
 the fixture is GENERATED as a comptime `rbt.ModelSpec` literal plus `rbt.Spec(spec)`, so it
 cannot exist without robot.zig, and three robot.zig tests imported it back. They moved into
 `robot_urdf.zig`, which already depends on both — 165 lines, changed only by `rbt.` qualifiers.
-`zn-robot` no longer runs them; `zn-robot_urdf` and `test-fast` do. The tree carries zero
+`test-robot` no longer runs them; `test-robot_urdf` and `test-fast` do. The tree carries zero
 `lint:off import-cycle`.
 
 ★★★ **`test-fast` IS FIVE ARTIFACTS NOW, NOT THIRTEEN.** `src/robot_tests.zig` imports every
@@ -2888,7 +2931,7 @@ robot_control 21, mjcf 17, robot_physics 16, urdf 10, robot_scene 6, robot_urdf 
 
 ★★ **`-Dslow-tests`** runs the retarget diagnostics that used to need a source edit, including
 `WHOLE BODY`, the only test of the shipped `solvePointCloud`:
-`zig build zn-robot_mjcf -Dslow-tests -Dtest-filter="WHOLE BODY"`. Host options only; the file
+`zig build test-robot_mjcf -Dslow-tests -Dtest-filter="WHOLE BODY"`. Host options only; the file
 reads it with `@hasDecl` because it also compiles into wasm.
 
 ★★ **THE RETARGET'S SILENT CLAMPS ARE CHECKS NOW.** `buildPointSamples` folded its capacity

@@ -16,16 +16,20 @@
 //! Self-import note: the absorbed kernel referred to itself as
 //! @import("wz"); inside the monolith those references are local.
 //!
-//! The ONE import is `dom_input.zig`: the table that turns DOM key codes and
-//! mouse buttons into raylib's numbers. This file cannot build for the host,
-//! so nothing in it can be unit-tested; that table can, so it lives apart.
-//! build.zig's `addBridgeSource` declares it - and `types.zig`, which it
-//! reads two enums from - as an input of every bridge compile, because a Run
-//! step's cache never sees an import it was not told about. A new import
-//! needs the same.
+//! Two imports, each kept apart from this file because it can be tested
+//! there, where nothing in this file can (it cannot build for the host):
+//! `dom_input.zig`, the table that turns DOM key codes and mouse buttons into
+//! raylib's numbers, tested natively; and `page_audio.zig`, the page's sound
+//! output, transpiled on its own and tested in Node against stand-ins for the
+//! browser's audio. build.zig's `addBridgeSource` declares both - and
+//! `types.zig`, which `dom_input.zig` reads two enums from - as inputs of every
+//! bridge compile, because a Run step's cache never sees an import it was not
+//! told about. A new import needs the same.
 
 /// DOM key codes and mouse buttons in raylib's numbering (see the header).
 const dom_input = @import("dom_input.zig");
+/// The page's sound output: the renderer worklet, the script processor, the readout's numbers, the panel.
+const page_audio = @import("page_audio.zig");
 
 // Reflection helper. In Zig 0.17.0-dev.813, `@typeInfo(T).@"struct"` exposes field
 // and decl metadata as parallel `.field_names`/`.field_types`/`.decl_names` arrays
@@ -1000,8 +1004,10 @@ const UserFile = struct {
 
 const BridgeGlobals = struct {
     const Boot = struct {
-        stage: u32 = 0, // 0 idle, 1 adapter, 2 device, 3 instantiate, 4 run
+        stage: u32 = 0, // 0 idle, 1 adapter, 2 device, 3 instantiate, 5 the renderer worklet loads, 4 run
         pending_promise: u32 = 0,
+        /// The app's compiled module, kept for the renderer worklet, which runs a second instance of it.
+        app_module: Value = undefined,
         gpu_adapter: Value = undefined,
         gpu_device: Value = undefined,
         gpu_queue: Value = undefined,
@@ -2605,561 +2611,88 @@ const ZimrWgpu = struct {
         return global().get("screen").getNum("height");
     }
 
-    // ---- Sound output: the contract's four audio requests, played by an AudioWorklet ----
+    // ---- Sound output: `page_audio.zig` ----
     //
-    // A page's own code has no audio thread, but the browser runs a small processor of ours on its audio thread: an
-    // AudioWorklet. The engine's mixer queues a block of samples each frame (`queueAudio`); the main thread copies it
-    // out of the module's memory and posts it to the processor, which plays the blocks in order, one 128-frame
-    // render quantum at a time, and silence when none waits. Every 256 frames it plays - and whenever it runs dry -
-    // it posts back how many it played, so the main thread knows how many still wait (`queuedAudioFrames`): those
-    // posted minus those played. Counting the processor's own reports, rather than reading the audio context's clock,
-    // keeps the count exact after an underrun, when the clock runs on while nothing plays.
-    //
-    // The processor's module is loaded from a Blob URL. A page whose origin is opaque - a file opened from disk or
-    // from a phone's downloads, a sandboxed frame - makes `blob:null/...` URLs, which a worklet may not load; the
-    // module then loads from a `data:` URL instead. Should both fail, or the browser have no AudioWorklet, the blocks
-    // play through a ScriptProcessorNode: deprecated, and run on the main thread, but available in every origin - its
-    // callback copies from the same queue, by the same function (`playBlocks`), and counts what it played itself.
-    //
-    // A sound started this frame need not wait behind what is queued: `mixIntoQueued` adds its first frames onto the
-    // queued ones, aligned to the queue's end, by the same function wherever the queue lives (`mixIntoQueue`) - in
-    // the worklet, by a message, which arrives after every block posted before it.
-    //
-    // Until the output can play - its module loads asynchronously, and browsers keep a page's audio suspended until
-    // the person first clicks, taps or presses a key - blocks are held on the main thread and drained at the real rate,
-    // as
-    // if played to nowhere. The mixer therefore sees a steady queue, not a dry one (which it would count as underruns
-    // and answer with a wider margin), and when the sound begins, at most one margin of held sound plays: a sound
-    // never plays late. The first pointer press or key press anywhere resumes the context.
-    //
-    // The program below is JavaScript, run once on the main thread (`audioOutput`), keeping its state on
-    // `globalThis.__zimrAudioOutput`. The processor's source is a function within it, `processorMain`, made into the
-    // worklet module's text by `toString()` - with `playBlocks`'s text as its argument - so that it is written as
-    // ordinary code, never quoted, and never run on the main thread.
-    const audio_output_program: []const u8 =
-        \\var output = globalThis.__zimrAudioOutput;
-        \\if (output) {
-        \\    return output;
-        \\}
-        \\// Copies queued blocks into one callback's channels, in order, then silence after the last; returns
-        \\// how many frames it copied. `queue` holds the blocks and how far into the first one playing has reached.
-        \\var playBlocks = function (queue, channelOutputs, channelCount) {
-        \\    var callbackFrameCount = channelOutputs[0].length;
-        \\    var framesWritten = 0;
-        \\    while (framesWritten < callbackFrameCount && queue.blocks.length > 0) {
-        \\        var block = queue.blocks[0];
-        \\        var blockFrameCount = block.length / channelCount;
-        \\        var framesLeftInBlock = blockFrameCount - queue.framesTakenFromFirstBlock;
-        \\        var framesToCopy = Math.min(framesLeftInBlock, callbackFrameCount - framesWritten);
-        \\        for (var frame = 0; frame < framesToCopy; frame++) {
-        \\            var firstSample = (queue.framesTakenFromFirstBlock + frame) * channelCount;
-        \\            for (var channel = 0; channel < channelOutputs.length; channel++) {
-        \\                var sourceChannel = Math.min(channel, channelCount - 1);
-        \\                channelOutputs[channel][framesWritten + frame] = block[firstSample + sourceChannel];
-        \\            }
-        \\        }
-        \\        framesWritten += framesToCopy;
-        \\        queue.framesTakenFromFirstBlock += framesToCopy;
-        \\        if (queue.framesTakenFromFirstBlock >= blockFrameCount) {
-        \\            queue.blocks.shift();
-        \\            queue.framesTakenFromFirstBlock = 0;
-        \\        }
-        \\    }
-        \\    for (var channelIndex = 0; channelIndex < channelOutputs.length; channelIndex++) {
-        \\        channelOutputs[channelIndex].fill(0, framesWritten);
-        \\    }
-        \\    return framesWritten;
-        \\};
-        \\// Adds `samples` onto the frames of `queue` not yet played, aligned to its end - the last sample onto the
-        \\// last one queued, and back from there - each sum held to -1..1; samples reaching back past the first
-        \\// unplayed frame, onto frames already played, are dropped. Mixing is addition, so a sound started now can
-        \\// begin inside the queue.
-        \\var mixIntoQueue = function (queue, samples, channelCount) {
-        \\    var sampleIndex = samples.length;
-        \\    for (var blockIndex = queue.blocks.length - 1; blockIndex >= 0 && sampleIndex > 0; blockIndex--) {
-        \\        var block = queue.blocks[blockIndex];
-        \\        var firstUnplayedSample = blockIndex === 0 ? queue.framesTakenFromFirstBlock * channelCount : 0;
-        \\        var blockSampleIndex = block.length;
-        \\        while (blockSampleIndex > firstUnplayedSample && sampleIndex > 0) {
-        \\            blockSampleIndex -= 1;
-        \\            sampleIndex -= 1;
-        \\            var sum = block[blockSampleIndex] + samples[sampleIndex];
-        \\            block[blockSampleIndex] = sum > 1 ? 1 : (sum < -1 ? -1 : sum);
-        \\        }
-        \\    }
-        \\};
-        \\// The processor, run in the worklet's scope: plays the blocks posted to it, and reports how many it played.
-        \\var processorMain = function (playBlocks, mixIntoQueue) {
-        \\    class ZimrOutputProcessor extends AudioWorkletProcessor {
-        \\        constructor(options) {
-        \\            super();
-        \\            this.channelCount = options.processorOptions.channels;
-        \\            this.queue = { blocks: [], framesTakenFromFirstBlock: 0 };
-        \\            this.framesPlayedUnreported = 0;
-        \\            // Frames of silence played for want of blocks once playing began, and how many times it ran
-        \\            // dry: each a gap heard. Reported with the frames played.
-        \\            this.hasPlayedAny = false;
-        \\            this.wasDry = false;
-        \\            this.dryFramesUnreported = 0;
-        \\            this.dryEventsUnreported = 0;
-        \\            this.port.onmessage = (event) => {
-        \\                if (event.data instanceof Float32Array) {
-        \\                    this.queue.blocks.push(event.data);
-        \\                } else {
-        \\                    mixIntoQueue(this.queue, event.data.mixIntoQueued, this.channelCount);
-        \\                }
-        \\            };
-        \\        }
-        \\        process(inputs, outputs) {
-        \\            var channelOutputs = outputs[0];
-        \\            var framesWritten = playBlocks(this.queue, channelOutputs, this.channelCount);
-        \\            var dryFrames = channelOutputs[0].length - framesWritten;
-        \\            if (framesWritten > 0) {
-        \\                this.hasPlayedAny = true;
-        \\            }
-        \\            if (dryFrames > 0 && this.hasPlayedAny) {
-        \\                this.dryFramesUnreported += dryFrames;
-        \\                if (!this.wasDry) {
-        \\                    this.dryEventsUnreported += 1;
-        \\                }
-        \\            }
-        \\            this.wasDry = dryFrames > 0;
-        \\            this.framesPlayedUnreported += framesWritten;
-        \\            var hasSomethingToReport = this.framesPlayedUnreported > 0 || this.dryFramesUnreported > 0;
-        \\            // Reported every 1 024 frames, and when it runs dry: each report says the context's frame it
-        \\            // describes, so that the main thread counts the frames since by the context's clock. Seldom
-        \\            // reports leave this thread little garbage to collect, on a thread that must never wait.
-        \\            if (this.framesPlayedUnreported >= 1024 || (dryFrames > 0 && hasSomethingToReport)) {
-        \\                var frameAtQuantumStart = typeof currentFrame === 'number' ? currentFrame : 0;
-        \\                this.port.postMessage({
-        \\                    played: this.framesPlayedUnreported,
-        \\                    dryFrames: this.dryFramesUnreported,
-        \\                    dryEvents: this.dryEventsUnreported,
-        \\                    atFrame: frameAtQuantumStart + channelOutputs[0].length,
-        \\                });
-        \\                this.framesPlayedUnreported = 0;
-        \\                this.dryFramesUnreported = 0;
-        \\                this.dryEventsUnreported = 0;
-        \\            }
-        \\            return true;
-        \\        }
-        \\    }
-        \\    registerProcessor('zimr-output', ZimrOutputProcessor);
-        \\};
-        \\output = {
-        \\    context: null,
-        \\    node: null,
-        \\    // 'worklet' or 'script processor': how the blocks reach the speaker.
-        \\    sink: '',
-        \\    sampleRate: 0,
-        \\    channelCount: 2,
-        \\    // Frames posted to the sink, and frames it played as last reported: their difference waits in it. The
-        \\    // worklet's reports say the context frame they describe (`estimateFramesPlayed`); -1 before the first.
-        \\    framesPosted: 0,
-        \\    framesPlayed: 0,
-        \\    reportedAtContextFrame: -1,
-        \\    // Silence the sink played for want of blocks, once playing, and how many times it ran dry - each a gap
-        \\    // heard; the mixer counts only the dry spells a report shows it.
-        \\    sinkDryFrames: 0,
-        \\    sinkDryEvents: 0,
-        \\    sinkHasPlayed: false,
-        \\    sinkWasDry: false,
-        \\    // The diagnostics panel at the top of the page, when shown (`showDiagnostics`); the mixer's latest state,
-        \\    // as it reports it each frame (`noteMixer`); and the newest warnings.
-        \\    diagnosticsPanel: null,
-        \\    mixerReport: null,
-        \\    recentWarnings: [],
-        \\    // The script processor's queue, on the main thread; the worklet keeps its own.
-        \\    mainThreadQueue: { blocks: [], framesTakenFromFirstBlock: 0 },
-        \\    // Blocks held while the output cannot play, drained at the real rate from heldDrainedAtMs on: a queue
-        \\    // of the same shape as the sinks', so that `mixIntoQueue` works on it too.
-        \\    heldQueue: { blocks: [], framesTakenFromFirstBlock: 0 },
-        \\    heldFrameCount: 0,
-        \\    heldDrainedAtMs: 0,
-        \\    isListeningForGesture: false,
-        \\};
-        \\output.canPlay = function () {
-        \\    return output.node !== null && output.context.state === 'running';
-        \\};
-        \\// Drops the held frames that would have played since the last drain - the oldest first.
-        \\output.drainHeld = function () {
-        \\    var nowMs = performance.now();
-        \\    var framesDue = Math.floor((nowMs - output.heldDrainedAtMs) * output.sampleRate / 1000);
-        \\    if (framesDue <= 0) {
-        \\        return;
-        \\    }
-        \\    output.heldDrainedAtMs += framesDue * 1000 / output.sampleRate;
-        \\    var held = output.heldQueue;
-        \\    while (framesDue > 0 && held.blocks.length > 0) {
-        \\        var blockFrameCount = held.blocks[0].length / output.channelCount;
-        \\        var framesLeftInBlock = blockFrameCount - held.framesTakenFromFirstBlock;
-        \\        var framesDrained = Math.min(framesLeftInBlock, framesDue);
-        \\        held.framesTakenFromFirstBlock += framesDrained;
-        \\        output.heldFrameCount -= framesDrained;
-        \\        framesDue -= framesDrained;
-        \\        if (framesDrained === framesLeftInBlock) {
-        \\            held.blocks.shift();
-        \\            held.framesTakenFromFirstBlock = 0;
-        \\        }
-        \\    }
-        \\};
-        \\// Hands a block to the sink: posted to the worklet, its buffer transferred rather than copied, or
-        \\// queued for the script processor. Its frames are counted first: a transferred buffer is detached on this
-        \\// side, and the block's length reads 0 once posted.
-        \\output.post = function (block) {
-        \\    var blockFrameCount = block.length / output.channelCount;
-        \\    if (output.sink === 'worklet') {
-        \\        output.node.port.postMessage(block, [block.buffer]);
-        \\    } else {
-        \\        output.mainThreadQueue.blocks.push(block);
-        \\    }
-        \\    output.framesPosted += blockFrameCount;
-        \\};
-        \\// Once the output can play: what is still held goes to the sink, without its drained part.
-        \\output.postHeld = function () {
-        \\    var held = output.heldQueue;
-        \\    while (held.blocks.length > 0) {
-        \\        var block = held.blocks.shift();
-        \\        var drainedSampleCount = held.framesTakenFromFirstBlock * output.channelCount;
-        \\        held.framesTakenFromFirstBlock = 0;
-        \\        output.post(drainedSampleCount > 0 ? block.slice(drainedSampleCount) : block);
-        \\    }
-        \\    output.heldFrameCount = 0;
-        \\};
-        \\output.useWorklet = function (context, channelCount) {
-        \\    var node = new AudioWorkletNode(context, 'zimr-output', {
-        \\        numberOfInputs: 0,
-        \\        outputChannelCount: [channelCount],
-        \\        processorOptions: { channels: channelCount },
-        \\    });
-        \\    node.port.onmessage = function (event) {
-        \\        output.framesPlayed += event.data.played;
-        \\        output.sinkDryFrames += event.data.dryFrames;
-        \\        output.sinkDryEvents += event.data.dryEvents;
-        \\        output.reportedAtContextFrame = event.data.atFrame;
-        \\    };
-        \\    node.connect(context.destination);
-        \\    output.node = node;
-        \\    output.sink = 'worklet';
-        \\};
-        \\// The fallback: 2 048 frames per callback, about 43 ms at 48 kHz - the main thread answers later than the
-        \\// audio thread, so its callbacks ask for more at a time.
-        \\output.useScriptProcessor = function (context, channelCount) {
-        \\    if (!context.createScriptProcessor) {
-        \\        console.warn('zimr: this browser has neither an AudioWorklet nor a script processor here; ' +
-        \\            'the sound is not played');
-        \\        return;
-        \\    }
-        \\    var node = context.createScriptProcessor(2048, 0, channelCount);
-        \\    node.onaudioprocess = function (event) {
-        \\        var channelOutputs = [];
-        \\        for (var channel = 0; channel < event.outputBuffer.numberOfChannels; channel++) {
-        \\            channelOutputs.push(event.outputBuffer.getChannelData(channel));
-        \\        }
-        \\        var framesWritten = playBlocks(output.mainThreadQueue, channelOutputs, output.channelCount);
-        \\        output.framesPlayed += framesWritten;
-        \\        output.noteSinkPlayed(framesWritten, channelOutputs[0].length);
-        \\    };
-        \\    node.connect(context.destination);
-        \\    output.node = node;
-        \\    output.sink = 'script processor';
-        \\};
-        \\// The script processor's count of its dry spells, as the worklet keeps its own.
-        \\output.noteSinkPlayed = function (framesWritten, framesWanted) {
-        \\    var dryFrames = framesWanted - framesWritten;
-        \\    if (framesWritten > 0) {
-        \\        output.sinkHasPlayed = true;
-        \\    }
-        \\    if (dryFrames > 0 && output.sinkHasPlayed) {
-        \\        output.sinkDryFrames += dryFrames;
-        \\        if (!output.sinkWasDry) {
-        \\            output.sinkDryEvents += 1;
-        \\        }
-        \\    }
-        \\    output.sinkWasDry = dryFrames > 0;
-        \\};
-        \\// A panel at the top of the page - where neither a viewer's chrome nor the page's log strip at the bottom
-        \\// covers it - with the sound's state, four times a second: the path to the speaker, the context, what
-        \\// waits, how often the sink ran dry, the mixer's margin, and the newest warnings.
-        \\output.showDiagnostics = function () {
-        \\    if (output.diagnosticsPanel || typeof document === 'undefined' || !document.createElement) {
-        \\        return;
-        \\    }
-        \\    var panel = document.createElement('pre');
-        \\    panel.style.cssText = 'position:fixed;left:0;top:0;width:100%;box-sizing:border-box;margin:0;' +
-        \\        'padding:4px 8px;background:rgba(0,0,0,0.78);color:#cfe;font:11px/1.35 monospace;' +
-        \\        'white-space:pre-wrap;z-index:99998;pointer-events:none';
-        \\    (document.body || document.documentElement).appendChild(panel);
-        \\    output.diagnosticsPanel = panel;
-        \\    ['warn', 'error'].forEach(function (method) {
-        \\        var original = console[method].bind(console);
-        \\        console[method] = function () {
-        \\            var text = Array.prototype.join.call(arguments, ' ');
-        \\            output.recentWarnings.push(text.slice(0, 200));
-        \\            if (output.recentWarnings.length > 3) {
-        \\                output.recentWarnings.shift();
-        \\            }
-        \\            return original.apply(console, arguments);
-        \\        };
-        \\    });
-        \\    panel.textContent = output.describe();
-        \\    setInterval(function () {
-        \\        panel.textContent = output.describe();
-        \\    }, 250);
-        \\};
-        \\output.noteMixer = function (marginFrames, underrunCount, voiceCount) {
-        \\    output.mixerReport = { marginFrames: marginFrames, underrunCount: underrunCount, voiceCount: voiceCount };
-        \\};
-        \\output.describe = function () {
-        \\    var context = output.context;
-        \\    var rate = output.sampleRate || 48000;
-        \\    var inMilliseconds = function (frames) {
-        \\        return (frames * 1000 / rate).toFixed(0) + ' ms';
-        \\    };
-        \\    var latency = function (seconds) {
-        \\        return typeof seconds === 'number' ? (seconds * 1000).toFixed(0) + ' ms' : '-';
-        \\    };
-        \\    var path = output.sink === '' ? 'no sink' : output.sink;
-        \\    if (!output.canPlay()) {
-        \\        path += ', held (' + (context ? context.state : 'no context') + ')';
-        \\    }
-        \\    var lines = [
-        \\        'audio: ' + path + ' | ' + (context ? context.sampleRate + ' Hz' : '-') + ' | latency ' +
-        \\            latency(context && context.baseLatency) + ' + ' + latency(context && context.outputLatency),
-        \\        'sink: queued ' + inMilliseconds(output.queuedFrames()) + ' | played ' +
-        \\            (output.framesPlayed / rate).toFixed(1) + ' s | ran dry ' + output.sinkDryEvents + 'x, ' +
-        \\            inMilliseconds(output.sinkDryFrames),
-        \\    ];
-        \\    var mixer = output.mixerReport;
-        \\    if (mixer) {
-        \\        lines.push('mixer: margin ' + inMilliseconds(mixer.marginFrames) + ' | underruns ' +
-        \\            mixer.underrunCount + ' | voices ' + mixer.voiceCount);
-        \\    }
-        \\    for (var index = 0; index < output.recentWarnings.length; index++) {
-        \\        lines.push(output.recentWarnings[index]);
-        \\    }
-        \\    return lines.join('\n');
-        \\};
-        \\output.start = function (sampleRate, channelCount) {
-        \\    output.stop();
-        \\    var AudioContextClass = globalThis.AudioContext || globalThis.webkitAudioContext;
-        \\    if (!AudioContextClass) {
-        \\        console.warn('zimr: this browser has no Web Audio; the sound is not played');
-        \\        return 0;
-        \\    }
-        \\    var context;
-        \\    try {
-        \\        context = new AudioContextClass({ sampleRate: sampleRate });
-        \\    } catch (error) {
-        \\        context = new AudioContextClass();
-        \\    }
-        \\    output.context = context;
-        \\    output.sampleRate = context.sampleRate;
-        \\    output.channelCount = channelCount;
-        \\    output.heldDrainedAtMs = performance.now();
-        \\    var moduleSource = '(' + processorMain.toString() + ')(' + playBlocks.toString() + ', ' +
-        \\        mixIntoQueue.toString() + ');';
-        \\    var blobUrl = URL.createObjectURL(new Blob([moduleSource], { type: 'application/javascript' }));
-        \\    var dataUrl = 'data:application/javascript,' + encodeURIComponent(moduleSource);
-        \\    var loadModule = function (url) {
-        \\        if (!context.audioWorklet || !globalThis.AudioWorkletNode) {
-        \\            return Promise.reject(new Error('this browser has no AudioWorklet here'));
-        \\        }
-        \\        return context.audioWorklet.addModule(url);
-        \\    };
-        \\    loadModule(blobUrl).catch(function () {
-        \\        return loadModule(dataUrl);
-        \\    }).then(function () {
-        \\        URL.revokeObjectURL(blobUrl);
-        \\        if (output.context === context) {
-        \\            output.useWorklet(context, channelCount);
-        \\        }
-        \\    }).catch(function (error) {
-        \\        URL.revokeObjectURL(blobUrl);
-        \\        if (output.context !== context) {
-        \\            return;
-        \\        }
-        \\        console.warn('zimr: the sound plays through a script processor, on the main thread - ' +
-        \\            'the audio worklet could not load: ' + error.message);
-        \\        output.useScriptProcessor(context, channelCount);
-        \\    });
-        \\    if (!output.isListeningForGesture) {
-        \\        output.isListeningForGesture = true;
-        \\        var resumeOnGesture = function () {
-        \\            if (output.context !== null && output.context.state !== 'running') {
-        \\                output.context.resume().catch(function () {});
-        \\            }
-        \\        };
-        \\        // The events that grant a page user activation, which resuming audio needs: a key, a mouse button
-        \\        // going down - and for touch and pen, the press ending (`pointerup`, `touchend`), not starting.
-        \\        var activationEvents = ['keydown', 'pointerdown', 'pointerup', 'touchend', 'click'];
-        \\        for (var eventIndex = 0; eventIndex < activationEvents.length; eventIndex++) {
-        \\            document.addEventListener(activationEvents[eventIndex], resumeOnGesture, true);
-        \\        }
-        \\    }
-        \\    return output.sampleRate;
-        \\};
-        \\output.queue = function (block) {
-        \\    if (output.context === null) {
-        \\        return;
-        \\    }
-        \\    if (output.canPlay()) {
-        \\        output.postHeld();
-        \\        output.post(block);
-        \\        return;
-        \\    }
-        \\    if (output.heldQueue.blocks.length === 0) {
-        \\        output.heldDrainedAtMs = performance.now();
-        \\    } else {
-        \\        output.drainHeld();
-        \\    }
-        \\    output.heldQueue.blocks.push(block);
-        \\    output.heldFrameCount += block.length / output.channelCount;
-        \\};
-        \\// The frames the sink has played by now. The worklet's reports arrive late - after a stall on this thread,
-        \\// several wait unread, and the next frame may run before them - so each report says the context frame it
-        \\// describes, and the frames since are counted by the context's own clock, which runs on whatever this
-        \\// thread does: the worklet plays one frame for each the context renders, while it has any. Run dry, the
-        \\// count passes what was posted, and the queue reads empty, as it is. A count too high only makes the next
-        \\// top-up larger and a new sound start later; a stale one, too low, would leave the queue short and start a
-        \\// sound on frames already played. The script processor's count needs none of this: it is of frames
-        \\// handed to the browser, which are out of reach the moment they are counted.
-        \\output.estimateFramesPlayed = function () {
-        \\    var context = output.context;
-        \\    var hasClock = context !== null && typeof context.currentTime === 'number';
-        \\    if (output.sink !== 'worklet' || output.reportedAtContextFrame < 0 || !hasClock) {
-        \\        return output.framesPlayed;
-        \\    }
-        \\    var contextFrame = Math.round(context.currentTime * output.sampleRate);
-        \\    return output.framesPlayed + Math.max(0, contextFrame - output.reportedAtContextFrame);
-        \\};
-        \\output.queuedFrames = function () {
-        \\    if (output.context === null) {
-        \\        return 0;
-        \\    }
-        \\    if (output.canPlay()) {
-        \\        output.postHeld();
-        \\        return Math.max(0, output.framesPosted - output.estimateFramesPlayed());
-        \\    }
-        \\    if (output.heldQueue.blocks.length > 0) {
-        \\        output.drainHeld();
-        \\    }
-        \\    return output.heldFrameCount;
-        \\};
-        \\// Adds samples onto the frames queued and not yet played, aligned to the queue's end (`mixIntoQueue`): in
-        \\// the worklet, by a message it applies on the audio thread - messages arrive in order, so the queue it sees
-        \\// ends where this one's did - or on this thread, for the script processor and for blocks still held.
-        \\output.mixIntoQueued = function (samples) {
-        \\    if (output.context === null) {
-        \\        return;
-        \\    }
-        \\    if (output.canPlay()) {
-        \\        output.postHeld();
-        \\        if (output.sink === 'worklet') {
-        \\            output.node.port.postMessage({ mixIntoQueued: samples }, [samples.buffer]);
-        \\        } else {
-        \\            mixIntoQueue(output.mainThreadQueue, samples, output.channelCount);
-        \\        }
-        \\        return;
-        \\    }
-        \\    if (output.heldQueue.blocks.length > 0) {
-        \\        output.drainHeld();
-        \\    }
-        \\    mixIntoQueue(output.heldQueue, samples, output.channelCount);
-        \\};
-        \\output.stop = function () {
-        \\    if (output.node !== null) {
-        \\        if (output.sink === 'worklet') {
-        \\            output.node.port.onmessage = null;
-        \\        } else {
-        \\            output.node.onaudioprocess = null;
-        \\        }
-        \\        output.node.disconnect();
-        \\    }
-        \\    if (output.context !== null) {
-        \\        output.context.close().catch(function () {});
-        \\    }
-        \\    output.context = null;
-        \\    output.node = null;
-        \\    output.sink = '';
-        \\    output.framesPosted = 0;
-        \\    output.framesPlayed = 0;
-        \\    output.reportedAtContextFrame = -1;
-        \\    output.mainThreadQueue = { blocks: [], framesTakenFromFirstBlock: 0 };
-        \\    output.heldQueue = { blocks: [], framesTakenFromFirstBlock: 0 };
-        \\    output.heldFrameCount = 0;
-        \\};
-        \\globalThis.__zimrAudioOutput = output;
-        \\return output;
-    ;
+    // The page's side of the mixer's output lives in `page_audio.zig`: the renderer worklet loaded at boot (`advance`,
+    // stages 3 and 5), its node and what crosses its port, the script processor where no worklet loads, the readout's
+    // numbers, the diagnostics panel. These are the `dom` imports the app's module calls for it: each hands page audio
+    // the numbers the module passed - addresses in the module's memory, counts, a rate.
 
-    /// The page's sound output (`audio_output_program`), made on first use.
-    fn audioOutput() Value {
-        const existing_output: Value = global().get("__zimrAudioOutput");
-        if (existing_output.truthy()) {
-            return existing_output;
-        }
-        const make_output: Value = global().get("Function").new(.{str(audio_output_program)});
-        return make_output.call("call", .{global()});
+    /// Starts the renderer worklet's node, when its module loaded at boot: the context's rate, or 0 when the mixer
+    /// must pull through the script processor instead (`page_audio.startForwarding`). The rate asked for is the one
+    /// the context was made at, at boot.
+    fn jsAudioForwardStart(sample_rate: f64, channel_count: f64) f64 {
+        _ = sample_rate;
+        return page_audio.startForwarding(@trunc(channel_count));
     }
 
-    /// Opens the output at `sample_rate` frames a second and `channel_count` channels; returns the rate the audio
-    /// context took - the one asked for, which browsers resample from - or 0 without an AudioWorklet.
-    fn jsAudioOutputStart(sample_rate: f64, channel_count: f64) f64 {
-        const granted_rate: Value = audioOutput().call("start", .{ num(sample_rate), num(channel_count) });
-        return granted_rate.to(f64);
+    /// Starts the output pulled on the main thread: a script processor asking the app's renderer for each buffer
+    /// (`page_audio.startPulled`). The context's rate, or 0.
+    fn jsAudioOutputStartPulled(sample_rate: f64, channel_count: f64) f64 {
+        return page_audio.startPulled(sample_rate, @trunc(channel_count));
     }
 
-    /// Queues `sample_count` interleaved samples at `samples_address` in the module's memory: copied out (`slice`), so
-    /// that the mixer may reuse its block at once, and posted to the processor.
-    fn jsAudioOutputQueue(samples_address: f64, sample_count: f64) void {
-        const module_memory: Value = g.boot.module_exports.get("memory").get("buffer");
-        const float32_array_class: Value = global().get("Float32Array");
-        const samples_view: Value = float32_array_class.new(.{
-            module_memory,
-            num(samples_address),
-            num(sample_count),
-        });
-        const samples_copy: Value = samples_view.call("slice", .{});
-        _ = audioOutput().call("queue", .{samples_copy});
+    /// Posts a frame's commands - `byte_count` bytes at `bytes_address` in the module's memory - to the renderer
+    /// worklet.
+    fn jsAudioForwardCommand(bytes_address: f64, byte_count: f64) void {
+        page_audio.forwardCommandBytes(@trunc(bytes_address), @trunc(byte_count));
     }
 
-    /// Adds `sample_count` interleaved samples at `samples_address` onto the frames queued and not yet played, aligned
-    /// to the queue's end: copied out, as for `jsAudioOutputQueue`, then handed to the program's `mixIntoQueued`.
-    fn jsAudioOutputMixIntoQueued(samples_address: f64, sample_count: f64) void {
-        const module_memory: Value = g.boot.module_exports.get("memory").get("buffer");
-        const float32_array_class: Value = global().get("Float32Array");
-        const samples_view: Value = float32_array_class.new(.{
-            module_memory,
-            num(samples_address),
-            num(sample_count),
-        });
-        const samples_copy: Value = samples_view.call("slice", .{});
-        _ = audioOutput().call("mixIntoQueued", .{samples_copy});
-    }
-
-    /// Frames queued and not yet played.
-    fn jsAudioOutputQueuedFrames() f64 {
-        return audioOutput().call("queuedFrames", .{}).to(f64);
-    }
-
-    /// Shows the sound's diagnostics panel at the top of the page (`showDiagnostics` in the output's program).
-    fn jsAudioOutputShowDiagnostics() void {
-        _ = audioOutput().call("showDiagnostics", .{});
-    }
-
-    /// Hands the diagnostics panel the mixer's margin, underrun count and voice count, for its next refresh.
-    fn jsAudioOutputNoteMixer(
-        margin_frames: f64,
-        underrun_count: f64,
-        voice_count: f64,
+    /// Posts samples to the renderer worklet, to register under `samples_id`.
+    fn jsAudioForwardSamples(
+        samples_id: f64,
+        samples_address: f64,
+        sample_count: f64,
     ) void {
-        _ = audioOutput().call("noteMixer", .{ num(margin_frames), num(underrun_count), num(voice_count) });
+        page_audio.forwardSamples(@trunc(samples_id), @trunc(samples_address), @trunc(sample_count));
     }
 
-    /// Closes the output, dropping what waits.
+    /// Posts a key's event to the renderer worklet: its key, 1 for down or 0 for up, its velocity.
+    fn jsAudioForwardNote(
+        key: f64,
+        is_down: f64,
+        velocity: f64,
+    ) void {
+        page_audio.forwardNote(@trunc(key), @trunc(is_down), velocity);
+    }
+
+    /// Copies the notices the renderer worklet sent back into the module's memory; returns the bytes copied.
+    fn jsAudioTakeNoticeBytes(
+        target_address: f64,
+        capacity: f64,
+        notice_byte_count: f64,
+    ) f64 {
+        const copied_byte_count: u32 = page_audio.takeNoticeBytes(
+            @trunc(target_address),
+            @trunc(capacity),
+            @trunc(notice_byte_count),
+        );
+        return @floatFromInt(copied_byte_count);
+    }
+
+    /// What lies past the output, in milliseconds (`page_audio.outputLatencyMilliseconds`).
+    fn jsAudioOutputLatencyMs() f64 {
+        return page_audio.outputLatencyMilliseconds();
+    }
+
+    /// The path playing, as a code (`page_audio.pathCode`).
+    fn jsAudioOutputUsesWorklet() f64 {
+        return @floatFromInt(page_audio.pathCode());
+    }
+
+    /// Shows the sound's diagnostics panel at the top of the page (`page_audio.showDiagnostics`).
+    fn jsAudioOutputShowDiagnostics() void {
+        page_audio.showDiagnostics();
+    }
+
+    /// Hands the diagnostics panel the mixer's count of playing voices.
+    fn jsAudioOutputNoteMixer(voice_count: f64) void {
+        page_audio.noteMixer(@trunc(voice_count));
+    }
+
+    /// Stops the output playing, whichever path (`page_audio.stop`).
     fn jsAudioOutputStop() void {
-        _ = audioOutput().call("stop", .{});
+        page_audio.stop();
     }
 
     /// Reads the page's gamepads, `navigator.getGamepads()`, or null when the page may not. A browser without the
@@ -7676,8 +7209,15 @@ const ZimrBoot = struct {
     /// every call until stage 0, which means "stopped" (idle or a fatal error).
     fn tick(_: Handle) void {
         switch (g.boot.stage) {
-            // Booting: an adapter (1), device (2), or instantiate (3) promise is
-            // pending. Poll it; advance on success, report + halt on rejection.
+            // Waiting for the renderer worklet's module to load, or to fail to (`page_audio`): advance once it has
+            // settled - the app then starts, its mixer knowing which path it takes.
+            5 => {
+                if (page_audio.isRendererSettled()) {
+                    advance(.{ .h = 0 });
+                }
+            },
+            // Booting: an adapter (1), device (2) or instantiate (3) promise is pending. Poll it; advance on
+            // success, report + halt on rejection.
             1, 2, 3 => {
                 const promise_resolved: u32 = 1;
                 const promise_rejected: u32 = 2;
@@ -7865,12 +7405,16 @@ const ZimrBoot = struct {
                     dom.set("js_screen_height", funcNum(&ZimrWgpu.jsScreenHeight));
                     dom.set("js_gamepad_state", funcNum(&ZimrWgpu.jsGamepadState));
                     dom.set("js_gamepad_vibrate", funcNum(&ZimrWgpu.jsGamepadVibrate));
-                    dom.set("js_audio_output_start", funcNum(&ZimrWgpu.jsAudioOutputStart));
-                    dom.set("js_audio_output_queue", funcNum(&ZimrWgpu.jsAudioOutputQueue));
-                    dom.set("js_audio_output_queued_frames", funcNum(&ZimrWgpu.jsAudioOutputQueuedFrames));
-                    dom.set("js_audio_output_mix_into_queued", funcNum(&ZimrWgpu.jsAudioOutputMixIntoQueued));
                     dom.set("js_audio_output_stop", funcNum(&ZimrWgpu.jsAudioOutputStop));
                     dom.set("js_audio_output_show_diagnostics", funcNum(&ZimrWgpu.jsAudioOutputShowDiagnostics));
+                    dom.set("js_audio_output_latency_ms", funcNum(&ZimrWgpu.jsAudioOutputLatencyMs));
+                    dom.set("js_audio_output_uses_worklet", funcNum(&ZimrWgpu.jsAudioOutputUsesWorklet));
+                    dom.set("js_audio_forward_start", funcNum(&ZimrWgpu.jsAudioForwardStart));
+                    dom.set("js_audio_output_start_pulled", funcNum(&ZimrWgpu.jsAudioOutputStartPulled));
+                    dom.set("js_audio_forward_command", funcNum(&ZimrWgpu.jsAudioForwardCommand));
+                    dom.set("js_audio_forward_samples", funcNum(&ZimrWgpu.jsAudioForwardSamples));
+                    dom.set("js_audio_forward_note", funcNum(&ZimrWgpu.jsAudioForwardNote));
+                    dom.set("js_audio_take_notice_bytes", funcNum(&ZimrWgpu.jsAudioTakeNoticeBytes));
                     dom.set("js_audio_output_note_mixer", funcNum(&ZimrWgpu.jsAudioOutputNoteMixer));
                     dom.set("js_tz_offset_min", funcNum(&ZimrWgpu.jsTzOffsetMin));
                     dom.set("js_set_cursor_style", funcNum(&ZimrWgpu.jsSetCursorStyle));
@@ -8001,13 +7545,21 @@ const ZimrBoot = struct {
                 g.boot.pending_promise = js_promise_register(instantiate_promise.h);
                 g.boot.stage = 3;
             },
-            // Stage 3 -> 4: the module instantiated. Pull its exports, start it
-            // under whichever contract it implements, then enter the run loop.
+            // Stage 3 -> 5: the module instantiated. Keep its exports, and the compiled module for the renderer
+            // worklet, whose program loads before the app starts: the app's mixer decides at its start whether it
+            // forwards there. Page audio starts the loading (`page_audio.prepareRenderer`) and settles it
+            // asynchronously - at once, for an app whose module plays no sound - and stage 5 waits for it.
             3 => {
-                // `v` is { module, instance }; we only need the instance's exports.
                 const instance: Value = v.get("instance");
                 g.boot.module_exports = instance.get("exports");
-
+                g.boot.app_module = v.get("module");
+                const renderer_program: Value = global().get("ZIMR_AUDIO_WORKLET_JS");
+                page_audio.setAppExports(g.boot.module_exports.h);
+                page_audio.prepareRenderer(renderer_program.h, g.boot.app_module.h);
+                g.boot.stage = 5;
+            },
+            // Stage 5 -> 4: the renderer worklet loaded, or will not: start the app.
+            5 => {
                 // Two app contracts, distinguished by which entry point is exported.
                 const page_main: Value = g.boot.module_exports.get("zimr_page_main");
                 if (page_main.isNull()) {

@@ -36,7 +36,6 @@ const sinRad = zm.sinRad;
 const Vec = zm.Vec;
 const Vec3 = zm.Vec3;
 const vec = zm.vec;
-const bufPrint = std.fmt.bufPrint;
 const Io = std.Io;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const sliceAsBytes = std.mem.sliceAsBytes;
@@ -482,14 +481,12 @@ fn update(f: *z.Frame, s: *State) void {
         });
 
         // THE number. Not "how fast" - "did it cost you the frame".
-        var buf: [96]u8 = undefined;
         const bad: bool = s.worst_gap_ms > 34.0;
-        const txt: []const u8 = bufPrint(
-            &buf,
+        u.textColored(
+            if (bad) z.colors.red_400 else z.colors.emerald_400,
             "worst frame gap {d:.0} ms   render {d:.0} ms   [{s}]",
             .{ s.worst_gap_ms, s.render_ms, @tagName(s.ran) },
-        ) catch "?";
-        u.textColored(if (bad) z.colors.red_400 else z.colors.emerald_400, "{s}", .{txt});
+        );
 
         // The diagnostics that would otherwise be invisible: what we asked for, what came
         // back, and what broke. An example that logs its failures to a console nobody can

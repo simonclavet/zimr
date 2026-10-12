@@ -12,7 +12,6 @@
 // Demonstrates Phase B3b of the imgui-parity arc.
 
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
@@ -104,9 +103,8 @@ fn update(f: *z.Frame, s: *State) void {
 
         // ---- 2. Color theme combo with a swatch row -------------------
         u.text("Color theme", .{});
-        var theme_label_buf: [16]u8 = undefined;
-        const theme_label: []const u8 = bufPrint(&theme_label_buf, "theme {d}", .{s.theme_index}) catch "?";
-        if (u.beginCombo("##theme", theme_label, .{ .width = 280 })) {
+        const theme_label: z.Str(16) = .print("theme {d}", .{s.theme_index});
+        if (u.beginCombo("##theme", theme_label.slice(), .{ .width = 280 })) {
             defer u.endCombo();
             // Six themes shown as labeled selectables tinted with the
             // theme color.  selectable's hover/selected highlight is
@@ -114,9 +112,8 @@ fn update(f: *z.Frame, s: *State) void {
             // highlight signals state.
             for (themes, 0..) |c, i| {
                 const sel = s.theme_index == @as(i32, @intCast(i));
-                var name_buf: [16]u8 = undefined;
-                const name: []const u8 = bufPrint(&name_buf, "  theme {d}", .{i}) catch "?";
-                if (u.selectable(name, sel, .{})) {
+                const name: z.Str(16) = .print("  theme {d}", .{i});
+                if (u.selectable(name.slice(), sel, .{})) {
                     s.theme_index = @intCast(i);
                 }
                 _ = c; // visual tint left for future expansion

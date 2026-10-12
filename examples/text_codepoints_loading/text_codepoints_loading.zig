@@ -29,7 +29,6 @@ const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
 
 const Color = zm.Color;
 const c = Color;
-const bufPrint = std.fmt.bufPrint;
 
 const screen_w: i32 = 800;
 const screen_h: i32 = 450;
@@ -116,9 +115,8 @@ fn update(f: *z.Frame, s: *State) void {
     f.gl.text(.{ 34, 272 }, line_cyril, .{ .size = 22, .color = c.black, .font = &s.uni_font });
 
     // The cost of each atlas, so "bake only what you need" is concrete.
-    var buf: [128]u8 = undefined;
-    const info: []const u8 = bufPrint(
-        &buf,
+    f.gl.textf(
+        .{ 20, 330 },
         "glyphs baked - ascii: {d}   extended: {d}   (atlas {d}x{d} px)",
         .{
             s.ascii_font.glyphCount,
@@ -126,8 +124,8 @@ fn update(f: *z.Frame, s: *State) void {
             s.uni_font.texture.width,
             s.uni_font.texture.height,
         },
-    ) catch "?";
-    f.gl.text(.{ 20, 330 }, info, .{ .size = 17, .color = c.darkgray, .font = &s.uni_font });
+        .{ .size = 17, .color = c.darkgray, .font = &s.uni_font },
+    );
 
     f.gl.text(
         .{ 20, 360 },

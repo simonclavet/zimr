@@ -7,7 +7,6 @@
 //! Each line shows PASS (green) or FAIL (red, with mismatch count). The CPU
 //! backend runs the same kernel at startup as an independent oracle.
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const shared_rotate = @import("shared_rotate.zig");
@@ -103,20 +102,19 @@ fn drawLine(
     miss: u32,
     y: *f32,
 ) void {
-    var buf: [128]u8 = undefined;
-    const txt: []const u8 = if (!s.have_result)
-        bufPrint(&buf, "{s}: ...", .{label}) catch label
+    const txt: z.Str(128) = if (!s.have_result)
+        .print("{s}: ...", .{label})
     else if (miss == 0)
-        bufPrint(&buf, "{s}: PASS", .{label}) catch label
+        .print("{s}: PASS", .{label})
     else
-        bufPrint(&buf, "{s}: FAIL ({d}/{d} wrong)", .{ label, miss, count }) catch label;
+        .print("{s}: FAIL ({d}/{d} wrong)", .{ label, miss, count });
     const col: Color = if (!s.have_result)
         z.colors.slate_300
     else if (miss == 0)
         z.colors.green_400
     else
         z.colors.red_500;
-    f.gl.text(.{ 14, y.* }, txt, .{ .size = 20, .color = col, .font = &s.font });
+    f.gl.text(.{ 14, y.* }, txt.slice(), .{ .size = 20, .color = col, .font = &s.font });
     y.* += 30;
 }
 

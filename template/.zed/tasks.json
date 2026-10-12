@@ -1,0 +1,138 @@
+[
+    {
+        "label": "zig: serve",
+        "command": "zig",
+        "args": [
+            "build",
+            "serve",
+            "-Dplatform=web"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false,
+        "allow_concurrent_runs": false
+    },
+    {
+        "label": "zig: build myproject1",
+        "command": "zig",
+        "args": [
+            "build",
+            "myproject1",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release myproject1",
+        "command": "zig",
+        "args": [
+            "build",
+            "myproject1",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build myproject2",
+        "command": "zig",
+        "args": [
+            "build",
+            "myproject2",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release myproject2",
+        "command": "zig",
+        "args": [
+            "build",
+            "myproject2",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build myproject3",
+        "command": "zig",
+        "args": [
+            "build",
+            "myproject3",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release myproject3",
+        "command": "zig",
+        "args": [
+            "build",
+            "myproject3",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build myproject1 (windows)",
+        "command": "zig",
+        "args": [
+            "build",
+            "myproject1",
+            "-Dplatform=windows"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build myproject2 (windows)",
+        "command": "zig",
+        "args": [
+            "build",
+            "myproject2",
+            "-Dplatform=windows"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build myproject3 (windows)",
+        "command": "zig",
+        "args": [
+            "build",
+            "myproject3",
+            "-Dplatform=windows"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build (release)",
+        "command": "zig",
+        "args": [
+            "build",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: test",
+        "command": "zig",
+        "args": [
+            "build",
+            "test",
+            "--summary",
+            "all"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    }
+]

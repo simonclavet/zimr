@@ -853,6 +853,7 @@ test "mjcf import: a keyframe loads, and one of the wrong length is refused" {
 }
 
 const build_options = @import("build_options");
+const report = @import("test_report.zig");
 
 /// -- *** THE THREE HEAVY RETARGET DIAGNOSTICS, OFF BY DEFAULT --
 ///
@@ -864,8 +865,10 @@ const build_options = @import("build_options");
 /// cutting iterations or directions would change what they measure rather than how long it takes
 /// - a cheaper test that answers a different question is not the same test. Each is a diagnostic
 /// from the retarget arc, which is PAUSED. Run them with `-Dslow-tests` (e.g.
-/// `zig build zn-robot_mjcf -Dslow-tests -Dtest-filter="WHOLE BODY"`); `WHOLE BODY` is the only
+/// `zig build test-robot_mjcf -Dslow-tests -Dtest-filter="WHOLE BODY"`); `WHOLE BODY` is the only
 /// test that exercises the shipped `solvePointCloud`, so a compiler bump should run it.
+/// `TORSO+PELVIS` is also PARKED (Oct 12, `report.parked`): it asserts nothing and prints nothing,
+/// so it needs `-Dparked-tests` as well.
 ///
 /// * A skip, not a comment-out: the runner prints them as skipped every run, so they stay
 /// visible and countable instead of quietly ceasing to exist. `@hasDecl`, because only the host
@@ -5669,6 +5672,11 @@ fn runCoreRetarget(flex_model: bool) !void {
 
 test "TORSO+PELVIS through the pipeline: two directions each, then IK for position" {
     if (!run_slow_retarget_diagnostics) {
+        return error.SkipZigTest;
+    }
+    // PARKED (Oct 12): 21 s that asserts nothing and prints nothing - only a crash could fail it.
+    // `-Dslow-tests -Dparked-tests` runs it; see `report.parked`.
+    if (report.parked()) {
         return error.SkipZigTest;
     }
     for ([_]bool{ false, true }) |flex| {

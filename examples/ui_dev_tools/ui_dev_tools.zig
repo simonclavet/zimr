@@ -35,7 +35,6 @@
 const std = @import("std");
 const zm = @import("zm");
 const float = zm.float;
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const ui = z.ui_real;
@@ -154,13 +153,8 @@ fn update(f: *z.Frame, s: *State) void {
             // Moving past the drag threshold logs drag_started;
             // dropping onto the slot logs drop_accepted.
             u.text("Drag the {d} below onto the slot:", .{s.drag_value});
-            var label_buf: [32]u8 = undefined;
-            const drag_label: []const u8 = bufPrint(
-                &label_buf,
-                "drag {d}",
-                .{s.drag_value},
-            ) catch "drag";
-            _ = u.button(drag_label, .{});
+            const drag_label: z.Str(32) = .print("drag {d}", .{s.drag_value});
+            _ = u.button(drag_label.slice(), .{});
             if (u.beginDragDropSource(.{})) {
                 defer u.endDragDropSource();
                 u.setDragDropPayload(i32, &s.drag_value);

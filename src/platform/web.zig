@@ -16,10 +16,15 @@ const TextInputOptions = contract.TextInputOptions;
 const TextInputArea = contract.TextInputArea;
 const AudioFormat = contract.AudioFormat;
 const AudioOutputKind = contract.AudioOutputKind;
+const AudioRenderCallback = contract.AudioRenderCallback;
+const AudioRenderTiming = contract.AudioRenderTiming;
 
 /// How this platform's output gets its frames (`contract.AudioOutputKind`), pushed for now: the browser's output
 /// still queues blocks the mixer renders ahead.
-pub const audio_output_kind: AudioOutputKind = .push;
+// The page's output pulls on the main thread: where the renderer worklet loaded, the mixer forwards to it instead
+// (`startAudioForwarding`); where it did not, a script processor asks the mixer's own renderer for each block
+// (`startAudioPull`).
+pub const audio_output_kind: AudioOutputKind = .pull_on_main_thread;
 const GamepadSlot = contract.GamepadSlot;
 const Gamepad = contract.Gamepad;
 const Rumble = contract.Rumble;
@@ -155,34 +160,125 @@ pub fn removeValue(key: []const u8) void {
     _ = dom.persistence_remove(key);
 }
 
-/// The page's sound output: an AudioWorklet playing the blocks the mixer queues (`bridge.zig`'s
-/// `audio_output_program`). The audio context is opened at the rate asked for, which browsers resample from to their
-/// device's; it grants that rate, or 0 when the browser has no AudioWorklet - the mixer then logs the difference, and
-/// its blocks are dropped.
-pub fn startAudio(wanted: AudioFormat) AudioFormat {
-    const granted_rate: u32 = web.dom.audio_output_start(wanted.sample_rate, wanted.channels);
+/// Stops the page's output, whichever path plays it: the renderer worklet's node, or the script processor.
+pub fn stopAudio() void {
+    web.dom.audio_output_stop();
+}
+
+/// The clock sound is timed by: the page's (`performance.now()`), in milliseconds since the page started.
+pub fn audioClockMilliseconds() f64 {
+    return web.dom.now_ms();
+}
+
+/// What the page's output adds past its queue: the script processor's buffer when the sound plays through one, and
+/// the latency the audio context reports (`baseLatency + outputLatency`).
+pub fn audioOutputLatencyMilliseconds() f64 {
+    return web.dom.audio_output_latency_ms();
+}
+
+/// Which path plays the page's sound: the engine's renderer in the browser's audio worklet; the worklet playing blocks
+/// the main thread renders; or, where no worklet can load, a script processor on the main thread.
+pub fn audioOutputName() []const u8 {
+    return switch (web.dom.audio_output_path()) {
+        2 => "zimr's renderer in the audio worklet, starting",
+        3 => "zimr's renderer, in the audio worklet",
+        4 => "zimr's renderer in the audio worklet FAILED - see the log",
+        5 => "zimr's renderer in the audio worklet, suspended until a tap",
+        else => "a script processor, on the main thread",
+    };
+}
+
+/// The most frames one pulled block holds: a script processor's buffer is at most 16 384 frames, and the page asks for
+/// 2 048 (`page_audio.startPulled`); 4 096 leaves room for a browser that rounds up.
+const pulled_block_frame_capacity: usize = 4_096;
+/// The most channels a pulled block holds: the mixer's two.
+const pulled_channel_capacity: usize = 2;
+
+/// The pulled output's state: the renderer it asks for frames, and the two buffers a block passes through - rendered
+/// interleaved, as the renderer writes frames, then laid out one channel after the other, as the script processor
+/// takes them (`getChannelData`).
+const PulledOutput = struct {
+    render_callback: ?AudioRenderCallback = null,
+    channel_count: u32 = 2,
+    interleaved_block: [pulled_block_frame_capacity * pulled_channel_capacity]f32 = undefined,
+    channel_after_channel_block: [pulled_block_frame_capacity * pulled_channel_capacity]f32 = undefined,
+};
+// The script processor's callback reaches this through an export, which takes no context.
+// lint:off module-var: the page's one sound output, reached from an export
+var pulled_output: PulledOutput = .{};
+
+/// Opens the page's output pulled on the main thread: a script processor whose callback renders each block when the
+/// browser asks for it, by calling `pullAudioBlock` through the app module's exports - no queue between the renderer
+/// and the speaker, and no margin. This is the path where the renderer worklet could not load (an opaque origin, as
+/// in an app's file viewer); where it loaded, the mixer forwards to it instead (`startAudioForwarding`). Grants the
+/// context's rate.
+pub fn startAudioPull(wanted: AudioFormat, render_callback: AudioRenderCallback) AudioFormat {
+    const is_channel_count_held: bool = wanted.channels <= pulled_channel_capacity;
+    if (!is_channel_count_held) {
+        log(.err, "web platform: the pulled output holds two channels at most");
+        return .{ .sample_rate = 0, .channels = wanted.channels };
+    }
+    pulled_output.render_callback = render_callback;
+    pulled_output.channel_count = wanted.channels;
+    const granted_rate: u32 = web.dom.audio_output_start_pulled(wanted.sample_rate, wanted.channels);
     return .{ .sample_rate = granted_rate, .channels = wanted.channels };
 }
 
-/// Posts a block to the output's processor - or, before the processor can play, holds it (draining at the real rate).
-pub fn queueAudio(samples: []const f32) void {
-    web.dom.audio_output_queue(samples);
+/// The script processor's callback, through the app module's exports (`zimr_audio_pull_block`): renders the next
+/// `frame_count` frames and returns their address, one channel after the other - all the left samples, then all the
+/// right - as the processor copies them into its channels; 0 when no output was started. Rendered now, the block is
+/// heard after the processor's own buffer, which the output's latency counts (`audioOutputLatencyMilliseconds`).
+fn pullAudioBlock(frame_count: u32) callconv(.c) usize {
+    const render_callback: AudioRenderCallback = pulled_output.render_callback orelse return 0;
+    const channel_count: usize = pulled_output.channel_count;
+    const block_frame_count: usize = @min(frame_count, pulled_block_frame_capacity);
+    const interleaved: []f32 = pulled_output.interleaved_block[0 .. block_frame_count * channel_count];
+    const asked_at_ms: f64 = audioClockMilliseconds();
+    const timing: AudioRenderTiming = .{ .asked_at_ms = asked_at_ms, .first_frame_out_ms = asked_at_ms };
+    render_callback.render(render_callback.context, interleaved, timing);
+    // Frame after frame becomes channel after channel: sample `c` of frame `f` goes to `c * frames + f`.
+    const channel_after_channel: []f32 = pulled_output.channel_after_channel_block[0..interleaved.len];
+    for (0..block_frame_count) |frame_index| {
+        for (0..channel_count) |channel_index| {
+            const interleaved_index: usize = frame_index * channel_count + channel_index;
+            const channel_after_channel_index: usize = channel_index * block_frame_count + frame_index;
+            channel_after_channel[channel_after_channel_index] = interleaved[interleaved_index];
+        }
+    }
+    return @intFromPtr(channel_after_channel.ptr);
 }
 
-/// Frames posted and not yet reported played, or held and not yet drained.
-pub fn queuedAudioFrames() u32 {
-    return web.dom.audio_output_queued_frames();
+comptime {
+    @export(&pullAudioBlock, .{ .name = "zimr_audio_pull_block" });
 }
 
-/// Adds samples onto the frames queued and not yet played, aligned to the queue's end: in the worklet by a message,
-/// or on the main thread for the script processor and for blocks still held.
-pub fn mixIntoQueuedAudio(samples: []const f32) void {
-    web.dom.audio_output_mix_into_queued(samples);
+/// The renderer in the browser's audio worklet (`mixer.ForwardingOutput`): a second instance of the app's module,
+/// loaded at boot. Null when it did not load: the mixer then starts the output pulled on the main thread
+/// (`startAudioPull`).
+pub fn startAudioForwarding(wanted: AudioFormat) ?AudioFormat {
+    const granted_rate: u32 = web.dom.audio_forward_start(wanted.sample_rate, wanted.channels);
+    if (granted_rate == 0) {
+        return null;
+    }
+    return .{ .sample_rate = granted_rate, .channels = wanted.channels };
 }
 
-/// Closes the audio context.
-pub fn stopAudio() void {
-    web.dom.audio_output_stop();
+pub fn forwardAudioCommandBytes(command_bytes: []const u8) void {
+    web.dom.audio_forward_command(command_bytes);
+}
+
+pub fn forwardAudioSamples(samples_id: u16, samples: []const f32) void {
+    web.dom.audio_forward_samples(samples_id, samples);
+}
+
+pub fn forwardAudioNote(key: u8, is_down: bool, velocity: f32) void {
+    web.dom.audio_forward_note(key, is_down, velocity);
+}
+
+/// The notices the renderer sent back, whole ones of `notice_byte_count` bytes only - the mixer's size of a notice,
+/// the same in both instances of the module.
+pub fn takeAudioNoticeBytes(notice_bytes: []u8, notice_byte_count: usize) usize {
+    return web.dom.audio_take_notice_bytes(notice_bytes, @intCast(notice_byte_count));
 }
 
 /// The gamepad in a slot, as the browser reads it (`navigator.getGamepads()`): its buttons in the standard gamepad's

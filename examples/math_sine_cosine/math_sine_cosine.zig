@@ -5,7 +5,6 @@
 //! moving marker. Exercises the new drawSplineLinear / drawLineDashed /
 //! drawCircleSectorLines primitives. Self-running, viewport-relative under `.responsive`.
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
@@ -98,9 +97,12 @@ fn update(f: *z.Frame, s: *State) void {
     // Labels.
     f.gl.text(.{ px + 6, (cy + py) * 0.5 - 8 }, "sin", .{ .size = 16, .color = red, .font = &s.font });
     f.gl.text(.{ (cx + px) * 0.5 - 10, cy + 6 }, "cos", .{ .size = 16, .color = blue, .font = &s.font });
-    var buf: [40]u8 = undefined;
-    const lbl: []const u8 = bufPrint(&buf, "angle: {d:.0} deg", .{s.angle_deg}) catch "?";
-    f.gl.text(.{ 12, 12 }, lbl, .{ .size = 16, .color = c.init(210, 214, 224, 230), .font = &s.font });
+    f.gl.textf(
+        .{ 12, 12 },
+        "angle: {d:.0} deg",
+        .{s.angle_deg},
+        .{ .size = 16, .color = c.init(210, 214, 224, 230), .font = &s.font },
+    );
     z.endDrawing(f.gl);
 }
 

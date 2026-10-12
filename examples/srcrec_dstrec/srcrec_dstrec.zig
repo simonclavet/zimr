@@ -19,7 +19,6 @@ const radFromDeg = zm.radFromDeg;
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
-const bufPrint = std.fmt.bufPrint;
 
 const frames: usize = 6;
 const frame_w: usize = 96;
@@ -214,13 +213,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     drawSheetStrip(f, s, w);
 
-    var buf: [40]u8 = undefined;
-    const label: []const u8 = bufPrint(
-        &buf,
-        "frame {d}/{d} - tap to cycle, drag to move",
-        .{ s.selected + 1, frames },
-    ) catch "";
-    common.caption(gl, s.font, label);
+    common.captionf(gl, s.font, "frame {d}/{d} - tap to cycle, drag to move", .{ s.selected + 1, frames });
     z.endDrawing(gl);
 }
 

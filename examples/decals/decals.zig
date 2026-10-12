@@ -43,7 +43,6 @@ const dot3 = zm.dot3;
 const float = zm.float;
 const rad_per_deg = zm.rad_per_deg;
 const Vec2 = zm.Vec2;
-const bufPrint = std.fmt.bufPrint;
 const common = @import("example_common");
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -371,25 +370,19 @@ fn update(f: *z.Frame, s: *State) void {
     z.endMode3D(f.gl);
 
     // ---- HUD ----
-    var buf: [80]u8 = undefined;
-    const hud: []const u8 = bufPrint(
-        &buf,
+    f.gl.textf(
+        .{ 14, 42 },
         "decals: {d}/{d}   click to splat",
         .{ s.decal_count, max_decals },
-    ) catch "";
-    f.gl.text(.{ 14, 42 }, hud, .{ .size = 18, .color = common.palette.ink_dim, .font = &s.font });
+        .{ .size = 18, .color = common.palette.ink_dim, .font = &s.font },
+    );
 
     // ---- DEBUG: show the last hit + first decal vertex to diagnose placement ----
     if (hit.hit) {
-        var dbg: [128]u8 = undefined;
-        const d1: []const u8 = bufPrint(
-            &dbg,
+        f.gl.textf(
+            .{ 14, 66 },
             "hit ({d:.2},{d:.2},{d:.2}) n({d:.2},{d:.2},{d:.2})",
             .{ hit.point[0], hit.point[1], hit.point[2], hit.normal[0], hit.normal[1], hit.normal[2] },
-        ) catch "";
-        f.gl.text(
-            .{ 14, 66 },
-            d1,
             .{ .size = 15, .color = .{ .r = 120, .g = 230, .b = 120, .a = 255 }, .font = &s.font },
         );
     }

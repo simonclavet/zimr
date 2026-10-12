@@ -4,7 +4,6 @@
 //! vector math is zimrmath - native `-` for difference, zm.angle2 for the signed between-
 //! angle, zm.lineAngle2 for a ray's angle - no hand-rolled helpers. From raylib's vector_angle.
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
@@ -66,10 +65,7 @@ fn update(f: *z.Frame, s: *State) void {
     f.gl.circle(v0, 5.0, .{ .color = common.palette.ink, .segments = 16 });
     f.gl.text(.{ v2[0] + 6, v2[1] - 6 }, "v2", .{ .size = 14, .color = common.palette.ink_dim, .font = &s.font });
 
-    var buf: [56]u8 = undefined;
-    const msg: []const u8 = bufPrint(&buf, "vector angle - MODE {d} - {d:.1} deg", .{ mode, angle }) catch
-        "vector angle";
-    common.caption(f.gl, s.font, msg);
+    common.captionf(f.gl, s.font, "vector angle - MODE {d} - {d:.1} deg", .{ mode, angle });
     z.endDrawing(f.gl);
 }
 

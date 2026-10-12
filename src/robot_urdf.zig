@@ -268,7 +268,7 @@ test "runtime load: a loaded model simulates like any other" {
 // They live here rather than beside the code they test because the fixture is generated as an
 // `rbt.ModelSpec` literal: it imports robot.zig, so robot.zig importing it back was a cycle - the
 // last one the `import-cycle` lint rule allowed. This file already depends on both. The cost is
-// that `zig build zn-robot` no longer runs them; `zn-robot_urdf` and `test-fast` do.
+// that `zig build test-robot` no longer runs them; `test-robot_urdf` and `test-fast` do.
 
 test "warm start: a bad warm start is thrown away, not fought" {
     // * THE GUARD MUJOCO HAS AND MY FIRST VERSION DID NOT.

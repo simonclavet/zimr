@@ -17,7 +17,6 @@
 //   SPACE    pause/resume box A's motion
 
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -150,15 +149,14 @@ fn update(f: *z.Frame, state: *State) void {
         f.gl.text(.{ msg_x, msg_y }, msg, .{ .size = 20, .color = c.black, .font = &state.font });
 
         // Area readout just below the upper strip.
-        var buf: [64]u8 = undefined;
         const aw: i32 = @trunc(overlap.width);
         const ah: i32 = @trunc(overlap.height);
         const area: i32 = aw * ah;
-        const area_msg: []const u8 = bufPrint(&buf, "Collision Area: {d}", .{area}) catch "Collision Area: ?";
         const area_y = @as(i32, upper_strip) + 10;
-        f.gl.text(
+        f.gl.textf(
             .{ @divFloor(screen_w, 2) - 100, area_y },
-            area_msg,
+            "Collision Area: {d}",
+            .{area},
             .{ .size = 20, .color = c.black, .font = &state.font },
         );
     }

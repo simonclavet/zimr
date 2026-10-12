@@ -2041,8 +2041,11 @@ test "robot_track_st: the policy learns through the model, and is judged in the 
             last_policy_loss = loss;
         }
     }
-    const servo: ?f32 = try learner.judge(300, 99, true);
-    const policy: ?f32 = try learner.judge(300, 99, false);
+    // The real-simulator judge is for the table alone - nothing below asserts on it - so it runs only when the table
+    // is asked for. Judging touches no training state (`decideInto` draws nothing at zero noise), so the losses
+    // asserted below are the same either way.
+    const servo: ?f32 = if (report.requested()) try learner.judge(300, 99, true) else null;
+    const policy: ?f32 = if (report.requested()) try learner.judge(300, 99, false) else null;
     const in_model_zero: InModel = learner.modelLoss(100, 7, false, 8);
     const in_model_policy: InModel = learner.modelLoss(100, 7, true, 8);
     report.print("\n  T8d (walk, {d} rounds): policy loss {d:.3} -> {d:.3}, world loss {d:.3}\n", .{

@@ -31,7 +31,7 @@ lint clean, `zig build check`, snapshot `zimr2307<letter(s)>.zip`.
   documentation silently became another's).
 - Zig: no declarations between container fields; list struct fields explicitly (no `@typeInfo(...).fields`);
   `std.math` only inside zimrmath; whole-init-first (a new field joins the whole-struct literal).
-- Never the full `gate` per turn; targeted tests (`zn-<stem>`, by name), then `check`. Pages in `release`, never `ship`.
+- Never the full `gate` per turn; targeted tests (`test-<stem>`, by name), then `check`. Pages in `release`, never `ship`.
 
 **Writing lint-clean code the first time (Oct 3, Simon: "integrate the non-autofixable rules").** 10 rules autofix
 (`fn-args-multiline`, `branch-braces`, `named-struct-init`, `prefer-vec`, `unused-global`, `redundant-import`,
@@ -146,7 +146,7 @@ STAGES. Each leaves the tree green and is verified before the next.
   `constants` field, `ppoClipLoss` and `setPpoClipInputs` removed; PpoModel.clip_loss is a PpoClipLoss; ppoUpdate,
   robot_gym (3 sites), the tests, both tutorials and the reference notes ported. Inputs are now [N, 1] or [1, N]
   (rank-1 refused). The analysis with the PPO loss family in MOVES: 61 public, 30 private, 95 tests, no blockers.
-  zn-zimrnum 333/333, test-fast (robot 631), check 360/360, doc-sync. Disk: the build cache reached 7.7 GB and the
+  test-zimrnum 333/333, test-fast (robot 631), check 360/360, doc-sync. Disk: the build cache reached 7.7 GB and the
   disk 98% - a full disk shows as "checking cache failed: FileNotFound"; clear .zig-cache when free space is low.
 
   (S0b as planned:)
@@ -296,12 +296,12 @@ STAGES. Each leaves the tree green and is verified before the next.
             outputs pass zig fmt and ast-check; after `zimrlint --fix` (22 fixes: zm keywords bound once at file
             scope - cosRad, sinRad, pi, radFromDeg - and unused aliases dropped) both lint with 0 findings.
       S3b DONE (Oct 4). The split is applied: src/zimrnum.zig 31,350 lines, 238 tests; src/zimrrl.zig 9,891 lines,
-            95 tests; `src/zimrrl.zig` is a fast test root (`zn-zimrrl`, in test-fast). zimrnum's reference table
+            95 tests; `src/zimrrl.zig` is a fast test root (`test-zimrrl`, in test-fast). zimrnum's reference table
             649 rows (the moved ones gone; addPointMassToGrid and DiagGaussian.half_log_tau added with notes), 305
             folds - the RL chapters still in zimrnum's tutorial have lost their folds until S3c moves them. Two
             compile errors the analysis could not see - Zig lets a file read a type's private members only from
             inside that file: zrl read `DiagGaussian(f64).half_log_tau`, and zimrnum's `numericalGrad` called
-            `PpoClipEval.loss`; both made pub, by rules in the script. Verified: zn-zimrrl 95/95, zn-zimrnum 238/238,
+            `PpoClipEval.loss`; both made pub, by rules in the script. Verified: test-zimrrl 95/95, test-zimrnum 238/238,
             test-fast 19/19, check 360/360; and re-running the pipeline (apply, `zimrlint --fix`, `zig fmt`) from the
             backups reproduces both files byte for byte.
       S3c-1 DONE (Oct 4). zimrnum: the tutorial check is `pub fn expectReferenceTableMatches(html, source)` (one
@@ -310,7 +310,7 @@ STAGES. Each leaves the tree green and is verified before the next.
             there). src/notes/tutorials/zimrrl-tutorial.html: header, chapter 1 (what zimrrl is), chapter 2 the
             generated reference table (139 rows); zimrnum_ref's `libraries` has the zrl entry; the page is in
             build.zig's doc-pages. Notes added: expectReferenceTableMatches, loss (PpoClipEval's). Verified:
-            zn-zimrnum 238/238, zn-zimrrl 98/98, doc-pages 32/32, check 360/360; control: removing CartpoleState's
+            test-zimrnum 238/238, test-zimrrl 98/98, doc-pages 32/32, check 360/360; control: removing CartpoleState's
             row fails zrl's check by name. Found, for S4: the generator reports 18 names with more than one note
             (slice exp log softplus elu silu gelu conv2d klGaussianDiag reshuffle observe step add ...), only the
             first of each rendering. From here on zimrrl.zig is edited directly.
@@ -320,7 +320,7 @@ STAGES. Each leaves the tree green and is verified before the next.
             opening); reference is chapter 5. zimrnum keeps pointers with the old ids and numbers; its title no
             longer says RL; cross-page links retargeted; a pre-existing dangling link (#polyak) fixed;
             robot_bmpc.zig's header and 8 references -> chapter 4; robot-mocap's link -> zimrrl. Folds: 285 + 63 =
-            348, the total before the split. Verified: zimrnum-ref idempotent, zn-zimrnum 238/238, zn-zimrrl 98/98,
+            348, the total before the split. Verified: zimrnum-ref idempotent, test-zimrnum 238/238, test-zimrrl 98/98,
             doc-sync, doc-pages 32/32, check 360/360, test-fast 19/19, the focused sweep page 528/528, the gate
             412/412; on the built zrl page all 11 figures are present with renumbered labels.
       S4 - LATER, each on its own: test names "zn rl: ..." -> "zrl: ..."; kernel sets, then zn_mlp's 13 RL kernels to
@@ -355,13 +355,13 @@ STAGES. Each leaves the tree green and is verified before the next.
       rlreplay, gae + rlgae, rl-ppo + rlppo), headings retitled, the world-model chapter 4.k -> 9.k (prose and figure
       labels, not attribute values), contents regenerated, robot_bmpc.zig's references -> 9.k, zimrnum's pointers
       updated (minibatchorder's pointer says 4.5 - it becomes 4.3 after step 2's merges). VERIFIED: zimrnum-ref (zn 650
-      rows / 285 folds, zrl 139 / 57 - the dropped section's 6 folds gone), zn-zimrnum 238/238, zn-zimrrl 98/98,
+      rows / 285 folds, zrl 139 / 57 - the dropped section's 6 folds gone), test-zimrnum 238/238, test-zimrrl 98/98,
       doc-sync, doc-pages.
       STEP 2 APPLIED (Oct 4; backups in /tmp/big/merge): src/notes/scripts/zimrrl_tutorial_merge.py - four merged
       sections (3.3 how an episode ends, 4.1 rollouts and replay, 4.2 GAE with the recurrence, 6.1 PPO's clip), each
       keeping the absorbed id as an anchor; ppoClipSample's quote matches the source again; minibatchorder 4.3 and
       zimrnum's pointer with it. VERIFIED: zimrnum-ref (zrl 139 rows, 56 folds - the duplicated Transition example
-      is quoted once), zn-zimrnum 238/238, zn-zimrrl 98/98, doc-pages 32/32.
+      is quoted once), test-zimrnum 238/238, test-zimrrl 98/98, doc-pages 32/32.
       STEP 3, WIDENED (Simon, Oct 4: "reduce the tutorial by 20%: cut less interesting details and dev anecdotes;
       tone more neutral and precise; maybe add diagrams"). Baseline (prose words, folds / code / figures / reference
       excluded; measured by src/notes/scripts/tutorial_measure.py): 13,797 words, 512 code lines; target
@@ -375,7 +375,7 @@ STAGES. Each leaves the tree green and is verified before the next.
       words, the run-loop figure replaces the table; chapter 3 939 -> 655, cartpole without the history, the two
       tasks condensed, 3.3 with the terminal / truncated timeline figure. Chapter 4 941 -> 769: minibatches as three
       plain rules (the review figures and the test aside gone), GAE tightened. TOTAL 13,797 -> 13,272 words; code
-      512 lines, unchanged. Verified: zimrnum-ref, zn-zimrrl 98/98, doc-pages.
+      512 lines, unchanged. Verified: zimrnum-ref, test-zimrrl 98/98, doc-pages.
       Chapter 5 1,175 -> 863 (each section around its unchanged code; TOTAL 12,960). Chapter 6 1,092 -> 851: the
       PPO clipped-objective figure in 6.1 (two panels, A > 0 and A < 0, band shaded, unclipped branch dashed) replaces
       6.2's pessimism subsection; AWR tightened. Figures now write var(--tok-type, currentColor) so a figure draws
@@ -393,7 +393,7 @@ STAGES. Each leaves the tree green and is verified before the next.
       stated as expected values; the numeric pessimism example replaced by the PPO figure). Three new figures - the
       run loop (2.1), terminal vs truncated (3.3), PPO's clipped objective (6.1); every theme colour in the page's
       figures now has a currentColor fallback. All 120 in-page links and the cross-page links resolve; zimrnum-ref
-      (56 folds), zn-zimrrl 98/98, zn-zimrnum, doc-sync, doc-pages green; figures checked on the built page.
+      (56 folds), test-zimrrl 98/98, test-zimrnum, doc-sync, doc-pages green; figures checked on the built page.
       Source comments in zimrrl.zig still carry the old history (znum, etc.) - a separate pass (S4).
       Was: then 7-8 (8.2's testing subsection; SAC and DQN tightened),
       then chapter 9 (read for detail; about 1,000 words). Still to cut: about 2,240 words to reach 11,040.
@@ -417,22 +417,22 @@ STAGES. Each leaves the tree green and is verified before the next.
       index and is updated. A comparison is REWRITTEN to explain the design directly, never just deleted.
       STEPS: (1) delete tools/zimrnum_parity.zig and its build step (its purpose is parity with znum), then
       build.zig, the small files, files.md / files.html; (2) zimrrl.zig, then regenerate and clean zimrrl's tutorial;
-      (3) zimrnum.zig; (4) zimrnum's tutorial. Verify after each: lint, zn-zimrnum / zn-zimrrl, check, doc pages.
+      (3) zimrnum.zig; (4) zimrnum's tutorial. Verify after each: lint, test-zimrnum / test-zimrrl, check, doc pages.
       STEP 1 DONE (Oct 4; backups in /tmp/big/znum1): tools/zimrnum_parity.zig and its build step deleted;
       build.zig (doc-sync's stranded comment moved to its code), kompute.zig and zimrmath.zig (provenance markers),
       zn_unary / zn_binary / zn_matmul (256 = the largest workgroup WebGPU guarantees), the probe, and zimrnum_ref's
       14 notes, all without znum; files.md / files.html regenerated (only the znum_mapping.md note's entry remains,
-      a development note). check 360/360, zn-zimrnum 238/238. Next: step 2, zimrrl.zig and zimrrl's tutorial.
+      a development note). check 360/360, test-zimrnum 238/238. Next: step 2, zimrrl.zig and zimrrl's tutorial.
       STEP 2 DONE (Oct 4): zimrrl.zig has no znum mention (0 of 25). The PPO doc chain is fixed - ppoEpoch has its
       38-line doc back (plus S0's "No parameter changes here: ppoUpdate is the version that trains"), ppoObjective
       its clipped-surrogate / KL-estimator doc, OffPolicyModel only its own; the paragraphs explain the design
       directly (Transition's doc said `seam`, now `episode_end`; the failure-angle test said turns, now radians).
-      zn-zimrrl 98/98, lint 0. zrl's tutorial: its prose has none; 5 left inside folds of zimrnum functions, which
+      test-zimrrl 98/98, lint 0. zrl's tutorial: its prose has none; 5 left inside folds of zimrnum functions, which
       step 3 removes at the source. NEXT: step 3, zimrnum.zig (106).
       ALSO DONE (Simon, Oct 4): zimrnum tutorial's chapter 2 "What exists" removed (a stale status table: it listed
       autograd, decompositions, FFT, serialisation as absent); chapters 3.. renumbered down by one (155 headings,
       letter suffixes kept: the pointers are now 15, 17b, 17d); build.zig's "section 3.1" -> 2.1 (backups in
-      /tmp/big/status). zimrnum-ref (numbering check), zn-zimrnum 238/238, check 360/360, doc-pages green. Noted for the
+      /tmp/big/status). zimrnum-ref (numbering check), test-zimrnum 238/238, check 360/360, doc-pages green. Noted for the
       comment pass: zimrnum.zig, zn_unary.zig and zimrnum_field.zig cite "section 10.3 ... debt 11" of a plan, not
       the tutorial.
       STEP 3 IN PROGRESS (zimrnum.zig; backup before it: /tmp/big/znum3/zimrnum.before.zig): batch 1a done - the
@@ -440,27 +440,27 @@ STAGES. Each leaves the tree green and is verified before the next.
       without the donor comparison), requireFloat / requireInt, the index view, the 128 threshold, keepdims.
       Batch 1b (dataframes, 18), 2a (3100-4200, 11: Polyak lerp, Push, the Gumbel-max story, affine, compareScalar,
       reshape rules) and 2b (4200-9000, 17: bitwise not, shifts, diff, asinh/acosh/atanh, a false `exp` doc removed,
-      softplus's forms, metrics, quantiles, mad, skew) done -> 54 left (zn-zimrnum green; /tmp/reflow.py re-wraps a
+      softplus's forms, metrics, quantiles, mad, skew) done -> 54 left (test-zimrnum green; /tmp/reflow.py re-wraps a
       doc paragraph if an edit leaves a long line). Noted for later: `Push` (the cartpole action) is RL and still in
       zimrnum. Batch 3a (Simon: "no need to keep znum magic bytes, there are no saved files"): the tensor file
       magic is now "ZIMR\0\0" (same 6 bytes and shape, so the test's pinned header bytes hold; the dtype tags are
       unchanged), its doc and the format block (source and tutorial) updated; Categorical, saveParameters, dft,
-      fft, rfft, convolution modes and the two serialisation test comments rewritten. zn-zimrnum 238/238 -> 43
+      fft, rfft, convolution modes and the two serialisation test comments rewritten. test-zimrnum 238/238 -> 43
       left. Batch 3b (linear algebra, optimisers, convolution, 12) done -> 31 left. Batches 4a (graph and layers, 10)
-      and 4b / 4c (tests, 21) done -> STEP 3 DONE: zimrnum.zig has no znum mention; lint 0, zn-zimrnum green.
+      and 4b / 4c (tests, 21) done -> STEP 3 DONE: zimrnum.zig has no znum mention; lint 0, test-zimrnum green.
       (A table row in the pseudo-inverse test, broken over three lines by an earlier wrap, rejoined.)
       STEP 4 DONE: the zimrnum tutorial's 31 prose mentions rewritten (two stale facts fixed on the way:
       resolveInferredShape does infer a -1 dimension; the MAD paragraph had a broken sentence). ZNUM HISTORY
       REMOVAL COMPLETE (Oct 4): no mention in any source file or tutorial; the only one left in a page is the
       files index's entry for the development note src/notes/znum_mapping.md (development notes kept as the log).
-      Verified: zimrnum-ref, zn-zimrnum 238/238, zn-zimrrl 98/98, doc-sync, check 360/360, test-fast 19/19,
+      Verified: zimrnum-ref, test-zimrnum 238/238, test-zimrrl 98/98, doc-sync, check 360/360, test-fast 19/19,
       doc-pages. Still open from this pass, for the comment pass: plan references in code ("section 10.3 ... debt
       11", in zimrnum.zig, zn_unary.zig, zimrnum_field.zig); `Push` (RL) still in zimrnum.
       Was, in order: elementwise and helpers ~3207-6885 (~25, incl. the
       Gumbel-max story at ~3737), statistics / linear algebra / FFT ~7953-10388 and ~19646-20097, graph and layers
       ~12105-16052, serialisation ~17391-17446 (KEEP the "ZNUM\0\0" magic bytes - a format identifier; only the
       comment changes), tests ~20989-28967. Each batch: read paragraphs (/tmp/paragraphs.py FILE LINES - recreate
-      if lost: prints the contiguous comment block around each line), rewrite, T0/T1, zn-zimrnum.
+      if lost: prints the contiguous comment block around each line), rewrite, T0/T1, test-zimrnum.
       Earlier: STEP 2 batch 1 done (backup /tmp/big/znum2) - the cartpole and rollout paragraphs
       (8) rewritten to explain the design directly; "Register row 62" plan references gone too. 17 mentions left.
       FOUND, to fix together with the rest: a chain of three shifted docs in the PPO region, inherited from zimrnum.
@@ -970,7 +970,7 @@ STAGES. Each leaves the tree green and is verified before the next.
                its title drops "and RL"; the status table, GPU chapter and recipes spell moved names `zrl.`;
             4. robot_bmpc.zig's 12 section references and its header ("Chapter 18d of the zimrnum tutorial");
                robot-mocap-tutorial.html's link `zimrnum-tutorial.html#wm-replay` -> zimrrl-tutorial.html;
-            5. verify: zimrnum-ref (both pages, idempotent on a second run), zn-zimrnum, zn-zimrrl, test-fast,
+            5. verify: zimrnum-ref (both pages, idempotent on a second run), test-zimrnum, test-zimrrl, test-fast,
                check, doc-pages, doc-sync, `smoke-install -Dfocus=zimrnum_field`, then one gate.
       S3c, in two steps:
             S3c-1 - the machinery: zimrrl.zig's gate test (its page's reference table against its public
@@ -986,9 +986,9 @@ STAGES. Each leaves the tree green and is verified before the next.
             2. `zimrlint --fix` on src/zimrnum.zig and src/zimrrl.zig, `zig fmt`, then lint: 0 findings;
             3. a note for `addPointMassToGrid` in tools/zimrnum_ref.zig, then `zig build zimrnum-ref` (zimrnum's table
                loses the moved rows; its own gate test needs that);
-            4. build.zig: a test step `zn-zimrrl` (root src/zimrrl.zig, modules zm and zn), mirroring `zn-zimrnum`,
+            4. build.zig: a test step `test-zimrrl` (root src/zimrrl.zig, modules zm and zn), mirroring `test-zimrnum`,
                in test-fast and the gate - without it zimrrl's 95 tests would not run;
-            5. zn-zimrnum (238 tests), zn-zimrrl (95), test-fast, check.
+            5. test-zimrnum (238 tests), test-zimrrl (95), test-fast, check.
       S3a - write src/notes/scripts/zimrrl_split.py and run it as a DRY RUN into /tmp: the new zimrrl.zig and the
             reduced zimrnum.zig, with the invariants checked (public names, test names, line counts) - the tree is
             not touched;
@@ -1017,13 +1017,13 @@ STAGES. Each leaves the tree green and is verified before the next.
       chapter and the recipes switch to `zrl.` spellings with a link.
     - zimrrl.zig gets its own gate test (reference table against public declarations, embedding the new page) and
       its own source scans (ASCII, no leaked locals in prose, no empty suffixes), copies of zimrnum's.
-    - build.zig: test step `zn-zimrrl` (root zimrrl.zig) in test-fast and the gate; the new page in the doc-pages
+    - build.zig: test step `test-zimrrl` (root zimrrl.zig) in test-fast and the gate; the new page in the doc-pages
       list; zimrnum_ref configured with zrl (the zrl page folds and arity-checks both zrl and zn).
     - Invariants, checked by the script and then by the build: public names before = zimrnum after + zimrrl after
       (disjoint); test names before = zimrnum after + zimrrl after (333 = 239 + 94); reference rows 784 = zimrnum's +
       zimrrl's; folds >= 344 across both pages (zn folds may repeat on the zrl page); moved and remaining line counts
       add up.
-    - Verify: zn-zimrnum, zn-zimrrl, test-fast (robot 631), check, lint and coverage (0 findings, tree covered),
+    - Verify: test-zimrnum, test-zimrrl, test-fast (robot 631), check, lint and coverage (0 findings, tree covered),
       `smoke-install -Dfocus=zimrnum_field` (the gate does not build the sweep page),
       doc-pages, doc-sync, zimrnum-ref idempotent (a second run changes nothing), and one full gate.
     - Rollback: restore the S2 snapshot, fix the script, re-run.

@@ -452,17 +452,16 @@ fn drawPanel(s: *State, f: *z.Frame) bool {
             u.text("measuring the servo alone...", .{});
         } else {
             const recent: Recent = recentWindow(p);
-            var servo_text: [24]u8 = undefined;
-            const servo: []const u8 = if (meanTimeToFailure(p.servo_exposure, p.servo_failures)) |seconds|
-                bufPrint(&servo_text, "{d:.1}s", .{seconds}) catch "?"
+            const servo: z.Str(24) = if (meanTimeToFailure(p.servo_exposure, p.servo_failures)) |seconds|
+                .print("{d:.1}s", .{seconds})
             else
-                "never";
+                .print("never", .{});
             if (p.history_count == 0) {
-                u.text("servo loses it every {s}", .{servo});
+                u.text("servo loses it every {s}", .{servo.slice()});
             } else if (recent.mttf) |seconds| {
-                u.text("loses it every {d:.1}s servo {s}", .{ seconds, servo });
+                u.text("loses it every {d:.1}s servo {s}", .{ seconds, servo.slice() });
             } else {
-                u.text("no losses lately! servo {s}", .{servo});
+                u.text("no losses lately! servo {s}", .{servo.slice()});
             }
         }
         if (p.last.assist > 0) {
@@ -495,9 +494,8 @@ fn drawPanel(s: *State, f: *z.Frame) bool {
             ".weights,application/octet-stream",
         );
         u.sameLine(.{});
-        var switch_label: [32]u8 = undefined;
-        const label: []const u8 = bufPrint(&switch_label, "-> {s}", .{s.task.other().label()}) catch "switch";
-        if (u.button(label, .{})) {
+        const label: z.Str(32) = .print("-> {s}", .{s.task.other().label()});
+        if (u.button(label.slice(), .{})) {
             startTask(s, s.task.other(), true) catch |err| {
                 p.failed = @errorName(err);
             };

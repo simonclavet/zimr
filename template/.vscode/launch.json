@@ -2,23 +2,12 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug: gallery (pick a project)",
-            "type": "chrome",
-            "request": "launch",
-            "url": "http://127.0.0.1:8081/",
-            "webRoot": "${workspaceFolder}/zig-out/web",
-            "preLaunchTask": "zig: build (debug)",
-            "sourceMaps": true,
-            "userDataDir": true,
-            "smartStep": true
-        },
-        {
             "name": "Debug: myproject1",
             "type": "chrome",
             "request": "launch",
-            "url": "http://127.0.0.1:8081/myproject1/",
+            "url": "http://localhost:8081/myproject1/",
             "webRoot": "${workspaceFolder}/zig-out/web",
-            "preLaunchTask": "zig: build (debug)",
+            "preLaunchTask": "zig: build myproject1",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -27,12 +16,56 @@
             "name": "Debug: myproject2",
             "type": "chrome",
             "request": "launch",
-            "url": "http://127.0.0.1:8081/myproject2/",
+            "url": "http://localhost:8081/myproject2/",
             "webRoot": "${workspaceFolder}/zig-out/web",
-            "preLaunchTask": "zig: build (debug)",
+            "preLaunchTask": "zig: build myproject2",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
+        },
+        {
+            "name": "Debug: myproject3",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8081/myproject3/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build myproject3",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: myproject1 (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/myproject1.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build myproject1 (windows)"
+        },
+        {
+            "name": "Debug: myproject2 (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/myproject2.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build myproject2 (windows)"
+        },
+        {
+            "name": "Debug: myproject3 (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/myproject3.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build myproject3 (windows)"
         }
     ]
 }

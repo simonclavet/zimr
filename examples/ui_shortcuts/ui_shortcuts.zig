@@ -8,7 +8,6 @@
 // Demonstrates Phase B2 of the imgui-parity arc.
 
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
@@ -153,27 +152,24 @@ fn update(f: *z.Frame, s: *State) void {
         f.gl.text(.{ 36, float(row_y + 10) }, bind.label, .{ .size = 12, .color = label_color, .font = &s.font });
 
         // Fire count on the right.
-        var buf: [32]u8 = undefined;
-        const count_text: []const u8 = bufPrint(&buf, "fires: {d}", .{s.fires[i]}) catch "?";
         const cx: f32 = float(sw - 130);
         const cy: f32 = float(row_y + 10);
-        f.gl.text(.{ cx, cy }, count_text, .{ .size = 12, .color = label_color, .font = &s.font });
+        f.gl.textf(.{ cx, cy }, "fires: {d}", .{s.fires[i]}, .{ .size = 12, .color = label_color, .font = &s.font });
     }
 
     // Wired state readout - proves that the shortcuts are doing
     // real work, not just incrementing a counter.
     const status_y: i32 = 96 + @as(i32, @intCast(bindings.len)) * (row_h + row_pad) + 24;
-    var status_buf: [128]u8 = undefined;
-    const status: []const u8 = bufPrint(
-        &status_buf,
+    f.gl.textf(
+        .{ 24, status_y },
         "doc state - dirty: {s} | undo depth: {d} | counter: {d}",
         .{
             if (s.dirty) "yes" else "no",
             s.undo_depth,
             s.counter,
         },
-    ) catch "?";
-    f.gl.text(.{ 24, status_y }, status, .{ .size = 14, .color = accent, .font = &s.font });
+        .{ .size = 14, .color = accent, .font = &s.font },
+    );
 }
 
 pub const app: z.AppSpec(State) = .{

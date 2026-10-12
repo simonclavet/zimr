@@ -23,7 +23,6 @@ const Vec = zm.Vec;
 const pointVec = zm.pointVec;
 const pi = zm.pi;
 const atan2Rad = zm.atan2Rad;
-const bufPrint = std.fmt.bufPrint;
 const float = zm.float;
 const clamp = zm.clamp;
 const common = @import("example_common");
@@ -227,9 +226,12 @@ fn update(f: *z.Frame, s: *State) void {
     z.endMode3D(f.gl);
 
     // ---- HUD ----
-    var buf: [64]u8 = undefined;
-    const hud: []const u8 = bufPrint(&buf, "direction row: {d}   walk frame: {d}", .{ dir, s.anim }) catch "";
-    f.gl.text(.{ 14, 42 }, hud, .{ .size = 18, .color = common.palette.ink_dim, .font = &s.font });
+    f.gl.textf(
+        .{ 14, 42 },
+        "direction row: {d}   walk frame: {d}",
+        .{ dir, s.anim },
+        .{ .size = 18, .color = common.palette.ink_dim, .font = &s.font },
+    );
     common.caption(f.gl, s.font, "WebGPU 3D - directional billboard (orbit to see other sides)");
     s.ui_host.render(f);
 }

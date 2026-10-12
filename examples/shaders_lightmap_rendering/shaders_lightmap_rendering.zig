@@ -30,7 +30,6 @@ const f32x4 = zm.f32x4;
 const splat = zm.splat;
 const identity = zm.identity;
 const float = zm.float;
-const bufPrint = std.fmt.bufPrint;
 const sliceAsBytes = std.mem.sliceAsBytes;
 const si = @import("shader_interface");
 
@@ -495,22 +494,21 @@ fn update(f: *z.Frame, s: *State) void {
     z.endMode3D(f.gl);
 
     // 3. HUD.
-    var buf: [96]u8 = undefined;
-    const line: []const u8 = bufPrint(
-        &buf,
-        "{d} coloured lights + baked shadows from {d} static cubes",
-        .{ num_lights, num_cubes },
-    ) catch "";
     f.gl.text(.{ 16, 16 }, "lightmap: baked many-light scene", .{
         .size = 24,
         .color = .{ .r = 235, .g = 235, .b = 245, .a = 255 },
         .font = &s.font,
     });
-    f.gl.text(.{ 16, 46 }, line, .{
-        .size = 16,
-        .color = .{ .r = 170, .g = 180, .b = 200, .a = 255 },
-        .font = &s.font,
-    });
+    f.gl.textf(
+        .{ 16, 46 },
+        "{d} coloured lights + baked shadows from {d} static cubes",
+        .{ num_lights, num_cubes },
+        .{
+            .size = 16,
+            .color = .{ .r = 170, .g = 180, .b = 200, .a = 255 },
+            .font = &s.font,
+        },
+    );
     common.caption(f.gl, s.font, "runtime lighting cost: 1 texture fetch, 0 lights - it's all in the lightmap");
 }
 

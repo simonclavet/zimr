@@ -35,6 +35,17 @@
             "smartStep": true
         },
         {
+            "name": "Debug: audio-keyboard",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/audio_keyboard/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build audio-keyboard",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
             "name": "Debug: audio-mixer",
             "type": "chrome",
             "request": "launch",
@@ -129,6 +140,17 @@
             "url": "http://localhost:8080/bone_socket/",
             "webRoot": "${workspaceFolder}/zig-out/web",
             "preLaunchTask": "zig: build bone-socket",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: bouncing-ball",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/bouncing_ball/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build bouncing-ball",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -1691,6 +1713,17 @@
             "url": "http://localhost:8080/procgen_noise/",
             "webRoot": "${workspaceFolder}/zig-out/web",
             "preLaunchTask": "zig: build procgen-noise",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: profiler-flamegraph",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/profiler_flamegraph/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build profiler-flamegraph",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -3476,6 +3509,3515 @@
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
+        },
+        {
+            "name": "Debug: 3d-probe (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/3d_probe.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build 3d-probe (windows)"
+        },
+        {
+            "name": "Debug: audio-amp-envelope (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/audio_amp_envelope.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build audio-amp-envelope (windows)"
+        },
+        {
+            "name": "Debug: audio-basic (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/audio_basic.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build audio-basic (windows)"
+        },
+        {
+            "name": "Debug: audio-keyboard (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/audio_keyboard.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build audio-keyboard (windows)"
+        },
+        {
+            "name": "Debug: audio-mixer (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/audio_mixer.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build audio-mixer (windows)"
+        },
+        {
+            "name": "Debug: audio-sound-lab (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/audio_sound_lab.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build audio-sound-lab (windows)"
+        },
+        {
+            "name": "Debug: audio-spectrum-visualizer (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/audio_spectrum_visualizer.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build audio-spectrum-visualizer (windows)"
+        },
+        {
+            "name": "Debug: audio-stream-synth (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/audio_stream_synth.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build audio-stream-synth (windows)"
+        },
+        {
+            "name": "Debug: balance-flywheel (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/balance_flywheel.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build balance-flywheel (windows)"
+        },
+        {
+            "name": "Debug: ball-physics (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ball_physics.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ball-physics (windows)"
+        },
+        {
+            "name": "Debug: basic (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/basic.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build basic (windows)"
+        },
+        {
+            "name": "Debug: billboards (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/billboards.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build billboards (windows)"
+        },
+        {
+            "name": "Debug: bone-socket (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/bone_socket.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build bone-socket (windows)"
+        },
+        {
+            "name": "Debug: bouncing-ball (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/bouncing_ball.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build bouncing-ball (windows)"
+        },
+        {
+            "name": "Debug: box-collisions (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/box_collisions.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build box-collisions (windows)"
+        },
+        {
+            "name": "Debug: bullet-hell (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/bullet_hell.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build bullet-hell (windows)"
+        },
+        {
+            "name": "Debug: camera-controls (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/camera_controls.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build camera-controls (windows)"
+        },
+        {
+            "name": "Debug: camera2d (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/camera2d.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build camera2d (windows)"
+        },
+        {
+            "name": "Debug: cartpole (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/cartpole.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build cartpole (windows)"
+        },
+        {
+            "name": "Debug: cartpole-duel (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/cartpole_duel.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build cartpole-duel (windows)"
+        },
+        {
+            "name": "Debug: catch (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/catch.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build catch (windows)"
+        },
+        {
+            "name": "Debug: cel-shading (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/cel_shading.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build cel-shading (windows)"
+        },
+        {
+            "name": "Debug: cellular-automata (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/cellular_automata.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build cellular-automata (windows)"
+        },
+        {
+            "name": "Debug: chain-ik (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/chain_ik.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build chain-ik (windows)"
+        },
+        {
+            "name": "Debug: circle-sector-drawing (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/circle_sector_drawing.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build circle-sector-drawing (windows)"
+        },
+        {
+            "name": "Debug: clock-of-clocks (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/clock_of_clocks.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build clock-of-clocks (windows)"
+        },
+        {
+            "name": "Debug: collision-area (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/collision_area.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build collision-area (windows)"
+        },
+        {
+            "name": "Debug: color-wheel (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/color_wheel.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build color-wheel (windows)"
+        },
+        {
+            "name": "Debug: colors-palette (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/colors_palette.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build colors-palette (windows)"
+        },
+        {
+            "name": "Debug: composer-drum (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/composer_drum.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build composer-drum (windows)"
+        },
+        {
+            "name": "Debug: comptime-julia (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/comptime_julia.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build comptime-julia (windows)"
+        },
+        {
+            "name": "Debug: comptime-mandelbrot (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/comptime_mandelbrot.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build comptime-mandelbrot (windows)"
+        },
+        {
+            "name": "Debug: compute-particles (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/compute_particles.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build compute-particles (windows)"
+        },
+        {
+            "name": "Debug: compute-smoke (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/compute_smoke.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build compute-smoke (windows)"
+        },
+        {
+            "name": "Debug: crane (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/crane.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build crane (windows)"
+        },
+        {
+            "name": "Debug: cube-demo (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/cube_demo.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build cube-demo (windows)"
+        },
+        {
+            "name": "Debug: cube-sidebyside (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/cube_sidebyside.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build cube-sidebyside (windows)"
+        },
+        {
+            "name": "Debug: cube3d (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/cube3d.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build cube3d (windows)"
+        },
+        {
+            "name": "Debug: cubicmap (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/cubicmap.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build cubicmap (windows)"
+        },
+        {
+            "name": "Debug: damaged-helmet (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/damaged_helmet.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build damaged-helmet (windows)"
+        },
+        {
+            "name": "Debug: dance-track (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/dance_track.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build dance-track (windows)"
+        },
+        {
+            "name": "Debug: dashed-line (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/dashed_line.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build dashed-line (windows)"
+        },
+        {
+            "name": "Debug: decal-sw (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/decal_sw.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build decal-sw (windows)"
+        },
+        {
+            "name": "Debug: decals (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/decals.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build decals (windows)"
+        },
+        {
+            "name": "Debug: deferred-render (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/deferred_render.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build deferred-render (windows)"
+        },
+        {
+            "name": "Debug: delta-time (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/delta_time.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build delta-time (windows)"
+        },
+        {
+            "name": "Debug: depth-cue (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/depth_cue.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build depth-cue (windows)"
+        },
+        {
+            "name": "Debug: depth-rendering (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/depth_rendering.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build depth-rendering (windows)"
+        },
+        {
+            "name": "Debug: depth-writing (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/depth_writing.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build depth-writing (windows)"
+        },
+        {
+            "name": "Debug: digital-clock (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/digital_clock.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build digital-clock (windows)"
+        },
+        {
+            "name": "Debug: directional-billboard (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/directional_billboard.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build directional-billboard (windows)"
+        },
+        {
+            "name": "Debug: double-pendulum (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/double_pendulum.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build double-pendulum (windows)"
+        },
+        {
+            "name": "Debug: draw2d-demo (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/draw2d_demo.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build draw2d-demo (windows)"
+        },
+        {
+            "name": "Debug: dynamic-mesh (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/dynamic_mesh.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build dynamic-mesh (windows)"
+        },
+        {
+            "name": "Debug: easings-ball (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/easings_ball.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build easings-ball (windows)"
+        },
+        {
+            "name": "Debug: easings-box (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/easings_box.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build easings-box (windows)"
+        },
+        {
+            "name": "Debug: easings-rectangles (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/easings_rectangles.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build easings-rectangles (windows)"
+        },
+        {
+            "name": "Debug: easings-testbed (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/easings_testbed.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build easings-testbed (windows)"
+        },
+        {
+            "name": "Debug: ecs-boids (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ecs_boids.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ecs-boids (windows)"
+        },
+        {
+            "name": "Debug: ecs-solar-system (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ecs_solar_system.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ecs-solar-system (windows)"
+        },
+        {
+            "name": "Debug: ellipse-collision (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ellipse_collision.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ellipse-collision (windows)"
+        },
+        {
+            "name": "Debug: first-person-camera (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/first_person_camera.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build first-person-camera (windows)"
+        },
+        {
+            "name": "Debug: first-person-maze (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/first_person_maze.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build first-person-maze (windows)"
+        },
+        {
+            "name": "Debug: fluid-sort (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/fluid_sort.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build fluid-sort (windows)"
+        },
+        {
+            "name": "Debug: fog-rendering (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/fog_rendering.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build fog-rendering (windows)"
+        },
+        {
+            "name": "Debug: following-eyes (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/following_eyes.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build following-eyes (windows)"
+        },
+        {
+            "name": "Debug: four-ways (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/four_ways.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build four-ways (windows)"
+        },
+        {
+            "name": "Debug: fps-playground (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/fps_playground.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build fps-playground (windows)"
+        },
+        {
+            "name": "Debug: fractal-tree (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/fractal_tree.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build fractal-tree (windows)"
+        },
+        {
+            "name": "Debug: friction-slope (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/friction_slope.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build friction-slope (windows)"
+        },
+        {
+            "name": "Debug: gallery (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/gallery.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build gallery (windows)"
+        },
+        {
+            "name": "Debug: gallery-all (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/gallery_all.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build gallery-all (windows)"
+        },
+        {
+            "name": "Debug: geno-dance (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/geno_dance.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build geno-dance (windows)"
+        },
+        {
+            "name": "Debug: geno-fit (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/geno_fit.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build geno-fit (windows)"
+        },
+        {
+            "name": "Debug: geno-ppo (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/geno_ppo.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build geno-ppo (windows)"
+        },
+        {
+            "name": "Debug: geno-track (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/geno_track.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build geno-track (windows)"
+        },
+        {
+            "name": "Debug: geno-train (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/geno_train.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build geno-train (windows)"
+        },
+        {
+            "name": "Debug: gestures-demo (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/gestures_demo.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build gestures-demo (windows)"
+        },
+        {
+            "name": "Debug: gestures-testbed (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/gestures_testbed.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build gestures-testbed (windows)"
+        },
+        {
+            "name": "Debug: getup-frames (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/getup_frames.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build getup-frames (windows)"
+        },
+        {
+            "name": "Debug: getup-train (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/getup_train.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build getup-train (windows)"
+        },
+        {
+            "name": "Debug: gltf-simple (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/gltf_simple.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build gltf-simple (windows)"
+        },
+        {
+            "name": "Debug: gltf-textured (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/gltf_textured.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build gltf-textured (windows)"
+        },
+        {
+            "name": "Debug: gripper (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/gripper.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build gripper (windows)"
+        },
+        {
+            "name": "Debug: heightmap (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/heightmap.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build heightmap (windows)"
+        },
+        {
+            "name": "Debug: hello-world (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/hello_world.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build hello-world (windows)"
+        },
+        {
+            "name": "Debug: helmet-sw (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/helmet_sw.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build helmet-sw (windows)"
+        },
+        {
+            "name": "Debug: hilbert-curve (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/hilbert_curve.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build hilbert-curve (windows)"
+        },
+        {
+            "name": "Debug: humanoid (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/humanoid.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build humanoid (windows)"
+        },
+        {
+            "name": "Debug: hybrid-render (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/hybrid_render.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build hybrid-render (windows)"
+        },
+        {
+            "name": "Debug: icosphere-demo (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/icosphere_demo.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build icosphere-demo (windows)"
+        },
+        {
+            "name": "Debug: image-editor (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/image_editor.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build image-editor (windows)"
+        },
+        {
+            "name": "Debug: imgui-phone-demo (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/imgui_phone_demo.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build imgui-phone-demo (windows)"
+        },
+        {
+            "name": "Debug: input-actions (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/input_actions.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build input-actions (windows)"
+        },
+        {
+            "name": "Debug: input-cursor-shapes (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/input_cursor_shapes.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build input-cursor-shapes (windows)"
+        },
+        {
+            "name": "Debug: input-gamepad (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/input_gamepad.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build input-gamepad (windows)"
+        },
+        {
+            "name": "Debug: input-keys (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/input_keys.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build input-keys (windows)"
+        },
+        {
+            "name": "Debug: input-mouse (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/input_mouse.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build input-mouse (windows)"
+        },
+        {
+            "name": "Debug: input-mouse-wheel (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/input_mouse_wheel.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build input-mouse-wheel (windows)"
+        },
+        {
+            "name": "Debug: input-multitouch (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/input_multitouch.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build input-multitouch (windows)"
+        },
+        {
+            "name": "Debug: input-pointer-lock (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/input_pointer_lock.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build input-pointer-lock (windows)"
+        },
+        {
+            "name": "Debug: input-virtual-controls (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/input_virtual_controls.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build input-virtual-controls (windows)"
+        },
+        {
+            "name": "Debug: instancing (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/instancing.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build instancing (windows)"
+        },
+        {
+            "name": "Debug: julia (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/julia.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build julia (windows)"
+        },
+        {
+            "name": "Debug: julia-gallery (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/julia_gallery.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build julia-gallery (windows)"
+        },
+        {
+            "name": "Debug: kaleidoscope (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/kaleidoscope.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build kaleidoscope (windows)"
+        },
+        {
+            "name": "Debug: keys (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/keys.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build keys (windows)"
+        },
+        {
+            "name": "Debug: lambert-demo (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/lambert_demo.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build lambert-demo (windows)"
+        },
+        {
+            "name": "Debug: langton-ant (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/langton_ant.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build langton-ant (windows)"
+        },
+        {
+            "name": "Debug: launcher (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/launcher.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build launcher (windows)"
+        },
+        {
+            "name": "Debug: life (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/life.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build life (windows)"
+        },
+        {
+            "name": "Debug: lines-bezier (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/lines_bezier.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build lines-bezier (windows)"
+        },
+        {
+            "name": "Debug: lines-drawing (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/lines_drawing.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build lines-drawing (windows)"
+        },
+        {
+            "name": "Debug: logo-raylib (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/logo_raylib.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build logo-raylib (windows)"
+        },
+        {
+            "name": "Debug: logo-raylib-anim (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/logo_raylib_anim.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build logo-raylib-anim (windows)"
+        },
+        {
+            "name": "Debug: mandel-julia (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/mandel_julia.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build mandel-julia (windows)"
+        },
+        {
+            "name": "Debug: mandel-sidebyside (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/mandel_sidebyside.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build mandel-sidebyside (windows)"
+        },
+        {
+            "name": "Debug: math-angle-rotation (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/math_angle_rotation.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build math-angle-rotation (windows)"
+        },
+        {
+            "name": "Debug: math-sine-cosine (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/math_sine_cosine.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build math-sine-cosine (windows)"
+        },
+        {
+            "name": "Debug: mesh-builder (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/mesh_builder.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build mesh-builder (windows)"
+        },
+        {
+            "name": "Debug: mesh-picking (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/mesh_picking.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build mesh-picking (windows)"
+        },
+        {
+            "name": "Debug: mocap-viewer (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/mocap_viewer.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build mocap-viewer (windows)"
+        },
+        {
+            "name": "Debug: models-animation-blend-custom (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/models_animation_blend_custom.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build models-animation-blend-custom (windows)"
+        },
+        {
+            "name": "Debug: models-geometric-shapes (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/models_geometric_shapes.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build models-geometric-shapes (windows)"
+        },
+        {
+            "name": "Debug: models3d (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/models3d.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build models3d (windows)"
+        },
+        {
+            "name": "Debug: monitors (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/monitors.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build monitors (windows)"
+        },
+        {
+            "name": "Debug: mpc-cartpole (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/mpc_cartpole.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build mpc-cartpole (windows)"
+        },
+        {
+            "name": "Debug: mpc-quadruped (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/mpc_quadruped.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build mpc-quadruped (windows)"
+        },
+        {
+            "name": "Debug: music-streaming (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/music_streaming.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build music-streaming (windows)"
+        },
+        {
+            "name": "Debug: net-cursors (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/net_cursors.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build net-cursors (windows)"
+        },
+        {
+            "name": "Debug: net-ws-smoke (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/net_ws_smoke.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build net-ws-smoke (windows)"
+        },
+        {
+            "name": "Debug: obj-bunny (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/obj_bunny.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build obj-bunny (windows)"
+        },
+        {
+            "name": "Debug: obj-simple (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/obj_simple.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build obj-simple (windows)"
+        },
+        {
+            "name": "Debug: orthographic-projection (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/orthographic_projection.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build orthographic-projection (windows)"
+        },
+        {
+            "name": "Debug: particles (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/particles.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build particles (windows)"
+        },
+        {
+            "name": "Debug: pbr-demo (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/pbr_demo.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build pbr-demo (windows)"
+        },
+        {
+            "name": "Debug: penrose-tile (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/penrose_tile.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build penrose-tile (windows)"
+        },
+        {
+            "name": "Debug: physics-sidebyside (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/physics_sidebyside.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build physics-sidebyside (windows)"
+        },
+        {
+            "name": "Debug: pie-chart (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/pie_chart.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build pie-chart (windows)"
+        },
+        {
+            "name": "Debug: pipeline-basic (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/pipeline_basic.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build pipeline-basic (windows)"
+        },
+        {
+            "name": "Debug: pipeline-bloom (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/pipeline_bloom.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build pipeline-bloom (windows)"
+        },
+        {
+            "name": "Debug: pipeline-instancing (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/pipeline_instancing.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build pipeline-instancing (windows)"
+        },
+        {
+            "name": "Debug: pipeline-msaa (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/pipeline_msaa.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build pipeline-msaa (windows)"
+        },
+        {
+            "name": "Debug: pipeline-postprocess (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/pipeline_postprocess.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build pipeline-postprocess (windows)"
+        },
+        {
+            "name": "Debug: pipeline-rendertarget (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/pipeline_rendertarget.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build pipeline-rendertarget (windows)"
+        },
+        {
+            "name": "Debug: pipeline-sampler (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/pipeline_sampler.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build pipeline-sampler (windows)"
+        },
+        {
+            "name": "Debug: pipeline-settings (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/pipeline_settings.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build pipeline-settings (windows)"
+        },
+        {
+            "name": "Debug: pipeline-uniforms (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/pipeline_uniforms.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build pipeline-uniforms (windows)"
+        },
+        {
+            "name": "Debug: platonic-solids (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/platonic_solids.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build platonic-solids (windows)"
+        },
+        {
+            "name": "Debug: plot-demo (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/plot_demo.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build plot-demo (windows)"
+        },
+        {
+            "name": "Debug: plot3d-demo (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/plot3d_demo.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build plot3d-demo (windows)"
+        },
+        {
+            "name": "Debug: plot3d-gallery (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/plot3d_gallery.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build plot3d-gallery (windows)"
+        },
+        {
+            "name": "Debug: png-demo (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/png_demo.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build png-demo (windows)"
+        },
+        {
+            "name": "Debug: point-rendering (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/point_rendering.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build point-rendering (windows)"
+        },
+        {
+            "name": "Debug: procgen-noise (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/procgen_noise.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build procgen-noise (windows)"
+        },
+        {
+            "name": "Debug: profiler-flamegraph (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/profiler_flamegraph.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build profiler-flamegraph (windows)"
+        },
+        {
+            "name": "Debug: quadruped (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/quadruped.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build quadruped (windows)"
+        },
+        {
+            "name": "Debug: ragdoll-compare (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ragdoll_compare.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ragdoll-compare (windows)"
+        },
+        {
+            "name": "Debug: random-sequence (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/random_sequence.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build random-sequence (windows)"
+        },
+        {
+            "name": "Debug: random-values (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/random_values.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build random-values (windows)"
+        },
+        {
+            "name": "Debug: raytracer (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/raytracer.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build raytracer (windows)"
+        },
+        {
+            "name": "Debug: rectangle-advanced (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/rectangle_advanced.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build rectangle-advanced (windows)"
+        },
+        {
+            "name": "Debug: rectangle-scaling (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/rectangle_scaling.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build rectangle-scaling (windows)"
+        },
+        {
+            "name": "Debug: recursive-hud (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/recursive_hud.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build recursive-hud (windows)"
+        },
+        {
+            "name": "Debug: render-texture (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/render_texture.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build render-texture (windows)"
+        },
+        {
+            "name": "Debug: ring-drawing (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ring_drawing.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ring-drawing (windows)"
+        },
+        {
+            "name": "Debug: rl-humanoid (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/rl_humanoid.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build rl-humanoid (windows)"
+        },
+        {
+            "name": "Debug: robot-3d (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/robot_3d.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build robot-3d (windows)"
+        },
+        {
+            "name": "Debug: robot-contact (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/robot_contact.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build robot-contact (windows)"
+        },
+        {
+            "name": "Debug: robot-demo (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/robot_demo.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build robot-demo (windows)"
+        },
+        {
+            "name": "Debug: robot-pendulum (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/robot_pendulum.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build robot-pendulum (windows)"
+        },
+        {
+            "name": "Debug: robot-sidebyside (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/robot_sidebyside.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build robot-sidebyside (windows)"
+        },
+        {
+            "name": "Debug: rock-demo (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/rock_demo.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build rock-demo (windows)"
+        },
+        {
+            "name": "Debug: rocket (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/rocket.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build rocket (windows)"
+        },
+        {
+            "name": "Debug: rounded-rectangle (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/rounded_rectangle.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build rounded-rectangle (windows)"
+        },
+        {
+            "name": "Debug: rt-shader (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/rt_shader.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build rt-shader (windows)"
+        },
+        {
+            "name": "Debug: rt-sidebyside (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/rt_sidebyside.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build rt-sidebyside (windows)"
+        },
+        {
+            "name": "Debug: rt-workers (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/rt_workers.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build rt-workers (windows)"
+        },
+        {
+            "name": "Debug: scissor-test (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/scissor_test.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build scissor-test (windows)"
+        },
+        {
+            "name": "Debug: shader-effects (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/shader_effects.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build shader-effects (windows)"
+        },
+        {
+            "name": "Debug: shaders-lightmap-rendering (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/shaders_lightmap_rendering.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build shaders-lightmap-rendering (windows)"
+        },
+        {
+            "name": "Debug: shaders-multi-texture (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/shaders_multi_texture.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build shaders-multi-texture (windows)"
+        },
+        {
+            "name": "Debug: shaders-normalmap-rendering (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/shaders_normalmap_rendering.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build shaders-normalmap-rendering (windows)"
+        },
+        {
+            "name": "Debug: shaders-shapes-textures (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/shaders_shapes_textures.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build shaders-shapes-textures (windows)"
+        },
+        {
+            "name": "Debug: shaders-vertex-displacement (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/shaders_vertex_displacement.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build shaders-vertex-displacement (windows)"
+        },
+        {
+            "name": "Debug: shadow-sidebyside (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/shadow_sidebyside.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build shadow-sidebyside (windows)"
+        },
+        {
+            "name": "Debug: shadowmap (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/shadowmap.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build shadowmap (windows)"
+        },
+        {
+            "name": "Debug: shadowmap-sw (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/shadowmap_sw.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build shadowmap-sw (windows)"
+        },
+        {
+            "name": "Debug: shapes-demo (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/shapes_demo.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build shapes-demo (windows)"
+        },
+        {
+            "name": "Debug: shapes-gallery (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/shapes_gallery.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build shapes-gallery (windows)"
+        },
+        {
+            "name": "Debug: shapes-procedural (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/shapes_procedural.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build shapes-procedural (windows)"
+        },
+        {
+            "name": "Debug: shapes-showcase (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/shapes_showcase.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build shapes-showcase (windows)"
+        },
+        {
+            "name": "Debug: shapes-top-down-lights (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/shapes_top_down_lights.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build shapes-top-down-lights (windows)"
+        },
+        {
+            "name": "Debug: shared-smoke (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/shared_smoke.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build shared-smoke (windows)"
+        },
+        {
+            "name": "Debug: sidebyside (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/sidebyside.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build sidebyside (windows)"
+        },
+        {
+            "name": "Debug: simple-particles (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/simple_particles.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build simple-particles (windows)"
+        },
+        {
+            "name": "Debug: skinned-mesh (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/skinned_mesh.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build skinned-mesh (windows)"
+        },
+        {
+            "name": "Debug: skybox (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/skybox.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build skybox (windows)"
+        },
+        {
+            "name": "Debug: smooth-pixelperfect (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/smooth_pixelperfect.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build smooth-pixelperfect (windows)"
+        },
+        {
+            "name": "Debug: snake (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/snake.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build snake (windows)"
+        },
+        {
+            "name": "Debug: sort-smoke (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/sort_smoke.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build sort-smoke (windows)"
+        },
+        {
+            "name": "Debug: sph-fluid-2d (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/sph_fluid_2d.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build sph-fluid-2d (windows)"
+        },
+        {
+            "name": "Debug: splines-drawing (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/splines_drawing.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build splines-drawing (windows)"
+        },
+        {
+            "name": "Debug: split-screen (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/split_screen.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build split-screen (windows)"
+        },
+        {
+            "name": "Debug: srcrec-dstrec (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/srcrec_dstrec.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build srcrec-dstrec (windows)"
+        },
+        {
+            "name": "Debug: starfield (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/starfield.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build starfield (windows)"
+        },
+        {
+            "name": "Debug: starfield-effect (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/starfield_effect.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build starfield-effect (windows)"
+        },
+        {
+            "name": "Debug: state-persistence (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/state_persistence.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build state-persistence (windows)"
+        },
+        {
+            "name": "Debug: tesseract-view (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/tesseract_view.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build tesseract-view (windows)"
+        },
+        {
+            "name": "Debug: text-codepoints-loading (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/text_codepoints_loading.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build text-codepoints-loading (windows)"
+        },
+        {
+            "name": "Debug: text-field (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/text_field.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build text-field (windows)"
+        },
+        {
+            "name": "Debug: text-font-filters (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/text_font_filters.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build text-font-filters (windows)"
+        },
+        {
+            "name": "Debug: text-font-loading (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/text_font_loading.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build text-font-loading (windows)"
+        },
+        {
+            "name": "Debug: text-font-sdf (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/text_font_sdf.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build text-font-sdf (windows)"
+        },
+        {
+            "name": "Debug: text-inline-styling (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/text_inline_styling.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build text-inline-styling (windows)"
+        },
+        {
+            "name": "Debug: text-layout (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/text_layout.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build text-layout (windows)"
+        },
+        {
+            "name": "Debug: text-on-texture (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/text_on_texture.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build text-on-texture (windows)"
+        },
+        {
+            "name": "Debug: text-sprite-fonts (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/text_sprite_fonts.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build text-sprite-fonts (windows)"
+        },
+        {
+            "name": "Debug: text-strings-management (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/text_strings_management.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build text-strings-management (windows)"
+        },
+        {
+            "name": "Debug: text-unicode-ranges (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/text_unicode_ranges.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build text-unicode-ranges (windows)"
+        },
+        {
+            "name": "Debug: texture-readback (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/texture_readback.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build texture-readback (windows)"
+        },
+        {
+            "name": "Debug: texture-views (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/texture_views.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build texture-views (windows)"
+        },
+        {
+            "name": "Debug: textured-cube (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/textured_cube.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build textured-cube (windows)"
+        },
+        {
+            "name": "Debug: textured-curve (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/textured_curve.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build textured-curve (windows)"
+        },
+        {
+            "name": "Debug: textures-background-scrolling (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/textures_background_scrolling.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build textures-background-scrolling (windows)"
+        },
+        {
+            "name": "Debug: textures-blend-modes (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/textures_blend_modes.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build textures-blend-modes (windows)"
+        },
+        {
+            "name": "Debug: textures-bunnymark (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/textures_bunnymark.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build textures-bunnymark (windows)"
+        },
+        {
+            "name": "Debug: textures-fog-of-war (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/textures_fog_of_war.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build textures-fog-of-war (windows)"
+        },
+        {
+            "name": "Debug: textures-framebuffer-rendering (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/textures_framebuffer_rendering.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build textures-framebuffer-rendering (windows)"
+        },
+        {
+            "name": "Debug: textures-gif-player (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/textures_gif_player.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build textures-gif-player (windows)"
+        },
+        {
+            "name": "Debug: textures-image-channel (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/textures_image_channel.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build textures-image-channel (windows)"
+        },
+        {
+            "name": "Debug: textures-image-rotate (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/textures_image_rotate.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build textures-image-rotate (windows)"
+        },
+        {
+            "name": "Debug: textures-image-text (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/textures_image_text.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build textures-image-text (windows)"
+        },
+        {
+            "name": "Debug: textures-magnifying-glass (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/textures_magnifying_glass.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build textures-magnifying-glass (windows)"
+        },
+        {
+            "name": "Debug: textures-mouse-painting (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/textures_mouse_painting.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build textures-mouse-painting (windows)"
+        },
+        {
+            "name": "Debug: textures-npatch-drawing (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/textures_npatch_drawing.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build textures-npatch-drawing (windows)"
+        },
+        {
+            "name": "Debug: textures-polygon-drawing (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/textures_polygon_drawing.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build textures-polygon-drawing (windows)"
+        },
+        {
+            "name": "Debug: textures-raw-data (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/textures_raw_data.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build textures-raw-data (windows)"
+        },
+        {
+            "name": "Debug: textures-screen-buffer (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/textures_screen_buffer.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build textures-screen-buffer (windows)"
+        },
+        {
+            "name": "Debug: textures-sprite-animation (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/textures_sprite_animation.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build textures-sprite-animation (windows)"
+        },
+        {
+            "name": "Debug: textures-sprite-button (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/textures_sprite_button.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build textures-sprite-button (windows)"
+        },
+        {
+            "name": "Debug: textures-sprite-explosion (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/textures_sprite_explosion.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build textures-sprite-explosion (windows)"
+        },
+        {
+            "name": "Debug: textures-sprite-stacking (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/textures_sprite_stacking.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build textures-sprite-stacking (windows)"
+        },
+        {
+            "name": "Debug: textures-tiled-drawing (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/textures_tiled_drawing.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build textures-tiled-drawing (windows)"
+        },
+        {
+            "name": "Debug: three-leg (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/three_leg.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build three-leg (windows)"
+        },
+        {
+            "name": "Debug: tic-tac-toe (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/tic_tac_toe.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build tic-tac-toe (windows)"
+        },
+        {
+            "name": "Debug: tile-smoke (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/tile_smoke.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build tile-smoke (windows)"
+        },
+        {
+            "name": "Debug: touch-paint (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/touch_paint.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build touch-paint (windows)"
+        },
+        {
+            "name": "Debug: track-train (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/track_train.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build track-train (windows)"
+        },
+        {
+            "name": "Debug: tracking (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/tracking.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build tracking (windows)"
+        },
+        {
+            "name": "Debug: trails (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/trails.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build trails (windows)"
+        },
+        {
+            "name": "Debug: triangle-gradient (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/triangle_gradient.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build triangle-gradient (windows)"
+        },
+        {
+            "name": "Debug: triangle-strip (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/triangle_strip.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build triangle-strip (windows)"
+        },
+        {
+            "name": "Debug: ui-animation-gallery (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_animation_gallery.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-animation-gallery (windows)"
+        },
+        {
+            "name": "Debug: ui-canvas-demo (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_canvas_demo.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-canvas-demo (windows)"
+        },
+        {
+            "name": "Debug: ui-clipper (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_clipper.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-clipper (windows)"
+        },
+        {
+            "name": "Debug: ui-code-editor (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_code_editor.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-code-editor (windows)"
+        },
+        {
+            "name": "Debug: ui-color-picker (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_color_picker.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-color-picker (windows)"
+        },
+        {
+            "name": "Debug: ui-combo-custom (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_combo_custom.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-combo-custom (windows)"
+        },
+        {
+            "name": "Debug: ui-custom-rendering (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_custom_rendering.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-custom-rendering (windows)"
+        },
+        {
+            "name": "Debug: ui-custom-widget (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_custom_widget.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-custom-widget (windows)"
+        },
+        {
+            "name": "Debug: ui-data-grid-phone (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_data_grid_phone.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-data-grid-phone (windows)"
+        },
+        {
+            "name": "Debug: ui-demo (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_demo.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-demo (windows)"
+        },
+        {
+            "name": "Debug: ui-dev-tools (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_dev_tools.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-dev-tools (windows)"
+        },
+        {
+            "name": "Debug: ui-dock-basic (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_dock_basic.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-dock-basic (windows)"
+        },
+        {
+            "name": "Debug: ui-dock-persistence (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_dock_persistence.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-dock-persistence (windows)"
+        },
+        {
+            "name": "Debug: ui-dock-simple (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_dock_simple.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-dock-simple (windows)"
+        },
+        {
+            "name": "Debug: ui-drag-drop-demo (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_drag_drop_demo.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-drag-drop-demo (windows)"
+        },
+        {
+            "name": "Debug: ui-drag-drop-flags-tour (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_drag_drop_flags_tour.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-drag-drop-flags-tour (windows)"
+        },
+        {
+            "name": "Debug: ui-drag-drop-source (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_drag_drop_source.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-drag-drop-source (windows)"
+        },
+        {
+            "name": "Debug: ui-drawlists (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_drawlists.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-drawlists (windows)"
+        },
+        {
+            "name": "Debug: ui-full-showcase (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_full_showcase.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-full-showcase (windows)"
+        },
+        {
+            "name": "Debug: ui-imgui-extras (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_imgui_extras.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-imgui-extras (windows)"
+        },
+        {
+            "name": "Debug: ui-input-callbacks (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_input_callbacks.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-input-callbacks (windows)"
+        },
+        {
+            "name": "Debug: ui-input-flags-zoo-phone (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_input_flags_zoo_phone.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-input-flags-zoo-phone (windows)"
+        },
+        {
+            "name": "Debug: ui-input-query-demo (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_input_query_demo.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-input-query-demo (windows)"
+        },
+        {
+            "name": "Debug: ui-kanban-board (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_kanban_board.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-kanban-board (windows)"
+        },
+        {
+            "name": "Debug: ui-log-skeleton (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_log_skeleton.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-log-skeleton (windows)"
+        },
+        {
+            "name": "Debug: ui-log-viewer (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_log_viewer.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-log-viewer (windows)"
+        },
+        {
+            "name": "Debug: ui-mini-plot-smoke (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_mini_plot_smoke.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-mini-plot-smoke (windows)"
+        },
+        {
+            "name": "Debug: ui-minimal-button (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_minimal_button.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-minimal-button (windows)"
+        },
+        {
+            "name": "Debug: ui-minimal-one-context (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_minimal_one_context.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-minimal-one-context (windows)"
+        },
+        {
+            "name": "Debug: ui-mouse-drag (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_mouse_drag.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-mouse-drag (windows)"
+        },
+        {
+            "name": "Debug: ui-multiselect-finder (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_multiselect_finder.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-multiselect-finder (windows)"
+        },
+        {
+            "name": "Debug: ui-notes-phone (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_notes_phone.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-notes-phone (windows)"
+        },
+        {
+            "name": "Debug: ui-panes (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_panes.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-panes (windows)"
+        },
+        {
+            "name": "Debug: ui-persistence (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_persistence.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-persistence (windows)"
+        },
+        {
+            "name": "Debug: ui-phone-gestures (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_phone_gestures.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-phone-gestures (windows)"
+        },
+        {
+            "name": "Debug: ui-plot (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_plot.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-plot (windows)"
+        },
+        {
+            "name": "Debug: ui-plotting-basic (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_plotting_basic.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-plotting-basic (windows)"
+        },
+        {
+            "name": "Debug: ui-polish (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_polish.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-polish (windows)"
+        },
+        {
+            "name": "Debug: ui-pomodoro-phone (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_pomodoro_phone.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-pomodoro-phone (windows)"
+        },
+        {
+            "name": "Debug: ui-primitives-zoo-phone (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_primitives_zoo_phone.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-primitives-zoo-phone (windows)"
+        },
+        {
+            "name": "Debug: ui-shortcuts (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_shortcuts.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-shortcuts (windows)"
+        },
+        {
+            "name": "Debug: ui-smoke-button (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_smoke_button.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-smoke-button (windows)"
+        },
+        {
+            "name": "Debug: ui-tabbar-tour (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_tabbar_tour.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-tabbar-tour (windows)"
+        },
+        {
+            "name": "Debug: ui-tables-basic (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_tables_basic.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-tables-basic (windows)"
+        },
+        {
+            "name": "Debug: ui-tables-demo (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_tables_demo.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-tables-demo (windows)"
+        },
+        {
+            "name": "Debug: ui-tables-scroll (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_tables_scroll.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-tables-scroll (windows)"
+        },
+        {
+            "name": "Debug: ui-text-editing (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_text_editing.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-text-editing (windows)"
+        },
+        {
+            "name": "Debug: ui-widgets-data-types (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_widgets_data_types.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-widgets-data-types (windows)"
+        },
+        {
+            "name": "Debug: ui-window-menubar (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/ui_window_menubar.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build ui-window-menubar (windows)"
+        },
+        {
+            "name": "Debug: undo-redo (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/undo_redo.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build undo-redo (windows)"
+        },
+        {
+            "name": "Debug: vao-multibuffer (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/vao_multibuffer.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build vao-multibuffer (windows)"
+        },
+        {
+            "name": "Debug: vector-angle (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/vector_angle.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build vector-angle (windows)"
+        },
+        {
+            "name": "Debug: vertex-texture-test (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/vertex_texture_test.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build vertex-texture-test (windows)"
+        },
+        {
+            "name": "Debug: viewport-scaling (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/viewport_scaling.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build viewport-scaling (windows)"
+        },
+        {
+            "name": "Debug: voxel (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/voxel.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build voxel (windows)"
+        },
+        {
+            "name": "Debug: waving-cubes (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/waving_cubes.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build waving-cubes (windows)"
+        },
+        {
+            "name": "Debug: window-requests (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/window_requests.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build window-requests (windows)"
+        },
+        {
+            "name": "Debug: wireframe (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/wireframe.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build wireframe (windows)"
+        },
+        {
+            "name": "Debug: worker-png (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/worker_png.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build worker-png (windows)"
+        },
+        {
+            "name": "Debug: writing-anim (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/writing_anim.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build writing-anim (windows)"
+        },
+        {
+            "name": "Debug: yaw-pitch-roll (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/yaw_pitch_roll.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build yaw-pitch-roll (windows)"
+        },
+        {
+            "name": "Debug: zimr-gallery (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/zimr_gallery.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build zimr-gallery (windows)"
+        },
+        {
+            "name": "Debug: zimrnum-field (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/zimrnum_field.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build zimrnum-field (windows)"
+        },
+        {
+            "name": "Debug: zimrnum-train (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/zimrnum_train.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build zimrnum-train (windows)"
+        },
+        {
+            "name": "Debug: zimrphysics-demo (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/zimrphysics_demo.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build zimrphysics-demo (windows)"
+        },
+        {
+            "name": "Debug: zimrphysics2d-demo (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/zimrphysics2d_demo.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build zimrphysics2d-demo (windows)"
         }
     ]
 }

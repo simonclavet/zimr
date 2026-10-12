@@ -198,7 +198,7 @@ fn update(f: *z.Frame, s: *State) void {
     u.setNextWindowSize(.{ fw - 16.0, 300 }, .{});
     if (u.window("Amp envelope (ADSR)", .{})) |w| {
         defer w.close();
-        if (u.button("PLAY", .{})) {
+        if (u.button("PLAY", .{ .pressed_on_click = true })) {
             if (s.have_snd) {
                 z.sounds.play(&s.audio.sounds, s.snd);
             }

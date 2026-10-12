@@ -43,7 +43,6 @@ const quat_identity = zm.quat_identity;
 const greenman_glb = @embedFile("greenman.glb");
 const sword_glb = @embedFile("greenman_sword.glb");
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
-const bufPrint = std.fmt.bufPrint;
 const eql = std.mem.eql;
 
 const max_nodes: usize = 32;
@@ -410,9 +409,12 @@ fn update(f: *z.Frame, s: *State) void {
         .color = .{ .r = 235, .g = 235, .b = 245, .a = 255 },
         .font = &s.font,
     });
-    var hud_buf: [80]u8 = undefined;
-    const hud: []const u8 = bufPrint(&hud_buf, "anim '3_attack'  t = {d:.2}s / {d:.2}s", .{ s.t, s.duration }) catch "";
-    f.gl.text(.{ 16, 42 }, hud, .{ .size = 16, .color = .{ .r = 170, .g = 180, .b = 200, .a = 255 }, .font = &s.font });
+    f.gl.textf(
+        .{ 16, 42 },
+        "anim '3_attack'  t = {d:.2}s / {d:.2}s",
+        .{ s.t, s.duration },
+        .{ .size = 16, .color = .{ .r = 170, .g = 180, .b = 200, .a = 255 }, .font = &s.font },
+    );
     common.caption(f.gl, s.font, "drag = orbit, pinch/wheel = zoom - sword socketed to bone socket_hand_R");
 }
 

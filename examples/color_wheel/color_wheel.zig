@@ -21,7 +21,6 @@ const Vec2 = zm.Vec2;
 const Color = zm.Color;
 const distance = zm.distance;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
-const bufPrint = std.fmt.bufPrint;
 
 const triangle_count = 120;
 
@@ -98,13 +97,12 @@ fn drawSwatch(f: *z.Frame, s: *State) void {
         .{ .x = 12, .y = 12, .width = 64, .height = 64 },
         .{ .color = Color.lerp(color, .{ .r = 0, .g = 0, .b = 0, .a = 255 }, 0.5), .outline = 1.0 },
     );
-    var buf: [48]u8 = undefined;
-    const hex: []const u8 = bufPrint(
-        &buf,
+    f.gl.textf(
+        .{ 12, 84 },
         "#{X:0>2}{X:0>2}{X:0>2}  ({d}, {d}, {d})",
         .{ color.r, color.g, color.b, color.r, color.g, color.b },
-    ) catch "";
-    f.gl.text(.{ 12, 84 }, hex, .{ .size = 18, .color = common.palette.ink, .font = &s.font });
+        .{ .size = 18, .color = common.palette.ink, .font = &s.font },
+    );
     common.caption(f.gl, s.font, "colour wheel - drag the wheel to pick hue/saturation, the bar for value");
 }
 

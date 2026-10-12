@@ -32,7 +32,6 @@ const Vec2 = zm.Vec2;
 const float = zm.float;
 const clamp = zm.clamp;
 const Color = zm.Color;
-const bufPrint = std.fmt.bufPrint;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -319,7 +318,6 @@ fn drawPanel(
     // THE HONEST NUMBER. Not "how fast", but "did it cost you a frame".
     const gap: f32 = s.worst_gap_ms[i];
     const bad: bool = gap > 34.0; // two dropped frames at 60 Hz
-    var buf: [96]u8 = undefined;
 
     // An INLINE worker is not a worker. Rather than let the panel imply a contrast it is not
     // making, it says so - a green 0 ms here with no real thread behind it would be a lie.
@@ -332,12 +330,16 @@ fn drawPanel(
         return;
     }
 
-    const txt: []const u8 = bufPrint(&buf, "frame gap {d:.0} ms", .{gap}) catch "?";
-    f.gl.text(.{ at[0] + fsz * 0.4, at[1] + size[1] - fsz * 1.5 }, txt, .{
-        .size = fsz,
-        .color = if (bad) z.colors.red_400 else z.colors.emerald_400,
-        .font = &s.font,
-    });
+    f.gl.textf(
+        .{ at[0] + fsz * 0.4, at[1] + size[1] - fsz * 1.5 },
+        "frame gap {d:.0} ms",
+        .{gap},
+        .{
+            .size = fsz,
+            .color = if (bad) z.colors.red_400 else z.colors.emerald_400,
+            .font = &s.font,
+        },
+    );
 }
 
 fn update(f: *z.Frame, s: *State) void {

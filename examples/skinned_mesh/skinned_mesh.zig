@@ -24,7 +24,6 @@
 //! makes glTF's COLUMN-major mat4 floats map DIRECTLY onto zm.Mat rows,
 //! and "rotate then translate" compose as `mulMat(R, T)`.
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const sliceAsBytes = std.mem.sliceAsBytes;
 const z = @import("zimr");
@@ -303,13 +302,12 @@ fn update(f: *z.Frame, s: *State) void {
         "skinned mesh - CPU skinning",
         .{ .size = 22, .color = .{ .r = 235, .g = 235, .b = 245, .a = 255 }, .font = &s.font },
     );
-    var hud_buf: [64]u8 = undefined;
-    const hud: []const u8 = bufPrint(
-        &hud_buf,
+    f.gl.textf(
+        .{ 16, 42 },
         "anim 'wave'  t = {d:.2}s / {d:.2}s",
         .{ s.t, duration },
-    ) catch "";
-    f.gl.text(.{ 16, 42 }, hud, .{ .size = 16, .color = .{ .r = 170, .g = 180, .b = 200, .a = 255 }, .font = &s.font });
+        .{ .size = 16, .color = .{ .r = 170, .g = 180, .b = 200, .a = 255 }, .font = &s.font },
+    );
     _ = vw;
     common.caption(f.gl, s.font, "glTF skin + animation parsed by codecs - bone 1 waves the right edge");
 }

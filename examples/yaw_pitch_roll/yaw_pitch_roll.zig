@@ -30,7 +30,6 @@ const rotationY = zm.rotationY;
 const rotationZ = zm.rotationZ;
 const rad_per_deg = zm.rad_per_deg;
 const vec = zm.vec;
-const bufPrint = std.fmt.bufPrint;
 const common = @import("example_common");
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -190,13 +189,12 @@ fn update(f: *z.Frame, s: *State) void {
     z.endMode3D(f.gl);
 
     // ---- HUD ----
-    var buf: [96]u8 = undefined;
-    const hud: []const u8 = bufPrint(
-        &buf,
+    f.gl.textf(
+        .{ 14, 42 },
         "pitch {d: >6.1}   yaw {d: >6.1}   roll {d: >6.1}",
         .{ s.pitch, s.yaw, s.roll },
-    ) catch "";
-    f.gl.text(.{ 14, 42 }, hud, .{ .size = 18, .color = common.palette.ink_dim, .font = &s.font });
+        .{ .size = 18, .color = common.palette.ink_dim, .font = &s.font },
+    );
     common.caption(f.gl, s.font, "WebGPU 3D - yaw / pitch / roll (arrows + A/S, or buttons)");
     s.ui_host.render(f);
 }

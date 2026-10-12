@@ -11,7 +11,6 @@
 //! `beginDrawing`/`clearBackground` BEFORE `ui_host.begin` (the UI renders into
 //! the open draw frame), paired with `endDrawing`.
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
@@ -78,13 +77,16 @@ fn lerpColor(
     };
 }
 
-fn formatMinSec(buf: []u8, total_sec: f32) []const u8 {
+/// "mm:ss"; minutes can run past two digits, so the capacity leaves room.
+const ClockText = z.Str(16);
+
+fn formatMinSec(total_sec: f32) ClockText {
     // u32 (not i32) so `{d:0>2}` doesn't print a leading '+' sign. Clamped to
     // zero via @max so a negative input is harmless.
     const sec_total: u32 = @trunc(@max(0, @ceil(total_sec)));
     const mins: u32 = sec_total / 60;
     const secs: u32 = sec_total % 60;
-    return bufPrint(buf, "{d:0>2}:{d:0>2}", .{ mins, secs }) catch buf[0..0];
+    return .print("{d:0>2}:{d:0>2}", .{ mins, secs });
 }
 
 fn update(f: *z.Frame, s: *State) void {
@@ -170,12 +172,11 @@ fn update(f: *z.Frame, s: *State) void {
             }
 
             // Timer text centred by hand (addText takes a top-left position).
-            var buf: [16]u8 = undefined;
-            const txt: []const u8 = formatMinSec(&buf, remaining);
-            const text_size: Vec2 = u.calcTextSize(txt);
+            const txt: ClockText = formatMinSec(remaining);
+            const text_size: Vec2 = u.calcTextSize(txt.slice());
             const tx: f32 = cx - text_size[0] * 0.5;
             const ty: f32 = cy - text_size[1] * 0.5;
-            c.drawList().addText(txt, .{ tx, ty }, 56, ring_col);
+            c.drawList().addText(txt.slice(), .{ tx, ty }, 56, ring_col);
         }
 
         u.spacing();

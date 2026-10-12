@@ -22,7 +22,6 @@ const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const Color = zm.Color;
 const c = Color;
-const bufPrint = std.fmt.bufPrint;
 
 const screen_w: i32 = 800;
 const screen_h: i32 = 450;
@@ -72,17 +71,16 @@ fn update(f: *z.Frame, s: *State) void {
 
     f.gl.circle(.{ s.x, sh * 0.5 }, ball_r, .{ .color = c.maroon });
 
-    var buf: [64]u8 = undefined;
-    const fps_txt: []const u8 = bufPrint(&buf, "{d:.0} FPS", .{s.fps_smooth}) catch "?";
-    f.gl.text(.{ 20, 20 }, fps_txt, .{ .size = 20, .color = c.darkgray, .font = &s.font });
+    f.gl.textf(.{ 20, 20 }, "{d:.0} FPS", .{s.fps_smooth}, .{ .size = 20, .color = c.darkgray, .font = &s.font });
 
-    var buf2: [64]u8 = undefined;
-    const ft_txt: []const u8 = bufPrint(&buf2, "frame time: {d:.2} ms", .{dt * 1000.0}) catch "?";
-    f.gl.text(.{ 20, 46 }, ft_txt, .{ .size = 20, .color = c.darkgray, .font = &s.font });
+    f.gl.textf(
+        .{ 20, 46 },
+        "frame time: {d:.2} ms",
+        .{dt * 1000.0},
+        .{ .size = 20, .color = c.darkgray, .font = &s.font },
+    );
 
-    var buf3: [64]u8 = undefined;
-    const t_txt: []const u8 = bufPrint(&buf3, "elapsed: {d:.1} s", .{f.time.time}) catch "?";
-    f.gl.text(.{ 20, 72 }, t_txt, .{ .size = 20, .color = c.darkgray, .font = &s.font });
+    f.gl.textf(.{ 20, 72 }, "elapsed: {d:.1} s", .{f.time.time}, .{ .size = 20, .color = c.darkgray, .font = &s.font });
 
     f.gl.text(
         .{ 20, sh - 40.0 },

@@ -35,6 +35,16 @@ pub fn caption(
     gl.text(.{ 14, 12 }, text, .{ .size = 14, .color = palette.ink, .font = &font });
 }
 
+/// `caption`, formatting the text first: `common.captionf(f.gl, s.font, "rule {d}", .{s.rule})`.
+pub fn captionf(
+    gl: anytype,
+    font: z.Font,
+    comptime fmt: []const u8,
+    args: anytype,
+) void {
+    gl.textf(.{ 14, 12 }, fmt, args, .{ .size = 14, .color = palette.ink, .font = &font });
+}
+
 /// Fill the viewport with a subtle vertical gradient + a faint grid so examples sit on a
 /// considered surface, not flat black. Call right after clearBackground, before content.
 pub fn backdrop(

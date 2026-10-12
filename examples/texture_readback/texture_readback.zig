@@ -18,7 +18,6 @@
 //! 256x256 is chosen so `width * 4 = 1024` bytes/row is already 256-aligned
 //! (the WebGPU `bytesPerRow` rule) - no row padding to strip.
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 
@@ -162,11 +161,10 @@ fn update(f: *z.Frame, s: *State) void {
         "GPU>CPU>GPU readback",
         .{ .size = 18, .color = .{ .r = 235, .g = 235, .b = 245, .a = 255 }, .font = &s.font },
     );
-    var hud_buf: [64]u8 = undefined;
-    const hud: []const u8 = bufPrint(&hud_buf, "round-trips: {d}", .{s.roundtrips}) catch "round-trips: ?";
-    f.gl.text(
+    f.gl.textf(
         .{ x2, py + panel + 10 },
-        hud,
+        "round-trips: {d}",
+        .{s.roundtrips},
         .{ .size = 16, .color = .{ .r = 170, .g = 180, .b = 200, .a = 255 }, .font = &s.font },
     );
     common.caption(f.gl, s.font, "copyTextureToBuffer + poll-mapped staging - the panels match, one async step apart");

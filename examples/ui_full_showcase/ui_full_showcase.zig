@@ -466,10 +466,9 @@ fn panelPlots(
     u.textDisabled("Hover any plot for the per-sample readout.", .{});
     u.separator();
 
-    var overlay_buf: [32]u8 = undefined;
-    const fps_overlay: []u8 = bufPrint(&overlay_buf, "FPS {d:.1}", .{fps}) catch overlay_buf[0..0];
+    const fps_overlay: z.Str(32) = .print("FPS {d:.1}", .{fps});
     u.plotLines("Live FPS (last 120 frames)", &s.fps_hist, .{
-        .overlay = fps_overlay,
+        .overlay = fps_overlay.slice(),
         .min = 0,
         .max = 120,
         .height = 80,

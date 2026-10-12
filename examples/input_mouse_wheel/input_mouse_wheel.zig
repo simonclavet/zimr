@@ -17,7 +17,6 @@
 //                  delta is *subtracted* from box_y)
 
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
@@ -80,9 +79,12 @@ fn update(f: *z.Frame, state: *State) void {
         .{ .size = 20, .color = c.gray, .font = &state.font },
     );
 
-    var buf: [64]u8 = undefined;
-    const msg: []const u8 = bufPrint(&buf, "Box position Y: {d:0>3}", .{state.box_y}) catch "Box position Y: ?";
-    f.gl.text(.{ 10, 40 }, msg, .{ .size = 20, .color = c.lightgray, .font = &state.font });
+    f.gl.textf(
+        .{ 10, 40 },
+        "Box position Y: {d:0>3}",
+        .{state.box_y},
+        .{ .size = 20, .color = c.lightgray, .font = &state.font },
+    );
     z.endDrawing(f.gl);
 }
 

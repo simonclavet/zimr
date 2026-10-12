@@ -34,6 +34,17 @@
     },
     {
         "adapter": "JavaScript",
+        "label": "Debug: audio-keyboard",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/audio_keyboard/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build audio-keyboard"
+    },
+    {
+        "adapter": "JavaScript",
         "label": "Debug: audio-mixer",
         "type": "chrome",
         "request": "launch",
@@ -130,6 +141,17 @@
         "sourceMaps": true,
         "smartStep": true,
         "build": "zig: build bone-socket"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: bouncing-ball",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/bouncing_ball/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build bouncing-ball"
     },
     {
         "adapter": "JavaScript",
@@ -1692,6 +1714,17 @@
         "sourceMaps": true,
         "smartStep": true,
         "build": "zig: build procgen-noise"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: profiler-flamegraph",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/profiler_flamegraph/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build profiler-flamegraph"
     },
     {
         "adapter": "JavaScript",
@@ -3474,5 +3507,3833 @@
         "sourceMaps": true,
         "smartStep": true,
         "build": "zig: build zimrphysics2d-demo"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: 3d-probe (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/3d_probe.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build 3d-probe (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: audio-amp-envelope (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/audio_amp_envelope.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build audio-amp-envelope (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: audio-basic (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/audio_basic.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build audio-basic (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: audio-keyboard (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/audio_keyboard.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build audio-keyboard (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: audio-mixer (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/audio_mixer.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build audio-mixer (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: audio-sound-lab (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/audio_sound_lab.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build audio-sound-lab (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: audio-spectrum-visualizer (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/audio_spectrum_visualizer.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build audio-spectrum-visualizer (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: audio-stream-synth (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/audio_stream_synth.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build audio-stream-synth (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: balance-flywheel (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/balance_flywheel.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build balance-flywheel (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ball-physics (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ball_physics.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ball-physics (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: basic (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/basic.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build basic (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: billboards (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/billboards.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build billboards (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: bone-socket (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/bone_socket.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build bone-socket (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: bouncing-ball (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/bouncing_ball.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build bouncing-ball (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: box-collisions (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/box_collisions.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build box-collisions (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: bullet-hell (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/bullet_hell.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build bullet-hell (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: camera-controls (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/camera_controls.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build camera-controls (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: camera2d (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/camera2d.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build camera2d (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: cartpole (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/cartpole.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build cartpole (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: cartpole-duel (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/cartpole_duel.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build cartpole-duel (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: catch (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/catch.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build catch (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: cel-shading (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/cel_shading.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build cel-shading (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: cellular-automata (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/cellular_automata.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build cellular-automata (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: chain-ik (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/chain_ik.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build chain-ik (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: circle-sector-drawing (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/circle_sector_drawing.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build circle-sector-drawing (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: clock-of-clocks (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/clock_of_clocks.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build clock-of-clocks (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: collision-area (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/collision_area.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build collision-area (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: color-wheel (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/color_wheel.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build color-wheel (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: colors-palette (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/colors_palette.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build colors-palette (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: composer-drum (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/composer_drum.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build composer-drum (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: comptime-julia (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/comptime_julia.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build comptime-julia (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: comptime-mandelbrot (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/comptime_mandelbrot.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build comptime-mandelbrot (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: compute-particles (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/compute_particles.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build compute-particles (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: compute-smoke (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/compute_smoke.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build compute-smoke (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: crane (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/crane.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build crane (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: cube-demo (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/cube_demo.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build cube-demo (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: cube-sidebyside (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/cube_sidebyside.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build cube-sidebyside (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: cube3d (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/cube3d.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build cube3d (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: cubicmap (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/cubicmap.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build cubicmap (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: damaged-helmet (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/damaged_helmet.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build damaged-helmet (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: dance-track (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/dance_track.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build dance-track (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: dashed-line (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/dashed_line.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build dashed-line (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: decal-sw (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/decal_sw.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build decal-sw (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: decals (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/decals.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build decals (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: deferred-render (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/deferred_render.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build deferred-render (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: delta-time (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/delta_time.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build delta-time (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: depth-cue (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/depth_cue.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build depth-cue (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: depth-rendering (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/depth_rendering.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build depth-rendering (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: depth-writing (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/depth_writing.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build depth-writing (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: digital-clock (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/digital_clock.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build digital-clock (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: directional-billboard (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/directional_billboard.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build directional-billboard (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: double-pendulum (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/double_pendulum.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build double-pendulum (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: draw2d-demo (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/draw2d_demo.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build draw2d-demo (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: dynamic-mesh (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/dynamic_mesh.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build dynamic-mesh (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: easings-ball (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/easings_ball.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build easings-ball (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: easings-box (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/easings_box.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build easings-box (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: easings-rectangles (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/easings_rectangles.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build easings-rectangles (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: easings-testbed (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/easings_testbed.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build easings-testbed (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ecs-boids (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ecs_boids.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ecs-boids (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ecs-solar-system (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ecs_solar_system.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ecs-solar-system (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ellipse-collision (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ellipse_collision.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ellipse-collision (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: first-person-camera (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/first_person_camera.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build first-person-camera (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: first-person-maze (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/first_person_maze.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build first-person-maze (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: fluid-sort (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/fluid_sort.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build fluid-sort (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: fog-rendering (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/fog_rendering.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build fog-rendering (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: following-eyes (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/following_eyes.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build following-eyes (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: four-ways (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/four_ways.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build four-ways (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: fps-playground (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/fps_playground.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build fps-playground (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: fractal-tree (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/fractal_tree.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build fractal-tree (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: friction-slope (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/friction_slope.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build friction-slope (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: gallery (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/gallery.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build gallery (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: gallery-all (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/gallery_all.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build gallery-all (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: geno-dance (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/geno_dance.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build geno-dance (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: geno-fit (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/geno_fit.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build geno-fit (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: geno-ppo (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/geno_ppo.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build geno-ppo (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: geno-track (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/geno_track.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build geno-track (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: geno-train (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/geno_train.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build geno-train (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: gestures-demo (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/gestures_demo.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build gestures-demo (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: gestures-testbed (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/gestures_testbed.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build gestures-testbed (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: getup-frames (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/getup_frames.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build getup-frames (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: getup-train (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/getup_train.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build getup-train (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: gltf-simple (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/gltf_simple.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build gltf-simple (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: gltf-textured (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/gltf_textured.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build gltf-textured (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: gripper (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/gripper.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build gripper (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: heightmap (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/heightmap.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build heightmap (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: hello-world (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/hello_world.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build hello-world (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: helmet-sw (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/helmet_sw.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build helmet-sw (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: hilbert-curve (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/hilbert_curve.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build hilbert-curve (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: humanoid (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/humanoid.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build humanoid (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: hybrid-render (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/hybrid_render.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build hybrid-render (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: icosphere-demo (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/icosphere_demo.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build icosphere-demo (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: image-editor (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/image_editor.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build image-editor (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: imgui-phone-demo (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/imgui_phone_demo.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build imgui-phone-demo (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: input-actions (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/input_actions.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build input-actions (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: input-cursor-shapes (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/input_cursor_shapes.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build input-cursor-shapes (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: input-gamepad (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/input_gamepad.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build input-gamepad (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: input-keys (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/input_keys.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build input-keys (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: input-mouse (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/input_mouse.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build input-mouse (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: input-mouse-wheel (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/input_mouse_wheel.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build input-mouse-wheel (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: input-multitouch (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/input_multitouch.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build input-multitouch (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: input-pointer-lock (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/input_pointer_lock.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build input-pointer-lock (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: input-virtual-controls (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/input_virtual_controls.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build input-virtual-controls (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: instancing (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/instancing.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build instancing (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: julia (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/julia.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build julia (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: julia-gallery (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/julia_gallery.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build julia-gallery (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: kaleidoscope (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/kaleidoscope.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build kaleidoscope (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: keys (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/keys.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build keys (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: lambert-demo (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/lambert_demo.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build lambert-demo (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: langton-ant (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/langton_ant.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build langton-ant (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: launcher (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/launcher.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build launcher (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: life (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/life.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build life (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: lines-bezier (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/lines_bezier.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build lines-bezier (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: lines-drawing (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/lines_drawing.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build lines-drawing (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: logo-raylib (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/logo_raylib.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build logo-raylib (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: logo-raylib-anim (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/logo_raylib_anim.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build logo-raylib-anim (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: mandel-julia (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/mandel_julia.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build mandel-julia (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: mandel-sidebyside (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/mandel_sidebyside.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build mandel-sidebyside (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: math-angle-rotation (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/math_angle_rotation.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build math-angle-rotation (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: math-sine-cosine (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/math_sine_cosine.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build math-sine-cosine (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: mesh-builder (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/mesh_builder.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build mesh-builder (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: mesh-picking (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/mesh_picking.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build mesh-picking (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: mocap-viewer (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/mocap_viewer.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build mocap-viewer (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: models-animation-blend-custom (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/models_animation_blend_custom.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build models-animation-blend-custom (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: models-geometric-shapes (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/models_geometric_shapes.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build models-geometric-shapes (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: models3d (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/models3d.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build models3d (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: monitors (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/monitors.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build monitors (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: mpc-cartpole (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/mpc_cartpole.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build mpc-cartpole (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: mpc-quadruped (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/mpc_quadruped.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build mpc-quadruped (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: music-streaming (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/music_streaming.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build music-streaming (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: net-cursors (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/net_cursors.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build net-cursors (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: net-ws-smoke (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/net_ws_smoke.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build net-ws-smoke (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: obj-bunny (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/obj_bunny.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build obj-bunny (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: obj-simple (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/obj_simple.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build obj-simple (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: orthographic-projection (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/orthographic_projection.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build orthographic-projection (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: particles (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/particles.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build particles (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: pbr-demo (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/pbr_demo.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build pbr-demo (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: penrose-tile (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/penrose_tile.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build penrose-tile (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: physics-sidebyside (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/physics_sidebyside.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build physics-sidebyside (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: pie-chart (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/pie_chart.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build pie-chart (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: pipeline-basic (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/pipeline_basic.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build pipeline-basic (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: pipeline-bloom (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/pipeline_bloom.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build pipeline-bloom (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: pipeline-instancing (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/pipeline_instancing.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build pipeline-instancing (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: pipeline-msaa (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/pipeline_msaa.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build pipeline-msaa (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: pipeline-postprocess (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/pipeline_postprocess.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build pipeline-postprocess (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: pipeline-rendertarget (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/pipeline_rendertarget.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build pipeline-rendertarget (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: pipeline-sampler (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/pipeline_sampler.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build pipeline-sampler (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: pipeline-settings (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/pipeline_settings.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build pipeline-settings (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: pipeline-uniforms (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/pipeline_uniforms.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build pipeline-uniforms (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: platonic-solids (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/platonic_solids.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build platonic-solids (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: plot-demo (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/plot_demo.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build plot-demo (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: plot3d-demo (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/plot3d_demo.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build plot3d-demo (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: plot3d-gallery (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/plot3d_gallery.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build plot3d-gallery (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: png-demo (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/png_demo.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build png-demo (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: point-rendering (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/point_rendering.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build point-rendering (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: procgen-noise (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/procgen_noise.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build procgen-noise (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: profiler-flamegraph (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/profiler_flamegraph.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build profiler-flamegraph (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: quadruped (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/quadruped.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build quadruped (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ragdoll-compare (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ragdoll_compare.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ragdoll-compare (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: random-sequence (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/random_sequence.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build random-sequence (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: random-values (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/random_values.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build random-values (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: raytracer (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/raytracer.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build raytracer (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: rectangle-advanced (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/rectangle_advanced.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build rectangle-advanced (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: rectangle-scaling (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/rectangle_scaling.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build rectangle-scaling (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: recursive-hud (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/recursive_hud.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build recursive-hud (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: render-texture (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/render_texture.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build render-texture (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ring-drawing (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ring_drawing.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ring-drawing (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: rl-humanoid (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/rl_humanoid.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build rl-humanoid (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: robot-3d (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/robot_3d.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build robot-3d (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: robot-contact (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/robot_contact.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build robot-contact (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: robot-demo (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/robot_demo.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build robot-demo (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: robot-pendulum (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/robot_pendulum.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build robot-pendulum (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: robot-sidebyside (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/robot_sidebyside.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build robot-sidebyside (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: rock-demo (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/rock_demo.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build rock-demo (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: rocket (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/rocket.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build rocket (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: rounded-rectangle (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/rounded_rectangle.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build rounded-rectangle (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: rt-shader (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/rt_shader.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build rt-shader (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: rt-sidebyside (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/rt_sidebyside.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build rt-sidebyside (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: rt-workers (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/rt_workers.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build rt-workers (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: scissor-test (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/scissor_test.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build scissor-test (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: shader-effects (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/shader_effects.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build shader-effects (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: shaders-lightmap-rendering (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/shaders_lightmap_rendering.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build shaders-lightmap-rendering (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: shaders-multi-texture (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/shaders_multi_texture.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build shaders-multi-texture (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: shaders-normalmap-rendering (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/shaders_normalmap_rendering.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build shaders-normalmap-rendering (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: shaders-shapes-textures (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/shaders_shapes_textures.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build shaders-shapes-textures (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: shaders-vertex-displacement (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/shaders_vertex_displacement.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build shaders-vertex-displacement (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: shadow-sidebyside (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/shadow_sidebyside.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build shadow-sidebyside (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: shadowmap (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/shadowmap.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build shadowmap (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: shadowmap-sw (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/shadowmap_sw.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build shadowmap-sw (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: shapes-demo (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/shapes_demo.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build shapes-demo (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: shapes-gallery (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/shapes_gallery.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build shapes-gallery (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: shapes-procedural (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/shapes_procedural.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build shapes-procedural (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: shapes-showcase (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/shapes_showcase.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build shapes-showcase (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: shapes-top-down-lights (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/shapes_top_down_lights.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build shapes-top-down-lights (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: shared-smoke (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/shared_smoke.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build shared-smoke (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: sidebyside (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/sidebyside.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build sidebyside (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: simple-particles (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/simple_particles.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build simple-particles (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: skinned-mesh (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/skinned_mesh.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build skinned-mesh (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: skybox (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/skybox.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build skybox (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: smooth-pixelperfect (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/smooth_pixelperfect.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build smooth-pixelperfect (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: snake (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/snake.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build snake (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: sort-smoke (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/sort_smoke.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build sort-smoke (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: sph-fluid-2d (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/sph_fluid_2d.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build sph-fluid-2d (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: splines-drawing (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/splines_drawing.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build splines-drawing (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: split-screen (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/split_screen.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build split-screen (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: srcrec-dstrec (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/srcrec_dstrec.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build srcrec-dstrec (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: starfield (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/starfield.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build starfield (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: starfield-effect (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/starfield_effect.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build starfield-effect (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: state-persistence (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/state_persistence.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build state-persistence (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: tesseract-view (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/tesseract_view.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build tesseract-view (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: text-codepoints-loading (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/text_codepoints_loading.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build text-codepoints-loading (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: text-field (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/text_field.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build text-field (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: text-font-filters (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/text_font_filters.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build text-font-filters (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: text-font-loading (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/text_font_loading.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build text-font-loading (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: text-font-sdf (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/text_font_sdf.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build text-font-sdf (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: text-inline-styling (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/text_inline_styling.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build text-inline-styling (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: text-layout (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/text_layout.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build text-layout (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: text-on-texture (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/text_on_texture.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build text-on-texture (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: text-sprite-fonts (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/text_sprite_fonts.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build text-sprite-fonts (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: text-strings-management (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/text_strings_management.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build text-strings-management (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: text-unicode-ranges (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/text_unicode_ranges.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build text-unicode-ranges (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: texture-readback (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/texture_readback.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build texture-readback (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: texture-views (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/texture_views.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build texture-views (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: textured-cube (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/textured_cube.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build textured-cube (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: textured-curve (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/textured_curve.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build textured-curve (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: textures-background-scrolling (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/textures_background_scrolling.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build textures-background-scrolling (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: textures-blend-modes (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/textures_blend_modes.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build textures-blend-modes (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: textures-bunnymark (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/textures_bunnymark.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build textures-bunnymark (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: textures-fog-of-war (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/textures_fog_of_war.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build textures-fog-of-war (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: textures-framebuffer-rendering (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/textures_framebuffer_rendering.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build textures-framebuffer-rendering (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: textures-gif-player (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/textures_gif_player.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build textures-gif-player (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: textures-image-channel (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/textures_image_channel.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build textures-image-channel (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: textures-image-rotate (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/textures_image_rotate.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build textures-image-rotate (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: textures-image-text (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/textures_image_text.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build textures-image-text (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: textures-magnifying-glass (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/textures_magnifying_glass.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build textures-magnifying-glass (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: textures-mouse-painting (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/textures_mouse_painting.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build textures-mouse-painting (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: textures-npatch-drawing (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/textures_npatch_drawing.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build textures-npatch-drawing (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: textures-polygon-drawing (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/textures_polygon_drawing.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build textures-polygon-drawing (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: textures-raw-data (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/textures_raw_data.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build textures-raw-data (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: textures-screen-buffer (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/textures_screen_buffer.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build textures-screen-buffer (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: textures-sprite-animation (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/textures_sprite_animation.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build textures-sprite-animation (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: textures-sprite-button (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/textures_sprite_button.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build textures-sprite-button (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: textures-sprite-explosion (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/textures_sprite_explosion.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build textures-sprite-explosion (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: textures-sprite-stacking (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/textures_sprite_stacking.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build textures-sprite-stacking (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: textures-tiled-drawing (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/textures_tiled_drawing.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build textures-tiled-drawing (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: three-leg (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/three_leg.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build three-leg (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: tic-tac-toe (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/tic_tac_toe.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build tic-tac-toe (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: tile-smoke (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/tile_smoke.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build tile-smoke (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: touch-paint (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/touch_paint.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build touch-paint (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: track-train (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/track_train.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build track-train (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: tracking (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/tracking.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build tracking (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: trails (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/trails.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build trails (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: triangle-gradient (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/triangle_gradient.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build triangle-gradient (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: triangle-strip (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/triangle_strip.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build triangle-strip (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-animation-gallery (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_animation_gallery.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-animation-gallery (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-canvas-demo (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_canvas_demo.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-canvas-demo (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-clipper (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_clipper.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-clipper (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-code-editor (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_code_editor.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-code-editor (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-color-picker (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_color_picker.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-color-picker (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-combo-custom (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_combo_custom.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-combo-custom (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-custom-rendering (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_custom_rendering.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-custom-rendering (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-custom-widget (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_custom_widget.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-custom-widget (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-data-grid-phone (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_data_grid_phone.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-data-grid-phone (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-demo (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_demo.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-demo (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-dev-tools (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_dev_tools.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-dev-tools (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-dock-basic (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_dock_basic.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-dock-basic (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-dock-persistence (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_dock_persistence.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-dock-persistence (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-dock-simple (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_dock_simple.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-dock-simple (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-drag-drop-demo (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_drag_drop_demo.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-drag-drop-demo (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-drag-drop-flags-tour (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_drag_drop_flags_tour.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-drag-drop-flags-tour (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-drag-drop-source (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_drag_drop_source.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-drag-drop-source (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-drawlists (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_drawlists.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-drawlists (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-full-showcase (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_full_showcase.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-full-showcase (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-imgui-extras (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_imgui_extras.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-imgui-extras (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-input-callbacks (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_input_callbacks.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-input-callbacks (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-input-flags-zoo-phone (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_input_flags_zoo_phone.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-input-flags-zoo-phone (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-input-query-demo (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_input_query_demo.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-input-query-demo (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-kanban-board (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_kanban_board.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-kanban-board (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-log-skeleton (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_log_skeleton.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-log-skeleton (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-log-viewer (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_log_viewer.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-log-viewer (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-mini-plot-smoke (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_mini_plot_smoke.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-mini-plot-smoke (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-minimal-button (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_minimal_button.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-minimal-button (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-minimal-one-context (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_minimal_one_context.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-minimal-one-context (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-mouse-drag (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_mouse_drag.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-mouse-drag (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-multiselect-finder (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_multiselect_finder.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-multiselect-finder (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-notes-phone (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_notes_phone.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-notes-phone (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-panes (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_panes.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-panes (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-persistence (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_persistence.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-persistence (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-phone-gestures (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_phone_gestures.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-phone-gestures (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-plot (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_plot.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-plot (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-plotting-basic (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_plotting_basic.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-plotting-basic (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-polish (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_polish.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-polish (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-pomodoro-phone (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_pomodoro_phone.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-pomodoro-phone (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-primitives-zoo-phone (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_primitives_zoo_phone.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-primitives-zoo-phone (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-shortcuts (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_shortcuts.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-shortcuts (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-smoke-button (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_smoke_button.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-smoke-button (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-tabbar-tour (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_tabbar_tour.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-tabbar-tour (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-tables-basic (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_tables_basic.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-tables-basic (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-tables-demo (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_tables_demo.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-tables-demo (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-tables-scroll (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_tables_scroll.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-tables-scroll (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-text-editing (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_text_editing.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-text-editing (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-widgets-data-types (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_widgets_data_types.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-widgets-data-types (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: ui-window-menubar (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/ui_window_menubar.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build ui-window-menubar (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: undo-redo (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/undo_redo.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build undo-redo (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: vao-multibuffer (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/vao_multibuffer.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build vao-multibuffer (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: vector-angle (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/vector_angle.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build vector-angle (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: vertex-texture-test (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/vertex_texture_test.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build vertex-texture-test (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: viewport-scaling (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/viewport_scaling.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build viewport-scaling (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: voxel (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/voxel.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build voxel (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: waving-cubes (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/waving_cubes.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build waving-cubes (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: window-requests (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/window_requests.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build window-requests (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: wireframe (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/wireframe.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build wireframe (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: worker-png (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/worker_png.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build worker-png (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: writing-anim (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/writing_anim.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build writing-anim (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: yaw-pitch-roll (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/yaw_pitch_roll.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build yaw-pitch-roll (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: zimr-gallery (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/zimr_gallery.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build zimr-gallery (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: zimrnum-field (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/zimrnum_field.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build zimrnum-field (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: zimrnum-train (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/zimrnum_train.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build zimrnum-train (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: zimrphysics-demo (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/zimrphysics_demo.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build zimrphysics-demo (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: zimrphysics2d-demo (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/zimrphysics2d_demo.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build zimrphysics2d-demo (windows)"
     }
 ]

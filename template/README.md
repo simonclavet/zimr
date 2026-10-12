@@ -6,13 +6,15 @@ Dear ImGui that runs in the browser on WebGPU. It ships inside zimr, as
 `zimr/template/`: try it there, then copy it to wherever your project should
 live.
 
-Two demo apps ship out of the box. **They're called `myproject1` and
-`myproject2` on purpose: rename them to whatever your project actually is.**
+Three demo apps ship out of the box. **They're called `myproject1` to
+`myproject3` on purpose: rename them to whatever your project actually is.**
 The whole template is meant to be edited.
 
 - **`src/myproject1.zig`**: 2D bouncing balls with an ImGui control panel.
 - **`src/myproject2.zig`**: a rotating 3D cube with a wireframe overlay,
   color picker and camera distance.
+- **`src/myproject3.zig`**: hello world, as a program that owns its `main`
+  (see [Owning your main](#owning-your-main)).
 
 ---
 
@@ -90,7 +92,8 @@ zig build run-myproject1           # build it, then run it: the program, or with
 zig build run                      # run-<name> of the first app in build.zig
 zig build test                     # host unit tests (see "Tests" below)
 zig build lint                     # zimr's linter over src/ (rules: `.lint` in build.zig)
-zig build check                    # lint + host tests + every app
+zig build check                    # lint + host tests + every app, and the editor configs current
+zig build editor-configs           # write .vscode/ and .zed/: a debug configuration per app (see "Debugging")
 zig build zbuild                   # install zig-out/bin/zbuild (below)
 ```
 
@@ -112,9 +115,12 @@ zig-out/web/
 ├── myproject1/
 │   ├── index.html      ← page that streams the wasm beside it
 │   └── myproject1.wasm
-└── myproject2/
+├── myproject2/
+│   ├── index.html
+│   └── myproject2.wasm
+└── myproject3/
     ├── index.html
-    └── myproject2.wasm
+    └── myproject3.wasm
 ```
 
 After `zig build serve -Dplatform=web`, open `http://127.0.0.1:8081/` for the gallery, or
@@ -178,19 +184,28 @@ running the app.
 
 ---
 
-## VS Code
+## Debugging
 
-`.vscode/{launch,tasks,extensions}.json` ship a complete F5-to-debug flow.
-Three launch configurations:
+`.vscode/` and `.zed/` hold a debug configuration for every app, written by
+`zig build editor-configs` the way zimr writes its own. Run it again after
+adding or renaming an app; `zig build check` fails while they are out of date.
 
-- **Debug: gallery** opens the picker
-- **Debug: myproject1** opens myproject1 directly
-- **Debug: myproject2** opens myproject2 directly
+**In the browser** (VS Code and Zed): **Debug: myproject1** (and **2**, **3**)
+builds that app for the web and opens it in Chrome through the dev server. Set
+breakpoints in `.zig` source: the debug-mode wasm carries the DWARF that maps
+them to Zig lines. VS Code starts the server as a background task on the first
+F5. In Zed, start it once yourself with the task **zig: serve**, which builds
+every app for the web and then serves them.
 
-Each one starts the dev server once (as a background task) and rebuilds in
-debug mode before launching Chrome. Set breakpoints in `.zig` source. The
-required extensions are listed in `.vscode/extensions.json`; VS Code offers
-to install them the first time the folder is opened.
+**As a Windows program** (VS Code and Zed): **Debug: myproject1 (windows)**
+builds `zig-out/windows/myproject1.exe` and launches it under CodeLLDB: the
+CodeLLDB extension in VS Code, and in Zed the copy Zed downloads by itself
+(F4 picks a configuration there). F9 sets a breakpoint in both.
+
+VS Code's required extensions are listed in `.vscode/extensions.json`; VS Code
+offers to install them the first time the folder is opened. That file and
+`.vscode/settings.json`, which has CodeLLDB read the program's debug info with
+LLDB's own reader, are the two there written by hand.
 
 ---
 
@@ -199,12 +214,45 @@ to install them the first time the folder is opened.
 1. Copy one of the apps to `src/myname.zig`. An app is a
    `pub const app: z.AppSpec(State) = .{ ... }` descriptor plus the `init`,
    `deinit` and `update` functions it names; zimr's runner does the rest.
+   Or copy `myproject3.zig` for an app with its own `main` (below).
 2. Add `_ = project.addApp(.{ .name = "myname", .title = "..." });` to
-   `build.zig`.
+   `build.zig` (with `.own_frame = true` for an app with its own `main`).
 3. Add a card to `public/index.html` linking to `myname/`.
-4. (Optional) Add a launch configuration to `.vscode/launch.json`.
+4. `zig build editor-configs` gives it its debug configurations (Debugging, above).
 5. `zig build run-myname -Dplatform=web` opens `http://127.0.0.1:8081/myname/`
    (or `zig build run-myname` runs it as a program).
+
+---
+
+## Owning your main
+
+`myproject1` and `myproject2` are *descriptors*: the file declares
+`pub const app: z.AppSpec(State)` and nothing else. The program is zimr's
+runner: it holds `main`, the root module, and the frame, opening and closing
+it around the app's `update`.
+
+`myproject3` is the program itself. Its row in `build.zig` sets
+`.own_frame = true`, which makes its file the root of the wasm (and of the
+Windows program) instead of the runner. Then:
+
+- **`main` is yours.** Code before `zimr_app.run(...)` runs before the first
+  frame. Natively, `zimr_app.runNative()` returns when the window closes, so
+  code after it runs on the way out.
+- **The root module's declarations are yours**: `std_options` (re-export
+  `z.std_options` so `std.log` reaches the page), a `panic` handler, exports.
+- **Each frame is yours**: `update` calls `z.beginDrawing` / `z.endDrawing`
+  itself, so it can render offscreen before it opens the screen.
+
+Owning `main` is not owning the loop. The browser calls a page once per frame,
+so `zimr_app.run` returns as soon as the app is initialized; natively,
+`runNative` calls the frames. Write a frame as a function, never as a
+`while` loop in `main`.
+
+What it costs: a descriptor is something another program can host. zimr's
+launcher runs many descriptors on one page, each in its own viewport, and
+resets them; a program can't be hosted that way. This template's gallery is
+just links to each app's own page, so it lists `myproject3` like the others.
+Start with a descriptor unless you need one of the three things above.
 
 ---
 
@@ -212,7 +260,8 @@ to install them the first time the folder is opened.
 
 ```
 .
-├── .vscode/                ← debug + task configs
+├── .vscode/                ← VS Code debug + task configs (zig build editor-configs)
+├── .zed/                   ← Zed debug + task configs (zig build editor-configs)
 ├── build.zig               ← the apps and tests (zimr.Project does the rest)
 ├── build.zig.zon           ← the zimr dependency
 ├── public/
@@ -220,7 +269,8 @@ to install them the first time the folder is opened.
 │   └── manifest.json
 └── src/
     ├── myproject1.zig      ← rename me
-    └── myproject2.zig      ← rename me too
+    ├── myproject2.zig      ← rename me too
+    └── myproject3.zig      ← this one owns its main
 ```
 
 The app runner, the browser runtime and the dev server all come from the

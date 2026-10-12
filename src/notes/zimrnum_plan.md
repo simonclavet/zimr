@@ -524,7 +524,7 @@ small job on top of what exists.
 
 ★★★ **READ THE EXIT CODE, NOT THE OUTPUT.** Twice this session a plant test "passed" when it
 had never run: once because `--test-filter` matched a different test, once because the grep
-pattern did not match the failure text. `zig build zn-<stem>` DOES return 1 on a failing test -
+pattern did not match the failure text. `zig build test-<stem>` DOES return 1 on a failing test -
 verified - so the check is `echo rc=$?`, not `grep -E 'FAIL'`.
 
 ★ And a plant that does not plant proves nothing: `s.replace(...)` silently does nothing when the
@@ -1695,7 +1695,7 @@ that report success.
 
 ## 4. Standing rules
 
-★★★ **THE TEST LOOP FOR THIS PLAN IS `zig build zn-zimrnum`, NOT `zig build test`.**
+★★★ **THE TEST LOOP FOR THIS PLAN IS `zig build test-zimrnum`, NOT `zig build test`.**
 
 `src/tests.zig` never mentions zimrnum, so `zig build test` does not compile or run a single
 line of it - it finished in 2 s after a zimrnum edit, having rebuilt nothing. That is how a
@@ -1705,8 +1705,8 @@ Measured, after a real edit to `src/zimrnum.zig`:
 
 | command | wall |
 |---|---|
-| `zig build zn-zimrnum -Dgate=false -Dtest-filter="zn eig"` | **21 s** |
-| `zig build zn-zimrnum -Dgate=false` (all its tests) | **71 s** |
+| `zig build test-zimrnum -Dgate=false -Dtest-filter="zn eig"` | **21 s** |
+| `zig build test-zimrnum -Dgate=false` (all its tests) | **71 s** |
 | same, nothing changed | **~1 s** |
 | `zig build test-fast` (six modules) | 71-212 s |
 | `zig build test` | does not build zimrnum at all |

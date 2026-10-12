@@ -32,6 +32,8 @@ const expectEqual = std.testing.expectEqual;
 const expectEqualStrings = std.testing.expectEqualStrings;
 const expectError = std.testing.expectError;
 const testing_allocator = std.testing.allocator;
+const allocPrint = std.fmt.allocPrint;
+const bufPrint = std.fmt.bufPrint;
 
 const CheckArgs = struct {
     @"--bridge": []const u8 = "src/bridge.zig",
@@ -187,13 +189,151 @@ fn functionImports(gpa: Allocator, wasm: []const u8) (ParseError || Allocator.Er
 
 // ---- The bridge's registered functions ----
 
-/// The set of names the bridge registers as functions.
-const Names = StringHashMapUnmanaged(void);
+/// The functions the bridge registers, each under the module it is registered in: a browser binds an import by its
+/// module and its name together, so a name registered in one module does not answer an import from another.
+const Registered = struct {
+    /// `module.name` for each function registered.
+    functions: StringHashMapUnmanaged(void) = .empty,
+    /// The module each name is registered in, to say where a missing import's name was registered instead.
+    module_of_name: StringHashMapUnmanaged([]const u8) = .empty,
 
-/// `.set("name", funcNum(&...))` and `.set("name", func(&...))`: a name registered as a function - its call on one
-/// line, or split across lines for length, the name or the function on a line of its own. Event handlers registered
-/// the same way (`.set("onended", func(...))`) are read too, and harmlessly: no import bears their names.
-fn addSetNames(gpa: Allocator, bridge: []const u8, names: *Names) Allocator.Error!void {
+    fn add(
+        registered: *Registered,
+        gpa: Allocator,
+        module: []const u8,
+        name: []const u8,
+    ) Allocator.Error!void {
+        const key: []const u8 = try allocPrint(gpa, "{s}.{s}", .{ module, name });
+        try registered.functions.put(gpa, key, {});
+        try registered.module_of_name.put(gpa, name, module);
+    }
+
+    fn contains(
+        registered: *const Registered,
+        gpa: Allocator,
+        module: []const u8,
+        name: []const u8,
+    ) bool {
+        const key: []const u8 = allocPrint(gpa, "{s}.{s}", .{ module, name }) catch return false;
+        return registered.functions.contains(key);
+    }
+};
+
+/// Which module each object of imports becomes, by the variable holding it: `imports.set("dom", dom)`.
+const ModuleOfName = StringHashMapUnmanaged([]const u8);
+
+fn isIdentifierByte(byte: u8) bool {
+    return std.ascii.isAlphanumeric(byte) or byte == '_';
+}
+
+/// The identifier ending just before `end` in `text`: the receiver of a call `receiver.set(`.
+fn identifierBefore(text: []const u8, end: usize) []const u8 {
+    var start: usize = end;
+    while (start > 0 and isIdentifierByte(text[start - 1])) {
+        start -= 1;
+    }
+    return text[start..end];
+}
+
+/// The identifier starting at `start` in `text`, after any blanks.
+fn identifierAt(text: []const u8, start: usize) []const u8 {
+    const rest: []const u8 = trimStart(u8, text[start..], " \t\r\n");
+    var length: usize = 0;
+    while (length < rest.len and isIdentifierByte(rest[length])) {
+        length += 1;
+    }
+    return rest[0..length];
+}
+
+/// The module of each variable passed to `imports.set("module", variable)`.
+fn modulesOfVariables(gpa: Allocator, bridge: []const u8) Allocator.Error!ModuleOfName {
+    var modules: ModuleOfName = .empty;
+    const opening: []const u8 = "imports.set(\"";
+    var cursor: usize = 0;
+    while (indexOfPos(u8, bridge, cursor, opening)) |found| {
+        const module_start: usize = found + opening.len;
+        const module_end: usize = indexOfScalarPos(u8, bridge, module_start, '"') orelse break;
+        cursor = module_end + 1;
+        if (!startsWith(u8, bridge[module_end + 1 ..], ",")) {
+            continue;
+        }
+        const variable: []const u8 = identifierAt(bridge, module_end + 2);
+        if (variable.len > 0) {
+            try modules.put(gpa, variable, bridge[module_start..module_end]);
+        }
+    }
+    return modules;
+}
+
+/// The module each installer struct registers into, by the variable it is installed on: `ZimrWgpu.install(wgpu_ns)`
+/// with `imports.set("wgpu", wgpu_ns)` makes everything `ZimrWgpu`'s `install` registers a `wgpu` import.
+fn modulesOfInstallers(
+    gpa: Allocator,
+    bridge: []const u8,
+    modules_of_variables: *const ModuleOfName,
+) Allocator.Error!ModuleOfName {
+    var modules: ModuleOfName = .empty;
+    const opening: []const u8 = ".install(";
+    var cursor: usize = 0;
+    while (indexOfPos(u8, bridge, cursor, opening)) |found| {
+        cursor = found + opening.len;
+        const installer: []const u8 = identifierBefore(bridge, found);
+        const variable: []const u8 = identifierAt(bridge, cursor);
+        const module: []const u8 = modules_of_variables.get(variable) orelse continue;
+        if (installer.len > 0) {
+            try modules.put(gpa, installer, module);
+        }
+    }
+    return modules;
+}
+
+/// Where the name of the last top-level declaration in `text` begins: the last line starting `const ` or
+/// `pub const ` - the text's own first line counting as a line start. Null when there is none.
+fn lastTopLevelDeclarationName(text: []const u8) ?usize {
+    var best: ?usize = null;
+    const prefixes = [_][]const u8{ "const ", "pub const " };
+    for (prefixes) |prefix| {
+        if (startsWith(u8, text, prefix)) {
+            best = @max(best orelse 0, prefix.len);
+        }
+        var line_prefix_buffer: [16]u8 = undefined;
+        const line_prefix: []const u8 = bufPrint(&line_prefix_buffer, "\n{s}", .{prefix}) catch continue;
+        if (std.mem.lastIndexOf(u8, text, line_prefix)) |found| {
+            best = @max(best orelse 0, found + line_prefix.len);
+        }
+    }
+    return best;
+}
+
+/// The top-level struct `position` lies inside: the nearest declaration before it at the start of a line,
+/// `const Name = struct {` or `pub const Name = struct {`, with no top-level `};` closing it in between. Null outside
+/// every top-level struct.
+fn enclosingTopLevelStruct(bridge: []const u8, position: usize) ?[]const u8 {
+    const before: []const u8 = bridge[0..position];
+    const name_start: usize = lastTopLevelDeclarationName(before) orelse return null;
+    const declaration: usize = name_start;
+    const name: []const u8 = identifierAt(bridge, name_start);
+    if (!startsWith(u8, bridge[name_start + name.len ..], " = struct {")) {
+        return null;
+    }
+    if (indexOfPos(u8, before, declaration, "\n};\n") != null) {
+        return null;
+    }
+    return name;
+}
+
+/// `.set("name", funcNum(&...))` and `.set("name", func(&...))`: a function registered under `name` - its call on one
+/// line, or split across lines for length - in the module of its receiver: a variable that becomes a module itself
+/// (`dom.set`), or an installer's own parameter (`ns.set` inside `ZimrWgpu`), whose module is the installer's.
+/// Registrations on any other object - an event handler, `holder.set("onended", func(...))` - are no imports, and
+/// are skipped.
+fn addSetRegistrations(
+    gpa: Allocator,
+    bridge: []const u8,
+    modules_of_variables: *const ModuleOfName,
+    modules_of_installers: *const ModuleOfName,
+    registered: *Registered,
+) Allocator.Error!void {
     const opening: []const u8 = ".set(";
     var cursor: usize = 0;
     while (indexOfPos(u8, bridge, cursor, opening)) |found| {
@@ -210,15 +350,27 @@ fn addSetNames(gpa: Allocator, bridge: []const u8, names: *Names) Allocator.Erro
             continue;
         }
         const value: []const u8 = trimStart(u8, rest[1..], " \t\r\n");
-        if (startsWith(u8, value, "funcNum(") or startsWith(u8, value, "func(")) {
-            try names.put(gpa, bridge[name_start..name_end], {});
+        const is_function: bool = startsWith(u8, value, "funcNum(") or startsWith(u8, value, "func(");
+        if (!is_function) {
+            continue;
         }
+        const receiver: []const u8 = identifierBefore(bridge, found);
+        const installer: ?[]const u8 = enclosingTopLevelStruct(bridge, found);
+        const installer_module: ?[]const u8 = if (installer) |name| modules_of_installers.get(name) else null;
+        const module: []const u8 = modules_of_variables.get(receiver) orelse installer_module orelse continue;
+        try registered.add(gpa, module, bridge[name_start..name_end]);
     }
 }
 
 /// The WASI shim's lists: every string in a `[_][]const u8{ ... }` array inside `ZimrWasi`, whose `install`
-/// registers each name in a loop.
-fn addWasiNames(gpa: Allocator, bridge: []const u8, names: *Names) Allocator.Error!void {
+/// registers each name in a loop, in the module `ZimrWasi` is installed on.
+fn addWasiRegistrations(
+    gpa: Allocator,
+    bridge: []const u8,
+    modules_of_installers: *const ModuleOfName,
+    registered: *Registered,
+) Allocator.Error!void {
+    const wasi_module: []const u8 = modules_of_installers.get("ZimrWasi") orelse return;
     const wasi_start: usize = indexOf(u8, bridge, "const ZimrWasi = struct {") orelse return;
     const wasi_end: usize = indexOfPos(u8, bridge, wasi_start, "\n};\n") orelse bridge.len;
     const wasi: []const u8 = bridge[0..wasi_end];
@@ -228,19 +380,21 @@ fn addWasiNames(gpa: Allocator, bridge: []const u8, names: *Names) Allocator.Err
         var string_cursor: usize = list_start;
         while (indexOfScalarPos(u8, wasi[0..list_end], string_cursor, '"')) |opening_quote| {
             const closing_quote: usize = indexOfScalarPos(u8, wasi[0..list_end], opening_quote + 1, '"') orelse break;
-            try names.put(gpa, wasi[opening_quote + 1 .. closing_quote], {});
+            try registered.add(gpa, wasi_module, wasi[opening_quote + 1 .. closing_quote]);
             string_cursor = closing_quote + 1;
         }
         list_cursor = list_end;
     }
 }
 
-/// The names `bridge` - the bridge's source - registers as functions, in its three forms.
-fn registeredNames(gpa: Allocator, bridge: []const u8) Allocator.Error!Names {
-    var names: Names = .empty;
-    try addSetNames(gpa, bridge, &names);
-    try addWasiNames(gpa, bridge, &names);
-    return names;
+/// The functions `bridge` - the bridge's source - registers, each with its module.
+fn registeredFunctions(gpa: Allocator, bridge: []const u8) Allocator.Error!Registered {
+    var registered: Registered = .{};
+    const modules_of_variables: ModuleOfName = try modulesOfVariables(gpa, bridge);
+    const modules_of_installers: ModuleOfName = try modulesOfInstallers(gpa, bridge, &modules_of_variables);
+    try addSetRegistrations(gpa, bridge, &modules_of_variables, &modules_of_installers, &registered);
+    try addWasiRegistrations(gpa, bridge, &modules_of_installers, &registered);
+    return registered;
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -258,7 +412,7 @@ pub fn main(init: std.process.Init) !void {
         try File.stderr().writeStreamingAll(io, aw.written());
         std.process.exit(1);
     };
-    const registered: Names = try registeredNames(gpa, bridge);
+    const registered: Registered = try registeredFunctions(gpa, bridge);
     for (args.programs) |path| {
         const wasm: []const u8 = cwd.readFileAlloc(io, path, gpa, .unlimited) catch {
             try w.print("bridge-import-check: cannot read {s}\n", .{path});
@@ -274,11 +428,18 @@ pub fn main(init: std.process.Init) !void {
             continue;
         };
         for (imports) |import| {
-            if (registered.contains(import.name)) {
+            if (registered.contains(gpa, import.module, import.name)) {
                 continue;
             }
             try w.print("bridge-import-check: {s} imports {s}.{s}, which the bridge ({s}) does not register - " ++
-                "a browser would refuse to load the page\n", .{ path, import.module, import.name, args.@"--bridge" });
+                "a browser would refuse to load the page", .{ path, import.module, import.name, args.@"--bridge" });
+            if (registered.module_of_name.get(import.name)) |other_module| {
+                try w.print(" (it registers {s}.{s}: the import and the registration name different modules)", .{
+                    other_module,
+                    import.name,
+                });
+            }
+            try w.print("\n", .{});
             failures += 1;
         }
     }
@@ -309,9 +470,20 @@ test "bridge-import-check: reads a module's function imports, and skips its memo
     try expectError(error.NotWasm, functionImports(gpa, "not a module"));
 }
 
-test "bridge-import-check: reads the bridge's three registration forms" {
+test "bridge-import-check: reads the bridge's three registration forms, each in its module" {
     const bridge: []const u8 =
+        \\const ZimrWgpu = struct {
+        \\    fn install(ns: Value) void {
         \\        ns.set("js_texture_destroy", funcNum(&jsTextureDestroy));
+        \\        ns.set("js_now_ms", funcNum(&jsNowMs));
+        \\    }
+        \\};
+        \\const ZimrWasi = struct {
+        \\    fn install(ns: Value) void {
+        \\        const success = [_][]const u8{ "fd_write", "clock_time_get" };
+        \\    }
+        \\};
+        \\fn boot() void {
         \\        dom.set("js_crypto_random_fill",
         \\            func(&domCryptoRandomFill));
         \\        dom.set(
@@ -320,21 +492,29 @@ test "bridge-import-check: reads the bridge's three registration forms" {
         \\        );
         \\        holder.set("onended", func(&onSourceEnded).call("bind", .{}));
         \\        canvas.set("width", num(4));
-        \\const ZimrWasi = struct {
-        \\    fn install(ns: Value) void {
-        \\        const success = [_][]const u8{ "fd_write", "clock_time_get" };
-        \\    }
-        \\};
+        \\        imports.set("dom", dom);
+        \\        ZimrWgpu.install(wgpu_ns);
+        \\        imports.set("wgpu", wgpu_ns);
+        \\        ZimrWasi.install(wasi);
+        \\        imports.set("wasi_snapshot_preview1", wasi);
+        \\}
         \\
     ;
     var arena: ArenaAllocator = .init(testing_allocator);
     defer arena.deinit();
-    const names: Names = try registeredNames(arena.allocator(), bridge);
-    try expect(names.contains("js_texture_destroy"));
-    try expect(names.contains("js_crypto_random_fill"));
-    try expect(names.contains("js_set_overlay_textarea_ctrl_enter_for_newline"));
-    try expect(names.contains("fd_write"));
-    try expect(names.contains("clock_time_get"));
-    try expect(!names.contains("width"));
-    try expect(!names.contains("js_is_fullscreen"));
+    const gpa: Allocator = arena.allocator();
+    const registered: Registered = try registeredFunctions(gpa, bridge);
+    try expect(registered.contains(gpa, "wgpu", "js_texture_destroy"));
+    try expect(registered.contains(gpa, "dom", "js_crypto_random_fill"));
+    try expect(registered.contains(gpa, "dom", "js_set_overlay_textarea_ctrl_enter_for_newline"));
+    try expect(registered.contains(gpa, "wasi_snapshot_preview1", "fd_write"));
+    try expect(registered.contains(gpa, "wasi_snapshot_preview1", "clock_time_get"));
+    // An event handler and a property are no imports.
+    try expect(registered.module_of_name.get("onended") == null);
+    try expect(registered.module_of_name.get("width") == null);
+    // A name registered in one module does not answer an import from another: the page that imported
+    // `dom.js_now_ms` while the bridge registered `wgpu.js_now_ms` was refused by the browser.
+    try expect(registered.contains(gpa, "wgpu", "js_now_ms"));
+    try expect(!registered.contains(gpa, "dom", "js_now_ms"));
+    try expectEqualStrings("wgpu", registered.module_of_name.get("js_now_ms").?);
 }

@@ -3,7 +3,6 @@
 //! mixer is doing: the voices playing, the margin it keeps queued, and how often the output ran dry. In a page, the
 //! browser keeps the sound silent until the first click or key press, which starts it.
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const asBytes = std.mem.asBytes;
 const z = @import("zimr");
@@ -121,25 +120,35 @@ fn draw(f: *z.Frame, s: *State) void {
     z.clearViewport(f, background);
     const instructions: []const u8 = "T: tone on or off    Space or click: a blip    Up, Down: master volume";
     f.gl.text(.{ 24, 24 }, instructions, .{ .size = 18, .color = text_color, .font = &s.font });
-    const sample_rate: f32 = float(z.mixer.sample_rate);
-    const margin_ms: f32 = float(f.mixer.render_ahead_frames) * 1000 / sample_rate;
     const tone_state: []const u8 = if (f.mixer.isPlaying(s.tone_voice)) "on" else "off";
-    var status_buffer: [160]u8 = undefined;
-    const status: []const u8 = bufPrint(
-        &status_buffer,
+    f.gl.textf(
+        .{ 24, 60 },
         "voices playing {d}   tone {s}   blips {d}   master volume {d:.1}",
         .{ f.mixer.playingVoiceCount(), tone_state, s.blips_played, f.mixer.master_volume },
-    ) catch "";
-    f.gl.text(.{ 24, 60 }, status, .{ .size = 18, .color = text_color, .font = &s.font });
-    var output_buffer: [160]u8 = undefined;
-    const output_status: []const u8 = bufPrint(
-        &output_buffer,
-        "margin kept queued {d:.0} ms   underruns {d}",
-        .{ margin_ms, f.mixer.underrun_count },
-    ) catch "";
-    f.gl.text(.{ 24, 92 }, output_status, .{ .size = 16, .color = dim_text_color, .font = &s.font });
+        .{ .size = 18, .color = text_color, .font = &s.font },
+    );
     const browser_note: []const u8 = "in a page, the first click or key press starts the sound";
-    f.gl.text(.{ 24, 124 }, browser_note, .{ .size = 16, .color = dim_text_color, .font = &s.font });
+    f.gl.text(.{ 24, 92 }, browser_note, .{ .size = 16, .color = dim_text_color, .font = &s.font });
+    // The latency readout: the output that plays, then the last five starts the mixer measured, newest first
+    // (`Mixer.formatLatencyLine`).
+    f.gl.textf(
+        .{ 24, 132 },
+        "output: {s}",
+        .{f.mixer.outputName()},
+        .{ .size = 15, .color = dim_text_color, .font = &s.font },
+    );
+    const readout_header: []const u8 = z.mixer.Mixer.latency_readout_header;
+    f.gl.text(.{ 24, 154 }, readout_header, .{ .size = 15, .color = dim_text_color, .font = &s.font });
+    var recent: [z.mixer.recent_start_capacity]z.mixer.LatencySample = undefined;
+    const measured: []z.mixer.LatencySample = f.mixer.recentStarts(&recent);
+    const past_output_ms: f64 = f.mixer.outputLatencyMilliseconds();
+    const shown_count: usize = @min(measured.len, 5);
+    for (measured[0..shown_count], 0..) |latency_sample, line_index| {
+        var line_buffer: [96]u8 = undefined;
+        const line: []const u8 = z.mixer.Mixer.formatLatencyLine(latency_sample, past_output_ms, &line_buffer);
+        const line_top: f32 = 176 + float(line_index) * 22;
+        f.gl.text(.{ 24, line_top }, line, .{ .size = 15, .color = dim_text_color, .font = &s.font });
+    }
 }
 
 fn update(f: *z.Frame, s: *State) void {
@@ -164,7 +173,7 @@ pub const app: z.AppSpec(State) = .{
         .window = .{
             .title = "zimr - the mixer",
             .width = 760,
-            .height = 170,
+            .height = 300,
             .scale_mode = .responsive,
         },
     },

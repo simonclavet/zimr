@@ -29,6 +29,7 @@ const TextInputArea = contract.TextInputArea;
 const AudioFormat = contract.AudioFormat;
 const AudioOutputKind = contract.AudioOutputKind;
 const AudioRenderCallback = contract.AudioRenderCallback;
+const AudioRenderTiming = contract.AudioRenderTiming;
 
 /// How this platform's output gets its frames (`contract.AudioOutputKind`): WASAPI's render thread asks the
 /// renderer for exactly the frames the device's buffer has room for, as the device signals it (`startAudioPull`).
@@ -323,42 +324,29 @@ pub fn removeValue(key: []const u8) void {
 
 // ---- Sound: WASAPI ----
 //
-// The mixer queues a block of samples each frame, on the main thread (`queueAudio`); a thread of the output's own,
-// the render thread, moves them into the device's stream as the stream asks for them. Between the two sits a ring: an
-// array of samples used round and round, with a write position only the main thread moves and a read position only
-// the render thread moves, each published atomically - a single-producer, single-consumer ring, on which neither
-// thread waits for the other.
-//
-//     positions count frames from the start; a frame's slot in the ring is its position modulo the capacity
-//
-//     ring:  ....... | read ########## frames queued, not yet played ########## write | .......
-//     main thread:    writes past `write`, then publishes `write` (release)
-//     render thread:  reads `write` (acquire), copies frames from `read` into the stream, then publishes `read`
+// The output pulls: a thread of the output's own, the render thread, asks the mixer's renderer for each block the
+// device's stream has room for, as the stream signals it, and the renderer writes the block straight into the
+// stream's buffer - no queue between the renderer and the device, and a sound starts in the next block the device
+// asks for. The main thread only sends the renderer its commands, through the mixer's queues.
 //
 // The render thread owns everything of WASAPI's, from COM's initialization on. It opens the default output device in
-// shared mode, event-driven - Windows signals an event whenever the stream's buffer has room - with Windows converting
-// the format (`AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM`), so that the engine mixes 48 000 Hz stereo float whatever the
-// device's own format. At each signal it asks how much of the buffer is still waiting to play
-// (`GetCurrentPadding`), borrows the rest (`GetBuffer`), fills it from the ring - with silence where the ring runs
-// short, an underrun - and gives it back (`ReleaseBuffer`).
-//
-// The ring is the contract's `AudioRing`, which every native output shares: its write position is moved by the main
-// thread alone, its read position by the render thread alone, and mixing into the queue (`mixIntoQueuedAudio`)
-// touches the samples between them with atomic loads and stores, so the two threads never race. The mixer starts a
-// new sound 10 ms past the read position, a device period, clear of the frames the render thread is copying - so no
-// guard is kept here: an addition reaching a frame as it is copied is heard or not, and nothing worse.
+// shared mode, event-driven - Windows signals an event whenever the stream's buffer has room - trying the low-latency
+// stream first (`IAudioClient3`, a period as short as the device allows) and the standard one after, with Windows
+// converting the format on the standard one (`AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM`), so that the engine mixes 48 000 Hz
+// stereo float whatever the device's own format. At each signal it asks how much of the buffer is still waiting to
+// play (`GetCurrentPadding`), borrows the rest (`GetBuffer`), has the renderer fill it, and gives it back
+// (`ReleaseBuffer`); the renderer is told when the block will be heard - after the padding before it - for the
+// latency readout (`AudioRenderTiming`).
 //
 // When the device goes away (`AUDCLNT_E_DEVICE_INVALIDATED`) or the default device changes - headphones plugged in -
 // the thread opens the default device anew. Windows reports a change of default through `device_change_listener`, an
-// `IMMNotificationClient` of the engine's own, called on a thread of Windows'. With no device at all, the thread drains
-// the ring at the real rate, as if playing to nowhere, so that the mixer's voices still advance and end; it looks for a
-// device again each second, or at once when the default changes.
+// `IMMNotificationClient` of the engine's own, called on a thread of Windows'. With no device at all, the thread asks
+// the renderer for the frames that would have played, at the real rate, and drops them, as if playing to nowhere, so
+// that the mixer's voices still advance and end; it looks for a device again each second, or at once when the default
+// changes.
 
-/// The ring's size: 65 536 frames, 1.37 s at 48 kHz - far more than the most the mixer keeps queued, 200 ms. A power
-/// of two, so that a position's slot is its low bits.
-const audio_ring_frame_capacity: u64 = 1 << 16;
-/// The most channels the ring holds per frame.
-const audio_ring_most_channels: u16 = 2;
+/// The most channels the output plays: the mixer's two.
+const audio_most_channels: u16 = 2;
 /// The stream's buffer asked for: 20 ms, two of the audio engine's usual 10 ms periods, in units of 100 ns.
 const audio_stream_buffer_duration: win32.REFERENCE_TIME = 200_000;
 /// How long the render thread waits for a device's signal before waiting again, in milliseconds; and how long it waits,
@@ -368,30 +356,32 @@ const audio_device_retry_ms: f64 = 1_000;
 /// How long the render thread pauses before opening a stream again after one failed.
 const audio_stream_retry_ms: f64 = 100;
 
-/// The output's state, shared by the main thread and the render thread as each field says.
 /// The frames rendered at once while no device is open, to be dropped (`renderAndDiscard`).
 const discarded_block_frame_capacity: usize = 1_024;
 
+/// The output's state, shared by the main thread and the render thread as each field says.
 const WasapiOutput = struct {
-    /// The format the output was opened at; written by `startAudio` before the render thread starts.
+    /// The format the output was opened at; written by `startAudioPull` before the render thread starts.
     format: AudioFormat = .{ .sample_rate = 48_000, .channels = 2 },
-    /// The ring's storage, and the ring over it (`contract.AudioRing`), made at each start for the format's channels.
-    ring_samples: [audio_ring_frame_capacity * audio_ring_most_channels]f32 = undefined,
-    ring: contract.AudioRing = undefined,
     thread: ?std.Thread = null,
-    /// The renderer the render thread asks for frames, when the output pulls (`startAudioPull`); null when it reads
-    /// the ring instead. Written before the thread starts, and not changed while it runs.
+    /// The renderer the render thread asks for frames (`startAudioPull`). Written before the thread starts, and not
+    /// changed while it runs; null while the output is stopped.
     render_callback: ?AudioRenderCallback = null,
     /// Frames rendered while no device is open, to be dropped: the sound keeps its time, as a device would have played
     /// it (`drainWithoutDevice`). Render thread only.
-    discard_samples: [discarded_block_frame_capacity * audio_ring_most_channels]f32 = undefined,
+    discard_samples: [discarded_block_frame_capacity * audio_most_channels]f32 = undefined,
     /// Signaled to wake the render thread at once: to stop, or to reopen the default device.
     wake_event: ?win32.HANDLE = null,
     is_stopping: std.atomic.Value(bool) = .{ .raw = false },
     is_device_change_pending: std.atomic.Value(bool) = .{ .raw = false },
+    /// The stream open now, for the latency readout: whether it is the low-latency kind, and its latency as WASAPI
+    /// reports it (`GetStreamLatency`), in microseconds. Written by the render thread when a stream opens, read by the
+    /// main thread.
+    is_low_latency_stream: std.atomic.Value(bool) = .{ .raw = false },
+    stream_latency_microseconds: std.atomic.Value(u32) = .{ .raw = 0 },
 };
 
-// lint:off module-var: the one sound output: its ring, shared with its render thread, and the thread itself
+// lint:off module-var: the one sound output: its state, shared with its render thread, and the thread itself
 var audio_output: WasapiOutput = .{};
 
 /// Asks the renderer for `frame_count` frames and drops them, in blocks the discard room holds: with no device, the
@@ -402,7 +392,10 @@ fn renderAndDiscard(render_callback: AudioRenderCallback, frame_count: u64) void
     while (frames_left > 0) {
         const block_frame_count: usize = @intCast(@min(frames_left, discarded_block_frame_capacity));
         const block: []f32 = audio_output.discard_samples[0 .. block_frame_count * channel_count];
-        render_callback.render(render_callback.context, block);
+        // Played to nowhere: the block is out as soon as it is asked for.
+        const now_ms: f64 = native_os.monotonicMilliseconds();
+        const timing: AudioRenderTiming = .{ .asked_at_ms = now_ms, .first_frame_out_ms = now_ms };
+        render_callback.render(render_callback.context, block, timing);
         frames_left -= block_frame_count;
     }
 }
@@ -427,11 +420,8 @@ fn drainWithoutDevice(duration_ms: f64) void {
         }
         const due_frames_float: f64 = @floatFromInt(due_frames);
         drained_until_ms += due_frames_float / frames_per_millisecond;
-        if (audio_output.render_callback) |render_callback| {
-            renderAndDiscard(render_callback, due_frames);
-        } else {
-            audio_output.ring.discard(due_frames);
-        }
+        const render_callback: AudioRenderCallback = audio_output.render_callback orelse return;
+        renderAndDiscard(render_callback, due_frames);
     }
 }
 
@@ -533,10 +523,15 @@ var device_change_listener: win32.IMMNotificationClient = .{ .vtable = &DeviceCh
 /// that a failure repeating at once does not spin the thread.
 const StreamEnd = enum { stopped, device_changed, failed };
 
-/// Fills `room_frames` frames of the stream's buffer from the ring: borrows them (`GetBuffer`), copies the ring's next
-/// frames in - silence for what it lacks - and gives them back (`ReleaseBuffer`). False when the stream refuses.
-/// Render thread only.
-fn fillStreamRoom(render_client: *win32.IAudioRenderClient, room_frames: u32) bool {
+/// Fills `room_frames` frames of the stream's buffer: borrows them (`GetBuffer`), has the renderer write the block
+/// into them, and gives them back (`ReleaseBuffer`). False when the stream refuses. `padding_frames` are already in
+/// the buffer, waiting to play: the new frames reach the device after them, which is what the renderer is told
+/// (`AudioRenderTiming`). Render thread only.
+fn fillStreamRoom(
+    render_client: *win32.IAudioRenderClient,
+    room_frames: u32,
+    padding_frames: u32,
+) bool {
     var stream_bytes: ?[*]u8 = null;
     if (render_client.vtable.GetBuffer(render_client, room_frames, &stream_bytes) < 0) {
         return false;
@@ -544,18 +539,22 @@ fn fillStreamRoom(render_client: *win32.IAudioRenderClient, room_frames: u32) bo
     const channel_count: usize = audio_output.format.channels;
     const stream_floats: [*]f32 = @ptrCast(@alignCast(stream_bytes.?));
     const stream_samples: []f32 = stream_floats[0 .. room_frames * channel_count];
-    // Pulled, the renderer writes straight into the device's buffer: the device's room is the block.
-    if (audio_output.render_callback) |render_callback| {
-        render_callback.render(render_callback.context, stream_samples);
-    } else {
-        _ = audio_output.ring.read(stream_samples);
-    }
+    // The renderer writes straight into the device's buffer: the device's room is the block. Its first frame plays
+    // once the `padding_frames` before it have played: `padding / rate` after now.
+    const render_callback: AudioRenderCallback = audio_output.render_callback orelse return false;
+    const asked_at_ms: f64 = native_os.monotonicMilliseconds();
+    const sample_rate: f64 = float64(audio_output.format.sample_rate);
+    const padding_ms: f64 = float64(padding_frames) * 1000.0 / sample_rate;
+    const timing: AudioRenderTiming = .{
+        .asked_at_ms = asked_at_ms,
+        .first_frame_out_ms = asked_at_ms + padding_ms,
+    };
+    render_callback.render(render_callback.context, stream_samples, timing);
     return render_client.vtable.ReleaseBuffer(render_client, room_frames, 0) >= 0;
 }
 
-/// The stream's loop: at each signal of `render_event`, fills the room in the stream's buffer - from the renderer when
-/// pulled, from the ring when pushed - until the output stops, the default device changes, or the stream fails. Render
-/// thread only.
+/// The stream's loop: at each signal of `render_event`, has the renderer fill the room in the stream's buffer, until
+/// the output stops, the default device changes, or the stream fails. Render thread only.
 fn streamUntilChange(
     client: *win32.IAudioClient,
     render_client: *win32.IAudioRenderClient,
@@ -587,7 +586,7 @@ fn streamUntilChange(
         if (room_frames == 0) {
             continue;
         }
-        if (!fillStreamRoom(render_client, room_frames)) {
+        if (!fillStreamRoom(render_client, room_frames, padding_frames)) {
             return .failed;
         }
     }
@@ -725,6 +724,13 @@ fn playOnDefaultDevice(enumerator: *win32.IMMDeviceEnumerator) ?StreamEnd {
         return null;
     }
     reportStream(low_latency_client != null, buffer_frames);
+    // WASAPI's own latency past the buffer, in units of 100 ns: kept for the latency readout.
+    var stream_latency: win32.REFERENCE_TIME = 0;
+    if (client.vtable.GetStreamLatency(client, &stream_latency) >= 0) {
+        const stream_latency_microseconds: u32 = @intCast(@divTrunc(@max(stream_latency, 0), 10));
+        audio_output.stream_latency_microseconds.store(stream_latency_microseconds, .release);
+    }
+    audio_output.is_low_latency_stream.store(low_latency_client != null, .release);
     if (client.vtable.SetEventHandle(client, render_event) < 0) {
         return null;
     }
@@ -734,9 +740,9 @@ fn playOnDefaultDevice(enumerator: *win32.IMMDeviceEnumerator) ?StreamEnd {
     }
     const render_client: *win32.IAudioRenderClient = @ptrCast(@alignCast(render_client_object.?));
     defer _ = render_client.vtable.Release(render_client);
-    // The whole buffer is filled before the stream starts - from the ring, or with silence - so that the device's
-    // first period has something to play rather than an empty buffer.
-    if (!fillStreamRoom(render_client, buffer_frames)) {
+    // The whole buffer is filled by the renderer before the stream starts, so that the device's first period has
+    // something to play rather than an empty buffer.
+    if (!fillStreamRoom(render_client, buffer_frames, 0)) {
         return null;
     }
     if (client.vtable.Start(client) < 0) {
@@ -747,7 +753,8 @@ fn playOnDefaultDevice(enumerator: *win32.IMMDeviceEnumerator) ?StreamEnd {
 }
 
 /// The render thread: COM for itself, the device enumerator, Windows' notice of device changes - then streams on the
-/// default device, one after another, until the output stops; between them, with no device, the ring drains.
+/// default device, one after another, until the output stops; between them, with no device, it renders to nowhere at
+/// the real rate (`drainWithoutDevice`).
 fn renderThreadMain() void {
     // Scheduled as audio work (MMCSS's "Pro Audio" task), ahead of ordinary threads, while the thread lives.
     var multimedia_task_index: win32.DWORD = 0;
@@ -828,21 +835,38 @@ pub fn stopAudio() void {
     audio_output.wake_event = null;
 }
 
-/// The two starts: `render_callback` is written before the render thread starts, which makes it visible there.
-fn startOutput(wanted: AudioFormat, render_callback: ?AudioRenderCallback) AudioFormat {
+/// The clock sound is timed by: the system's monotonic clock (the performance counter), the same on every thread.
+pub fn audioClockMilliseconds() f64 {
+    return native_os.monotonicMilliseconds();
+}
+
+/// Past the device's buffer, what WASAPI reports of its stream's latency (`GetStreamLatency`); the buffer itself is
+/// in each block's timing already (`padding`). The driver and the converter beyond it are not reported.
+pub fn audioOutputLatencyMilliseconds() f64 {
+    const microseconds: u32 = audio_output.stream_latency_microseconds.load(.acquire);
+    return float64(microseconds) / 1000.0;
+}
+
+/// Which stream plays: the low-latency one (`IAudioClient3`) or the standard one.
+pub fn audioOutputName() []const u8 {
+    if (audio_output.is_low_latency_stream.load(.acquire)) {
+        return "WASAPI, low-latency stream";
+    }
+    return "WASAPI, standard stream";
+}
+
+/// Opens the output at `wanted` - up to two channels; Windows converts the rate on the standard stream - and starts
+/// its render thread, which opens the device and asks `render_callback` for the frames the device has room for, at
+/// each of its signals. The format is granted at once: the device opens on the render thread, and a device that cannot
+/// open makes the thread render to nowhere at the real rate (`drainWithoutDevice`) rather than refuse the format.
+/// `render_callback` is written before the render thread starts, which makes it visible there.
+pub fn startAudioPull(wanted: AudioFormat, render_callback: AudioRenderCallback) AudioFormat {
     stopAudio();
     const granted: AudioFormat = .{
         .sample_rate = wanted.sample_rate,
-        .channels = @min(wanted.channels, audio_ring_most_channels),
+        .channels = @min(wanted.channels, audio_most_channels),
     };
     audio_output.format = granted;
-    const ring_sample_count: usize = audio_ring_frame_capacity * granted.channels;
-    const ring: contract.AudioRing = .init(
-        audio_output.ring_samples[0..ring_sample_count],
-        audio_ring_frame_capacity,
-        @intCast(granted.channels),
-    );
-    audio_output.ring = ring;
     audio_output.render_callback = render_callback;
     audio_output.is_stopping.store(false, .monotonic);
     audio_output.is_device_change_pending.store(false, .monotonic);
@@ -858,46 +882,6 @@ fn startOutput(wanted: AudioFormat, render_callback: ?AudioRenderCallback) Audio
         return granted;
     };
     return granted;
-}
-
-/// Opens the output at `wanted` - up to two channels; Windows converts the rate - and starts its render thread, which
-/// opens the device. The format is granted at once: the device opens on the render thread, and a device that cannot
-/// open makes the ring drain silently rather than refuse the format.
-pub fn startAudio(wanted: AudioFormat) AudioFormat {
-    return startOutput(wanted, null);
-}
-
-/// Opens the output as `startAudio` does, except that the render thread asks `render_callback` for the frames the
-/// device has room for, at each of its signals, instead of reading the ring: no queue, no margin, and a sound starts
-/// in the device's next block.
-pub fn startAudioPull(wanted: AudioFormat, render_callback: AudioRenderCallback) AudioFormat {
-    return startOutput(wanted, render_callback);
-}
-
-/// Appends interleaved samples to the ring; a full ring - a stream that stopped taking frames - drops what does not
-/// fit.
-pub fn queueAudio(samples: []const f32) void {
-    if (audio_output.thread == null) {
-        return;
-    }
-    _ = audio_output.ring.write(samples);
-}
-
-/// Frames queued in the ring and not yet taken by the stream. Frames already in the stream's own buffer - up to its
-/// 20 ms - are past the engine's reach and not counted.
-pub fn queuedAudioFrames() u32 {
-    if (audio_output.thread == null) {
-        return 0;
-    }
-    return audio_output.ring.queuedFrames();
-}
-
-/// Adds `samples` onto the frames queued in the ring, aligned to its end, with no guard (see this section's head).
-pub fn mixIntoQueuedAudio(samples: []const f32) void {
-    if (audio_output.thread == null) {
-        return;
-    }
-    audio_output.ring.mixInto(samples, 0);
 }
 
 // ---- Gamepads, through XInput ----

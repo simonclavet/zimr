@@ -597,6 +597,9 @@ pub const ui = @import("ui.zig");
 /// at the public paths example authors use.
 pub const features = utils.features;
 pub const todo = utils.todo;
+/// A short string held inside the value - `const t: z.Str(64) = .print(fmt, args);` then
+/// `t.slice()`. For one-off drawn labels, `gl.textf` formats and draws in one call.
+pub const Str = utils.Str;
 pub const CpuFramebuffer = wgpu_app.CpuFramebuffer;
 pub const WgpuRenderTexture = @import("wgpu_texture.zig").WgpuRenderTexture;
 

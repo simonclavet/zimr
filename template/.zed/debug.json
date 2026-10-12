@@ -1,0 +1,71 @@
+[
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: myproject1",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8081/myproject1/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build myproject1"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: myproject2",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8081/myproject2/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build myproject2"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: myproject3",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8081/myproject3/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build myproject3"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: myproject1 (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/myproject1.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build myproject1 (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: myproject2 (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/myproject2.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build myproject2 (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: myproject3 (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/myproject3.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build myproject3 (windows)"
+    }
+]

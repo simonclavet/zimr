@@ -1073,7 +1073,9 @@ pub const IAudioClient = extern struct {
         ) callconv(.winapi) HRESULT,
         /// The stream buffer's size, in frames.
         GetBufferSize: *const fn (*IAudioClient, *u32) callconv(.winapi) HRESULT,
-        GetStreamLatency: *const anyopaque,
+        /// The most time the stream takes, in 100-nanosecond units, from a frame leaving its buffer to the device:
+        /// the audio engine's own latency, past the buffer.
+        GetStreamLatency: *const fn (*IAudioClient, *REFERENCE_TIME) callconv(.winapi) HRESULT,
         /// How many frames of the buffer are written and not yet played.
         GetCurrentPadding: *const fn (*IAudioClient, *u32) callconv(.winapi) HRESULT,
         IsFormatSupported: *const anyopaque,

@@ -10,7 +10,6 @@
 //! sub-apps here are written exactly like a future embedded example body (no
 //! begin/clear/end, no absolute offsets, reads f.window).
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const Random = std.Random;
 const z = @import("zimr");
@@ -172,13 +171,12 @@ fn updateCounter(s: *CounterState, f: *z.Frame, font: z.Font) void {
     const h: f32 = f.window.heightf();
     f.gl.rect(.{ .x = 0, .y = 0, .width = w, .height = h }, .{ .color = z.colors.emerald_500 });
 
-    var buf: [32]u8 = undefined;
-    const text: []const u8 = bufPrint(&buf, "{d}", .{s.frame_count}) catch return;
+    const text: z.Str(32) = .print("{d}", .{s.frame_count});
     const font_size: f32 = @min(w, h) * 0.32;
-    const tw: f32 = measureWidth(font, text, font_size);
+    const tw: f32 = measureWidth(font, text.slice(), font_size);
     const tx: f32 = (w - tw) / 2;
     const ty: f32 = (h - font_size) / 2;
-    f.gl.text(.{ tx, ty }, text, .{ .size = font_size, .color = z.colors.emerald_200, .font = &font });
+    f.gl.text(.{ tx, ty }, text.slice(), .{ .size = font_size, .color = z.colors.emerald_200, .font = &font });
     f.gl.text(.{ 12, 12 }, "counter", .{ .size = 20, .color = z.colors.slate_50, .font = &font });
 
     if (s.frame_count == 1 or s.frame_count % 60 == 0) {

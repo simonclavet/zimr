@@ -8,7 +8,6 @@
 //! page cannot do any of these, so the keys are read only where there is a window to place.
 
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
@@ -75,12 +74,12 @@ fn update(f: *z.Frame, s: *State) void {
     const accent: Color = .{ .r = 96, .g = 165, .b = 250, .a = 255 };
     const monitor_count: u32 = z.monitorCount();
     const current_index: u32 = z.currentMonitor();
-    var heading_bytes: [96]u8 = undefined;
-    const heading: []const u8 = bufPrint(&heading_bytes, "{d} monitor(s); the window is on monitor {d}", .{
-        monitor_count,
-        current_index,
-    }) catch "monitors";
-    f.gl.text(.{ 24, 24 }, heading, .{ .size = 20, .color = white, .font = &s.font });
+    f.gl.textf(
+        .{ 24, 24 },
+        "{d} monitor(s); the window is on monitor {d}",
+        .{ monitor_count, current_index },
+        .{ .size = 20, .color = white, .font = &s.font },
+    );
     var index: u32 = 0;
     while (index < monitor_count) : (index += 1) {
         const described: z.Monitor = z.monitor(index) orelse break;
@@ -88,26 +87,27 @@ fn update(f: *z.Frame, s: *State) void {
         const is_current: bool = index == current_index;
         const marker: []const u8 = if (is_current) "> " else "  ";
         const primary_note: []const u8 = if (described.is_primary) ", primary" else "";
-        var name_line_bytes: [128]u8 = undefined;
-        const name_line: []const u8 = bufPrint(&name_line_bytes, "{s}{d}: {s}{s}", .{
-            marker,
-            index,
-            described.name(),
-            primary_note,
-        }) catch "?";
         const name_color: Color = if (is_current) accent else white;
-        f.gl.text(.{ 24, line_y }, name_line, .{ .size = 18, .color = name_color, .font = &s.font });
-        var detail_bytes: [128]u8 = undefined;
+        f.gl.textf(
+            .{ 24, line_y },
+            "{s}{d}: {s}{s}",
+            .{ marker, index, described.name(), primary_note },
+            .{ .size = 18, .color = name_color, .font = &s.font },
+        );
         const detail_format: []const u8 = "    at ({d:.0}, {d:.0}), {d:.0} x {d:.0}, scale {d:.2}, {d:.0} Hz";
-        const detail: []const u8 = bufPrint(&detail_bytes, detail_format, .{
-            described.x,
-            described.y,
-            described.width,
-            described.height,
-            described.scale,
-            described.refresh_hz,
-        }) catch "?";
-        f.gl.text(.{ 24, line_y + 26 }, detail, .{ .size = 16, .color = dim, .font = &s.font });
+        f.gl.textf(
+            .{ 24, line_y + 26 },
+            detail_format,
+            .{
+                described.x,
+                described.y,
+                described.width,
+                described.height,
+                described.scale,
+                described.refresh_hz,
+            },
+            .{ .size = 16, .color = dim, .font = &s.font },
+        );
     }
     if (comptime !z.host.is_browser) {
         const help: []const u8 = if (s.is_size_limited)

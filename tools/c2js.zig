@@ -299,7 +299,9 @@
 //!     directly), js_new0..3, js_str/num/to_num/is_null/free, js_obj, js_read_into
 //!     (bulk-copy a heap region so a typed read crosses the boundary once),
 //!     js_func / js_func_ctx (wrap a Zig fn pointer as a JS callback; js_func_ctx
-//!     threads one extra context argument; args are interned), js_fn_raw (raw fn
+//!     threads one extra context argument; args are interned), js_func3 (the same
+//!     for exactly three arguments, building no array - js_func's rest parameter and
+//!     `map` make two per call - for a callback on every audio block), js_fn_raw (raw fn
 //!     value, e.g. for wasm imports), js_string_into (encode a JS string into the
 //!     heap).
 //!   * PROMISES / "await": there is no synchronous await. `js_promise_register`
@@ -315,6 +317,8 @@
 //!         js_try_call                        call that may throw; writes a
 //!                                            success flag to *okp and returns the
 //!                                            result-or-caught-exception handle
+//!         js_try_call1                       the same with one argument, building
+//!                                            no argument array
 //!         js_undefined                       the undefined value
 //!   * `__copy` (heap byte copy, for struct-by-value) also lives in the preamble.
 //!   To use any of these from Zig you declare them `extern fn`. Most call sites emit
@@ -2658,6 +2662,8 @@ const Transpiler = struct {
             \\function js_func(f) { return __href(function(...args) { const hs = args.map(__href); const r = __FTABLE[f](...hs); for (let i = 0; i < hs.length; i++) js_free(hs[i]); return r; }); }
             // lint:off line-length: emitted-JS template - one source line is one output line
             \\function js_func_ctx(f,ctx) { return __href(function(...args) { const hs = args.map(__href); const r = __FTABLE[f](ctx, ...hs); for (let i = 0; i < hs.length; i++) js_free(hs[i]); return r; }); }
+            // lint:off line-length: emitted-JS template - one source line is one output line
+            \\function js_func3(f) { return __href(function(a, b, c) { const ha = __href(a), hb = __href(b), hc = __href(c); const r = __FTABLE[f](ha, hb, hc); js_free(ha); js_free(hb); js_free(hc); return r; }); }
             \\function js_obj() { return __href({}); }
             \\function js_fn_raw(f) { return __href(function(...args) { return __FTABLE[f](...args); }); }
             // lint:off line-length: emitted-JS template - one source line is one output line
@@ -2746,6 +2752,8 @@ const Transpiler = struct {
             \\// and returns the result handle (or the caught exception handle).
             // lint:off line-length: emitted-JS template - one source line is one output line
             \\function js_try_call(o,p,l,argp,n,okp){try{const f=__H[o][__jstr(p,l)];const r=f.apply(__H[o],__args(argp,n));__cku32(okp);__HEAPU32[okp>>2]=1;return __href(r);}catch(e){__cku32(okp);__HEAPU32[okp>>2]=0;return __href(e);}}
+            // lint:off line-length: emitted-JS template - one source line is one output line
+            \\function js_try_call1(o,p,l,a,okp){try{const r=__H[o][__jstr(p,l)].call(__H[o],__H[a]);__cku32(okp);__HEAPU32[okp>>2]=1;return __href(r);}catch(e){__cku32(okp);__HEAPU32[okp>>2]=0;return __href(e);}}
             \\
             \\const __f64dv = new DataView(new ArrayBuffer(8));
             \\function __f64bits(bi){ __f64dv.setBigUint64(0, BigInt(bi)); return __f64dv.getFloat64(0); }

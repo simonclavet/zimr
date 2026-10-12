@@ -179,7 +179,7 @@ fn update(f: *z.Frame, s: *State) void {
         u.text("Tap a tone; watch its peak move.", .{});
         u.separator();
         for (names, 0..) |nm, i| {
-            if (u.button(nm, .{})) {
+            if (u.button(nm, .{ .pressed_on_click = true })) {
                 z.sounds.play(&s.audio.sounds, s.voice[i]);
             }
             if (i % 2 == 0) {

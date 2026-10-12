@@ -12,7 +12,6 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const bufPrint = std.fmt.bufPrint;
 const z = @import("zimr");
 const common = @import("example_common");
 const zm = @import("zm");
@@ -128,10 +127,13 @@ fn update(f: *z.Frame, s: *State) void {
     const awake_text: []const u8 = if (s.is_keeping_awake) "screen kept awake: yes" else "screen kept awake: no";
     f.gl.text(.{ 16, status_top }, fullscreen_text, .{ .size = 16, .color = dim_color, .font = &s.font });
     f.gl.text(.{ 16, status_top + 24 }, awake_text, .{ .size = 16, .color = dim_color, .font = &s.font });
-    var paste_line_buffer: [80]u8 = undefined;
     const pasted_text: []const u8 = s.last_paste[0..s.last_paste_length];
-    const paste_line: []const u8 = bufPrint(&paste_line_buffer, "last paste: {s}", .{pasted_text}) catch "";
-    f.gl.text(.{ 16, status_top + 48 }, paste_line, .{ .size = 16, .color = dim_color, .font = &s.font });
+    f.gl.textf(
+        .{ 16, status_top + 48 },
+        "last paste: {s}",
+        .{pasted_text},
+        .{ .size = 16, .color = dim_color, .font = &s.font },
+    );
     common.caption(f.gl, s.font, "window_requests: fullscreen, a screen kept on, and a page opened");
 }
 

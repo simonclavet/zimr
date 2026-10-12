@@ -21,7 +21,6 @@ const float = zm.float;
 const clamp = zm.clamp;
 const length = zm.length;
 const distance = zm.distance;
-const bufPrint = std.fmt.bufPrint;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // Procedural road texture. U spans the road width; V tiles down its length.
@@ -364,9 +363,12 @@ fn update(f: *z.Frame, s: *State) void {
     );
     f.gl.text(.{ toggle.x + 8, toggle.y + 6 }, "show base curve", .{ .size = 14, .color = ink, .font = &s.font });
 
-    var buf: [96]u8 = undefined;
-    const info: []const u8 = bufPrint(&buf, "width {d:.0}   segments {d}", .{ s.width, s.segments }) catch "";
-    f.gl.text(.{ w * 0.06, h - 62 }, info, .{ .size = 16, .color = darkgray, .font = &s.font });
+    f.gl.textf(
+        .{ w * 0.06, h - 62 },
+        "width {d:.0}   segments {d}",
+        .{ s.width, s.segments },
+        .{ .size = 16, .color = darkgray, .font = &s.font },
+    );
 
     // Diagnostic: a small crosshair at the reported pointer position. If it
     // does not sit under the finger, input and drawing are in different scales.

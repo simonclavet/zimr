@@ -57,7 +57,6 @@ const zUpToYUp = zm.zUpToYUp;
 const assertUnreachable = zm.assertUnreachable;
 const float64 = zm.float64;
 const float = zm.float;
-const bufPrint = std.fmt.bufPrint;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -368,9 +367,8 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
         u.text("one humanoid, limp; same geoms, masses, floor", .{});
         u.text("{d} steps/s   t = {d:.1} s", .{ s.rate_hz, s.sim_time });
         for (rates) |rate| {
-            var label_buf: [16]u8 = undefined;
-            const label: []const u8 = bufPrint(&label_buf, "{d} Hz", .{rate}) catch "rate";
-            if (u.button(label, .{})) {
+            const label: z.Str(16) = .print("{d} Hz", .{rate});
+            if (u.button(label.slice(), .{})) {
                 setRate(s, rate);
             }
         }

@@ -1,0 +1,9 @@
+{
+    // CodeLLDB reads a Windows program's PDB with LLDB's own reader rather
+    // than Microsoft's DIA, which names every Zig function in the call stack
+    // as a C declaration. The "(windows)" configs in launch.json cannot ask
+    // for it themselves: the LLDB that CodeLLDB ships may be too old for
+    // the setting. Written by hand, like extensions.json; launch.json and
+    // tasks.json come from `zig build editor-configs`.
+    "lldb.useNativePDBReader": true
+}

@@ -17,7 +17,6 @@ const rad_per_deg = zm.rad_per_deg;
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
-const bufPrint = std.fmt.bufPrint;
 
 // A cell's state is a pair of hand angles (degrees): .x = big hand, .y = little hand.
 // Named poses: corners bend two hands into an L; hh/vv are straight lines; zz is "blank".
@@ -176,9 +175,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     drawClocks(f, s, w, h);
 
-    var buf: [48]u8 = undefined;
-    const line: []const u8 = bufPrint(&buf, "{d}-hour mode - tap to switch", .{s.hour_mode}) catch "";
-    common.caption(f.gl, s.font, line);
+    common.captionf(f.gl, s.font, "{d}-hour mode - tap to switch", .{s.hour_mode});
     z.endDrawing(f.gl);
 }
 

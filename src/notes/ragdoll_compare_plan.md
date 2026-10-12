@@ -285,7 +285,7 @@ tutorial section.
 - **2163, Sep 18 — Stage 0 begun.** `src/robot_maximal.zig`: `build` (robot `Model` -> 13 parts,
   12 joints; head and hands welded into their parents), `Ragdoll.setPose / bodyFrame /
   jointError / centerOfMass / peakSpeed`, `limpReduced`; in `test-fast` through
-  `src/robot_tests.zig`, and alone as `zig build zn-robot_maximal`. Measured:
+  `src/robot_tests.zig`, and alone as `zig build test-robot_maximal`. Measured:
   - **Mass properties equal**: 40.8440 kg on both sides; worst part mass 9.7e-8 relative, COM
     1.2e-7 m, inertia 7.3e-7 relative — **after fixing a zimrphysics bug the test found**: its
     capsule's perpendicular inertia treated both end caps as one sphere at the centre, so every

@@ -16,7 +16,6 @@ const Color = zm.Color;
 const atan2Rad = zm.atan2Rad;
 const radFromDeg = zm.radFromDeg;
 const degFromRad = zm.degFromRad;
-const bufPrint = std.fmt.bufPrint;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const n_slices: usize = 7;
@@ -102,14 +101,13 @@ fn update(f: *z.Frame, s: *State) void {
 
         // Percentage label at the wedge mid-angle.
         if (values[i] > 0 and sweep > 12.0) {
-            var lbuf: [16]u8 = undefined;
             const pct: f32 = values[i] / total * 100.0;
-            const label: []const u8 = bufPrint(&lbuf, "{d:.0}%", .{pct}) catch "";
-            const ts: Vec2 = z.measureText(s.font, label, 16);
+            const label: z.Str(16) = .print("{d:.0}%", .{pct});
+            const ts: Vec2 = z.measureText(s.font, label.slice(), 16);
             const lr: f32 = radius * 0.68;
             const lx: f32 = center[0] + @cos(radFromDeg(mid)) * lr - ts[0] * 0.5;
             const ly: f32 = center[1] + @sin(radFromDeg(mid)) * lr - ts[1] * 0.5;
-            f.gl.text(.{ lx, ly }, label, .{ .size = 16, .color = common.palette.ink, .font = &s.font });
+            f.gl.text(.{ lx, ly }, label.slice(), .{ .size = 16, .color = common.palette.ink, .font = &s.font });
         }
         start_angle += sweep;
     }
@@ -125,16 +123,18 @@ fn update(f: *z.Frame, s: *State) void {
     f.gl.rect(.{ .x = 10, .y = 40, .width = 250, .height = 96 }, .{ .color = panel });
     f.gl.rect(.{ .x = 10, .y = 40, .width = 250, .height = 96 }, .{ .color = border, .outline = 1.0 });
 
-    var buf: [48]u8 = undefined;
-    const slc: []const u8 = bufPrint(&buf, "slices: {d}   total: {d:.0}", .{ n_slices, total }) catch "slices: ?";
-    f.gl.text(.{ 22, 52 }, slc, .{ .size = 13, .color = common.palette.ink, .font = &s.font });
+    f.gl.textf(
+        .{ 22, 52 },
+        "slices: {d}   total: {d:.0}",
+        .{ n_slices, total },
+        .{ .size = 13, .color = common.palette.ink, .font = &s.font },
+    );
 
-    var buf2: [48]u8 = undefined;
-    const hov: []const u8 = if (hovered >= 0)
-        (bufPrint(&buf2, "hover: slice {d:0>2}", .{hovered + 1}) catch "hover: --")
+    const hov: z.Str(48) = if (hovered >= 0)
+        .print("hover: slice {d:0>2}", .{hovered + 1})
     else
-        "hover: --";
-    f.gl.text(.{ 22, 74 }, hov, .{ .size = 13, .color = common.palette.accent2, .font = &s.font });
+        .print("hover: --", .{});
+    f.gl.text(.{ 22, 74 }, hov.slice(), .{ .size = 13, .color = common.palette.accent2, .font = &s.font });
     f.gl.text(
         .{ 22, 96 },
         if (s.donut) "tap: pie" else "tap: donut",

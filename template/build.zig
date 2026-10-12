@@ -15,7 +15,9 @@
 //   zig build test                -- pure-CPU host unit tests (see below)
 //   zig build lint                -- zimr's linter over src/ (rules: see `.lint` below)
 //   zig build fix                 -- the linter's autofixes over src/, then zig fmt
-//   zig build check               -- lint + host tests + every app
+//   zig build check               -- lint + host tests + every app, and the editor configs current
+//   zig build editor-configs      -- write .vscode/ and .zed/: a debug config for every app, on the web and as a
+//                                    Windows program, each with the task that builds the app first
 //   zig build zbuild              -- install zig-out/bin/zbuild: `zig-out/bin/zbuild <step>` runs `zig build <step>`
 //                                    and, when it fails, ends with only what failed
 //
@@ -24,10 +26,12 @@
 // zig-out/web/ as the gallery.
 //
 // Adding an app:
-//   1. Drop `src/myname.zig` next to myproject1/myproject2. It declares
-//      `pub const app: z.AppSpec(State) = .{ ... }` and nothing else.
+//   1. Drop `src/myname.zig` next to the others. It declares
+//      `pub const app: z.AppSpec(State) = .{ ... }` and nothing else - or, like myproject3,
+//      its own `pub fn main` (then add `.own_frame = true` to its row).
 //   2. Add a `project.addApp` call below.
 //   3. Add a card to public/index.html linking to `myname/`.
+//   4. Run `zig build editor-configs`: .vscode/ and .zed/ gain the app's debug configs.
 //
 // Beyond a plain app, `addApp` takes (see `Project.App` in zimr's build.zig):
 //   .shaders = &.{ "wave_fs", ... }   typed Zig shaders from src/shaders/: wave_fs.zig beside
@@ -35,6 +39,8 @@
 //   .compute_kernels = &.{ ... }      GPU compute (`kompute`), kernels beside the app's source
 //   .job_kernels = true               Web Worker jobs (`zimr.jobs`) from <app dir>/kernels.zig
 //   .engine_wgsl = true               embed zimr's engine shaders ("pbr_fs.wgsl", ...)
+//   .own_frame = true                 the app's file is the program's root: its own `main`, its own
+//                                     frames (src/myproject3.zig; README "Owning your main")
 // An app with kernels gets its own directory: src/myname/myname.zig is found by name too.
 // Assets and extra imports go on the module `addApp` returns:
 //   const game = project.addApp(.{ .name = "game", .title = "Game" });
@@ -53,6 +59,9 @@ pub fn build(b: *std.Build) void {
     const project: *zimr.Project = .init(b, .{
         // zimr's own gallery serves on 8080, so this one can run beside it.
         .port = "8081",
+        // .vscode/ and .zed/ hold a debug config for every app, written by `zig build editor-configs` as zimr writes
+        // its own; `check` fails when an app was added without rerunning it.
+        .editor_configs = true,
         // zimr's linter over src/: `zig build lint`, and part of `check` and of every app's step. Every rule is
         // opt-in, and this project enables them all, as zimr does for itself: in zimr a lint finding is a compile
         // error, and an explained `// lint:off <rule>: <why>` is how code says a rule does not apply where it
@@ -124,6 +133,8 @@ pub fn build(b: *std.Build) void {
 
     _ = project.addApp(.{ .name = "myproject1", .title = "myproject1 - bouncing balls" });
     _ = project.addApp(.{ .name = "myproject2", .title = "myproject2 - 3D cube" });
+    // Owns its `main` (and each frame), instead of being a descriptor zimr's runner drives: see src/myproject3.zig.
+    _ = project.addApp(.{ .name = "myproject3", .title = "myproject3 - owns its main", .own_frame = true });
 
     // project.addTest(b.path("src/util.zig"));
 }

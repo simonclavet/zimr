@@ -26,7 +26,6 @@ const zn = @import("zn");
 const zn_train = @import("zn_train");
 
 const Allocator = std.mem.Allocator;
-const bufPrint = std.fmt.bufPrint;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const zm = @import("zm");
 const Color = zm.Color;
@@ -207,9 +206,7 @@ fn textRow(
     comptime fmt: []const u8,
     args: anytype,
 ) void {
-    var buf: [160]u8 = undefined;
-    const text: []const u8 = bufPrint(&buf, fmt, args) catch return;
-    f.gl.text(.{ 12, y.* }, text, .{ .size = size, .color = color, .font = &s.font });
+    f.gl.textf(.{ 12, y.* }, fmt, args, .{ .size = size, .color = color, .font = &s.font });
     y.* += size + 4;
 }
 

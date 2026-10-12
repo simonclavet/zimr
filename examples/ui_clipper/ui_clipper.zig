@@ -27,7 +27,6 @@
 // roadmap.
 
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const ui = z.ui_real;
@@ -53,12 +52,15 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.* = .{ .font = font, .ui_host = z.UiHost.init(gpa, font) };
 }
 
-/// Format row `i` into the provided buffer.  Deterministic from
+/// One log row's text.
+const RowText = z.Str(128);
+
+/// Format row `i`, returned by value.  Deterministic from
 /// the index - no allocation, no per-row state.  In a real app
 /// the row content would come from a backing store (file, db,
 /// network buffer); the point is that the clipper only reads
 /// data for visible rows.
-fn rowText(buf: []u8, i: usize) []const u8 {
+fn rowText(i: usize) RowText {
     const subsystems: [10][]const u8 = .{
         "net",
         "auth",
@@ -85,14 +87,13 @@ fn rowText(buf: []u8, i: usize) []const u8 {
     const sub: []const u8 = subsystems[i % subsystems.len];
     const subj: []const u8 = subjects[(i / 10) % subjects.len];
     const verb: []const u8 = verbs[(i / 7) % verbs.len];
-    const written: []const u8 = bufPrint(buf, "[{d:0>6}] {s}: {s} {s} ({s}ms)", .{
+    return .print("[{d:0>6}] {s}: {s} {s} ({s}ms)", .{
         i,
         sub,
         subj,
         verb,
         if (i & 1 == 0) "<1" else "12.3",
-    }) catch return buf[0..0];
-    return written;
+    });
 }
 
 fn update(f: *z.Frame, s: *State) void {
@@ -149,21 +150,19 @@ fn update(f: *z.Frame, s: *State) void {
                 while (clip.step()) |range| {
                     vs = range.start;
                     ve = range.end;
-                    var buf: [128]u8 = undefined;
                     var i: usize = range.start;
                     while (i < range.end) : (i += 1) {
-                        const t: []const u8 = rowText(&buf, i);
-                        u.text("{s}", .{t});
+                        const t: RowText = rowText(i);
+                        u.text("{s}", .{t.slice()});
                         submitted += 1;
                     }
                 }
             } else {
                 // ---- Naive path: submit every row ----
-                var buf: [128]u8 = undefined;
                 var i: usize = 0;
                 while (i < n) : (i += 1) {
-                    const t: []const u8 = rowText(&buf, i);
-                    u.text("{s}", .{t});
+                    const t: RowText = rowText(i);
+                    u.text("{s}", .{t.slice()});
                     submitted += 1;
                 }
                 vs = 0;

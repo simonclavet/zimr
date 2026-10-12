@@ -13,6 +13,7 @@ const sinTurns = zm.sinTurns;
 const cosTurns = zm.cosTurns;
 const types = @import("types.zig");
 const requireGl = types.requireGl;
+const utils = @import("utils.zig");
 
 const Color = zm.Color;
 const Vec2 = zm.Vec2;
@@ -66,6 +67,11 @@ pub const TextOpts = struct {
     font: ?*const Font = null,
     spacing: f32 = 0,
 };
+
+/// What every sink's `textf` formats into before drawing: one line of label text. A
+/// longer line is cut off and asserts (see `Str.print`); build a bigger `Str` and call
+/// `text` for that.
+pub const TextLine = utils.Str(256);
 
 /// `line`.
 pub const LineOpts = struct {

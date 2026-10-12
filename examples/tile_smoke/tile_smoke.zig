@@ -5,7 +5,6 @@
 //! at startup as an independent oracle. Once green, the fluid's density/force
 //! passes can adopt the identical cooperative-load-barrier-tile-read shape.
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const Random = std.Random;
 const z = @import("zimr");
@@ -164,38 +163,35 @@ fn update(f: *z.Frame, s: *State) void {
 
     z.clearViewport(f, z.colors.slate_900);
 
-    var bufw: [160]u8 = undefined;
     const total: u32 = tg.grid_cells * tg.wg_size;
     const probe_ok: bool = s.probe.correct == total;
-    const wgid_msg: []const u8 = if (!s.have_result)
-        "c.id probe: ..."
+    const wgid_msg: z.Str(160) = if (!s.have_result)
+        .print("c.id probe: ...", .{})
     else
-        bufPrint(
-            &bufw,
+        .print(
             "c.id probe: {d}/{d} ok, nz={d}, max_t={d}, [1000]={d} [5000]={d}",
             .{ s.probe.correct, total, s.probe.nonzero, s.probe.maxidx, s.probe.s1000, s.probe.s5000 },
-        ) catch "probe";
-    f.gl.text(.{ 14, 20 }, wgid_msg, .{ .size = 15, .color = if (!s.have_result)
+        );
+    f.gl.text(.{ 14, 20 }, wgid_msg.slice(), .{ .size = 15, .color = if (!s.have_result)
         z.colors.slate_300
     else if (probe_ok)
         z.colors.green_400
     else
         z.colors.red_500, .font = &s.font });
 
-    var buf: [160]u8 = undefined;
-    const head: []const u8 = if (!s.have_result)
-        "GPU tiled neighbour gather: ..."
+    const head: z.Str(160) = if (!s.have_result)
+        .print("GPU tiled neighbour gather: ...", .{})
     else if (s.miss == 0)
-        bufPrint(&buf, "GPU tiled neighbour gather: PASS ({d} particles)", .{n_part}) catch "PASS"
+        .print("GPU tiled neighbour gather: PASS ({d} particles)", .{n_part})
     else
-        bufPrint(&buf, "GPU tiled neighbour gather: FAIL ({d}/{d} wrong)", .{ s.miss, n_part }) catch "FAIL";
+        .print("GPU tiled neighbour gather: FAIL ({d}/{d} wrong)", .{ s.miss, n_part });
     const col: Color = if (!s.have_result)
         z.colors.slate_300
     else if (s.miss == 0)
         z.colors.green_400
     else
         z.colors.red_500;
-    f.gl.text(.{ 14, 50 }, head, .{ .size = 18, .color = col, .font = &s.font });
+    f.gl.text(.{ 14, 50 }, head.slice(), .{ .size = 18, .color = col, .font = &s.font });
 
     const cpu_msg: []const u8 = if (s.cpu_ok) "CPU oracle: PASS" else "CPU oracle: FAIL";
     f.gl.text(
@@ -204,13 +200,12 @@ fn update(f: *z.Frame, s: *State) void {
         .{ .size = 14, .color = if (s.cpu_ok) z.colors.green_400 else z.colors.red_500, .font = &s.font },
     );
 
-    var buf2: [120]u8 = undefined;
-    const info: []const u8 = bufPrint(
-        &buf2,
+    f.gl.textf(
+        .{ 14, 108 },
         "grid {d}x{d}, max/cell {d} (cap {d}), one workgroup per cell, dispatch {d} threads",
         .{ tg.n_cols, tg.n_rows, s.max_cell, tg.max_per_cell, total },
-    ) catch "";
-    f.gl.text(.{ 14, 108 }, info, .{ .size = 13, .color = z.colors.slate_300, .font = &s.font });
+        .{ .size = 13, .color = z.colors.slate_300, .font = &s.font },
+    );
 
     z.endDrawing(f.gl);
 }

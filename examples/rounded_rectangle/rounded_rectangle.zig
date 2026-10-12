@@ -11,7 +11,6 @@ const zm = @import("zm");
 const common = @import("example_common");
 
 const Color = zm.Color;
-const bufPrint = std.fmt.bufPrint;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const mode_count: usize = 3;
@@ -78,22 +77,27 @@ fn update(f: *z.Frame, s: *State) void {
     f.gl.rect(.{ .x = 10, .y = 40, .width = 272, .height = 96 }, .{ .color = panel });
     f.gl.rect(.{ .x = 10, .y = 40, .width = 272, .height = 96 }, .{ .color = border, .outline = 1.0 });
 
-    var buf: [64]u8 = undefined;
-    const mode_line: []const u8 = bufPrint(&buf, "mode: {s}", .{mode_names[s.mode]}) catch "mode: ?";
-    f.gl.text(.{ 22, 52 }, mode_line, .{ .size = 14, .color = common.palette.accent, .font = &s.font });
+    f.gl.textf(
+        .{ 22, 52 },
+        "mode: {s}",
+        .{mode_names[s.mode]},
+        .{ .size = 14, .color = common.palette.accent, .font = &s.font },
+    );
 
-    var buf2: [80]u8 = undefined;
     const manual: bool = segments >= 4;
-    const par_line: []const u8 = bufPrint(
-        &buf2,
+    f.gl.textf(
+        .{ 22, 74 },
         "roundness: {d:.2}  segs: {d} ({s})",
         .{ roundness, segments, if (manual) "MANUAL" else "AUTO" },
-    ) catch "roundness: --";
-    f.gl.text(.{ 22, 74 }, par_line, .{ .size = 13, .color = common.palette.ink, .font = &s.font });
+        .{ .size = 13, .color = common.palette.ink, .font = &s.font },
+    );
 
-    var buf3: [48]u8 = undefined;
-    const thick_line: []const u8 = bufPrint(&buf3, "thickness: {d:.1}", .{thick}) catch "thickness: --";
-    f.gl.text(.{ 22, 96 }, thick_line, .{ .size = 13, .color = common.palette.ink, .font = &s.font });
+    f.gl.textf(
+        .{ 22, 96 },
+        "thickness: {d:.1}",
+        .{thick},
+        .{ .size = 13, .color = common.palette.ink, .font = &s.font },
+    );
     f.gl.text(.{ 22, 116 }, "tap: cycle mode", .{ .size = 13, .color = common.palette.ink_dim, .font = &s.font });
 
     common.caption(f.gl, s.font, "rounded rectangle");

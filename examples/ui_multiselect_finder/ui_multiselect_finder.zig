@@ -33,7 +33,6 @@ const std = @import("std");
 const zm = @import("zm");
 const assertUnreachable = zm.assertUnreachable;
 const float64 = zm.float64;
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const ui = z.ui_real;
@@ -155,21 +154,24 @@ fn kindGlyph(k: FileKind) []const u8 {
     };
 }
 
-fn formatSize(buf: []u8, bytes: u64) []const u8 {
+/// A file size for the size column; the widest, a u64 in GB, is 16 bytes.
+const SizeText = z.Str(16);
+
+fn formatSize(bytes: u64) SizeText {
     if (bytes == 0) {
-        return "-";
+        return .print("-", .{});
     }
     const kb: f64 = float64(bytes) / 1024.0;
     if (kb < 1.0) {
-        return bufPrint(buf, "{d} B", .{bytes}) catch "?";
+        return .print("{d} B", .{bytes});
     } else if (kb < 1024.0) {
-        return bufPrint(buf, "{d:.1} KB", .{kb}) catch "?";
+        return .print("{d:.1} KB", .{kb});
     } else if (kb < 1024.0 * 1024.0) {
         const mb: f64 = kb / 1024.0;
-        return bufPrint(buf, "{d:.1} MB", .{mb}) catch "?";
+        return .print("{d:.1} MB", .{mb});
     } else {
         const gb: f64 = kb / (1024.0 * 1024.0);
-        return bufPrint(buf, "{d:.1} GB", .{gb}) catch "?";
+        return .print("{d:.1} GB", .{gb});
     }
 }
 
@@ -192,13 +194,7 @@ fn update(f: *z.Frame, s: *State) void {
 
         // ---- Selection HUD ------------------------------------
         u.separatorText("Selection");
-        var hud_buf: [64]u8 = undefined;
-        const hud_text: []const u8 = bufPrint(
-            &hud_buf,
-            "selected: {d} / {d}",
-            .{ s.selection.size(), files.len },
-        ) catch "?";
-        u.text("{s}", .{hud_text});
+        u.text("selected: {d} / {d}", .{ s.selection.size(), files.len });
 
         if (u.button("Clear All", .{})) {
             s.selection.clear();
@@ -283,14 +279,11 @@ fn update(f: *z.Frame, s: *State) void {
             // pad the name area to a fixed width so the size column
             // aligns.will replace this with a proper
             // 3-column layout via separators.
-            var row_buf: [128]u8 = undefined;
-            var size_buf: [16]u8 = undefined;
-            const size_str: []const u8 = formatSize(&size_buf, item.size_bytes);
-            const row: []const u8 = bufPrint(
-                &row_buf,
+            const size_str: SizeText = formatSize(item.size_bytes);
+            const row: z.Str(128) = .print(
                 "{s} {s:<28} {s:>10}",
-                .{ kindGlyph(item.kind), item.name, size_str },
-            ) catch item.name;
+                .{ kindGlyph(item.kind), item.name, size_str.slice() },
+            );
 
             const id: u64 = @intCast(idx);
             u.setNextItemSelectionUserData(id);
@@ -298,7 +291,7 @@ fn update(f: *z.Frame, s: *State) void {
             // scope's applyRequests after endMultiSelect below,
             // not by inline toggle.  Matches the canonical
             // multi-select demo idiom in imgui_demo.cpp:2745+.
-            _ = u.selectable(row, s.selection.contains(id), .{});
+            _ = u.selectable(row.slice(), s.selection.contains(id), .{});
         }
 
         const ms_io2: *const ui.MultiSelectIO = u.endMultiSelect();

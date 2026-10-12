@@ -20,13 +20,11 @@ const expectEqual = std.testing.expectEqual;
 const expectEqualStrings = std.testing.expectEqualStrings;
 const readInt = std.mem.readInt;
 const sliceAsBytes = std.mem.sliceAsBytes;
-const expectApproxEqAbs = std.testing.expectApproxEqAbs;
-const expectEqualSlices = std.testing.expectEqualSlices;
 const contract = @import("contract.zig");
 const console = @import("console.zig");
 const host = @import("../host.zig");
 const zm = @import("zm");
-const clamp = zm.clamp;
+const float64 = zm.float64;
 const Size = contract.Size;
 const Cursor = contract.Cursor;
 const TextInputOptions = contract.TextInputOptions;
@@ -34,6 +32,7 @@ const TextInputArea = contract.TextInputArea;
 const AudioFormat = contract.AudioFormat;
 const AudioOutputKind = contract.AudioOutputKind;
 const AudioRenderCallback = contract.AudioRenderCallback;
+const AudioRenderTiming = contract.AudioRenderTiming;
 
 /// How this platform's output gets its frames (`contract.AudioOutputKind`): at each frame, it asks the renderer for
 /// the frames its clock has played since the last (`playAudioUntil`). Its push requests stay, for the tests of the
@@ -330,8 +329,8 @@ pub fn removeValue(key: []const u8) void {
 // A headless run's output plays exactly as the run's clock moves - the frames' times, which the script gives - not as
 // a device's clock would. So the same script plays the same sound, sample for sample, on every run, and a capture of
 // it (`writeAudioCapture`) can be compared, or measured, as a captured frame can. The run's frame driver calls
-// `playAudioUntil` with each frame's time, before the engine's update: what played in the meantime leaves the queue,
-// as it would have left a device's, and the engine then sees the queue lower and tops it up.
+// `playAudioUntil` with each frame's time, before the engine's update: the output asks the mixer's renderer for the
+// frames that came due since the last frame, as a device asks for each block it needs, and keeps them.
 
 /// The most played frames kept for a capture: the last two minutes, about 46 MB at 48 kHz stereo. A run playing longer
 /// keeps the newest; the oldest are dropped in batches, once ten seconds more have gathered, so that dropping them -
@@ -339,106 +338,64 @@ pub fn removeValue(key: []const u8) void {
 const audio_kept_most_frames: usize = 48_000 * 120;
 const audio_kept_slack_frames: usize = 48_000 * 10;
 
-/// The output's state: the format granted, when it started on the run's clock, the samples waiting to play, the
-/// samples played (the last two minutes of them), and how often the queue ran dry.
+/// The output's state: the format granted, when it started on the run's clock, the renderer it asks for frames, and
+/// the samples played (the last two minutes of them).
 const HeadlessAudio = struct {
-    /// The format granted by `startAudio`; null while the output is stopped.
+    /// The format granted by `startAudioPull`; null while the output is stopped.
     format: ?AudioFormat = null,
     /// The run's clock, in milliseconds, when the output started playing: playing counts its frames from there. An
     /// output started between frames - in an app's `init`, say, before the first frame - starts playing on the next
     /// frame's time, as a device starts when it first runs: until then this is null, and nothing is due.
     started_at_ms: ?f64 = null,
-    /// The samples queued and not yet played, interleaved: `queued_samples.items[first_waiting_sample..]`. Playing
-    /// moves `first_waiting_sample` forward instead of moving every waiting sample down each frame; the waiting
-    /// samples move to the front only once more than half the list has been played (`playAudioUntil`).
-    queued_samples: ArrayList(f32) = .empty,
-    first_waiting_sample: usize = 0,
-    /// The samples played, interleaved - the queue's, and the silence of underruns - the last two minutes of them
-    /// (`trimPlayedSamples`).
+    /// The samples played, interleaved, the last two minutes of them (`trimPlayedSamples`).
     played_samples: ArrayList(f32) = .empty,
     /// Whether older samples were dropped: the run said so once, and a capture holds the newest only.
     has_dropped_played_samples: bool = false,
     /// How many frames have played since the start.
     played_frame_count: u64 = 0,
-    /// How many times the queue ran dry while playing.
-    underrun_count: u32 = 0,
-    /// The renderer asked for frames, when the output pulls them (`startAudioPull`); null when it is pushed to.
+    /// The renderer asked for the frames (`startAudioPull`); null while the output is stopped.
     render_callback: ?AudioRenderCallback = null,
+    /// The run's clock as the last frame set it (`playAudioUntil`): the time sound is stamped with
+    /// (`audioClockMilliseconds`).
+    clock_ms: f64 = 0,
 };
 
-// lint:off module-var: the headless output's queue and what it has played, for the run only
+// lint:off module-var: the headless output and what it has played, for the run only
 var audio_output: HeadlessAudio = .{};
 
-/// Opens the output at exactly the format asked for - a run can play any - with an empty queue and nothing played
-/// yet; it starts playing on the next frame's time (`started_at_ms`).
-pub fn startAudio(wanted: AudioFormat) AudioFormat {
-    audio_output.queued_samples.clearRetainingCapacity();
-    audio_output.first_waiting_sample = 0;
+/// The clock sound is timed by: the run's own, as its frames move it - a run's sound is timed as its frames are.
+pub fn audioClockMilliseconds() f64 {
+    return audio_output.clock_ms;
+}
+
+/// Nothing lies past a headless run's output: a frame played is a frame captured.
+pub fn audioOutputLatencyMilliseconds() f64 {
+    return 0;
+}
+
+pub fn audioOutputName() []const u8 {
+    return "headless, the run's clock";
+}
+
+/// Opens the output at exactly the format asked for - a run can play any - with nothing played yet; it starts playing
+/// on the next frame's time (`started_at_ms`). At each frame it asks `render_callback` for the frames its clock has
+/// played since the last (`playAudioUntil`), as a device asks for each block it needs. Rendering at a frame's time
+/// the frames up to it, a sound started by that frame's update is rendered from that time on, at the next frame: the
+/// capture shows each sound at its frame's own time.
+pub fn startAudioPull(wanted: AudioFormat, render_callback: AudioRenderCallback) AudioFormat {
     audio_output.played_samples.clearRetainingCapacity();
     audio_output.has_dropped_played_samples = false;
     audio_output.played_frame_count = 0;
-    audio_output.underrun_count = 0;
     audio_output.started_at_ms = null;
-    audio_output.render_callback = null;
+    audio_output.render_callback = render_callback;
     audio_output.format = wanted;
     return wanted;
 }
 
-/// Opens the output as `startAudio` does, but with no queue: at each frame it asks `render_callback` for the frames
-/// its clock has played since the last (`playAudioUntil`), as a device asks for each block it needs. Rendering at a
-/// frame's time the frames up to it, a sound started by that frame's update is rendered from that time on, at the
-/// next frame: the capture shows each sound at its frame's own time.
-pub fn startAudioPull(wanted: AudioFormat, render_callback: AudioRenderCallback) AudioFormat {
-    const granted: AudioFormat = startAudio(wanted);
-    audio_output.render_callback = render_callback;
-    return granted;
-}
-
-/// Appends interleaved samples to the queue, whole frames only - a trailing partial frame is dropped; all of them are
-/// dropped while the output is stopped.
-pub fn queueAudio(samples: []const f32) void {
-    const output_format: AudioFormat = audio_output.format orelse return;
-    const partial_frame_sample_count: usize = samples.len % output_format.channels;
-    const whole_frames_sample_count: usize = samples.len - partial_frame_sample_count;
-    const whole_frames_samples: []const f32 = samples[0..whole_frames_sample_count];
-    audio_output.queued_samples.appendSlice(host.heap, whole_frames_samples) catch {
-        console.log(.err, "headless audio: out of memory queueing samples");
-    };
-}
-
-/// How many frames are queued and not yet played.
-pub fn queuedAudioFrames() u32 {
-    const output_format: AudioFormat = audio_output.format orelse return 0;
-    const queued_sample_count: usize = audio_output.queued_samples.items.len;
-    const waiting_sample_count: usize = queued_sample_count - audio_output.first_waiting_sample;
-    const waiting_frame_count: usize = waiting_sample_count / output_format.channels;
-    return @intCast(waiting_frame_count);
-}
-
-/// Adds `samples` onto the frames waiting in the queue, aligned to its end: the last sample onto the queue's last, and
-/// back from there. Each sum is held to -1..1, the range a device plays. Samples reaching back past the first waiting
-/// frame - onto frames already played - are dropped: nothing headless is too close to playing to change, since the run
-/// plays only between frames (`playAudioUntil`).
-pub fn mixIntoQueuedAudio(samples: []const f32) void {
-    const output_format: AudioFormat = audio_output.format orelse return;
-    const partial_frame_sample_count: usize = samples.len % output_format.channels;
-    const whole_frames: []const f32 = samples[0 .. samples.len - partial_frame_sample_count];
-    const waiting_samples: []f32 = audio_output.queued_samples.items[audio_output.first_waiting_sample..];
-    const added_sample_count: usize = @min(whole_frames.len, waiting_samples.len);
-    const added_samples: []const f32 = whole_frames[whole_frames.len - added_sample_count ..];
-    const target_samples: []f32 = waiting_samples[waiting_samples.len - added_sample_count ..];
-    for (target_samples, added_samples) |*target_sample, added_sample| {
-        const sum: f32 = target_sample.* + added_sample;
-        target_sample.* = clamp(sum, -1, 1);
-    }
-}
-
-/// Closes the output, dropping what was queued; what was played stays, for a capture.
+/// Closes the output: no frame plays, and the renderer is not called, until it starts again.
 pub fn stopAudio() void {
     audio_output.format = null;
     audio_output.render_callback = null;
-    audio_output.queued_samples.clearRetainingCapacity();
-    audio_output.first_waiting_sample = 0;
 }
 
 /// Keeps at most `most_frames` played frames, the newest: once the samples kept exceed that by `slack_frames`, the
@@ -463,10 +420,12 @@ fn trimPlayedSamples(most_frames: usize, slack_frames: usize, channel_count: usi
 /// Plays the output up to `frame_ms` on the run's clock. The frames due since the start are
 /// `floor(elapsed ms x frames a second / 1000)` - counted from the start each time, not added up frame by frame, so
 /// that no fraction of a frame is lost between frames: 60 frames of 1000/60 ms each play exactly 48 000 frames at
-/// 48 kHz. Those not yet played play now: from the queue first, then silence for what the queue lacks, which counts as
-/// an underrun. Called by the run's frame driver, once a frame.
+/// 48 kHz. Those not yet played are rendered now, in place where they are kept, by the renderer the output was
+/// started with. Called by the run's frame driver, once a frame.
 pub fn playAudioUntil(frame_ms: f64) void {
+    audio_output.clock_ms = frame_ms;
     const output_format: AudioFormat = audio_output.format orelse return;
+    const render_callback: AudioRenderCallback = audio_output.render_callback orelse return;
     const started_at_ms: f64 = audio_output.started_at_ms orelse {
         // The first frame since the output started: it starts playing now, so nothing is due yet.
         audio_output.started_at_ms = frame_ms;
@@ -480,55 +439,23 @@ pub fn playAudioUntil(frame_ms: f64) void {
     }
     const channel_count: usize = output_format.channels;
     const frames_to_play_now: usize = @intCast(frames_due_since_start - audio_output.played_frame_count);
-    if (audio_output.render_callback) |render_callback| {
-        // Pulled: the renderer fills the frames now due, in place, where they are kept.
-        const sample_count_now: usize = frames_to_play_now * channel_count;
-        const first_new_sample: usize = audio_output.played_samples.items.len;
-        audio_output.played_samples.appendNTimes(host.heap, 0, sample_count_now) catch {
-            console.log(.err, "headless audio: out of memory keeping what played");
-            return;
-        };
-        render_callback.render(render_callback.context, audio_output.played_samples.items[first_new_sample..]);
-        audio_output.played_frame_count = frames_due_since_start;
-        trimPlayedSamples(audio_kept_most_frames, audio_kept_slack_frames, channel_count);
-        return;
-    }
-    const waiting_samples: []const f32 = audio_output.queued_samples.items[audio_output.first_waiting_sample..];
-    const waiting_frame_count: usize = waiting_samples.len / channel_count;
-    const frames_from_queue: usize = @min(frames_to_play_now, waiting_frame_count);
-    const samples_from_queue: usize = frames_from_queue * channel_count;
-    const silent_frame_count: usize = frames_to_play_now - frames_from_queue;
-    const silent_sample_count: usize = silent_frame_count * channel_count;
-    audio_output.played_samples.appendSlice(host.heap, waiting_samples[0..samples_from_queue]) catch {
+    const sample_count_now: usize = frames_to_play_now * channel_count;
+    const first_new_sample: usize = audio_output.played_samples.items.len;
+    audio_output.played_samples.appendNTimes(host.heap, 0, sample_count_now) catch {
         console.log(.err, "headless audio: out of memory keeping what played");
         return;
     };
-    audio_output.played_samples.appendNTimes(host.heap, 0, silent_sample_count) catch {
-        console.log(.err, "headless audio: out of memory keeping what played");
-        return;
+    // The frames rendered are those that came due since the last frame: the first of them was out when the run's
+    // clock passed it, a little before now.
+    const played_until_now_ms: f64 = float64(audio_output.played_frame_count) * 1000.0 / frames_per_second;
+    const timing: AudioRenderTiming = .{
+        .asked_at_ms = frame_ms,
+        .first_frame_out_ms = started_at_ms + played_until_now_ms,
     };
-    if (silent_frame_count > 0) {
-        audio_output.underrun_count += 1;
-    }
-    trimPlayedSamples(audio_kept_most_frames, audio_kept_slack_frames, channel_count);
-    audio_output.first_waiting_sample += samples_from_queue;
+    const new_samples: []f32 = audio_output.played_samples.items[first_new_sample..];
+    render_callback.render(render_callback.context, new_samples, timing);
     audio_output.played_frame_count = frames_due_since_start;
-    // Once more than half the list has been played, the waiting samples move to its front: each sample moves at most
-    // once per doubling of the list, so moving them costs, on average, a constant amount per sample queued.
-    const queued_sample_count: usize = audio_output.queued_samples.items.len;
-    const has_played_most: bool = audio_output.first_waiting_sample * 2 > queued_sample_count;
-    if (has_played_most) {
-        const still_waiting_count: usize = queued_sample_count - audio_output.first_waiting_sample;
-        const still_waiting: []const f32 = audio_output.queued_samples.items[audio_output.first_waiting_sample..];
-        copyForwards(f32, audio_output.queued_samples.items[0..still_waiting_count], still_waiting);
-        audio_output.queued_samples.shrinkRetainingCapacity(still_waiting_count);
-        audio_output.first_waiting_sample = 0;
-    }
-}
-
-/// How often the queue ran dry while playing.
-pub fn audioUnderrunCount() u32 {
-    return audio_output.underrun_count;
+    trimPlayedSamples(audio_kept_most_frames, audio_kept_slack_frames, channel_count);
 }
 
 /// Every sample played since the output started, interleaved.
@@ -784,32 +711,48 @@ pub fn keyName(key: contract.KeyboardKey, buffer: []u8) ?[]const u8 {
     return contract.usKeyName(key, buffer);
 }
 
-test "headless audio plays on the run's clock, with silence where the queue runs dry" {
-    const granted: AudioFormat = startAudio(.{ .sample_rate = 48_000, .channels = 2 });
+/// A test renderer: fills each block with its call's number over 8 - the first block 0.125, the second 0.25 - and
+/// keeps the frames it rendered and the timing it was last given.
+const TestRenderer = struct {
+    call_count: u32 = 0,
+    frames_rendered: usize = 0,
+    last_timing: ?AudioRenderTiming = null,
+
+    fn render(context: *anyopaque, samples: []f32, timing: AudioRenderTiming) void {
+        const test_renderer: *TestRenderer = @ptrCast(@alignCast(context));
+        test_renderer.call_count += 1;
+        test_renderer.frames_rendered += samples.len / 2;
+        test_renderer.last_timing = timing;
+        const call_number: f32 = @floatFromInt(test_renderer.call_count);
+        @memset(samples, call_number / 8);
+    }
+};
+
+test "headless audio is pulled on the run's clock: each frame renders the frames due since the last" {
+    var test_renderer: TestRenderer = .{};
+    const render_callback: AudioRenderCallback = .{ .context = &test_renderer, .render = &TestRenderer.render };
+    const granted: AudioFormat = startAudioPull(.{ .sample_rate = 48_000, .channels = 2 }, render_callback);
+    try expectEqual(@as(u32, 48_000), granted.sample_rate);
     // The first frame after the start: the output starts playing at its time, 0 ms, with nothing due yet.
     playAudioUntil(0);
-    try expectEqual(@as(u32, 48_000), granted.sample_rate);
-    const frame: [2]f32 = .{ 0.5, -0.5 };
-    var index: usize = 0;
-    while (index < 1000) : (index += 1) {
-        queueAudio(&frame);
-    }
-    try expectEqual(@as(u32, 1000), queuedAudioFrames());
-    // 10 ms at 48 kHz: 480 frames played from the queue.
+    try expectEqual(@as(u32, 0), test_renderer.call_count);
+    // 10 ms at 48 kHz: 480 frames, in one block asked for at 10 ms, its first frame out at 0 ms.
     playAudioUntil(10);
-    try expectEqual(@as(u32, 520), queuedAudioFrames());
-    try expectEqual(@as(u32, 0), audioUnderrunCount());
-    // 30 ms in all: 1440 frames - the 520 left, then 440 of silence, one underrun.
+    try expectEqual(@as(usize, 480), test_renderer.frames_rendered);
+    try expectEqual(@as(f64, 10), test_renderer.last_timing.?.asked_at_ms);
+    try expectEqual(@as(f64, 0), test_renderer.last_timing.?.first_frame_out_ms);
+    // 30 ms in all: 960 frames more, their first out at 10 ms.
     playAudioUntil(30);
-    try expectEqual(@as(u32, 0), queuedAudioFrames());
-    try expectEqual(@as(u32, 1), audioUnderrunCount());
+    try expectEqual(@as(usize, 1440), test_renderer.frames_rendered);
+    try expectEqual(@as(f64, 10), test_renderer.last_timing.?.first_frame_out_ms);
     const played: []const f32 = playedAudio();
     try expectEqual(@as(usize, 1440 * 2), played.len);
-    try expectEqual(@as(f32, 0.5), played[999 * 2]);
-    try expectEqual(@as(f32, 0), played[1000 * 2]);
+    try expectEqual(@as(f32, 0.125), played[0]);
+    try expectEqual(@as(f32, 0.25), played[1439 * 2]);
+    // Stopped: the renderer is not asked again.
     stopAudio();
-    queueAudio(&frame);
-    try expectEqual(@as(u32, 0), queuedAudioFrames());
+    playAudioUntil(60);
+    try expectEqual(@as(u32, 2), test_renderer.call_count);
 }
 
 test "a float WAV header says its format and length" {
@@ -820,33 +763,10 @@ test "a float WAV header says its format and length" {
     try expectEqual(@as(u32, 800), readInt(u32, header[40..44], .little));
 }
 
-test "samples mixed into the headless queue land on its last frames, held to -1..1, the excess dropped" {
-    const granted: AudioFormat = startAudio(.{ .sample_rate = 48_000, .channels = 2 });
-    _ = granted;
-    playAudioUntil(0);
-    const quarter: [2]f32 = .{ 0.25, 0.25 };
-    var frame_index: usize = 0;
-    while (frame_index < 4) : (frame_index += 1) {
-        queueAudio(&quarter);
-    }
-    // Two frames mixed in: the queue's last two frames.
-    const addition: [4]f32 = .{ 0.5, 0.5, 0.9, -1.5 };
-    mixIntoQueuedAudio(&addition);
-    const waiting: []const f32 = audio_output.queued_samples.items[audio_output.first_waiting_sample..];
-    try expectEqualSlices(f32, &.{ 0.25, 0.25, 0.25, 0.25, 0.75, 0.75, 1.0, -1.0 }, waiting);
-    // More frames than wait: only the last four of the six reach the queue.
-    const six_frames: [12]f32 = .{ 9, 9, 9, 9, 0, 0, 0, 0, 0, 0, 0.1, 0.1 };
-    mixIntoQueuedAudio(&six_frames);
-    // The 9s fell before the first waiting frame and were dropped; the last frame got 0.1 more, held at 1.
-    const after: []const f32 = audio_output.queued_samples.items[audio_output.first_waiting_sample..];
-    try expectEqual(@as(f32, 0.25), after[0]);
-    try expectEqual(@as(f32, 1.0), after[6]);
-    try expectApproxEqAbs(@as(f32, -0.9), after[7], 0.0001);
-    stopAudio();
-}
-
 test "the headless output keeps the newest played frames, dropping the oldest in batches" {
-    _ = startAudio(.{ .sample_rate = 48_000, .channels = 2 });
+    var test_renderer: TestRenderer = .{};
+    const render_callback: AudioRenderCallback = .{ .context = &test_renderer, .render = &TestRenderer.render };
+    _ = startAudioPull(.{ .sample_rate = 48_000, .channels = 2 }, render_callback);
     playAudioUntil(0);
     // Frames whose samples count up, frame n holding n and -n.
     var frame_number: usize = 0;

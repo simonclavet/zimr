@@ -12,7 +12,6 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const bufPrint = std.fmt.bufPrint;
 const z = @import("zimr");
 const zm = @import("zm");
 const Color = zm.Color;
@@ -165,13 +164,12 @@ fn update(f: *z.Frame, s: *State) void {
     drawScene(f, s);
 
     // ---- 2D HUD, after endMode3D, in screen space ----
-    var status_buf: [64]u8 = undefined;
-    const status: []const u8 = bufPrint(
-        &status_buf,
+    f.gl.textf(
+        .{ 12, f.window.heightf() - 28 },
         "yaw {d:.0} deg   pitch {d:.0} deg   {s}",
         .{ s.angles.yaw_deg, s.angles.pitch_deg, if (s.tune.paused) "PAUSED" else "spinning" },
-    ) catch "yaw ?";
-    f.gl.text(.{ 12, f.window.heightf() - 28 }, status, .{ .size = 18, .color = colors.slate_400, .font = &s.font });
+        .{ .size = 18, .color = colors.slate_400, .font = &s.font },
+    );
 
     drawPanel(u, f, s);
 }

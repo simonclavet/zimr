@@ -352,8 +352,8 @@ enough, and <a href="#floor">§8</a> explains why.</p>
 <h3 id="run">2.3 Running the examples<a class="anchor" href="#run">#</a></h3>
 <p>Every example in this document is a test in <code>src/robot_mocap_tutorial.zig</code>. From the
 repository root, where the capture files are found by relative path:</p>
-<pre class="sketch"><code>zig build zn-robot_mocap_tutorial -Dtest-filter="tutorial"      # every example
-zig build zn-robot_mocap_tutorial -Dtest-filter="tutorial 2"    # just this one</code></pre>
+<pre class="sketch"><code>zig build test-robot_mocap_tutorial -Dtest-filter="tutorial"      # every example
+zig build test-robot_mocap_tutorial -Dtest-filter="tutorial 2"    # just this one</code></pre>
 <p>The step also runs the tests of the modules the examples import; the filter keeps it to the
 examples. This one takes a few seconds, most of it the retarget.</p>
 
@@ -9626,9 +9626,10 @@ pub fn readGeneration(self: *Self) Generation {
                 // `element_count`.
                 const count: usize = self.element_count;
                 const enc: wgpu.CommandEncoderHandle = wgpu.createCommandEncoder(gp.dev);
+                // In MEMORY order, which `unpackPrefixes` relies on (`fields_by_offset`).
                 var packed_at: u32 = 0;
-                inline for (buffer_field_names, 0..) |fname, fi| {
-                    const bytes: u32 = prefixBytes(fname, count);
+                inline for (fields_by_offset) |fi| {
+                    const bytes: u32 = prefixBytes(buffer_field_names[fi], count);
                     if (bytes &gt; 0) {
                         wgpu.copyBufferToBuffer(enc, gp.field_bufs[fi], 0, gp.staging, packed_at, bytes);
                     }

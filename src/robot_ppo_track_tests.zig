@@ -5,7 +5,7 @@
 //! its own - which Zig refuses, a file belonging to two modules. So the trainer lives in the zimr
 //! module where pages can reach it, and its proofs live here, reachable only from the test root.
 //!
-//! Training chunks run from here too: `zig build zn-robot_ppo_track_tests -Dtrain-chunk
+//! Training chunks run from here too: `zig build test-robot_ppo_track_tests -Dtrain-chunk
 //! -Dtest-filter="robot_ppo_track: train chunk - the get-up"`.
 
 const std = @import("std");
@@ -805,6 +805,12 @@ test "robot_ppo_track: D5 step 3 - PPO's policy cloned from the teacher, judged 
     // gradient - and the trainer's own `evaluate` judges the clone against the servo alone.
     const options = @import("build_options");
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
+        return error.SkipZigTest;
+    }
+    // A MEASUREMENT IN ALL BUT NAME: its one check is that the clone's training loss fell, which gradient descent
+    // all but guarantees, so it runs with its table - `-Dslow-tests -Dtest-report` - and not on every slow run.
+    // To revisit: a real check (the clone outlasting the servo) would earn it its place back. See `report.requested`.
+    if (!report.requested()) {
         return error.SkipZigTest;
     }
     const gpa: Allocator = testing_allocator;

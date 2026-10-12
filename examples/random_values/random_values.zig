@@ -8,8 +8,8 @@
 // What this exercises:
 //   - Owning a `std.Random.DefaultPrng` in State and pulling ranged ints
 //     with `rng.random().intRangeAtMost(i32, lo, hi)` (raylib's -8..5).
-//   - Formatting a runtime int into text with `std.fmt.bufPrint`, then
-//     drawing it with the unified `f.gl.text` sink.
+//   - Formatting a runtime int and drawing it in one call with `f.gl.textf`,
+//     the formatting form of the unified `f.gl.text` sink.
 //
 // Leak-clean (`.memory = .managed`): only the font is allocated and it is
 // engine-owned (freed by resetRegistry), so `deinit` is a no-op.
@@ -19,7 +19,6 @@ const Allocator = std.mem.Allocator;
 
 const z = @import("zimr");
 const zm = @import("zm");
-const bufPrint = std.fmt.bufPrint;
 const Random = std.Random;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -64,9 +63,7 @@ fn update(f: *z.Frame, s: *State) void {
         .{ .size = 20, .color = c.maroon, .font = &s.font },
     );
 
-    var buf: [16]u8 = undefined;
-    const txt: []const u8 = bufPrint(&buf, "{d}", .{s.value}) catch "?";
-    f.gl.text(.{ 360, 180 }, txt, .{ .size = 80, .color = c.maroon, .font = &s.font });
+    f.gl.textf(.{ 360, 180 }, "{d}", .{s.value}, .{ .size = 80, .color = c.maroon, .font = &s.font });
 
     z.endDrawing(f.gl);
 }

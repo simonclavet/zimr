@@ -29,7 +29,6 @@ const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const Color = zm.Color;
 const c = Color;
-const bufPrint = std.fmt.bufPrint;
 
 const screen_w: i32 = 800;
 const screen_h: i32 = 450;
@@ -67,13 +66,12 @@ fn update(f: *z.Frame, s: *State) void {
         y += sz + 16.0;
     }
 
-    var buf: [96]u8 = undefined;
-    const meta: []const u8 = bufPrint(
-        &buf,
+    f.gl.textf(
+        .{ 20, sh - 36.0 },
         "atlas base size: {d} px    glyphs baked: {d}",
         .{ s.font.baseSize, s.font.glyphCount },
-    ) catch "?";
-    f.gl.text(.{ 20, sh - 36.0 }, meta, .{ .size = 18, .color = c.gray, .font = &s.font });
+        .{ .size = 18, .color = c.gray, .font = &s.font },
+    );
 
     z.endDrawing(f.gl);
 }

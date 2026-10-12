@@ -595,13 +595,9 @@ pub const App = struct {
     viewport_stack: [8]ViewportSave = undefined,
     viewport_depth: u8 = 0,
 
-    /// Build the WebGPU runtime, allocate `State`, run `init_fn`, and register
-    /// the per-frame dispatch. Same signature shape as `AppBridge.run` minus
-    /// the explicit `gpa` (WebGPU examples use the wasm allocator, matching the
-    /// other wgpu demos). After this returns, the JS RAF loop's `update` calls
-    /// drive `update_fn` via the `update` export below.
     /// A native program's frames: `update` - the SAME function the browser calls once per frame - driven by the
-    /// window's messages until the window is closed (`native_loop.run`).
+    /// window's messages until the window is closed (`native_loop.run`). Called after `run`, by the runner or by an
+    /// own-frame app's `main`; on the web it returns at once, the browser calling the frames.
     pub fn runNative(self: *App) void {
         switch (comptime host.kind) {
             // lint:off decl-order: `update` and `receiveEvent` sit with the browser's exports, after App
@@ -632,6 +628,11 @@ pub const App = struct {
         return is_validation_clean and failed_line_count == 0 and error_line_count == 0;
     }
 
+    /// Build the WebGPU runtime, allocate `State`, run `init_fn`, and register
+    /// the per-frame dispatch. Same signature shape as `AppBridge.run` minus
+    /// the explicit `gpa` (WebGPU examples use the wasm allocator, matching the
+    /// other wgpu demos). After this returns, the JS RAF loop's `update` calls
+    /// drive `update_fn` via the `update` export below.
     pub fn run(
         self: *App,
         cfg: Config,
@@ -2175,7 +2176,8 @@ pub fn isMouseButtonPressed(
 
 /// Update a `Camera3D` from mouse/keyboard each frame.
 /// - `.orbital`: left-drag orbits around the target, wheel zooms.
-/// - `.first_person` / `.free`: left-drag looks, WASD moves, wheel zooms.
+/// - `.first_person` / `.free`: mouse motion looks while the pointer is locked (the app asks with `disableCursor`),
+///   left-drag looks otherwise; WASD moves, and the wheel lengthens that frame's step.
 /// - `.custom`: no-op (caller drives the camera). `Camera3D` stays exposed.
 pub fn updateCamera(
     gl: *WgpuGl,
@@ -2220,9 +2222,15 @@ pub fn updateCamera(
             fz /= flen;
             var yaw: f32 = atan2Rad(fx, fz);
             var pitch: f32 = asinRad(clamp(fy, -1.0, 1.0));
-            if (isMouseButtonDown(in, .left) and !isMouseButtonPressed(in, .left)) {
+            // A locked pointer reports the hand's motion with no button held. Unlocked, look only while the left
+            // button drags, and skip the press frame: its delta is the jump from wherever the pointer last was.
+            const pointer_locked: bool = input.isPointerLocked(in);
+            const left_dragging: bool = isMouseButtonDown(in, .left) and !isMouseButtonPressed(in, .left);
+            if (pointer_locked or left_dragging) {
+                // Mouse look: right turns right, down looks down. This forward is (sin yaw, -, cos yaw), so a
+                // growing yaw turns LEFT - hence the minus.
                 const d: Vec2 = getMouseDelta(in);
-                yaw += d[0] * 0.006;
+                yaw -= d[0] * 0.006;
                 pitch -= d[1] * 0.006;
             }
             pitch = clamp(pitch, -1.5, 1.5);

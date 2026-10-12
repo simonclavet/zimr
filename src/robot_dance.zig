@@ -1490,6 +1490,12 @@ test "robot_dance: the retargeted dance's TARGETS - does the IK reach them, are 
     if (!slow) {
         return error.SkipZigTest;
     }
+    // A MEASUREMENT: it asserts nothing but that the clip has frames, so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
     const gpa: Allocator = testing_allocator;
     var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();

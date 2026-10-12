@@ -4,7 +4,6 @@
 // interactive (pan / zoom / pinch / double-tap-fit / value readout).
 
 const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
@@ -1226,9 +1225,12 @@ fn tabQuery(u: ui.Ui, s: *State) void {
         sink.line(.{ area.x, m[1] }, .{ area.right(), m[1] }, .{ .color = ch, .thickness = 1.0 });
         sink.line(.{ m[0], area.y }, .{ m[0], area.bottom() }, .{ .color = ch, .thickness = 1.0 });
         const dp: [2]f64 = s.p_query.getPlotMousePos();
-        var buf: [64]u8 = undefined;
-        const txt: []const u8 = bufPrint(&buf, "x={d:.2}  y={d:.2}", .{ dp[0], dp[1] }) catch "";
-        sink.text(.{ m[0] + 8, m[1] - 18 }, txt, .{ .size = 13, .color = .{ .r = 255, .g = 255, .b = 255, .a = 255 } });
+        const txt: z.Str(64) = .print("x={d:.2}  y={d:.2}", .{ dp[0], dp[1] });
+        sink.text(
+            .{ m[0] + 8, m[1] - 18 },
+            txt.slice(),
+            .{ .size = 13, .color = .{ .r = 255, .g = 255, .b = 255, .a = 255 } },
+        );
     }
 }
 

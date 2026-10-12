@@ -7,7 +7,7 @@
 //! even when every test passed, under a `failed command:` line, so a green `zig build test` read
 //! as a red one. The tables now print only on request:
 //!
-//!     zig build zn-robot_control -Dtest-report -Dtest-filter="rung 2"
+//!     zig build test-robot_control -Dtest-report -Dtest-filter="rung 2"
 //!
 //! * Host tests only. The wasm builds' `build_options` has no `test_report`, and nothing outside
 //! a `test` calls `print`, so a module without `build_options` never analyses the import.
@@ -30,6 +30,22 @@ pub const enabled: bool = if (@hasDecl(build_options, "test_report")) build_opti
 /// between the runs that print it. A call is runtime-known, so the whole body is still checked.
 pub fn requested() bool {
     return enabled;
+}
+
+/// True under `-Dparked-tests`. To gate a whole test on it, call `parked` instead.
+pub const parked_enabled: bool = if (@hasDecl(build_options, "parked_tests")) build_options.parked_tests else false;
+
+/// Whether a PARKED test skips. A parked test checks something real but costs more than it is worth while the suite
+/// is being trimmed (Oct 12); it keeps compiling, and `-Dslow-tests -Dparked-tests` runs it. The list to revisit is
+/// `grep -n "report.parked()" src`.
+///
+///     if (report.parked()) {
+///         return error.SkipZigTest;
+///     }
+///
+/// * A call for the same reason as `requested`: the parked body is still analysed on every run.
+pub fn parked() bool {
+    return !parked_enabled;
 }
 
 /// `std.debug.print`, when `enabled`; nothing otherwise.

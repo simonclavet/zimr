@@ -467,7 +467,7 @@ lint-clean (it already caught a prefer-std-alias slip during authoring).
     T1, per file, seconds - the new zimrlint on that one file with the enforced rules (27 s for the largest file,
         a few for most): the finding is gone and nothing new appeared.
     T2, per BATCH, minutes - `zig build check` (~4 min warm: the compiler's type checking and the whole-tree lint),
-        plus the module tests a batch can change the behaviour of (`zn-zimrnum` ~3 min, ...). Never per site.
+        plus the module tests a batch can change the behaviour of (`test-zimrnum` ~3 min, ...). Never per site.
   WHICH FIXES NEED WHICH TIER.
     Syntax only - safe at T0 + T1: branch-braces, fn-args-multiline, import-at-top (a move).
     Binding - T0 catches their failure modes (shadowing, undeclared): prefer-std-alias, no-qualified-std / zm,
@@ -648,7 +648,7 @@ lint-clean (it already caught a prefer-std-alias slip during authoring).
     named, also keeping the line in 120). int-from-float, each by what it means: `@intFromFloat(@round(row))` was
     already rounding -> `@round(row)`; two test indexes from floats holding exact integers -> `@round(...)` (says
     it, and survives a 2.9999999). `try DataLoader(f64).init` on a split declaration -> `try .init` (one logical
-    line). T0, T1 0; `zn-zimrnum` 325/325; `check` 358/358; zimrnum tutorial folds regenerated (774 rows); baseline
+    line). T0, T1 0; `test-zimrnum` 325/325; `check` 358/358; zimrnum tutorial folds regenerated (774 rows); baseline
     95 -> 84.
     L4c BATCH 5 DONE (Oct 2) - src/runtime.zig, 9 no-qualified-zm. The file aggregates former files into
     namespaces ("was: src/core.zig"), and each namespace still re-bound its own zm names - leftovers of the old files'
@@ -799,7 +799,7 @@ lint-clean (it already caught a prefer-std-alias slip during authoring).
   (markDeclarationValue: the array_init tags; note and allowed-forms test updated; negative control - no array arm -
   fails it). A struct-literal field stays flagged: its type is not spelled. (Simon: it matches my intent.) The other
   seven lines spell their type: `ArenaAllocator` (scratch, twice), `NormedDense(T)` (the hidden layers - wrapped, one
-  argument per line), `Mlp(f64)` (three test fixtures), `ReplayBuffer(T)`. zimrlint 108/108; T1 0; `zn-zimrnum`
+  argument per line), `Mlp(f64)` (three test fixtures), `ReplayBuffer(T)`. zimrlint 108/108; T1 0; `test-zimrnum`
   325/325; `check` 358/358; zimrnum tutorial folds regenerated. Tree: 108 -> 95 in 32 files.
   BURN-DOWN BATCH 3 (Oct 2) - the three robot files, 32: robot_supertrack 12 (`gym.Layer` for a three-layer tuple,
   ArenaAllocator, Random.DefaultPrng, Net, Graph, gym.AdamSet), robot_latent 11 (... and `track.Fleet`, whose init

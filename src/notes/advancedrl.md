@@ -188,7 +188,7 @@ Three artefacts exist and each answers a different question.
 
 | artefact | question it answers | how |
 |---|---|---|
-| `zig build zn-zimrnum` | is the CPU answer right? | unit tests against closed forms |
+| `zig build test-zimrnum` | is the CPU answer right? | unit tests against closed forms |
 | `zig build zn-rl-gpu` | does it COMPILE for a device? | `src/shaders/zn_rl_gpu_probe.zig`, a real SPIR-V entry point |
 | `src/gpu/zn_conformance.zig` + `zimrnum_field.html` | does the device AGREE with the CPU? | a row in the sweep table, run on real hardware |
 

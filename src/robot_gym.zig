@@ -967,6 +967,11 @@ test "robot_gym: P1 - PPO learns to stay up and move on HumanoidEnv" {
     if (!slow) {
         return error.SkipZigTest;
     }
+    // PARKED (Oct 12): 13 s of PPO for one memory bound. `-Dslow-tests -Dparked-tests` runs it; see
+    // `report.parked`.
+    if (report.parked()) {
+        return error.SkipZigTest;
+    }
     const gpa: Allocator = testing_allocator;
     const env: *HumanoidEnv = try .init(gpa, humanoid_xml, .{});
     defer env.deinit();
@@ -1064,7 +1069,7 @@ test "robot_gym: FOOT SLIP - how far a statue's feet slide while it still stands
 test "robot_gym: P1 LONG - does PPO learn to stand past the statue, given 300k samples?" {
     // ** THE PHONE RAN ~30k SAMPLES, FLAT AT ~30 STEPS; humanoid PPO usually needs hundreds of
     // thousands. This runs 150 iterations (307k samples) natively and prints the curve every ten.
-    // Gated on `-Dslow-tests` (several minutes): zig build zn-robot_gym -Dslow-tests -Dtest-report
+    // Gated on `-Dslow-tests` (several minutes): zig build test-robot_gym -Dslow-tests -Dtest-report
     // -Dtest-filter="P1 LONG".
     const slow: bool = comptime @hasDecl(build_options, "slow_tests") and build_options.slow_tests;
     if (!slow) {

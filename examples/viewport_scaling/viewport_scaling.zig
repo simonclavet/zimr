@@ -31,7 +31,6 @@ const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const Color = zm.Color;
 const c = Color;
 const Vec2 = zm.Vec2;
-const bufPrint = std.fmt.bufPrint;
 
 // The FIXED design resolution everything is authored against.
 const virt_w: i32 = 640;
@@ -152,13 +151,12 @@ fn update(f: *z.Frame, s: *State) void {
     f.gl.texture(dest, s.rt.asTexture(), .{});
 
     // HUD drawn in REAL screen space (outside the viewport), showing the fit.
-    var buf: [96]u8 = undefined;
-    const hud: []const u8 = bufPrint(
-        &buf,
+    f.gl.textf(
+        .{ 10, 10 },
         "window {d:.0}x{d:.0}  scale {d:.2}x  bars {d:.0},{d:.0}",
         .{ win_w, win_h, fit.scale, fit.off_x, fit.off_y },
-    ) catch "?";
-    f.gl.text(.{ 10, 10 }, hud, .{ .size = 16, .color = c.raywhite, .font = &s.font });
+        .{ .size = 16, .color = c.raywhite, .font = &s.font },
+    );
 
     z.endDrawing(f.gl);
 }
