@@ -6,12 +6,12 @@ natively on Windows on Vulkan. Everything is Zig, down to the shaders (we have a
 transpiler for webgpu, using the compiler's spv target) and the browser glue (we have a c2js 
 transpiler using the compiler's c target), so the Zig compiler is the only dependency.
 
-A shader written in Zig runs unchanged on the GPU (natively on Vulkan, or in the browser on
-WebGPU), on the CPU in a software renderer, and even at compile time. The demos include ray
+A shader written in Zig runs unchanged on the GPU, on the CPU in a software renderer, 
+and even at compile time. The demos include ray
 tracing, physically based rendering and fractals. Neural networks work the same way: debug
 the training on the CPU, then run the same code on the GPU.
 
-Work in progress: the API changes often.
+Work in progress.
 
 - Live demos: https://simonclavet.github.io/zimr/
 - Overview, with demos running in the page: https://simonclavet.github.io/zimr/readme.html
