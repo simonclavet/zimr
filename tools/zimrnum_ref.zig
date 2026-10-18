@@ -419,6 +419,15 @@ const notes = [_]Note{
         .name = "rfft",
         .text = "Real input, n/2 + 1 bins. Half the transform, not a full one halved.",
     },
+    .{
+        .name = "imdctDirect",
+        .text = "O(N&sup2;), any N: 2N samples from N coefficients. The reference `imdct` is checked against.",
+    },
+    .{
+        .name = "imdct",
+        .text = "N a power of two: a DCT-IV through one N/2-point fft, unfolded. " ++
+            "Overlapped blocks give back N/2 times the signal.",
+    },
     .{ .name = "ConvMode", .text = "full, same, valid. Each is a window onto full." },
     .{ .name = "outputLen", .text = "Outputs a mode produces. `length` is reserved." },
     .{ .name = "convolve", .text = "Flips the kernel." },

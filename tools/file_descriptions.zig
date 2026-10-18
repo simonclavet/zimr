@@ -111,11 +111,6 @@ pub const descriptions = [_]Entry{
             "(DepthReplacing, NonWritable, unused pointer ArrayStrides; refuses Linkage). Std only.",
     },
     .{
-        .path = "src/spv2wgsl_wasm.zig",
-        .text = "Wasm entry root exposing the transpiler to the browser dev page. Excluded from " ++
-            "refAllDecls (wasm root).",
-    },
-    .{
         .path = "src/sound.zig",
         .text = "Audio: sounds (one-shot), streams (ring-buffered PCM with FIFO recycle), and " ++
             "music, over web-audio bridge externs with host no-op fallbacks.",
@@ -390,14 +385,6 @@ pub const descriptions = [_]Entry{
         .path = "webtests/smoke.ts",
         .text = "The original GL-era headless smoke shim; superseded by wgpu_smoke.zig for the " ++
             "live path.",
-    },
-    .{
-        .path = "webtests/transpiler_corpus.zig",
-        .text = "Phase 5c dogfood: the spv2wgsl corpus/fixture test LOGIC in Zig, transpiled to " ++
-            "JS by our own c2js and run under runner.mjs. Walks .opt.spv inputs, transpiles " ++
-            "each through the spv2wgsl wasm, MD5s the WGSL in-Zig (std.crypto), scans for " ++
-            "unresolved placeholders, and checks/refreshes tests/fixtures/wgsl_corpus.json. " ++
-            "Byte-identical to the deleted .ts.",
     },
     .{
         .path = "src/shaders/_deleted_glsl_placeholder.glsl",

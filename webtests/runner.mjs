@@ -33,8 +33,7 @@
 // import; it never inspects real GPU results). Names not in importNames but
 // imported by the SUT are installed as "unhandled" stubs that record a
 // distinct marker so the test logic can fail on undeclared imports.
-import { readFileSync, readdirSync, writeFileSync, mkdirSync, statSync } from "node:fs";
-import { createHash } from "node:crypto";
+import { readFileSync, readdirSync } from "node:fs";
 
 const suts = new Map(); // id -> { instance, log, voidNames, unhandled }
 let nextSutId = 1;
@@ -499,14 +498,6 @@ const host = {
       return null;
     }
   },
-  // Read a file as a UTF-8 string (null on error). For the fixture JSON.
-  readText(path) {
-    try {
-      return readFileSync(path, "utf8");
-    } catch {
-      return null;
-    }
-  },
   // List *.wasm files in a directory, sorted, newline-joined (or "" on
   // error). The test logic splits on "\n". Used by directory/--web-dir mode.
   listWasms(dir) {
@@ -588,45 +579,6 @@ const host = {
     const r = fn(...args);
     return typeof r === "number" ? r : 0;
   },
-  // ---- additions for the transpiler-corpus test (Phase 5c) -------------
-  // Some SUT exports return a packed 64-bit value (ptr|len) as a BigInt.
-  // Split it into [ptrLo32, lenHi32] so the wasm32 test logic (no i64
-  // ergonomics through the bridge) gets two plain numbers. Returns null on
-  // a 0/throw (the test reads that as transpile failure).
-  sutCallPacked(id, name, ...args) {
-    const s = suts.get(id);
-    if (!s) return null;
-    const fn = s.instance.exports[name];
-    if (typeof fn !== "function") return null;
-    let packed;
-    try {
-      packed = fn(...args);
-    } catch {
-      return null;
-    }
-    const big = BigInt(packed);
-    if (big === 0n) return null;
-    return {
-      ptr: Number(big & 0xffffffffn),
-      len: Number((big >> 32n) & 0xffffffffn),
-    };
-  },
-  // Write bytes (a normal array of byte values) into the SUT's linear
-  // memory at `ptr`. Used to place SPIR-V into the transpiler's input buffer.
-  sutMemWrite(id, ptr, bytes) {
-    const s = suts.get(id);
-    if (!s) return false;
-    const mem = new Uint8Array(s.instance.exports.memory.buffer);
-    mem.set(bytes, ptr);
-    return true;
-  },
-  // Read `len` bytes from the SUT's memory at `ptr` as a normal byte array.
-  sutMemRead(id, ptr, len) {
-    const s = suts.get(id);
-    if (!s) return [];
-    const mem = new Uint8Array(s.instance.exports.memory.buffer);
-    return Array.from(mem.subarray(ptr, ptr + len));
-  },
   // The SUT's current linear-memory size in bytes. Wasm memory never shrinks, so
   // this is a HIGH-WATER mark. Read HOST-SIDE from the SUT's own memory buffer —
   // this adds NO code to the example wasm, so it does NOT perturb the example's
@@ -640,54 +592,6 @@ const host = {
     if (!s) return 0;
     const m = s.instance.exports.memory;
     return m ? m.buffer.byteLength : 0;
-  },
-  // Recursively list files under `root` ending in `suffix`, newline-joined.
-  listFiles(root, suffix) {
-    const out = [];
-    const walk = (dir) => {
-      let entries;
-      try {
-        entries = readdirSync(dir, { withFileTypes: true });
-      } catch {
-        return;
-      }
-      for (const e of entries) {
-        const p = dir + "/" + e.name;
-        if (e.isDirectory()) walk(p);
-        else if (e.isFile() && e.name.endsWith(suffix)) out.push(p);
-      }
-    };
-    walk(root);
-    out.sort();
-    return out.join("\n");
-  },
-  // MD5 of a file's bytes as lowercase hex (or "" if unreadable). Hashing the
-  // raw SPIR-V; the test does WGSL hashing in Zig via std.crypto.
-  md5File(path) {
-    try {
-      return createHash("md5").update(readFileSync(path)).digest("hex");
-    } catch {
-      return "";
-    }
-  },
-  // File size in bytes (-1 if unreadable). Used to sort shaders small-first.
-  fileSize(path) {
-    try {
-      return statSync(path).size;
-    } catch {
-      return -1;
-    }
-  },
-  // Write a string to a file (creating parent dirs). For --refresh-fixture.
-  writeFile(path, text) {
-    try {
-      const slash = path.lastIndexOf("/");
-      if (slash > 0) mkdirSync(path.slice(0, slash), { recursive: true });
-      writeFileSync(path, text);
-      return true;
-    } catch {
-      return false;
-    }
   },
   sutCallLog(id) {
     const s = suts.get(id);

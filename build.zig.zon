@@ -2,7 +2,7 @@
     .name = .zimr,
     .version = "0.1.0",
     .fingerprint = 0xc986ab19f1cd755,
-    .minimum_zig_version = "0.17.0-dev.2122+3e15e99e6",
+    .minimum_zig_version = "0.18.0-dev.253+16d31ceed",
     .dependencies = .{},
     // What a project fetching zimr by `.url` + `.hash` gets. Matched case-sensitively, so
     // "readme.md" as it is spelled on disk. Not template/: a project needs zimr, not a copy

@@ -292,7 +292,34 @@
 //!     an index. `__href(o)` interns and returns an index; index 1 is globalThis.
 //!     A free-list reclaims freed indices (`js_free`), and `js_mark`/`js_reset`
 //!     bracket a scope so all handles interned within it are released at once -
-//!     wz.Site uses this per frame, so the table stays bounded in a render loop.
+//!     each frame of a page runs in one, so the table stays bounded in a render
+//!     loop. A scope is airtight: `js_mark` sets the free list aside, so the
+//!     scope's handles take no slot below its mark - where its reset would not
+//!     reach them - and `js_reset` gives the list back, with the slots the scope
+//!     freed below its mark added. A handle that must outlive the scope it is made
+//!     in - an object the page keeps for its life, made the first time a frame
+//!     needs it - is pinned (`js_pin`): a reset leaves it, and the slots below it
+//!     are freed rather than popped; `js_free` unpins it. A free slot holds
+//!     `__freedSlotMarker`, a marker of its own - not `undefined`, which is a value a handle
+//!     may hold (a call that returns nothing) and must still be freeable - and
+//!     the marker throws when used: a handle used after it was freed says so.
+//!     `js_table_length` reads the table's length, for diagnostics.
+//!   * DEBUGGING HANDLES: `js_set_handle_debugging(1)` turns on, in its realm,
+//!     a record of where each handle is made - an `Error`, whose stack the
+//!     engine captures cheaply and formats only when read: when a tombstone
+//!     fires or a census is taken, never on the way - and a tombstone per freed
+//!     slot that throws naming the handle,
+//!     where it was made and where it was freed; `js_handle_census(n)` counts
+//!     the live handles by where they were made, the n most first - what leaks,
+//!     by the code that made it. Off, a free slot holds the shared marker and no
+//!     stack is taken. An exception escaping a callback (`js_func*`) is handed
+//!     to the realm's `__zimrOnCallbackError`, if set, before it goes on: where
+//!     the browser reports only an error's message - an audio worklet's - the
+//!     program can send its stack. An error is handed over once, marked as it
+//!     passes - a callback inside a callback rethrows it through both - and a
+//!     thrown value that is not an object, `throw null` among them, is handed
+//!     over unmarked: reading a mark on it would itself throw, and that error
+//!     would take the place of the one being reported.
 //!   * PRIMITIVES: js_global, js_get/get_num/get_index/set/set_num/set_index,
 //!     js_call0..6 plus js_call0v..5v (void variants that return no result handle)
 //!     and js_calln1..6 / js_calln1v..6v (numeric fast paths that pass f64 args
@@ -305,10 +332,14 @@
 //!     value, e.g. for wasm imports), js_string_into (encode a JS string into the
 //!     heap).
 //!   * PROMISES / "await": there is no synchronous await. `js_promise_register`
-//!     attaches .then to a promise and stashes the settled result/handle in a
-//!     completion table `__P`; `js_promise_status`/`js_promise_take` are polled
-//!     (naturally, once per frame in a game loop). Chained async (fetch ->
-//!     arrayBuffer) is orchestrated in Zig across frames as register/poll/take.
+//!     attaches .then to a promise and stashes the settled value - the value, not a
+//!     handle - in a completion table `__P`; `js_promise_status`/`js_promise_take`
+//!     are polled (naturally, once per frame in a game loop). The handle is made
+//!     when the value is taken, in the taker's scope: a frame that takes a result
+//!     has it reclaimed with the frame's other handles, where a handle made when
+//!     the promise settled - outside every scope - was kept for good. A taken id is
+//!     reused. Chained async (fetch -> arrayBuffer) is orchestrated in Zig across
+//!     frames as register/poll/take.
 //!   * GENERALITY LAYER (so a Zig program can do anything JS can):
 //!         js_array/js_push/js_len           build/inspect arrays
 //!         js_apply/js_call_n/js_construct    calls/new for more than six arguments -
@@ -1996,6 +2027,9 @@ const Transpiler = struct {
     // so the type comes from the declaration (`parseLValueBase`).
     global_scalars: StringHashMap(Elem),
     array_elems: StringHashMap(Elem), // array global/local name -> element type
+    // A fixed-array global's name -> its wrapper's tag (`arr_N_T`), kept whether or not the wrapper's layout parsed:
+    // what an element access through the global with no cast is typed by (`parseArrayWrapperBase`).
+    global_array_wrappers: StringHashMap([]const u8),
     struct_vars: StringHashMap([]const u8), // struct local/global name -> struct tag
     struct_ptrs: StringHashMap([]const u8), // struct-pointer temp name -> pointee struct tag
     // Pointer-to-pointer struct pointers (`struct X **`). A SINGLE-star struct
@@ -2097,6 +2131,7 @@ const Transpiler = struct {
             .globals = StringHashMap(u32).init(gpa),
             .global_scalars = StringHashMap(Elem).init(gpa),
             .array_elems = StringHashMap(Elem).init(gpa),
+            .global_array_wrappers = StringHashMap([]const u8).init(gpa),
             .struct_vars = StringHashMap([]const u8).init(gpa),
             .struct_ptrs = StringHashMap([]const u8).init(gpa),
             .pp_struct_ptrs = StringHashMap(void).init(gpa),
@@ -2611,7 +2646,180 @@ const Transpiler = struct {
             \\const __nc = new Map(); // memo: comptime method/property name addr -> decoded string
             \\const __H = [null, (typeof globalThis !== "undefined" ? globalThis : this)];
             \\let __Hf = [];
-            \\function __href(o) { const i = __Hf.length ? __Hf.pop() : __H.length; __H[i] = o; return i; }
+            // The pinned handles: slots a scope's reset leaves in place (`js_pin`). A handle the page keeps for its
+            // life but first makes inside a frame - the canvas's context, made the first time a frame draws - is pinned
+            // where it is stored, so that the frame's reset, which reclaims everything the frame made, passes over it.
+            \\const __pinnedHandles = new Set();
+            //
+            // The scopes open now, innermost last: for each, the table's length when it opened - its mark - and the
+            // free list as it was then, set aside while the scope runs (`js_mark`). A scope that reused a free slot
+            // below its mark would make a handle its reset never reaches; with the list set aside, every handle a scope
+            // makes lies above its mark.
+            \\const __scopeStack = [];
+            //
+            // What a freed slot holds while debugging is off: one marker shared by all freed slots - not `undefined`,
+            // which is a value a live handle may hold (a call that returns nothing) and must still be freeable. Reading
+            // a property of it, or calling it, throws: a handle used after it was freed says so at once, until its slot
+            // is given to a new handle.
+            \\const __freedSlotMarker = new Proxy(function () {}, {
+            \\  get: function () { throw new Error('zimr: a handle used after it was freed'); },
+            \\  apply: function () { throw new Error('zimr: a handle called after it was freed'); },
+            \\});
+            //
+            // Debugging handles (`js_set_handle_debugging`), off by default. While it is on, each new handle keeps an
+            // `Error` made where the handle was made: the engine captures the stack as the error is made, cheaply, and
+            // formats it only when it is read - when a stale handle is used, or a census taken - so a page pays a few
+            // microseconds per handle, not the tens a formatted stack would cost. And each freed slot gets a tombstone
+            // of its own instead of the shared marker, which remembers the handle and where it was made and freed; the
+            // set of tombstones tells them from live values (`__isFreedSlot`), and lets them go with their slots.
+            \\let __isDebuggingHandles = false;
+            \\const __errorWhereHandleWasMade = [];
+            \\const __tombstones = new WeakSet();
+            //
+            // Where a handle was made, read from the stack captured then: the first three functions of the program on
+            // it, nearest first, joined by " < " - "bridge_ZimrWgpu_onCanvasResize < ResizeObserver.<anonymous>". A
+            // stack line reads "at name (file:line:column)", the name qualified by its receiver where it was called as
+            // a method - "Object.__href [as handleOf]". The location in parentheses is cut off. The runtime's own
+            // frames are skipped, told by the function's own name - the part after the last dot, without an alias in
+            // brackets - starting with "__" or "js_"; so are the arguments' `map` and the promise machinery. Formatted
+            // once, the first time it is asked for, and kept on the error: a census asks for the same handles' sites
+            // again ten seconds later.
+            \\function __describeWhereMade(capturedError) {
+            \\  if (capturedError.__describedSite !== undefined) {
+            \\    return capturedError.__describedSite;
+            \\  }
+            \\  const stackLines = String(capturedError.stack).split('\n');
+            \\  const programFunctionNames = [];
+            \\  for (const stackLine of stackLines) {
+            \\    const trimmedLine = stackLine.trim();
+            \\    if (!trimmedLine.startsWith('at ')) {
+            \\      continue;
+            \\    }
+            \\    const frameText = trimmedLine.slice('at '.length);
+            \\    const functionName = frameText.replace(/ \(.*\)$/, '');
+            \\    const ownName = functionName.replace(/ \[as [^\]]*\]$/, '').split('.').pop();
+            \\    const isRuntimeFunction = ownName.startsWith('__') || ownName.startsWith('js_');
+            \\    const isArgumentsMap = functionName === 'Array.map';
+            \\    const isPromiseMachinery = functionName.startsWith('new Promise');
+            \\    if (!isRuntimeFunction && !isArgumentsMap && !isPromiseMachinery) {
+            \\      programFunctionNames.push(functionName);
+            \\    }
+            \\    if (programFunctionNames.length === 3) {
+            \\      break;
+            \\    }
+            \\  }
+            \\  const describedSite = programFunctionNames.length > 0 ? programFunctionNames.join(' < ') : '?';
+            \\  capturedError.__describedSite = describedSite;
+            \\  return describedSite;
+            \\}
+            //
+            // A new handle for `value`: a freed slot if there is one, else a new slot at the table's end. While
+            // debugging, the place it was made in is captured with it.
+            \\function __href(value) {
+            \\  const handle = __Hf.length ? __Hf.pop() : __H.length;
+            \\  __H[handle] = value;
+            \\  if (__isDebuggingHandles) {
+            \\    __errorWhereHandleWasMade[handle] = new Error();
+            \\  }
+            \\  return handle;
+            \\}
+            //
+            // Whether a slot's value says the slot is free: the shared marker, or one of the debugging tombstones.
+            // Compared by identity and set membership only, so that the marker's throwing traps are never touched.
+            \\function __isFreedSlot(slotValue) {
+            \\  const isSharedMarker = slotValue === __freedSlotMarker;
+            \\  const isTombstone = typeof slotValue === 'function' && __tombstones.has(slotValue);
+            \\  return isSharedMarker || isTombstone;
+            \\}
+            //
+            // What the slot of `handle` holds once freed: the shared marker; or, while debugging, a tombstone made now,
+            // which throws naming the handle, where it was made and where it was freed - "zimr: handle 56 used after it
+            // was freed - made at sendNotices < processBlock; freed at sendNotices < processBlock". The freeing place
+            // is captured here, and both are formatted only if the tombstone is ever touched.
+            \\function __markerForFreedSlot(handle) {
+            \\  if (!__isDebuggingHandles) {
+            \\    return __freedSlotMarker;
+            \\  }
+            \\  const errorWhereMade = __errorWhereHandleWasMade[handle];
+            \\  const errorWhereFreed = new Error();
+            \\  const reportStaleUse = function () {
+            \\    const madeAt = errorWhereMade ? __describeWhereMade(errorWhereMade) : '?';
+            \\    const freedAt = __describeWhereMade(errorWhereFreed);
+            \\    const staleUseMessage = 'zimr: handle ' + handle + ' used after it was freed - made at ' + madeAt +
+            \\      '; freed at ' + freedAt;
+            \\    throw new Error(staleUseMessage);
+            \\  };
+            \\  const tombstone = new Proxy(function () {}, { get: reportStaleUse, apply: reportStaleUse });
+            \\  __tombstones.add(tombstone);
+            \\  return tombstone;
+            \\}
+            //
+            // Turns the debugging of handles on (1) or off (0), in this realm only: a page and its audio worklet each
+            // have their own runtime, and the page tells the worklet by a message. Handles made before it was turned on
+            // have no place recorded; a census counts them apart.
+            \\function js_set_handle_debugging(isOn) {
+            \\  __isDebuggingHandles = isOn !== 0;
+            \\}
+            //
+            // Hands an exception that is escaping a callback to the realm's hook, `__zimrOnCallbackError`, if the
+            // program set one - before it goes on: where the browser reports only an error's message, as for an audio
+            // worklet, the program can send its stack. An error is handed over once: a callback called from inside
+            // another rethrows it through both wrappers, so it is marked as it passes. A thrown value that is not an
+            // object - `throw null`, a string - cannot be marked, and reading a mark on `null` would itself throw,
+            // replacing the error being reported: such a value is handed over unmarked. Whatever the hook throws is
+            // dropped, so that the original error still goes on.
+            \\function __handOverCallbackError(thrownValue) {
+            \\  const callbackErrorHook = globalThis.__zimrOnCallbackError;
+            \\  if (typeof callbackErrorHook !== 'function') {
+            \\    return;
+            \\  }
+            \\  const isMarkable = thrownValue !== null &&
+            \\    (typeof thrownValue === 'object' || typeof thrownValue === 'function');
+            \\  if (isMarkable && thrownValue.__zimrReported) {
+            \\    return;
+            \\  }
+            \\  try {
+            \\    if (isMarkable) {
+            \\      thrownValue.__zimrReported = true;
+            \\    }
+            \\    callbackErrorHook(thrownValue);
+            \\  } catch (hookError) {
+            \\    void hookError;
+            \\  }
+            \\}
+            //
+            // The live handles counted by where they were made, as text: one line per place, the most first, at most
+            // `limit` lines - "124 x Promise.resolve.then..." - then a line counting the handles made before debugging
+            // began, whose place is unknown. A leak shows as the code that made it, its count rising from one census to
+            // the next. The slots 0 and 1 hold `null` and the global object, and are not counted.
+            \\function js_handle_census(limit) {
+            \\  const countBySite = new Map();
+            \\  let countMadeBeforeDebugging = 0;
+            \\  for (let handle = 2; handle < __H.length; handle++) {
+            \\    if (__isFreedSlot(__H[handle])) {
+            \\      continue;
+            \\    }
+            \\    const errorWhereMade = __errorWhereHandleWasMade[handle];
+            \\    if (errorWhereMade === undefined) {
+            \\      countMadeBeforeDebugging += 1;
+            \\      continue;
+            \\    }
+            \\    const site = __describeWhereMade(errorWhereMade);
+            \\    const countSoFar = countBySite.get(site) || 0;
+            \\    countBySite.set(site, countSoFar + 1);
+            \\  }
+            \\  const sitesMostFirst = Array.from(countBySite.entries()).sort(function (first, second) {
+            \\    return second[1] - first[1];
+            \\  });
+            \\  const reportedSites = sitesMostFirst.slice(0, limit);
+            \\  const censusLines = reportedSites.map(function (siteAndCount) {
+            \\    return siteAndCount[1] + ' x ' + siteAndCount[0];
+            \\  });
+            \\  if (countMadeBeforeDebugging > 0) {
+            \\    censusLines.push(countMadeBeforeDebugging + ' made before debugging began');
+            \\  }
+            \\  return __href(censusLines.join('\n'));
+            \\}
             \\const __SCR = new Uint8Array(65536);
             // lint:off line-length: emitted-JS template - one source line is one output line
             \\function __cp(p, l) { if (l > 65536) return __HEAPU8.slice(p, p + l); __SCR.set(__HEAPU8.subarray(p, p + l)); return __SCR.subarray(0, l); }
@@ -2654,16 +2862,142 @@ const Transpiler = struct {
             \\function js_num(x) { return __href(x); }
             \\function js_to_num(v) { return +__H[v]; }
             \\function js_is_null(v) { return (__H[v] == null) ? 1 : 0; }
-            \\function js_free(v) { if (v > 1 && __H[v] !== undefined) { __H[v] = undefined; __Hf.push(v); } }
-            \\function js_mark() { return __H.length; }
-            // lint:off line-length: emitted-JS template - one source line is one output line
-            \\function js_reset(m) { while (__H.length > m) __H.pop(); if (__Hf.length) __Hf = __Hf.filter(function (i) { return i < m; }); }
-            // lint:off line-length: emitted-JS template - one source line is one output line
-            \\function js_func(f) { return __href(function(...args) { const hs = args.map(__href); const r = __FTABLE[f](...hs); for (let i = 0; i < hs.length; i++) js_free(hs[i]); return r; }); }
-            // lint:off line-length: emitted-JS template - one source line is one output line
-            \\function js_func_ctx(f,ctx) { return __href(function(...args) { const hs = args.map(__href); const r = __FTABLE[f](ctx, ...hs); for (let i = 0; i < hs.length; i++) js_free(hs[i]); return r; }); }
-            // lint:off line-length: emitted-JS template - one source line is one output line
-            \\function js_func3(f) { return __href(function(a, b, c) { const ha = __href(a), hb = __href(b), hc = __href(c); const r = __FTABLE[f](ha, hb, hc); js_free(ha); js_free(hb); js_free(hc); return r; }); }
+            // Frees `handle`: its slot gets the freed marker (or a tombstone) and joins the free list, and it is
+            // unpinned. The slots 0 and 1 - `null` and the global object - are never freed, nor is a slot already free:
+            // a second free of a handle would otherwise put its slot on the free list twice, and two later handles
+            // would share it.
+            \\function js_free(handle) {
+            \\  if (handle <= 1 || __isFreedSlot(__H[handle])) {
+            \\    return;
+            \\  }
+            \\  __pinnedHandles.delete(handle);
+            \\  __H[handle] = __markerForFreedSlot(handle);
+            \\  __Hf.push(handle);
+            \\}
+            //
+            // Pins `handle`: every scope's reset leaves it in place, until it is freed.
+            \\function js_pin(handle) {
+            \\  if (handle > 1) {
+            \\    __pinnedHandles.add(handle);
+            \\  }
+            \\}
+            //
+            // Opens a scope: returns the table's length - the scope's mark - and sets the free list aside until the
+            // scope is reset, so that every handle made inside lies above the mark.
+            \\function js_mark() {
+            \\  const mark = __H.length;
+            \\  __scopeStack.push({ mark: mark, outerFreeList: __Hf });
+            \\  __Hf = [];
+            \\  return mark;
+            \\}
+            //
+            // The table's length, for diagnostics - without opening a scope, as `js_mark` would.
+            \\function js_table_length() {
+            \\  return __H.length;
+            \\}
+            //
+            // Closes the scope opened at `mark`, releasing every handle made since. With nothing pinned, the table is
+            // popped back to the mark. With pins, the slots above the highest pin are popped, and the scope's slots
+            // below it, unpinned, are freed one by one - marked free and put on the free list. Then the free list as
+            // the scope found it comes back, with the scope's still-free slots added: those it freed below its mark
+            // (handles of an outer scope it let go), and those freed around pins. A scope opened inside this one and
+            // never reset - its function left by an exception - is closed with it, its free slots kept; a record whose
+            // mark is lower belongs to an outer scope and is left in place.
+            \\function js_reset(mark) {
+            \\  if (__pinnedHandles.size === 0) {
+            \\    while (__H.length > mark) {
+            \\      __H.pop();
+            \\    }
+            \\  } else {
+            \\    while (__H.length > mark && !__pinnedHandles.has(__H.length - 1)) {
+            \\      __H.pop();
+            \\    }
+            \\    for (let handle = __H.length - 1; handle >= mark; handle--) {
+            \\      const isPinned = __pinnedHandles.has(handle);
+            \\      if (!isPinned && !__isFreedSlot(__H[handle])) {
+            \\        __H[handle] = __markerForFreedSlot(handle);
+            \\        __Hf.push(handle);
+            \\      }
+            \\    }
+            \\  }
+            \\  const isStillFree = function (handle) {
+            \\    return handle < __H.length && __isFreedSlot(__H[handle]);
+            \\  };
+            \\  let freeSlots = __Hf.filter(isStillFree);
+            \\  while (__scopeStack.length > 0) {
+            \\    const scope = __scopeStack.pop();
+            \\    if (scope.mark > mark) {
+            \\      const abandonedFreeSlots = scope.outerFreeList.filter(isStillFree);
+            \\      freeSlots = freeSlots.concat(abandonedFreeSlots);
+            \\      continue;
+            \\    }
+            \\    if (scope.mark === mark) {
+            \\      freeSlots = scope.outerFreeList.concat(freeSlots);
+            \\    } else {
+            \\      __scopeStack.push(scope);
+            \\    }
+            \\    break;
+            \\  }
+            \\  __Hf = freeSlots;
+            \\}
+            // A JavaScript function that calls the program's function `functionIndex` with handles for its arguments,
+            // freed when it returns. An exception escaping it is handed to the realm's hook before it goes on
+            // (`__handOverCallbackError`).
+            \\function js_func(functionIndex) {
+            \\  return __href(function (...callArguments) {
+            \\    const argumentHandles = callArguments.map(__href);
+            \\    let result;
+            \\    try {
+            \\      result = __FTABLE[functionIndex](...argumentHandles);
+            \\    } catch (thrownValue) {
+            \\      __handOverCallbackError(thrownValue);
+            \\      throw thrownValue;
+            \\    }
+            \\    for (const argumentHandle of argumentHandles) {
+            \\      js_free(argumentHandle);
+            \\    }
+            \\    return result;
+            \\  });
+            \\}
+            //
+            // The same, passing `context` first: one program function serving several callbacks, each its own context.
+            \\function js_func_ctx(functionIndex, context) {
+            \\  return __href(function (...callArguments) {
+            \\    const argumentHandles = callArguments.map(__href);
+            \\    let result;
+            \\    try {
+            \\      result = __FTABLE[functionIndex](context, ...argumentHandles);
+            \\    } catch (thrownValue) {
+            \\      __handOverCallbackError(thrownValue);
+            \\      throw thrownValue;
+            \\    }
+            \\    for (const argumentHandle of argumentHandles) {
+            \\      js_free(argumentHandle);
+            \\    }
+            \\    return result;
+            \\  });
+            \\}
+            //
+            // The same for exactly three arguments, without the rest parameter's array: an audio worklet's `process`,
+            // called some 375 times a second, builds no array on the way.
+            \\function js_func3(functionIndex) {
+            \\  return __href(function (first, second, third) {
+            \\    const firstHandle = __href(first);
+            \\    const secondHandle = __href(second);
+            \\    const thirdHandle = __href(third);
+            \\    let result;
+            \\    try {
+            \\      result = __FTABLE[functionIndex](firstHandle, secondHandle, thirdHandle);
+            \\    } catch (thrownValue) {
+            \\      __handOverCallbackError(thrownValue);
+            \\      throw thrownValue;
+            \\    }
+            \\    js_free(firstHandle);
+            \\    js_free(secondHandle);
+            \\    js_free(thirdHandle);
+            \\    return result;
+            \\  });
+            \\}
             \\function js_obj() { return __href({}); }
             \\function js_fn_raw(f) { return __href(function(...args) { return __FTABLE[f](...args); }); }
             // lint:off line-length: emitted-JS template - one source line is one output line
@@ -2688,11 +3022,57 @@ const Transpiler = struct {
             // lint:off line-length: emitted-JS template - one source line is one output line
             \\function js_string_into(h,p,max){const m=Math.min(max,65536);const r=__utf8Encoder.encodeInto(String(__H[h]),__SCR.subarray(0,m));__HEAPU8.set(__SCR.subarray(0,r.written),p);return r.written;}
             \\function js_bytes(p,l){return __href(new Uint8Array(__MEM.slice(p,p+l)));}
+            // The promises the program polls (`js_promise_register`), by id: for each, a record of its state - 0
+            // pending, 1 fulfilled, 2 rejected - and its settled value, kept as a value: the handle is made only when
+            // the value is taken (`js_promise_take`), in the taker's scope. A handle made when the promise settled
+            // would lie outside every scope - kept for good, one per promise: a GPU readback's every frame. The ids of
+            // taken promises are reused.
             \\const __P = [null];
-            // lint:off line-length: emitted-JS template - one source line is one output line
-            \\function js_promise_register(ph){const id=__P.length;__P.push({s:0,v:0});Promise.resolve(__H[ph]).then(v=>{if(__P[id])__P[id]={s:1,v:__href(v)};},e=>{if(__P[id])__P[id]={s:2,v:__href(e)};});return id;}
-            \\function js_promise_status(id){return __P[id]?__P[id].s:2;}
-            \\function js_promise_take(id){const r=__P[id]?__P[id].v:0;__P[id]=null;return r;}
+            \\const __freedPromiseIds = [];
+            //
+            // Registers the promise in `promiseHandle` and returns its id. Its settlement is written into its record -
+            // unless the id was taken and given to a later promise meanwhile: each continuation checks that its record
+            // is still the one under its id.
+            \\function js_promise_register(promiseHandle) {
+            \\  const promiseId = __freedPromiseIds.length ? __freedPromiseIds.pop() : __P.length;
+            \\  const record = { state: 0, value: undefined };
+            \\  __P[promiseId] = record;
+            \\  const isStillRegistered = function () { return __P[promiseId] === record; };
+            \\  Promise.resolve(__H[promiseHandle]).then(
+            \\    function (fulfilledValue) {
+            \\      if (isStillRegistered()) {
+            \\        record.state = 1;
+            \\        record.value = fulfilledValue;
+            \\      }
+            \\    },
+            \\    function (rejectionReason) {
+            \\      if (isStillRegistered()) {
+            \\        record.state = 2;
+            \\        record.value = rejectionReason;
+            \\      }
+            \\    },
+            \\  );
+            \\  return promiseId;
+            \\}
+            //
+            // The state of the promise `promiseId`: 0 pending, 1 fulfilled, 2 rejected - and 2 for an id not
+            // registered, so that a poller waiting on it stops.
+            \\function js_promise_status(promiseId) {
+            \\  const record = __P[promiseId];
+            \\  return record ? record.state : 2;
+            \\}
+            //
+            // Takes the settled value of the promise `promiseId`, as a new handle made now, in the taker's scope; the
+            // id is freed for a later promise. 0 for an id not registered.
+            \\function js_promise_take(promiseId) {
+            \\  const record = __P[promiseId];
+            \\  if (!record) {
+            \\    return 0;
+            \\  }
+            \\  __P[promiseId] = null;
+            \\  __freedPromiseIds.push(promiseId);
+            \\  return __href(record.value);
+            \\}
             \\// fetch(url) then unwrap the body: resolves DIRECTLY to parsed JSON / text,
             \\// folding the `r => r.json()` step JS-side (Zig has no inline closures).
             \\function js_fetch_json(u){return __href(fetch(__H[u]).then(function(r){return r.json();}));}
@@ -3058,6 +3438,29 @@ const Transpiler = struct {
         self.p = saved;
     }
 
+    /// Records what an element access through a fixed-array global with no cast is typed by, from its declaration's
+    /// type tokens `specs` (`static struct arr_16_u8_181`): its element type (`array_elems`), its wrapper's tag
+    /// (`global_array_wrappers`), and - when the wrapper's layout parsed - the tag as a struct's (`struct_vars`), as a
+    /// local array's are. Nothing for a global whose type is no array wrapper.
+    fn recordArrayWrapperOfGlobal(
+        self: *Transpiler,
+        name: []const u8,
+        specs: []const Token,
+    ) error{OutOfMemory}!void {
+        const wrapper_tag: []const u8 = for (specs) |spec| {
+            if (spec.kind == .ident and startsWith(u8, spec.text, "arr_")) {
+                break spec.text;
+            }
+        } else return;
+        try self.global_array_wrappers.put(name, wrapper_tag);
+        if (parseArrTag(wrapper_tag)) |info| {
+            try self.array_elems.put(name, info.elem);
+        }
+        if (self.structs.contains(wrapper_tag)) {
+            try self.struct_vars.put(name, wrapper_tag);
+        }
+    }
+
     /// Scan all tokens for `... <name> ... = { "<cstring>" }` statics, decode the
     /// C string bytes, and assign each <name> a heap offset. Only handles the
     /// initialized char-array form the backend uses for string literals.
@@ -3094,6 +3497,17 @@ const Transpiler = struct {
                     try self.data.append(self.gpa, 0);
                 }
                 try self.globals.put(name, off);
+                // A byte array initialized from a string is still a fixed-array global (`static struct arr_16_u8_181
+                // name = {"..."}`): its declaration's type, back to the statement before it, records its wrapper.
+                var specs_start: usize = i;
+                while (specs_start > 0) {
+                    const before: []const u8 = self.toks[specs_start - 1].text;
+                    if (eql(u8, before, ";") or eql(u8, before, "}") or eql(u8, before, "{")) {
+                        break;
+                    }
+                    specs_start -= 1;
+                }
+                try self.recordArrayWrapperOfGlobal(name, self.toks[specs_start..i]);
             }
         }
         // second pass: mutable scalar globals. The C backend accesses every global
@@ -3197,6 +3611,10 @@ const Transpiler = struct {
                     try self.data.append(self.gpa, 0);
                 }
                 try self.globals.put(name, off);
+                // Its element type and its wrapper's tag, as a local array's (`array_elems`, `struct_vars`): an element
+                // reached through the global's own name is sized by them - `g.array[i]`, and `&((&g))->array[i]`,
+                // which this Zig's C backend writes with no cast to carry the type (`tryArrayWrapperAddr`).
+                try self.recordArrayWrapperOfGlobal(name, specs);
                 // Const array with a literal initializer (`= {{e0, e1, ...}}`):
                 // the wrapper is `struct arr_N_T { T array[N]; }`, so its layout
                 // (parsed in prescanStructLayouts) has a single array field -
@@ -6348,6 +6766,11 @@ const Transpiler = struct {
         if (try self.tryArrayWrapperStore()) |stored| {
             return stored;
         }
+        // A scalar field through an address taken in place: `((&LVALUE))->field = rhs`, the shape the Zig C backend
+        // writes for an optional field's null flag when a literal is assigned to it.
+        if (try self.tryAddressMemberStore()) |stored| {
+            return stored;
+        }
         // simple-identifier lvalue assignment (covers Zig C-backend output)
         const t: Token = self.current();
         if (t.kind == .ident and !isTypeQualifierOrSpecifier(t.text)) {
@@ -6794,6 +7217,13 @@ const Transpiler = struct {
                     }
                     if (self.globals.get(op.text)) |off| {
                         self.p += 1;
+                        // `&g` points at g's own type: a struct's or an array wrapper's tag, recorded so that a
+                        // following `->field` resolves against it, as after a cast `((T *)&g)`. Zig's C backend leaves
+                        // the cast out where `&g` already has that type - `((&g))->array[i] = v`,
+                        // `memcpy(((&g))->array, ...)` - so the type comes from g.
+                        if (self.struct_vars.get(op.text)) |tag| {
+                            self.pending_struct_tag = tag;
+                        }
                         return self.scratchBase(op.text, off);
                     }
                     // &fn  (operand is not a known var) -> the JS function value (its name)
@@ -6894,6 +7324,9 @@ const Transpiler = struct {
         // Remember the leading identifier (if any) so `name.array[i]` on an
         // array global/local can be recognized below.
         const base_name: []const u8 = if (self.current().kind == .ident) self.current().text else "";
+        // A tag left by an earlier expression that nothing read (an `&g` passed as a plain value) is not this
+        // primary's: only what the primary itself records counts.
+        self.pending_struct_tag = null;
         var e: []const u8 = try self.parsePrimary();
         // A struct-yielding primary (e.g. a compound literal `(struct T){...}`)
         // records its tag here; capture it so a following `.array[i]` resolves,
@@ -7680,166 +8113,128 @@ const Transpiler = struct {
         return try allocPrint(self.gpa, "({s})", .{try self.heapStore(lv.elem, lv.addr, try self.wrap(rhs, ety))});
     }
 
-    /// Parse `( ... (arr_T *) & global ... ) -> array [ idx ]` at self.p (just
-    /// after a consumed '&') and return `globalOffset + idx*elemsize`, the
-    /// address of a fixed-array global's element. Returns null (without
-    /// consuming) if the shape doesn't match.
-    fn tryArrayWrapperAddr(self: *Transpiler) error{OutOfMemory}!?[]const u8 {
+    /// A fixed-array global's base as the C backend writes an element access through it (`parseArrayWrapperBase`):
+    /// the global's offset, and its wrapper's tag (`arr_N_T`, the struct holding the array).
+    const ArrayWrapperBase = struct {
+        offset: u32,
+        wrapper_tag: []const u8,
+    };
+
+    /// Parses the base of an element access through a fixed-array global, at self.p (just after a consumed `&`, or at
+    /// the start of a store's left side): `( ... (struct arr_T *) & global ... )`, the pointer cast giving the
+    /// wrapper's type - or `( ... & global ... )` with no cast, where `&global` already has the wrapper's pointer type
+    /// and Zig 0.17's C backend leaves the cast out. The wrapper's tag then comes from the global's own declared type:
+    /// a primitive-element array's (`global_array_wrappers`), or a struct-element one's, declared as a struct
+    /// (`struct_vars`). Consumes through the base's closing parentheses; returns null, consuming nothing, for any
+    /// other shape.
+    fn parseArrayWrapperBase(self: *Transpiler) ?ArrayWrapperBase {
         const save: usize = self.p;
         if (!self.atText("(")) {
             return null;
         }
-        // Scan within the outer parens for the `arr_*` cast tag and the global name.
-        // Shape: ( ( ( (struct arr_T *) & global ) ) ) -> array [ idx ]
-        var elem: ?Elem = null;
-        // skip leading '('s
         while (self.atText("(")) {
             self.p += 1;
         }
-        // optional 'struct'
+        // With a cast: `struct`, the wrapper's tag, `*`, and the cast's closing parentheses.
+        var cast_tag: ?[]const u8 = null;
         if (self.atText("struct")) {
             self.p += 1;
         }
-        // the arr_ tag ident
-        if (self.current().kind == .ident) {
-            if (parseArrTag(self.current().text)) |info| {
-                elem = info.elem;
+        if (self.current().kind == .ident and startsWith(u8, self.current().text, "arr_")) {
+            cast_tag = self.current().text;
+            self.p += 1; // the tag
+            if (!self.atText("*")) {
+                self.p = save;
+                return null;
+            }
+            self.p += 1; // *
+            while (self.atText(")")) {
+                self.p += 1;
             }
         }
-        if (elem == null) {
+        if (!self.atText("&") or self.lookahead(1).kind != .ident) {
             self.p = save;
             return null;
         }
-        self.p += 1; // arr tag
-        if (!self.atText("*")) {
-            self.p = save;
-            return null;
-        }
-        self.p += 1; // *
-        while (self.atText(")")) {
-            self.p += 1;
-        } // close cast parens
-        if (!self.atText("&")) {
-            self.p = save;
-            return null;
-        }
-        self.p += 1; // &
-        if (self.current().kind != .ident) {
-            self.p = save;
-            return null;
-        }
-        const gname: []const u8 = self.current().text;
-        const off: u32 = self.globals.get(gname) orelse {
+        const global_name: []const u8 = self.lookahead(1).text;
+        const offset: u32 = self.globals.get(global_name) orelse {
             self.p = save;
             return null;
         };
-        self.p += 1; // global name
+        const wrapper_tag: []const u8 = cast_tag orelse self.global_array_wrappers.get(global_name) orelse
+            self.struct_vars.get(global_name) orelse {
+            self.p = save;
+            return null;
+        };
+        if (!startsWith(u8, wrapper_tag, "arr_")) {
+            self.p = save;
+            return null;
+        }
+        self.p += 2; // & global
         while (self.atText(")")) {
             self.p += 1;
-        } // close remaining wrapper parens
-        // -> array [ idx ]
-        if (!self.atText("->")) {
+        }
+        return .{ .offset = offset, .wrapper_tag = wrapper_tag };
+    }
+
+    /// The array field of an element access through a fixed-array global, after its base: `-> array [`. Consumes it and
+    /// returns true; returns false, consuming nothing, for any other shape.
+    fn parseArrayFieldOpening(self: *Transpiler) bool {
+        const is_array_field: bool = self.atText("->") and self.lookahead(1).kind == .ident and
+            eql(u8, self.lookahead(1).text, "array") and eql(u8, self.lookahead(2).text, "[");
+        if (!is_array_field) {
+            return false;
+        }
+        self.p += 3; // -> array [
+        return true;
+    }
+
+    /// Parse `( ... (arr_T *) & global ... ) -> array [ idx ]` at self.p (just after a consumed '&'), the cast optional
+    /// (`parseArrayWrapperBase`), and return `globalOffset + idx*elemsize`, the address of a fixed-array global's
+    /// element. Returns null (without consuming) if the shape doesn't match.
+    fn tryArrayWrapperAddr(self: *Transpiler) error{OutOfMemory}!?[]const u8 {
+        const save: usize = self.p;
+        const base: ArrayWrapperBase = self.parseArrayWrapperBase() orelse return null;
+        const info: ArrayInfo = parseArrTag(base.wrapper_tag) orelse {
+            self.p = save;
+            return null;
+        };
+        if (!self.parseArrayFieldOpening()) {
             self.p = save;
             return null;
         }
-        self.p += 1; // ->
-        if (!(self.current().kind == .ident and eql(u8, self.current().text, "array"))) {
-            self.p = save;
-            return null;
-        }
-        self.p += 1; // array
-        if (!self.atText("[")) {
-            self.p = save;
-            return null;
-        }
-        self.p += 1; // [
         const idx: []const u8 = try self.parseExpr();
         self.expect("]");
-        const e: Elem = elem.?;
-        const size: usize = elemSize(e);
-        return try allocPrint(self.gpa, "(({d}) + ({s}) * {d})", .{ off, idx, size });
+        return try allocPrint(self.gpa, "(({d}) + ({s}) * {d})", .{ base.offset, idx, elemSize(info.elem) });
     }
 
     /// Store form of the array-wrapper element address:
-    /// `((arr_N_T*)&global)->array[idx] = rhs`  ->  heapStore at off + idx*size.
-    /// Mirrors tryArrayWrapperAddr but consumes the `= rhs` and emits the store
-    /// (routing a 64-bit element through __st64). Returns null (without consuming)
-    /// if the shape - including the trailing `=` - doesn't match.
+    /// `((arr_N_T*)&global)->array[idx] = rhs`, the cast optional (`parseArrayWrapperBase`)  ->  heapStore at
+    /// off + idx*size. Mirrors tryArrayWrapperAddr but consumes the `= rhs` and emits the store (routing a 64-bit
+    /// element through __st64; a struct element is a byte copy). Returns null (without consuming) if the shape -
+    /// including the trailing `=` - doesn't match.
     fn tryArrayWrapperStore(self: *Transpiler) error{OutOfMemory}!?[]const u8 {
         const save: usize = self.p;
-        if (!self.atText("(")) {
-            return null;
-        }
-        var elem: ?Elem = null;
-        var elem_struct: ?[]const u8 = null; // set for a STRUCT-element wrapper
-        while (self.atText("(")) {
-            self.p += 1;
-        } // leading '('s
-        if (self.atText("struct")) {
-            self.p += 1;
-        }
-        if (self.current().kind == .ident) {
-            const wt: []const u8 = self.current().text;
-            if (parseArrTag(wt)) |info| {
-                elem = info.elem; // primitive-element wrapper
-            } else if (startsWith(u8, wt, "arr_") and self.structs.contains(wt)) {
-                // STRUCT-element wrapper (`arr_N_<struct>`): the `array` field carries
-                // the element struct in its struct_tag; the element store is a byte copy.
-                if (self.fieldOf(wt, "array")) |af| {
-                    if (af.struct_tag) |est| {
-                        if (self.structs.contains(est)) {
-                            elem_struct = est;
-                        }
-                    }
-                }
+        const base: ArrayWrapperBase = self.parseArrayWrapperBase() orelse return null;
+        // A primitive element (`arr_N_u64`), or a struct one (`arr_N_<struct>`), whose `array` field carries the
+        // element struct in its struct_tag.
+        const elem: ?Elem = if (parseArrTag(base.wrapper_tag)) |info| info.elem else null;
+        const elem_struct: ?[]const u8 = struct_elem: {
+            if (elem != null or !self.structs.contains(base.wrapper_tag)) {
+                break :struct_elem null;
             }
-        }
+            const array_field: Field = self.fieldOf(base.wrapper_tag, "array") orelse break :struct_elem null;
+            const element_tag: []const u8 = array_field.struct_tag orelse break :struct_elem null;
+            break :struct_elem if (self.structs.contains(element_tag)) element_tag else null;
+        };
         if (elem == null and elem_struct == null) {
             self.p = save;
             return null;
         }
-        self.p += 1; // arr tag
-        if (!self.atText("*")) {
+        if (!self.parseArrayFieldOpening()) {
             self.p = save;
             return null;
         }
-        self.p += 1; // *
-        while (self.atText(")")) {
-            self.p += 1;
-        } // close cast parens
-        if (!self.atText("&")) {
-            self.p = save;
-            return null;
-        }
-        self.p += 1; // &
-        if (self.current().kind != .ident) {
-            self.p = save;
-            return null;
-        }
-        const gname: []const u8 = self.current().text;
-        const off: u32 = self.globals.get(gname) orelse {
-            self.p = save;
-            return null;
-        };
-        self.p += 1; // global name
-        while (self.atText(")")) {
-            self.p += 1;
-        } // remaining wrapper parens
-        if (!self.atText("->")) {
-            self.p = save;
-            return null;
-        }
-        self.p += 1; // ->
-        if (!(self.current().kind == .ident and eql(u8, self.current().text, "array"))) {
-            self.p = save;
-            return null;
-        }
-        self.p += 1; // array
-        if (!self.atText("[")) {
-            self.p = save;
-            return null;
-        }
-        self.p += 1; // [
         const idx: []const u8 = try self.parseExpr();
         self.expect("]");
         if (!self.atText("=") or eql(u8, self.lookahead(1).text, "=")) {
@@ -7848,6 +8243,7 @@ const Transpiler = struct {
         }
         self.p += 1; // =
         const rhs: []const u8 = try self.parseAssign();
+        const off: u32 = base.offset;
         // STRUCT-element wrapper: byte-copy the element struct (rhs is its offset).
         if (elem_struct) |est| {
             const sz: u32 = if (self.structs.get(est)) |layout| layout.size else 4;
@@ -7858,6 +8254,54 @@ const Transpiler = struct {
         const ety = CType{ .kind = if (e.float) .float else .int, .bits = e.bits, .signed = e.signed };
         const addr: []const u8 = try allocPrint(self.gpa, "(({d}) + ({s}) * {d})", .{ off, idx, elemSize(e) });
         return try allocPrint(self.gpa, "({s})", .{try self.heapStore(e, addr, try self.wrap(rhs, ety))});
+    }
+
+    /// A store to a scalar field reached through an address taken in place: `((&LVALUE))->field = rhs`, the
+    /// parentheses in any depth, the address-of right inside them. Zig 0.17's C backend writes this for an optional
+    /// field's null flag when a struct literal is assigned to the field - `((&(&holder)->report))->is_null = false` -
+    /// after storing the payload's fields through `*(&...) = v`. The place walker (`parseLValueAddr`) resolves the
+    /// address and the field's type; the value is stored through that type. Narrow by design: only when the left
+    /// side opens with parentheses around `&`, resolves to a scalar, and a plain `=` follows - an aggregate place is
+    /// left to the paths that copy structs. Returns null (without consuming) otherwise.
+    fn tryAddressMemberStore(self: *Transpiler) error{OutOfMemory}!?[]const u8 {
+        const start_of_statement: usize = self.p;
+        if (!self.atText("(")) {
+            return null;
+        }
+        // The shape, looked at before anything is parsed: parentheses, then `&` right inside them.
+        var after_parentheses: usize = self.p;
+        while (after_parentheses < self.toks.len and eql(u8, self.toks[after_parentheses].text, "(")) {
+            after_parentheses += 1;
+        }
+        const opens_with_address_of: bool = after_parentheses < self.toks.len and
+            eql(u8, self.toks[after_parentheses].text, "&");
+        if (!opens_with_address_of) {
+            return null;
+        }
+        // The place itself - its address and its type - from the place walker.
+        const place: LValue = (try self.parseLValueAddr()) orelse {
+            self.p = start_of_statement;
+            return null;
+        };
+        // Only a plain `=` to a scalar: a compound assignment (`+=`, its own token) and a struct-typed place are left
+        // to the paths that handle them.
+        const is_plain_assignment: bool = self.atText("=") and !eql(u8, self.lookahead(1).text, "=");
+        const is_scalar_place: bool = place.tag == null;
+        if (!is_scalar_place or !is_plain_assignment) {
+            self.p = start_of_statement;
+            return null;
+        }
+        self.p += 1; // =
+        const stored_expression: []const u8 = try self.parseAssign();
+        const place_type = CType{
+            .kind = if (place.elem.float) .float else .int,
+            .bits = place.elem.bits,
+            .signed = place.elem.signed,
+        };
+        // The value made the place's own width and signedness, then stored at its address.
+        const stored_value: []const u8 = try self.wrap(stored_expression, place_type);
+        const store: []const u8 = try self.heapStore(place.elem, place.addr, stored_value);
+        return try allocPrint(self.gpa, "({s})", .{store});
     }
 
     /// Render `arg` (already-emitted JS for a u64 word) as a BigInt-valued expression.
@@ -10385,34 +10829,76 @@ pub fn main(init: std.process.Init) !void {
                 .{b64},
             );
         } else "";
+        // The fullscreen button. Where the browser has a Fullscreen API it toggles the page's fullscreen; where it has
+        // none - Safari on iPhone, which allows fullscreen to a video alone - or where the page is shown inside
+        // another, which may forbid it, a tap explains what to do instead: on iPhone, the page added to the Home
+        // Screen and opened from its icon runs as a web app, without the browser's bars (the head's
+        // `apple-mobile-web-app-capable`; since iOS 26 every page so added). Opened that way the button has nothing
+        // to do, and hides. A request refused - by promise, or by the prefixed API's `webkitfullscreenerror` - is
+        // shown with its reason, and logged. The button sits inside the screen's safe area, clear of a home
+        // indicator or a notch.
         const fs_js: []const u8 = if (fullscreen_landscape)
             \\<style>
             \\  html,body{margin:0;height:100%;background:#000;overflow:hidden}
             \\  #fsbtn{position:fixed;right:10px;bottom:10px;z-index:99998;
+            \\    right:calc(10px + env(safe-area-inset-right, 0px));
+            \\    bottom:calc(10px + env(safe-area-inset-bottom, 0px));
             \\    width:52px;height:52px;border:none;border-radius:10px;
             \\    background:#1e2a44;color:#cfe0ff;font:24px/52px monospace;
             \\    text-align:center;opacity:0.85}
+            \\  #fshint{position:fixed;left:50%;bottom:72px;z-index:99998;transform:translateX(-50%);
+            \\    bottom:calc(72px + env(safe-area-inset-bottom, 0px));
+            \\    width:min(86vw, 420px);box-sizing:border-box;padding:12px 16px;border-radius:10px;
+            \\    background:#1e2a44;color:#e8f0ff;font:15px/1.45 -apple-system, system-ui, sans-serif;display:none}
             \\</style>
             \\<button id="fsbtn" title="fullscreen">[ ]</button>
+            \\<div id="fshint"></div>
             \\<script>
             \\(function(){
-            \\  var b=document.getElementById("fsbtn");
-            \\  function fsEl(){ return document.fullscreenElement || document.webkitFullscreenElement; }
-            \\  async function go(){
-            \\    // Toggle fullscreen in WHATEVER orientation the user is in — no
-            \\    // orientation lock, so portrait works exactly like landscape.
-            \\    try{
-            \\      if(fsEl()){
-            \\        if(document.exitFullscreen) await document.exitFullscreen();
-            \\        else if(document.webkitExitFullscreen) document.webkitExitFullscreen();
-            \\      }else{
-            \\        var el=document.documentElement;
-            \\        if(el.requestFullscreen) await el.requestFullscreen();
-            \\        else if(el.webkitRequestFullscreen) el.webkitRequestFullscreen();
-            \\      }
-            \\    }catch(e){}
+            \\  var button=document.getElementById("fsbtn");
+            \\  var hint=document.getElementById("fshint");
+            \\  var asWebApp=navigator.standalone===true||(window.matchMedia!==undefined&&
+            \\    (matchMedia("(display-mode: standalone)").matches||
+            \\    matchMedia("(display-mode: fullscreen)").matches));
+            \\  if(asWebApp){ button.style.display="none"; return; }
+            \\  function showHint(text){ hint.textContent=text; hint.style.display="block"; }
+            \\  function hideHint(){ hint.style.display="none"; }
+            \\  hint.addEventListener("click", hideHint);
+            \\  function fullscreenElement(){ return document.fullscreenElement||document.webkitFullscreenElement; }
+            \\  function hasFullscreen(){
+            \\    return document.fullscreenEnabled===true||document.webkitFullscreenEnabled===true;
             \\  }
-            \\  b.addEventListener("click", go);
+            \\  function refused(reason){
+            \\    var text=reason&&reason.message?reason.message:String(reason);
+            \\    console.warn("zimr: fullscreen refused: "+text);
+            \\    showHint("Fullscreen was refused: "+text);
+            \\  }
+            \\  function settle(result){ if(result&&typeof result.catch==="function"){ result.catch(refused); } }
+            \\  function declined(){ refused("the browser declined the request"); }
+            \\  document.addEventListener("fullscreenerror", declined);
+            \\  document.addEventListener("webkitfullscreenerror", declined);
+            \\  function toggle(){
+            \\    hideHint();
+            \\    try{
+            \\      if(fullscreenElement()){
+            \\        settle(document.exitFullscreen?document.exitFullscreen():document.webkitExitFullscreen());
+            \\        return;
+            \\      }
+            \\      if(!hasFullscreen()){
+            \\        if(window.top!==window.self){
+            \\          showHint("This page is shown inside another, which does not allow fullscreen. " +
+            \\            "Open it on its own.");
+            \\        }else{
+            \\          showHint("This browser has no fullscreen for pages. On iPhone: tap Share, then Add to Home " +
+            \\            "Screen, and open the page from its icon - it then runs without the browser's bars.");
+            \\        }
+            \\        return;
+            \\      }
+            \\      var page=document.documentElement;
+            \\      settle(page.requestFullscreen?page.requestFullscreen():page.webkitRequestFullscreen());
+            \\    }catch(error){ refused(error); }
+            \\  }
+            \\  button.addEventListener("click", toggle);
             \\})();
             \\</script>
         else
@@ -10466,19 +10952,22 @@ pub fn main(init: std.process.Init) !void {
         const js_section: []const u8 = if (external_js_opt) |ext|
             try allocPrint(
                 gpa,
-                "{s}{s}{s}{s}<script src=\"{s}\"></script>",
+                "{s}{s}{s}{s}<script type=\"text/x-zimr-main\" id=\"__wzmain\" data-src=\"{s}\"></script>",
                 .{ wasm_setup, kernel_setup, worker_setup, audio_worklet_setup, ext },
             )
         else
             try allocPrint(
                 gpa,
-                "{s}{s}{s}{s}<script>\n{s}\n</script>",
+                "{s}{s}{s}{s}<script type=\"text/x-zimr-main\" id=\"__wzmain\">\n{s}\n</script>",
                 .{ wasm_setup, kernel_setup, worker_setup, audio_worklet_setup, js_out },
             );
         const html: []u8 = try allocPrint(gpa,
             \\<!doctype html>
             \\<meta charset="utf-8">
-            \\<meta name="viewport" content="width=device-width, initial-scale=1">
+            \\<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+            \\<meta name="apple-mobile-web-app-capable" content="yes">
+            \\<meta name="mobile-web-app-capable" content="yes">
+            \\<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
             \\<title>{s}</title>
             \\{s}
             \\<script>
@@ -10512,17 +11001,67 @@ pub fn main(init: std.process.Init) !void {
             \\  window.__wzFail("unhandled rejection: " + (e.reason && e.reason.stack ? e.reason.stack : e.reason));
             \\}});
             \\</script>
+            \\<script>
+            \\// zimr: what the main script needs of the browser before it can even be read, checked in plain old
+            \\// JavaScript, which every browser reads. The main script writes 64-bit integers as BigInt literals
+            \\// (`0n`), which a browser without BigInt cannot parse - Safari before 14 stops at the first with
+            \\// "No identifiers allowed directly after numeric literal", and the page shows nothing it can use. So
+            \\// the main script waits below under a type no browser runs, and is loaded only where nothing is
+            \\// missing; elsewhere the page says what is.
+            \\window.__wzMissing = [];
+            \\if (typeof WebAssembly !== "object") {{
+            \\  window.__wzMissing.push("WebAssembly");
+            \\}}
+            \\if (typeof BigInt !== "function" || typeof BigInt64Array !== "function") {{
+            \\  window.__wzMissing.push("BigInt (Safari 15, Chrome 67, Firefox 68)");
+            \\}}
+            \\</script>
             \\{s}
             \\{s}
             \\<script>
-            \\window.addEventListener("DOMContentLoaded", function () {{
-            \\  if (typeof start !== "function") {{
-            \\    window.__wzFail("start() is not defined — the main script failed to evaluate " +
-            \\      "(its top-level threw before finishing; see any error above).");
+            \\// zimr: the main script loaded - copied from its holder into a script the browser runs, at once, or
+            \\// fetched from its `data-src` - then `start()` once the page is loaded. Where the check above found
+            \\// something missing, the page says what, and what runs zimr pages, instead.
+            \\(function () {{
+            \\  if (window.__wzMissing.length > 0) {{
+            \\    var lacking = window.__wzMissing.slice();
+            \\    if (!navigator.gpu) {{
+            \\      lacking.push("WebGPU (Safari 26, Chrome 113, Firefox 141)");
+            \\    }}
+            \\    window.__wzFail("This browser cannot run this page. It lacks " + lacking.join(", ") + ".\n" +
+            \\      "zimr pages run in Chrome 113 or later, Safari 26 or later (iOS and iPadOS 26), " +
+            \\      "and Firefox 141 or later.");
             \\    return;
             \\  }}
-            \\  try {{ start(); }} catch (err) {{ window.__wzFail("start() threw:\n" + (err.stack || err)); }}
-            \\}});
+            \\  function runStart() {{
+            \\    if (typeof start !== "function") {{
+            \\      window.__wzFail("start() is not defined — the main script failed to evaluate " +
+            \\        "(its top-level threw before finishing; see any error above).");
+            \\      return;
+            \\    }}
+            \\    try {{ start(); }} catch (err) {{ window.__wzFail("start() threw:\n" + (err.stack || err)); }}
+            \\  }}
+            \\  function startOnceLoaded() {{
+            \\    if (document.readyState === "loading") {{
+            \\      window.addEventListener("DOMContentLoaded", runStart);
+            \\    }} else {{
+            \\      runStart();
+            \\    }}
+            \\  }}
+            \\  var holder = document.getElementById("__wzmain");
+            \\  var main = document.createElement("script");
+            \\  var source = holder.getAttribute("data-src");
+            \\  if (source) {{
+            \\    main.src = source;
+            \\    main.onload = startOnceLoaded;
+            \\    main.onerror = function () {{ window.__wzFail("the main script did not load: " + source); }};
+            \\    holder.parentNode.insertBefore(main, holder);
+            \\  }} else {{
+            \\    main.text = holder.text;
+            \\    holder.parentNode.insertBefore(main, holder);
+            \\    startOnceLoaded();
+            \\  }}
+            \\}})();
             \\</script>
             \\
         , .{ title_text, fs_js, log_overlay_js, js_section });

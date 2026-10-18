@@ -30,6 +30,8 @@
 //   - Tables, docking, multi-viewport (out of scope entirely)
 
 const std = @import("std");
+const indexOf = std.mem.indexOf;
+const indexOfScalar = std.mem.indexOfScalar;
 const ArrayList = std.ArrayList;
 const allocPrint = std.fmt.allocPrint;
 const bufPrint = std.fmt.bufPrint;
@@ -56,6 +58,8 @@ const zm = @import("zm");
 const turnsFromRad = zm.turnsFromRad;
 const float64 = zm.float64;
 const radFromDeg = zm.radFromDeg;
+const log10 = zm.log10;
+const pow = zm.pow;
 pub const FrameArena = @import("frame_arena.zig").FrameArena;
 /// Ceiling for the UI per-frame arena: well above one honest frame of draw
 /// payload, far below the wasm ~2GB wall. Trips FrameArena if the per-frame
@@ -7157,6 +7161,14 @@ pub const UiContext = struct {
     /// while combo A is open implicitly closes A.
     combo_open_id: Id = 0,
 
+    /// The open combo's scrolling, when its list shows fewer rows than it has (`ComboOpts.max_visible_items`): the
+    /// first item shown; where a press on the list began, if one is held - its height, and the first item shown then;
+    /// and whether the press has moved far enough to be a drag, which chooses nothing when let go.
+    combo_first_item: usize = 0,
+    combo_press_y: ?f32 = null,
+    combo_press_first_item: usize = 0,
+    combo_has_dragged: bool = false,
+
     /// Active `beginCombo` scope. Non-null between a `beginCombo`
     /// call that returned true and the matching `endCombo`. Holds
     /// the dropdown's geometry + saved cursor state so widgets
@@ -10858,6 +10870,47 @@ pub const PlotOpts = struct {
     height: f32 = 0,
 };
 
+/// One series of a `plotCurves` plot: its points' x and y values, in the plot's units, and its colour - and, when
+/// it has one, a baseline it is to be compared with, drawn as a dashed horizontal line of the same colour.
+pub const PlotCurve = struct {
+    xs: []const f32,
+    ys: []const f32,
+    color: Color,
+    baseline: ?f32 = null,
+};
+
+/// How `plotCurves` scales its axes.
+pub const PlotScale = enum {
+    linear,
+    /// Equal ratios take equal room - 1 to 10 as much as 10 to 100. Values must be above zero; the lowest is held
+    /// at the axis's minimum.
+    logarithmic,
+};
+
+/// The axes of a `plotCurves` plot. A value outside an axis's range is drawn at its edge: a point above the top
+/// is drawn on the top line.
+pub const PlotCurvesOpts = struct {
+    x_min: f32 = 0,
+    x_max: f32 = 1,
+    y_min: f32 = 0,
+    y_max: f32 = 1,
+    y_scale: PlotScale = .linear,
+    /// Values of y marked across the plot with a faint line and their number, at the left.
+    y_marks: []const f32 = &.{},
+    /// What the axes count, written after their numbers: "s", "min".
+    x_unit: []const u8 = "",
+    y_unit: []const u8 = "",
+    /// The plot's frame: zero width fills the row, zero height is 160 pixels.
+    width: f32 = 0,
+    height: f32 = 0,
+};
+
+/// Where a `plotCurves` plot was clicked, in its own units.
+pub const PlotClick = struct {
+    x: f32,
+    y: f32,
+};
+
 /// Pack four normalized floats into a ColorU32 in zimr's RGBA8
 /// wire format.
 fn packF(r: f32, g: f32, b: f32, a: f32) ColorU32 {
@@ -13300,7 +13353,109 @@ pub const ComboOpts = struct {
     /// Override box width. Zero means auto-fit to remaining row
     /// width (with the label reserved on the right).
     width: f32 = 0,
+    /// The most items the open list shows at once; zero shows them all. A longer list scrolls, a whole row at a
+    /// time: by the mouse wheel, or by dragging it - a finger on a phone - up or down. It opens scrolled to show the
+    /// item chosen, and a thin bar along its right side shows where the rows shown lie in the whole list. Such a
+    /// list chooses an item when the finger or button is let go on it without having dragged - a press alone could
+    /// be the start of a drag - where a list shown whole chooses on the press.
+    max_visible_items: usize = 0,
+    /// The lines each item of the open list shows: an item's text may hold several, separated by `\n` - a name, then
+    /// what it means - and each row is as tall as that many. The closed box shows an item's first line.
+    lines_per_item: u8 = 1,
+    /// The open list's width; zero makes it as wide as the closed box. A list whose items say more than its box has
+    /// room for is made wider, reaching to the right of the box.
+    list_width: f32 = 0,
 };
+
+/// A widget label's visible part: the text before `##`, if it has one - Dear ImGui's rule. The whole label stays the
+/// widget's id, so that two widgets can show the same text, or none (`"##tonic"`).
+fn visibleLabelPart(label: []const u8) []const u8 {
+    const hidden_start: usize = indexOf(u8, label, "##") orelse return label;
+    return label[0..hidden_start];
+}
+
+/// A text's first line: what a combo's closed box shows of an item of several (`ComboOpts.lines_per_item`).
+fn firstLine(text: []const u8) []const u8 {
+    const line_end: usize = indexOfScalar(u8, text, '\n') orelse return text;
+    return text[0..line_end];
+}
+
+/// Scrolls an open combo's list (`ComboOpts.max_visible_items`), and chooses an item from it. The mouse wheel over the
+/// list moves it a row a notch. A press on the list is remembered - where it began and the first item then shown - and
+/// while held, the list follows it, a row for each row's height it has moved, once it has moved half a row: a drag. Let
+/// go without having dragged, it chooses the item under it and closes the list. `last_first_item` is the first item of
+/// the list's last rows, past which it does not scroll.
+fn scrollComboList(
+    ctx: *UiContext,
+    dropdown_rect: Rectangle,
+    row_height: f32,
+    last_first_item: usize,
+    current_index: *i32,
+    changed: *bool,
+) void {
+    const mouse_position: Vec2 = ctx.input.mouse_pos;
+    const is_over_list: bool = pointInRect(mouse_position, dropdown_rect);
+    const wheel_rows: f32 = @round(ctx.input.mouse_wheel_y);
+    if (is_over_list and wheel_rows != 0) {
+        const scrolled_first: f32 = float(ctx.combo_first_item) - wheel_rows;
+        ctx.combo_first_item = @trunc(clamp(scrolled_first, 0, float(last_first_item)));
+    }
+    if (ctx.input.mouse_left_clicked and is_over_list) {
+        ctx.combo_press_y = mouse_position[1];
+        ctx.combo_press_first_item = ctx.combo_first_item;
+        ctx.combo_has_dragged = false;
+    }
+    const press_y: f32 = ctx.combo_press_y orelse return;
+    const moved_rows: f32 = (press_y - mouse_position[1]) / row_height;
+    if (@abs(moved_rows) > 0.5) {
+        ctx.combo_has_dragged = true;
+    }
+    if (ctx.input.mouse_left_down and ctx.combo_has_dragged) {
+        const dragged_first: f32 = float(ctx.combo_press_first_item) + @round(moved_rows);
+        ctx.combo_first_item = @trunc(clamp(dragged_first, 0, float(last_first_item)));
+    }
+    if (ctx.input.mouse_left_released) {
+        ctx.combo_press_y = null;
+        if (!ctx.combo_has_dragged and is_over_list) {
+            const row_index: usize = @trunc((mouse_position[1] - dropdown_rect.y) / row_height);
+            current_index.* = @intCast(ctx.combo_first_item + row_index);
+            ctx.combo_open_id = 0;
+            changed.* = true;
+        }
+        // The release is the list's, as its press was (`comboImpl`): no widget after it takes it.
+        if (is_over_list) {
+            ctx.input.mouse_left_released = false;
+        }
+    }
+}
+
+/// The thin bar along the right side of a scrolling combo's open list: its track the list's height, its thumb the
+/// share of the list shown, where it lies in the whole - drawn over the items, on the foreground draw list.
+fn drawComboScrollBar(
+    ctx: *UiContext,
+    list_rect: Rectangle,
+    visible_count: usize,
+    item_count: usize,
+) void {
+    const saved_draw_list: ?*DrawList = ctx.current_draw_list;
+    if (!ctx.eager_mode) {
+        ctx.current_draw_list = &ctx.foreground_dl;
+    }
+    defer if (!ctx.eager_mode) {
+        ctx.current_draw_list = saved_draw_list;
+    };
+    const bar_width: f32 = @max(3, 0.25 * ctx.style.frame_padding[0]);
+    const track_height: f32 = list_rect.height;
+    const thumb_height: f32 = track_height * float(visible_count) / float(item_count);
+    const thumb_top: f32 = track_height * float(ctx.combo_first_item) / float(item_count);
+    const thumb: Rectangle = .{
+        .x = list_rect.x + list_rect.width - bar_width,
+        .y = list_rect.y + thumb_top,
+        .width = bar_width,
+        .height = thumb_height,
+    };
+    drawRectFilled(ctx, thumb, Color.toWire(ctx.style.text));
+}
 
 fn comboImpl(
     ctx: *UiContext,
@@ -13315,8 +13470,13 @@ fn comboImpl(
     const padding: Vec2 = ctx.style.frame_padding;
     const row_h: f32 = ctx.style.font_size + 2 * padding[1];
     const arrow_size: f32 = ctx.style.font_size;
+    // An open list's row: as tall as its item's lines (`ComboOpts.lines_per_item`), the gap between lines included.
+    const item_line_count: f32 = float(@max(1, opts.lines_per_item));
+    const line_gap: f32 = float(ctx.style.line_spacing);
+    const item_row_h: f32 = item_line_count * ctx.style.font_size + (item_line_count - 1) * line_gap + 2 * padding[1];
 
-    const text_size: Vec2 = measureTextS(ctx, label);
+    const visible_label: []const u8 = visibleLabelPart(label);
+    const text_size: Vec2 = measureTextS(ctx, visible_label);
     const inner_right: f32 = w.pos[0] + w.size[0] - ctx.style.window_padding[0];
 
     const at: Vec2 = resolveCursor(w, ctx.style.item_spacing[0]);
@@ -13328,6 +13488,7 @@ fn comboImpl(
     );
 
     const closed_box = Rectangle{ .x = at[0], .y = at[1], .width = box_w, .height = row_h };
+    const list_w: f32 = if (opts.list_width > 0) opts.list_width else box_w;
     const hovered_closed: bool = itemHoverable(ctx, closed_box);
     if (hovered_closed) {
         ctx.hovered_id = id;
@@ -13338,11 +13499,20 @@ fn comboImpl(
 
     // Click on closed row toggles. Opens this combo, implicitly
     // closes any other.
+    // The rows the open list shows: all of them, or at most `max_visible_items`, scrolled.
+    const is_scrolling_list: bool = opts.max_visible_items > 0 and items.len > opts.max_visible_items;
+    const visible_count: usize = if (is_scrolling_list) opts.max_visible_items else items.len;
+    const last_first_item: usize = items.len - visible_count;
     if (hovered_closed and ctx.input.mouse_left_clicked) {
         if (was_open) {
             ctx.combo_open_id = 0;
         } else {
             ctx.combo_open_id = id;
+            // Opened scrolled to show the item chosen, near the middle of the rows shown.
+            const chosen_index: usize = @intCast(@max(0, current_index.*));
+            const centred_first: usize = chosen_index -| visible_count / 2;
+            ctx.combo_first_item = @min(centred_first, last_first_item);
+            ctx.combo_press_y = null;
         }
     }
     const is_open: bool = ctx.combo_open_id == id;
@@ -13362,7 +13532,7 @@ fn comboImpl(
         drawTextAtS(
             ctx,
             .{ closed_box.x + padding[0], closed_box.y + padding[1] },
-            items[@intCast(current_index.*)],
+            firstLine(items[@intCast(current_index.*)]),
             Color.toWire(ctx.style.text),
         );
     }
@@ -13381,13 +13551,15 @@ fn comboImpl(
         Color.toWire(ctx.style.text),
     );
 
-    // Label to the right of the box.
-    drawTextAtS(
-        ctx,
-        .{ closed_box.x + closed_box.width + ctx.style.item_spacing[0], closed_box.y + padding[1] },
-        label,
-        Color.toWire(ctx.style.text),
-    );
+    // Label to the right of the box: its visible part.
+    if (visible_label.len > 0) {
+        drawTextAtS(
+            ctx,
+            .{ closed_box.x + closed_box.width + ctx.style.item_spacing[0], closed_box.y + padding[1] },
+            visible_label,
+            Color.toWire(ctx.style.text),
+        );
+    }
 
     // ---- Render dropdown items (only when open)
     // Dropdown emits to the foreground draw list - that's what makes
@@ -13409,22 +13581,33 @@ fn comboImpl(
 
     if (is_open and items.len > 0) {
         const dropdown_top: f32 = closed_box.y + closed_box.height;
-        const dropdown_height: f32 = float(items.len) * row_h;
+        const dropdown_height: f32 = float(visible_count) * item_row_h;
         const dropdown_rect = Rectangle{
             .x = closed_box.x,
             .y = dropdown_top,
-            .width = closed_box.width,
+            .width = list_w,
             .height = dropdown_height,
         };
+        if (is_scrolling_list) {
+            scrollComboList(ctx, dropdown_rect, item_row_h, last_first_item, current_index, &changed);
+        }
+        const first_item: usize = if (is_scrolling_list) ctx.combo_first_item else 0;
 
         // Click handling on dropdown items happens FIRST, while the
         // window's draw list is still active - we mutate combo state
         // (close, set selection) but emit nothing here. All visual
         // emission goes through the foreground_dl redirect below.
+        // The dropdown floats over every window, so its items and its rect are hit-tested as plain rectangles, not
+        // through `itemHoverable` - whose clip is the OWNING window's, so a dropdown reaching past its window's edge (a
+        // combo in a one-row toolbar) had items that could not be picked, and a click on them counted as outside.
+        // A list shown whole chooses on the press; a scrolling one on the release (`scrollComboList`).
         for (items, 0..) |_, i| {
-            const item_y: f32 = dropdown_top + float(i) * row_h;
-            const item_rect = Rectangle{ .x = closed_box.x, .y = item_y, .width = closed_box.width, .height = row_h };
-            if (itemHoverable(ctx, item_rect) and ctx.input.mouse_left_clicked) {
+            if (is_scrolling_list) {
+                break;
+            }
+            const item_y: f32 = dropdown_top + float(i) * item_row_h;
+            const item_rect = Rectangle{ .x = closed_box.x, .y = item_y, .width = list_w, .height = item_row_h };
+            if (pointInRect(ctx.input.mouse_pos, item_rect) and ctx.input.mouse_left_clicked) {
                 current_index.* = @intCast(i);
                 ctx.combo_open_id = 0;
                 changed = true;
@@ -13432,9 +13615,16 @@ fn comboImpl(
         }
         // Click outside both the closed row AND the dropdown closes.
         if (ctx.input.mouse_left_clicked and !hovered_closed and
-            !itemHoverable(ctx, dropdown_rect))
+            !pointInRect(ctx.input.mouse_pos, dropdown_rect))
         {
             ctx.combo_open_id = 0;
+        }
+        // A press on the open list is the list's: it is taken from the frame's input, so that no widget submitted
+        // after this one - lying under the list, which the list hides - takes it too; otherwise choosing an item over
+        // another widget's box would press that box as well. The list's rectangle is its own width
+        // (`ComboOpts.list_width`), so a press on a list wider than its box is the list's too.
+        if (ctx.input.mouse_left_clicked and pointInRect(ctx.input.mouse_pos, dropdown_rect)) {
+            ctx.input.mouse_left_clicked = false;
         }
 
         // Dropdown visuals -> foreground draw list. Saved/restored
@@ -13455,9 +13645,10 @@ fn comboImpl(
         drawRectFilled(ctx, dropdown_rect, Color.toWire(ctx.style.window_bg));
         drawRect(ctx, dropdown_rect, Color.toWire(ctx.style.border));
 
-        for (items, 0..) |item, i| {
-            const item_y: f32 = dropdown_top + float(i) * row_h;
-            const item_rect = Rectangle{ .x = closed_box.x, .y = item_y, .width = closed_box.width, .height = row_h };
+        for (items[first_item..][0..visible_count], first_item..) |item, i| {
+            const row_index: usize = i - first_item;
+            const item_y: f32 = dropdown_top + float(row_index) * item_row_h;
+            const item_rect = Rectangle{ .x = closed_box.x, .y = item_y, .width = list_w, .height = item_row_h };
             const item_hovered: bool = itemHoverable(ctx, item_rect);
             const is_selected = current_index.* == @as(i32, @intCast(i));
 
@@ -13476,6 +13667,16 @@ fn comboImpl(
                 Color.toWire(ctx.style.text),
             );
         }
+    }
+
+    if (is_open and is_scrolling_list) {
+        const list_rect: Rectangle = .{
+            .x = closed_box.x,
+            .y = closed_box.y + closed_box.height,
+            .width = list_w,
+            .height = float(visible_count) * item_row_h,
+        };
+        drawComboScrollBar(ctx, list_rect, visible_count, items.len);
     }
 
     // Layout: combo always consumes ONLY the closed-row height,
@@ -13638,7 +13839,11 @@ fn beginComboImpl(
     resetContentLayout(popup_w, inner_origin);
 
     ctx.window_stack.append(popup_w) catch return false;
-    ctx.current_window = popup_w;
+    // The dropdown's items are hit-tested against the DROPDOWN's rect, not the owning window's: `refreshItemClip` on
+    // the push, as on the pop in `endComboImpl`. Without it the items kept the owner's clip, so a dropdown reaching
+    // past its window's edge - a combo in a one-row toolbar - had items that could be neither hovered nor picked, and
+    // a click on them counted as a click outside, closing the list.
+    refreshItemClip(ctx);
 
     const saved_dl: ?*DrawList = ctx.current_draw_list;
     if (!ctx.eager_mode) {
@@ -13697,8 +13902,10 @@ fn endComboImpl(ctx: *UiContext) void {
             .width = scope.dropdown_width,
             .height = ctx.style.font_size + 2 * ctx.style.frame_padding[1],
         };
-        const click_in_dropdown: bool = itemHoverable(ctx, dropdown_rect);
-        const click_on_closed: bool = itemHoverable(ctx, closed_above);
+        // Plain rectangle tests: the dropdown's rect and the closed row's are given whole here, and the closed row
+        // lies outside the dropdown's clip, which `item_clip` holds while the dropdown's items are submitted.
+        const click_in_dropdown: bool = pointInRect(ctx.input.mouse_pos, dropdown_rect);
+        const click_on_closed: bool = pointInRect(ctx.input.mouse_pos, closed_above);
         if (!click_in_dropdown and !click_on_closed) {
             ctx.combo_open_id = 0;
         }
@@ -16384,6 +16591,22 @@ pub const Ui = struct {
         plotImpl(self.ctx, label, values, opts, .histogram);
     }
 
+    /// Several curves on one pair of axes - learning curves to compare, say: each series its own points and
+    /// colour, each optionally with a dashed baseline; y on a linear or a logarithmic scale, with marked values;
+    /// the x range's ends written under the frame. Returns where the plot was clicked, in its own units, on the
+    /// frame it was clicked.
+    ///     const click = ui.plotCurves("curves", &.{ first, second }, .{
+    ///         .x_max = 60, .y_min = 1, .y_max = 60, .y_scale = .logarithmic, .y_marks = &.{ 1, 10, 60 },
+    ///     });
+    pub fn plotCurves(
+        self: Ui,
+        label: []const u8,
+        curves: []const PlotCurve,
+        opts: PlotCurvesOpts,
+    ) ?PlotClick {
+        return plotCurvesImpl(self.ctx, label, curves, opts);
+    }
+
     /// Block-style color picker. Generic over `*[3]f32` (RGB),
     /// `*[4]f32` (RGBA), or `*Color` (zimr's u8 RGBA). Renders
     /// either a bar layout (hue gradient + SV box) or a wheel
@@ -17301,6 +17524,12 @@ pub const Ui = struct {
         opts: ComboOpts,
     ) bool {
         return comboImpl(self.ctx, label, current_index, items, opts);
+    }
+
+    /// Whether a combo's dropdown is open - at most one is. An app reading the pointer for itself asks this to leave
+    /// a press alone while it lands on a list floating over the app's own drawing.
+    pub fn isComboOpen(self: Ui) bool {
+        return self.ctx.combo_open_id != 0;
     }
 
     /// Begin a combo dropdown that the caller fills with custom
@@ -29806,6 +30035,172 @@ fn colorEditNFloat(
 /// Which sample-rendering style the plot uses.
 const PlotKind = enum { lines, histogram };
 
+/// A value's place along an axis, from 0 at `low` to 1 at `high`, on a linear or logarithmic scale - held in
+/// [0, 1], so that a value outside the axis is drawn at its edge.
+fn plotAxisShare(
+    value: f32,
+    low: f32,
+    high: f32,
+    scale: PlotScale,
+) f32 {
+    const share: f32 = switch (scale) {
+        .linear => (value - low) / (high - low),
+        .logarithmic => share: {
+            const smallest: f32 = @max(low, 1.0e-6);
+            const kept_value: f32 = @max(value, smallest);
+            const value_decades: f32 = log10(kept_value / smallest);
+            const axis_decades: f32 = log10(high / smallest);
+            break :share value_decades / axis_decades;
+        },
+    };
+    return clamp(share, 0, 1);
+}
+
+/// The value at `share` along an axis: `plotAxisShare` the other way.
+fn plotAxisValue(
+    share: f32,
+    low: f32,
+    high: f32,
+    scale: PlotScale,
+) f32 {
+    return switch (scale) {
+        .linear => low + share * (high - low),
+        .logarithmic => value: {
+            const smallest: f32 = @max(low, 1.0e-6);
+            const axis_decades: f32 = log10(high / smallest);
+            break :value smallest * pow(10.0, share * axis_decades);
+        },
+    };
+}
+
+/// A dashed horizontal line across the plot's inside at `y`, in screen pixels: dashes of 6 pixels, gaps of 4.
+fn plotDashedLine(
+    dl: *DrawList,
+    arena: Allocator,
+    left: f32,
+    right: f32,
+    y: f32,
+    color: ColorU32,
+) void {
+    const dash_pixels: f32 = 6;
+    const gap_pixels: f32 = 4;
+    var dash_left: f32 = left;
+    while (dash_left < right) {
+        const dash_right: f32 = @min(dash_left + dash_pixels, right);
+        dl.addLine(arena, .{ dash_left, y }, .{ dash_right, y }, color, 1);
+        dash_left = dash_right + gap_pixels;
+    }
+}
+
+fn plotCurvesImpl(
+    ctx: *UiContext,
+    label: []const u8,
+    curves: []const PlotCurve,
+    opts: PlotCurvesOpts,
+) ?PlotClick {
+    const w: *Window = ctx.current_window orelse return null;
+    const dl: *DrawList = &w.draw_list;
+    const arena: Allocator = ctx.frame_arena.allocator();
+    const text_color: ColorU32 = Color.toWire(ctx.style.text);
+
+    // The frame: the row's width, or what the caller asks; 160 pixels high by default, and a line of text below it
+    // for the x range's ends.
+    const start: Vec2 = resolveCursor(w, ctx.style.item_spacing[0]);
+    const inner_right: f32 = w.pos[0] + w.size[0] - ctx.style.window_padding[0];
+    const default_width: f32 = @max(80, inner_right - start[0]);
+    const frame_width: f32 = effectiveItemWidth(ctx, opts.width, default_width);
+    const frame_height: f32 = if (opts.height > 0) opts.height else 160;
+    const frame: Rectangle = .{ .x = start[0], .y = start[1], .width = frame_width, .height = frame_height };
+    dl.addRectFilled(arena, frame, Color.toWire(ctx.style.frame_bg));
+
+    // The inside, where values are drawn: room at the left for the marks' numbers.
+    const mark_room: f32 = measureTextS(ctx, "000s")[0] + 4;
+    const inner_pad: f32 = 4;
+    const inner_left: f32 = frame.x + mark_room;
+    const inner_top: f32 = frame.y + inner_pad;
+    const inner_width: f32 = frame.width - mark_room - inner_pad;
+    const inner_height: f32 = frame.height - 2 * inner_pad;
+    const inner_bottom: f32 = inner_top + inner_height;
+    const inner_right_edge: f32 = inner_left + inner_width;
+
+    // The marked values: a faint line across, and the value at the left.
+    const mark_color: ColorU32 = Color.toWire(ctx.style.border);
+    for (opts.y_marks) |mark| {
+        const mark_share: f32 = plotAxisShare(mark, opts.y_min, opts.y_max, opts.y_scale);
+        const mark_y: f32 = inner_bottom - mark_share * inner_height;
+        dl.addLine(arena, .{ inner_left, mark_y }, .{ inner_right_edge, mark_y }, mark_color, 1);
+        var mark_text_buffer: [24]u8 = undefined;
+        const mark_text: []const u8 = bufPrint(&mark_text_buffer, "{d}{s}", .{ mark, opts.y_unit }) catch "";
+        const text_height: f32 = ctx.style.font_size;
+        const mark_text_position: Vec2 = .{ frame.x + 2, mark_y - 0.5 * text_height };
+        drawTextAtS(ctx, mark_text_position, mark_text, text_color);
+    }
+
+    // Each curve, as a line through its points; then its baseline, dashed.
+    for (curves) |curve| {
+        const curve_color: ColorU32 = Color.toWire(curve.color);
+        const point_count: usize = @min(curve.xs.len, curve.ys.len);
+        // Each point placed once, and joined to the one before it.
+        var previous_point: ?Vec2 = null;
+        for (0..point_count) |point| {
+            const x_share: f32 = plotAxisShare(curve.xs[point], opts.x_min, opts.x_max, .linear);
+            const y_share: f32 = plotAxisShare(curve.ys[point], opts.y_min, opts.y_max, opts.y_scale);
+            const point_x: f32 = inner_left + x_share * inner_width;
+            const point_y: f32 = inner_bottom - y_share * inner_height;
+            const here: Vec2 = .{ point_x, point_y };
+            if (previous_point) |previous| {
+                dl.addLine(arena, previous, here, curve_color, 1.5);
+            }
+            previous_point = here;
+        }
+        if (curve.baseline) |baseline| {
+            const baseline_share: f32 = plotAxisShare(baseline, opts.y_min, opts.y_max, opts.y_scale);
+            const baseline_y: f32 = inner_bottom - baseline_share * inner_height;
+            plotDashedLine(dl, arena, inner_left, inner_right_edge, baseline_y, curve_color);
+        }
+    }
+
+    // The x range's ends, under the frame.
+    var low_text_buffer: [32]u8 = undefined;
+    var high_text_buffer: [32]u8 = undefined;
+    const low_text: []const u8 = bufPrint(&low_text_buffer, "{d:.1}{s}", .{ opts.x_min, opts.x_unit }) catch "";
+    const high_text: []const u8 = bufPrint(&high_text_buffer, "{d:.1}{s}", .{ opts.x_max, opts.x_unit }) catch "";
+    const high_text_width: f32 = measureTextS(ctx, high_text)[0];
+    const under_frame: f32 = frame.y + frame.height + 2;
+    drawTextAtS(ctx, .{ inner_left, under_frame }, low_text, text_color);
+    drawTextAtS(ctx, .{ inner_right_edge - high_text_width, under_frame }, high_text, text_color);
+
+    // A click inside: where, in the plot's units.
+    const is_hovered: bool = itemHoverable(ctx, frame);
+    const inside: Rectangle = .{ .x = inner_left, .y = inner_top, .width = inner_width, .height = inner_height };
+    const mouse: Vec2 = ctx.input.mouse_pos;
+    const is_inside: bool = mouse[0] >= inside.x and mouse[0] <= inside.x + inside.width and
+        mouse[1] >= inside.y and mouse[1] <= inside.y + inside.height;
+    const is_clicked: bool = is_hovered and is_inside and ctx.input.mouse_left_clicked;
+    const click: ?PlotClick = if (is_clicked) click: {
+        const x_share: f32 = (mouse[0] - inner_left) / inner_width;
+        const y_share: f32 = (inner_bottom - mouse[1]) / inner_height;
+        break :click .{
+            .x = plotAxisValue(x_share, opts.x_min, opts.x_max, .linear),
+            .y = plotAxisValue(y_share, opts.y_min, opts.y_max, opts.y_scale),
+        };
+    } else null;
+
+    const item_height: f32 = frame.height + ctx.style.font_size + 2;
+    w.layout.last_item_id = widgetId(ctx, w, label);
+    w.layout.last_item_rect = .{ .x = frame.x, .y = frame.y, .width = frame.width, .height = item_height };
+    w.layout.last_item_hovered = is_hovered;
+    markItemPost(ctx, w, false);
+    // The layout moves past the frame and the line of text under it.
+    advanceLayout(
+        w,
+        .{ frame.width, item_height },
+        ctx.style.item_spacing,
+        ctx.style.window_padding[0],
+    );
+    return click;
+}
+
 fn plotImpl(
     ctx: *UiContext,
     label: []const u8,
@@ -30937,10 +31332,11 @@ fn selectableImpl(
         drawRectFilled(ctx, rect, Color.toWire(bg));
     }
 
+    // The label's visible part: the text before `##`, the whole label staying the row's id (`visibleLabelPart`).
     drawTextAtS(
         ctx,
         .{ at[0] + padding[0], at[1] + padding[1] },
-        label,
+        visibleLabelPart(label),
         Color.toWire(ctx.style.text),
     );
 
@@ -31888,12 +32284,15 @@ fn inputTextImpl(
     const id: Id = widgetId(ctx, w, label);
 
     const padding: Vec2 = ctx.style.frame_padding;
-    const text_size: Vec2 = measureTextS(ctx, label);
+    // The label's visible part, right of the box: the text before `##`, the whole label staying the field's id
+    // (`visibleLabelPart`). A field whose label is all hidden reserves no room for it.
+    const visible_label: []const u8 = visibleLabelPart(label);
+    const text_size: Vec2 = measureTextS(ctx, visible_label);
     const box_h: f32 = ctx.style.font_size + 2 * padding[1];
     const inner_right: f32 = w.pos[0] + w.size[0] - ctx.style.window_padding[0];
 
     const at: Vec2 = resolveCursor(w, ctx.style.item_spacing[0]);
-    const reserve_label: f32 = text_size[0] + ctx.style.item_spacing[0];
+    const reserve_label: f32 = if (visible_label.len > 0) text_size[0] + ctx.style.item_spacing[0] else 0;
     const box_w: f32 = effectiveItemWidth(
         ctx,
         opts.width,
@@ -32321,13 +32720,15 @@ fn inputTextImpl(
         };
     }
 
-    // Draw label to the right of the box.
-    drawTextAtS(
-        ctx,
-        .{ box.x + box.width + ctx.style.item_spacing[0], content_y },
-        label,
-        Color.toWire(ctx.style.text),
-    );
+    // Draw label to the right of the box: its visible part.
+    if (visible_label.len > 0) {
+        drawTextAtS(
+            ctx,
+            .{ box.x + box.width + ctx.style.item_spacing[0], content_y },
+            visible_label,
+            Color.toWire(ctx.style.text),
+        );
+    }
 
     const total_w: f32 = box.width + ctx.style.item_spacing[0] + text_size[0];
     w.layout.last_item_id = id;

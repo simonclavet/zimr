@@ -306,6 +306,10 @@ fn deinit(gpa: Allocator, s: *State) void {
 fn measureServo(s: *State) void {
     const p: *Progress = &s.progress;
     const fleet: *track.Fleet = s.trainer.env.fleet;
+    // The servo ALONE: the root assist, which would hold up characters the servo would lose, is off while measuring.
+    const scheduled_assist: f32 = fleet.options.task.gains.assist;
+    fleet.options.task.gains.assist = 0;
+    defer fleet.options.task.gains.assist = scheduled_assist;
     const take: u32 = @min(p.servo_left, p.per_frame);
     for (0..take) |_| {
         for (0..2) |_| {

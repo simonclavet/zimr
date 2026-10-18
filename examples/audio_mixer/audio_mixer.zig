@@ -152,6 +152,10 @@ fn draw(f: *z.Frame, s: *State) void {
 }
 
 fn update(f: *z.Frame, s: *State) void {
+    // A black screen with a start button, until it is pressed and the audio runs (`z.showAudioStartScreen`).
+    if (z.showAudioStartScreen(f, &s.font)) {
+        return;
+    }
     if (z.isKeyPressed(f.input, .t)) {
         toggleTone(f, s);
     }

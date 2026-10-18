@@ -716,6 +716,19 @@ pub extern "shcore" fn GetDpiForMonitor(
     dpiY: *UINT,
 ) callconv(.winapi) HRESULT;
 pub extern "kernel32" fn CloseHandle(hObject: HANDLE) callconv(.winapi) BOOL;
+/// A handle to the process `dwProcessId`, with the rights `dwDesiredAccess` asks for; null when it cannot be had (it
+/// has ended, or the rights are refused). Closed with `CloseHandle`.
+pub extern "kernel32" fn OpenProcess(
+    dwDesiredAccess: DWORD,
+    bInheritHandle: BOOL,
+    dwProcessId: DWORD,
+) callconv(.winapi) ?HANDLE;
+/// Ends the process `hProcess` with exit code `uExitCode`, at once.
+pub extern "kernel32" fn TerminateProcess(hProcess: HANDLE, uExitCode: UINT) callconv(.winapi) BOOL;
+/// The id of the process `Process` is a handle to.
+pub extern "kernel32" fn GetProcessId(Process: HANDLE) callconv(.winapi) DWORD;
+/// `OpenProcess`'s right to end the process.
+pub const PROCESS_TERMINATE: DWORD = 0x0001;
 /// Opens or creates a file; answers INVALID_HANDLE_VALUE (all bits set) on failure.
 pub extern "kernel32" fn CreateFileW(
     lpFileName: [*:0]const u16,
@@ -1244,6 +1257,43 @@ pub extern "kernel32" fn WaitForMultipleObjects(
     bWaitAll: BOOL,
     dwMilliseconds: DWORD,
 ) callconv(.winapi) DWORD;
+
+// ---- Waiting for a message, or a moment ----
+
+/// Waits for any of `pHandles` or for the thread's message queue to hold input of the kinds `dwWakeMask` names, at
+/// most `dwMilliseconds`: `WAIT_OBJECT_0 + i` for handle `i`, `WAIT_OBJECT_0 + nCount` for a message.
+pub extern "user32" fn MsgWaitForMultipleObjectsEx(
+    nCount: DWORD,
+    pHandles: ?[*]const HANDLE,
+    dwMilliseconds: DWORD,
+    dwWakeMask: DWORD,
+    dwFlags: DWORD,
+) callconv(.winapi) DWORD;
+/// Every kind of message, input and others (`MsgWaitForMultipleObjectsEx`).
+pub const QS_ALLINPUT: DWORD = 0x04FF;
+/// Returns for a message already in the queue too, not only one arriving during the wait.
+pub const MWMO_INPUTAVAILABLE: DWORD = 0x0004;
+pub const INFINITE: DWORD = 0xFFFF_FFFF;
+/// A waitable timer: signalled once when its due time comes (`SetWaitableTimer`). With
+/// `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION` (Windows 10 version 1803 and later) it keeps its due time to well under a
+/// millisecond, where an ordinary one waits for the system's timer tick - 15.6 ms unless a program asks for less.
+pub extern "kernel32" fn CreateWaitableTimerExW(
+    lpTimerAttributes: ?*anyopaque,
+    lpTimerName: ?[*:0]const u16,
+    dwFlags: DWORD,
+    dwDesiredAccess: DWORD,
+) callconv(.winapi) ?HANDLE;
+pub const CREATE_WAITABLE_TIMER_HIGH_RESOLUTION: DWORD = 0x0000_0002;
+pub const TIMER_ALL_ACCESS: DWORD = 0x001F_0003;
+/// Arms `hTimer`: due at `lpDueTime`, in units of 100 ns - negative for a time relative to now.
+pub extern "kernel32" fn SetWaitableTimer(
+    hTimer: HANDLE,
+    lpDueTime: *const i64,
+    lPeriod: i32,
+    pfnCompletionRoutine: ?*anyopaque,
+    lpArgToCompletionRoutine: ?*anyopaque,
+    fResume: BOOL,
+) callconv(.winapi) BOOL;
 
 // ---- The environment ----
 

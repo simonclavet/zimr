@@ -58,7 +58,7 @@ pub const TextureOpts = struct {
     tint: Color = white,
 };
 
-/// `text`. `font == null` uses the sink's default font. A pointer (not a value):
+/// `text`. The GPU sink needs a font (`WgpuGl.text` draws nothing without one). A pointer (not a value):
 /// retained backends record it for later replay, so it must reference a font that
 /// outlives the draw - pass `&my_font`.
 pub const TextOpts = struct {

@@ -116,6 +116,7 @@ pub fn build(b: *std.Build) void {
                 .no_std_timer, // std.time.Timer does not exist in the pinned std
                 .debug_print, // no std.debug.print in code that ships as wasm
                 .float_from_int, // `@as(f32, @floatFromInt(x))` is `zm.float(x)`
+                .prefer_splat, // `@as(Vec, @splat(x))` is `splat(x)`
                 .shader_safe, // a SHADER-SAFE file stays compilable for the GPU
                 .scope_balance, // every begin{X} in a function has its end{X}
                 .screaming_const, // value consts are snake_case, at every depth

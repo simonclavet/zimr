@@ -25,6 +25,7 @@ const dot = zm.dot;
 const length = zm.length;
 const normalize = zm.normalize;
 const pi = zm.pi;
+const splat3 = zm.splat3;
 const shader_io = @import("pbr_fs_io.zig");
 const shader_externs = @import("pbr_fs_externs");
 
@@ -92,7 +93,7 @@ fn fresnelSchlick(cos_theta: f32, F0: Vec3) Vec3 {
         const c2: f32 = c * c;
         break :blk c2 * c2 * c;
     };
-    return F0 + (one - F0) * @as(Vec3, @splat(t));
+    return F0 + (one - F0) * splat3(t);
 }
 
 fn brdf(
@@ -114,14 +115,14 @@ fn brdf(
     const F: Vec3 = fresnelSchlick(@max(dot(H, V), 0.0), F0);
 
     const specular: Vec3 =
-        F * @as(Vec3, @splat((D * G) / @max(4.0 * NdotV * NdotL, 1e-7)));
+        F * splat3((D * G) / @max(4.0 * NdotV * NdotL, 1e-7));
 
     const kS: Vec3 = F;
     const one: Vec3 = .{ 1.0, 1.0, 1.0 };
-    const kD: Vec3 = (one - kS) * @as(Vec3, @splat(1.0 - metallic));
+    const kD: Vec3 = (one - kS) * splat3(1.0 - metallic);
 
-    const diffuse_term: Vec3 = kD * albedo * @as(Vec3, @splat(1.0 / pi));
-    return (diffuse_term + specular) * radiance * @as(Vec3, @splat(NdotL));
+    const diffuse_term: Vec3 = kD * albedo * splat3(1.0 / pi);
+    return (diffuse_term + specular) * radiance * splat3(NdotL);
 }
 
 /// Light-space position -> shadow-map texture coords ([0,1]).  Pure math
@@ -134,7 +135,7 @@ fn shadowProjCoords(io_in: Io) Vec3 {
         io_in.frag_light_space_pos[1] * inv_w,
         io_in.frag_light_space_pos[2] * inv_w,
     };
-    proj_coords = proj_coords * @as(Vec3, @splat(0.5)) + @as(Vec3, @splat(0.5));
+    proj_coords = proj_coords * splat3(0.5) + splat3(0.5);
     return proj_coords;
 }
 
@@ -241,7 +242,7 @@ pub fn shaderMain(io_in: Io) Out {
     // ---- F0: dielectric base for non-metals, albedo tint for metals -
     const dielectric: Vec3 = .{ 0.04, 0.04, 0.04 };
     const F0: Vec3 =
-        dielectric * @as(Vec3, @splat(1.0 - metallic)) + albedo * @as(Vec3, @splat(metallic));
+        dielectric * splat3(1.0 - metallic) + albedo * splat3(metallic);
 
     // ---- Light accumulation -----------------------------------------
     var Lo: Vec3 = .{ 0.0, 0.0, 0.0 };
@@ -255,7 +256,7 @@ pub fn shaderMain(io_in: Io) Out {
         const L: Vec3 = normalize(Vec3{ -L_neg[0], -L_neg[1], -L_neg[2] });
         const shadow: f32 = if (i == 0) computeShadow(io_in, N, L, shadow_proj, shadow_closest) else 1.0;
         const lc: Vec = io_in.u.directional_light_color[idx];
-        const radiance: Vec3 = Vec3{ lc[0], lc[1], lc[2] } * @as(Vec3, @splat(shadow));
+        const radiance: Vec3 = Vec3{ lc[0], lc[1], lc[2] } * splat3(shadow);
         Lo = Lo + brdf(N, V, L, radiance, albedo, metallic, roughness, F0);
     }
 
@@ -270,17 +271,17 @@ pub fn shaderMain(io_in: Io) Out {
         if (dist > range) {
             continue;
         }
-        const L: Vec3 = to_light * @as(Vec3, @splat(1.0 / @max(dist, 1e-7)));
+        const L: Vec3 = to_light * splat3(1.0 / @max(dist, 1e-7));
         const falloff: f32 = clamp(1.0 - dist / range, 0.0, 1.0);
         const pc: Vec = io_in.u.point_light_color[idx];
         const radiance: Vec3 =
-            Vec3{ pc[0], pc[1], pc[2] } * @as(Vec3, @splat(falloff * falloff));
+            Vec3{ pc[0], pc[1], pc[2] } * splat3(falloff * falloff);
         Lo = Lo + brdf(N, V, L, radiance, albedo, metallic, roughness, F0);
     }
 
     // ---- Ambient with occlusion (R channel; ambient term only) ------
     const ao: f32 = ao_sample[0];
-    const ambient: Vec3 = ambient_color * albedo * @as(Vec3, @splat(ao));
+    const ambient: Vec3 = ambient_color * albedo * splat3(ao);
 
     // ---- Emissive (additive, before tone-map) -----------------------
     const emissive: Vec3 = Vec3{ e_sample[0], e_sample[1], e_sample[2] } * emissive_factor;
@@ -300,8 +301,8 @@ pub fn shaderMain(io_in: Io) Out {
         const dist: f32 = length(view_pos - io_in.frag_world_pos);
         const fog_range: f32 = @max(io_in.u.fog_far - io_in.u.fog_near, 1e-7);
         const fog_amount: f32 = clamp01((dist - io_in.u.fog_near) / fog_range);
-        color = color * @as(Vec3, @splat(1.0 - fog_amount)) +
-            fog_color * @as(Vec3, @splat(fog_amount));
+        color = color * splat3(1.0 - fog_amount) +
+            fog_color * splat3(fog_amount);
     }
 
     out.out_color = Vec{ color[0], color[1], color[2], io_in.u.col_diffuse[3] };

@@ -118,6 +118,7 @@ extern fn js_new3(
 extern fn js_try_new1(constructor: Handle, first_argument: Handle) Handle;
 extern fn js_obj() Handle;
 extern fn js_array() Handle;
+/// Appends `value` to `array`, and returns `array`'s own handle - not a new one, never to be freed apart from it.
 extern fn js_push(array: Handle, value: Handle) Handle;
 extern fn js_str(text_pointer: [*]const u8, text_length: u32) Handle;
 extern fn js_num(number: f64) Handle;
@@ -129,13 +130,27 @@ extern fn js_undefined() Handle;
 extern fn js_func(function: *const anyopaque) Handle;
 extern fn js_free(value: Handle) void;
 extern fn js_mark() Handle;
+/// The handle table's length, for the panel: `js_mark` would open a scope.
+extern fn js_table_length() u32;
+/// Turns the runtime's debugging of handles on (1) or off (0), in this realm (`setHandleDebugging`).
+extern fn js_set_handle_debugging(is_on: u32) void;
+/// The live handles counted by where they were made, the `limit` most first, as text.
+extern fn js_handle_census(limit: u32) Handle;
 extern fn js_reset(mark: Handle) void;
+/// Pins a handle: a scope's reset - the frame's - leaves it, until `js_free` releases it.
+extern fn js_pin(handle: Handle) void;
 
 // ---- Helpers over the handles ----
 
 /// `object[name]`.
 fn property(object: Handle, comptime name: []const u8) Handle {
     return js_get(object, name.ptr, name.len);
+}
+
+/// `value`, or 0 for NaN - what a missing number property reads as (`baseLatency` in an older browser).
+fn finiteOrZero(value: f64) f64 {
+    const is_nan: bool = value != value;
+    return if (is_nan) 0 else value;
 }
 
 /// `+object[name]`.
@@ -205,6 +220,14 @@ fn callVoid3(
     js_call3v(object, name.ptr, name.len, first, second, third);
 }
 
+/// `handle`, pinned (`js_pin`): page audio's handles are kept for the page's life, and some are made inside a frame -
+/// the output started by the app's first frame, the panel shown at a tap - whose handle scope would otherwise reclaim
+/// them as it ends.
+fn kept(handle: Handle) Handle {
+    js_pin(handle);
+    return handle;
+}
+
 /// A global by its name: `AudioContext`, `Blob`, `URL`.
 fn globalNamed(comptime name: []const u8) Handle {
     return property(js_global(), name);
@@ -260,13 +283,73 @@ pub const ProcessorState = enum { none, starting, running, failed };
 const RendererReport = struct {
     block_count: f64,
     loudest_sample: f64,
+    /// The clicks the renderer's watch has counted since the page started (`Renderer.watchForClicks`), and the largest
+    /// jump in the sound's slope it has seen: a jump over 0.02 is a click.
+    click_count: f64,
+    largest_jump: f64,
+    /// The samples the mix clipped since the page started: past full scale, held at it - distortion.
+    clipped_count: f64,
     worklet_frame: f64,
     received_at_ms: f64,
-    /// What the second's blocks took, on the worklet's clock: the longest call, and the longest gap from one block's
-    /// start to the next's.
+    /// What the second's blocks took, on the worklet's clock: the longest call, their mean - the renderer's usual cost,
+    /// against the 2.67 ms a block of 128 frames lasts - and the longest gap from one block's start to the next's.
     longest_block_ms: f64,
+    mean_block_ms: f64,
     longest_gap_ms: f64,
+    /// The worklet's handle table's length, read as it sent the report: steady while nothing in the audio thread's
+    /// realm leaks.
+    worklet_handle_count: f64,
+    /// Whether the worklet's clock counts whole milliseconds - `Date`, where the browser gives a worklet no
+    /// `performance` - so that a block's time reads 0 or 1 whatever it took, and only says it was under 2 ms.
+    is_worklet_clock_coarse: bool,
 };
+
+/// Whether the output plays without a break, read from the browser's own map of what it plays when
+/// (`AudioContext.getOutputTimestamp`): a pair of times, `contextTime` - a point of the context's timeline, the frames
+/// the renderer made - and `performanceTime` - when the speaker plays it, on the page's clock. While the output plays
+/// the rendered frames back to back, the two move together, and their difference stays put. When the renderer is late
+/// - its block not ready when the device asks - the browser plays silence in its place: the speaker's time moves on
+/// and the timeline's does not, and the difference grows by exactly the silence played. A browser that buffers more
+/// after such a gap does not move it: playing from a deeper buffer is still playing frame after frame.
+///
+///     the offset, performanceTime - 1000 x contextTime, read every 250 ms:
+///         4012.3   4012.3   4012.4   4021.6   4021.6     a step of 9.2 ms: 9.2 ms of silence, one dropout
+///
+/// So a rise is a dropout, its height the silence heard. But the speaker's time is the browser's estimate of when a
+/// frame is played, and an output that reports its position in chunks - a Bluetooth link does - makes it jitter, up and
+/// down by more than a block. A rise from jitter falls back; a rise from silence stays, since silence played cannot be
+/// taken back. So a dropout is counted only when the offset rises above the highest it has been, by the threshold: a
+/// jitter that falls and comes back to the same top is not counted again. The top sinks slowly - 0.1 ms a second -
+/// so that the drift between two clocks, the device's and the page's, tens of parts per million, never adds up to a
+/// rise. Two numbers tell the rest: the offset's net shift since the first reading - every dropout's silence adds to
+/// it, every jitter cancels out of it - and its largest fall between two readings, which no silence can make: jitter,
+/// measured. Dropouts closer together than the readings count as one.
+const OutputContinuity = struct {
+    /// Whether a reading was taken while the context ran; cleared when it stops, so that a pause is no dropout.
+    has_reading: bool = false,
+    /// The offset last read, and the speaker's time of the first and the last readings, in milliseconds.
+    last_offset_ms: f64 = 0,
+    first_reading_ms: f64 = 0,
+    last_reading_ms: f64 = 0,
+    dropout_count: u32 = 0,
+    /// The silence played in all the dropouts, and the speaker's time of the last one.
+    silence_ms: f64 = 0,
+    last_dropout_ms: f64 = 0,
+    /// The offset of the first reading; the highest the offset has been, sinking slowly (`offset_top_sink_ms_per_s`);
+    /// and the largest fall between two readings.
+    first_offset_ms: f64 = 0,
+    offset_top_ms: f64 = 0,
+    largest_fall_ms: f64 = 0,
+};
+
+/// How fast the offset's top sinks, in milliseconds a second (`OutputContinuity`): ten times the drift two clocks
+/// show, and a hundredth of a block in a second.
+const offset_top_sink_ms_per_s: f64 = 0.1;
+
+/// The smallest step of the output's offset counted as a dropout (`OutputContinuity`): 2 ms, below one block of the
+/// renderer (128 frames, 2.7 ms at 48 000 Hz) - the least a late renderer leaves out - and above the jitter of the
+/// browser's estimate of when a frame is played.
+const dropout_threshold_ms: f64 = 2;
 
 /// The most bytes of a warning the panel shows.
 const last_warning_capacity: usize = 200;
@@ -292,21 +375,36 @@ const PageAudio = struct {
     processor_state: ProcessorState = .none,
     /// The notices the renderer sent back, one `Uint8Array` each, until the app takes them (`takeNoticeBytes`).
     held_notices: Handle = 0,
+    /// The renderer's last frames mixed, as its last analysis answer brought them (`acceptAnalysis`): a
+    /// `Float32Array`, the oldest first; 0 before the first answer. And whether a request waits for its answer
+    /// (`askAnalysis`).
+    analysis_frames: Handle = 0,
+    is_analysis_asked: bool = false,
     /// The renderer's last report, valid once `has_report`. A flag beside a plain struct, not an optional struct:
     /// c2js drops the store of an optional's null flag when a struct literal is assigned to an optional struct field
     /// (it mistranslates `(&x)->is_null = false`), so such an optional would read as empty after being set.
     report: RendererReport = .{
         .block_count = 0,
         .loudest_sample = 0,
+        .click_count = 0,
+        .largest_jump = 0,
+        .clipped_count = 0,
         .worklet_frame = 0,
         .received_at_ms = 0,
         .longest_block_ms = 0,
+        .mean_block_ms = 0,
+        .worklet_handle_count = 0,
         .longest_gap_ms = 0,
+        .is_worklet_clock_coarse = false,
     },
     has_report: bool = false,
+    /// The output's dropouts, read with the panel (`readOutputContinuity`).
+    output_continuity: OutputContinuity = .{},
     /// What the page posted to the renderer, for the diagnostics.
     posted_command_count: u32 = 0,
     posted_samples_count: u32 = 0,
+    /// The forwarded streams' messages of frames posted (`forwardStreamFrames`).
+    posted_stream_message_count: u32 = 0,
     posted_note_count: u32 = 0,
     /// The context's rate, once an output started.
     sample_rate: f64 = 0,
@@ -316,6 +414,20 @@ const PageAudio = struct {
     /// it reports it each frame (`noteMixer`); and page audio's last warning, for the panel's last line.
     diagnostics_panel: Handle = 0,
     mixer_voice_count: ?u32 = null,
+    /// Whether handles are being debugged (`setHandleDebugging`), and the panel's refreshes since the census of the
+    /// page's handles was last written to the page's log - every `census_refreshes` while debugging.
+    is_debugging_handles: bool = false,
+    refreshes_since_census: u32 = 0,
+    /// The page's frames on the main thread, timed where the mixer reports each (`noteMixer`): when the last was, and
+    /// the gaps between them since the worklet's last report - the longest, their sum and their count; and the last
+    /// whole second's, which the panel shows (`takeFrameGaps`). A long frame on the main thread beside a long gap on
+    /// the audio thread says the two are starved together: the device's processors are busy.
+    last_frame_ms: f64 = 0,
+    frame_gap_longest_ms: f64 = 0,
+    frame_gap_sum_ms: f64 = 0,
+    frame_gap_count: f64 = 0,
+    shown_longest_frame_gap_ms: f64 = 0,
+    shown_mean_frame_gap_ms: f64 = 0,
     last_warning: [last_warning_capacity]u8 = undefined,
     last_warning_length: usize = 0,
     /// `undefined`, made once: the value a handler is cleared with. Its handle is never freed (c2js's `js_free` does
@@ -343,7 +455,7 @@ fn warn(comptime prefix: []const u8, detail: Handle) void {
 /// The handle of `undefined`, made the first time it is asked for.
 fn undefinedValue() Handle {
     if (page_audio.undefined_value == 0) {
-        page_audio.undefined_value = js_undefined();
+        page_audio.undefined_value = kept(js_undefined());
     }
     return page_audio.undefined_value;
 }
@@ -374,13 +486,37 @@ fn moduleExportsRenderer(app_module: Handle) bool {
     return false;
 }
 
+/// Asks for the audio session of media playback: `navigator.audioSession.type = "playback"` (the Audio Session API,
+/// Safari since 16.4, on iOS too; no other browser has it). Safari on iOS otherwise plays Web Audio in the ambient
+/// session, which the iPhone's Silent mode - its switch, its Action button, Control Center - mutes: the page runs, its
+/// notes light, and nothing is heard. In the playback session the page is heard as music or a video is, through Silent
+/// mode; starting it pauses other apps' audio rather than mixing with it. Asked before the context is made, as the
+/// session a context starts in is the one it keeps.
+fn askForPlaybackSession() void {
+    const navigator: Handle = globalNamed("navigator");
+    defer js_free(navigator);
+    if (js_truthy(navigator) == 0) {
+        return;
+    }
+    const audio_session: Handle = property(navigator, "audioSession");
+    defer js_free(audio_session);
+    if (js_truthy(audio_session) == 0) {
+        return;
+    }
+    const playback: Handle = string("playback");
+    defer js_free(playback);
+    setProperty(audio_session, "type", playback);
+}
+
 /// An audio context at `sample_rate`; at the browser's own rate when it refuses the one asked for (an older Safari);
-/// 0 when the browser has no Web Audio at all.
+/// 0 when the browser has no Web Audio at all. Asks first for the audio session of media playback
+/// (`askForPlaybackSession`), where the browser has one.
 fn makeAudioContext(sample_rate: f64) Handle {
     const context_class: Handle = globalNamed("AudioContext");
     if (js_truthy(context_class) == 0) {
         return 0;
     }
+    askForPlaybackSession();
     const options: Handle = js_obj();
     defer js_free(options);
     const rate_value: Handle = js_num(sample_rate);
@@ -466,12 +602,12 @@ pub fn prepareRenderer(program_text: Handle, app_module: Handle) void {
         page_audio.loading = .unavailable;
         return;
     }
-    page_audio.context = context;
-    page_audio.app_module = app_module;
+    page_audio.context = kept(context);
+    page_audio.app_module = kept(app_module);
     // The worklet's module is the program with its entry point called: `registerProcessor` runs as it loads.
     const entry_point_call: Handle = string("\nstart();\n");
     defer js_free(entry_point_call);
-    page_audio.module_source = call1(program_text, "concat", entry_point_call);
+    page_audio.module_source = kept(call1(program_text, "concat", entry_point_call));
     const source_parts: Handle = js_array();
     defer js_free(source_parts);
     _ = js_push(source_parts, page_audio.module_source);
@@ -482,7 +618,7 @@ pub fn prepareRenderer(program_text: Handle, app_module: Handle) void {
     setProperty(blob_options, "type", javascript_type);
     const blob: Handle = js_new2(globalNamed("Blob"), source_parts, blob_options);
     defer js_free(blob);
-    page_audio.blob_url = call1(globalNamed("URL"), "createObjectURL", blob);
+    page_audio.blob_url = kept(call1(globalNamed("URL"), "createObjectURL", blob));
     page_audio.loading = .loading_from_blob;
     loadModuleFrom(page_audio.blob_url, &onLoadedFromBlob, &onBlobLoadFailed);
 }
@@ -563,6 +699,64 @@ fn postToRenderer(message: Handle, transfer_list: Handle) void {
     callVoid2(port, "postMessage", message, transfer_list);
 }
 
+/// Keeps the frames' gaps since the last call as the second the panel shows, and starts counting again: called at each
+/// report from the worklet, about once a second.
+fn takeFrameGaps() void {
+    const has_frames: bool = page_audio.frame_gap_count > 0;
+    page_audio.shown_longest_frame_gap_ms = page_audio.frame_gap_longest_ms;
+    const mean_frame_gap_ms: f64 = if (has_frames) page_audio.frame_gap_sum_ms / page_audio.frame_gap_count else 0;
+    page_audio.shown_mean_frame_gap_ms = mean_frame_gap_ms;
+    page_audio.frame_gap_longest_ms = 0;
+    page_audio.frame_gap_sum_ms = 0;
+    page_audio.frame_gap_count = 0;
+}
+
+/// `{ kind: "analysis", bytes }`: the renderer's last frames mixed, kept in place of the last answer's until an
+/// analyser takes them (`takeAnalysisFrames`); the next request may go.
+fn acceptAnalysis(message: Handle) void {
+    const frame_bytes: Handle = property(message, "bytes");
+    const frames: Handle = js_new1(globalNamed("Float32Array"), frame_bytes);
+    if (page_audio.analysis_frames != 0) {
+        js_free(page_audio.analysis_frames);
+    }
+    page_audio.analysis_frames = kept(frames);
+    page_audio.is_analysis_asked = false;
+}
+
+/// Asks the renderer worklet for its last frames mixed (`{ kind: "analysis" }`), for an analyser: one request at a
+/// time, another only once the answer came (`acceptAnalysis`). Nothing while the worklet does not play.
+pub fn askAnalysis() void {
+    const is_worklet_playing: bool = page_audio.path == .renderer_worklet and page_audio.node != 0;
+    if (!is_worklet_playing or page_audio.is_analysis_asked) {
+        return;
+    }
+    const scope: Handle = js_mark();
+    defer js_reset(scope);
+    const request: Handle = js_obj();
+    setProperty(request, "kind", string("analysis"));
+    postToRenderer(request, js_array());
+    page_audio.is_analysis_asked = true;
+}
+
+/// Copies the last `frame_count` frames of the renderer's last answer into the app's memory at `target_address`,
+/// oldest first; returns `frame_count` - or 0 before the first answer, and for more frames than an answer holds.
+pub fn takeAnalysisFrames(target_address: u32, frame_count: u32) u32 {
+    if (page_audio.analysis_frames == 0) {
+        return 0;
+    }
+    const held_frame_count: u32 = js_len(page_audio.analysis_frames);
+    if (frame_count > held_frame_count) {
+        return 0;
+    }
+    const scope: Handle = js_mark();
+    defer js_reset(scope);
+    const target: Handle = appMemoryView("Float32Array", target_address, frame_count);
+    const first_kept: Handle = js_num(@floatFromInt(held_frame_count - frame_count));
+    const newest_frames: Handle = call1(page_audio.analysis_frames, "subarray", first_kept);
+    callVoid1(target, "set", newest_frames);
+    return frame_count;
+}
+
 /// A message from the renderer's processor (`worklet_abi.message`, in `sound.zig`): notices kept until the app takes
 /// them; its report kept for the diagnostics; its start, ready or failed.
 fn onRendererMessage(event: Handle) void {
@@ -575,15 +769,30 @@ fn onRendererMessage(event: Handle) void {
         const notice_bytes: Handle = js_new1(globalNamed("Uint8Array"), notice_buffer);
         _ = js_push(page_audio.held_notices, notice_bytes);
     } else if (isString(kind, "stats")) {
+        // The click watch's totals since the page started: computed before the report is replaced - the new report's
+        // fields are written straight into the old one's place, so a field read from it while it is written could
+        // already be the new one.
+        const click_total: f64 = page_audio.report.click_count + numberProperty(message, "clicks");
+        const largest_jump_ever: f64 = @max(page_audio.report.largest_jump, numberProperty(message, "largestJump"));
+        const clipped_total: f64 = page_audio.report.clipped_count + numberProperty(message, "clipped");
         page_audio.report = .{
             .block_count = numberProperty(message, "blocks"),
             .loudest_sample = numberProperty(message, "peak"),
+            .click_count = click_total,
+            .largest_jump = largest_jump_ever,
+            .clipped_count = clipped_total,
             .worklet_frame = numberProperty(message, "frame"),
             .received_at_ms = pageClockMilliseconds(),
             .longest_block_ms = numberProperty(message, "longestBlockMs"),
+            .mean_block_ms = numberProperty(message, "meanBlockMs"),
+            .worklet_handle_count = numberProperty(message, "handles"),
             .longest_gap_ms = numberProperty(message, "longestGapMs"),
+            .is_worklet_clock_coarse = numberProperty(message, "isClockWholeMs") == 1,
         };
         page_audio.has_report = true;
+        takeFrameGaps();
+    } else if (isString(kind, "analysis")) {
+        acceptAnalysis(message);
     } else if (isString(kind, "ready")) {
         page_audio.processor_state = .running;
     } else if (isString(kind, "failed")) {
@@ -603,7 +812,7 @@ fn onProcessorError(event: Handle) void {
 /// Hands page audio the app's instance's exports, once it is instantiated: what the forwarded bytes are copied from,
 /// and the script processor's pull.
 pub fn setAppExports(app_exports: Handle) void {
-    page_audio.app_exports = app_exports;
+    page_audio.app_exports = kept(app_exports);
 }
 
 /// Stops the output playing, whichever path: its node disconnected and its handler cleared. The renderer worklet's
@@ -648,6 +857,11 @@ pub fn stop() void {
         js_free(page_audio.held_notices);
         page_audio.held_notices = 0;
     }
+    if (page_audio.analysis_frames != 0) {
+        js_free(page_audio.analysis_frames);
+        page_audio.analysis_frames = 0;
+    }
+    page_audio.is_analysis_asked = false;
     page_audio.path = .none;
     page_audio.processor_state = .none;
     page_audio.has_report = false;
@@ -682,12 +896,13 @@ pub fn startForwarding(channel_count: u32) f64 {
     const node: Handle = js_new3(node_class, page_audio.context, processor_name, node_options);
     // The state first, then the handlers: a message the processor posted while it was made - its `ready` - may be
     // delivered as soon as the handler is set, and must find the state it changes already in place.
-    page_audio.node = node;
+    page_audio.node = kept(node);
     page_audio.path = .renderer_worklet;
     page_audio.processor_state = .starting;
-    page_audio.held_notices = js_array();
+    page_audio.held_notices = kept(js_array());
     page_audio.posted_command_count = 0;
     page_audio.posted_samples_count = 0;
+    page_audio.posted_stream_message_count = 0;
     page_audio.posted_note_count = 0;
     page_audio.sample_rate = numberProperty(page_audio.context, "sampleRate");
     const port: Handle = property(node, "port");
@@ -730,6 +945,41 @@ pub fn forwardCommandBytes(bytes_address: u32, byte_count: u32) void {
     page_audio.posted_command_count += 1;
 }
 
+/// Posts a forwarded stream's frames - `sample_count` samples at `frames_address` in the app's memory, of `channels`
+/// channels made at `sample_rate` - to the renderer, for the stream's ring there:
+/// `{ kind: "stream", streamId, channels, sampleRate, frames }`, the copy handed over.
+pub fn forwardStreamFrames(
+    stream_id: u32,
+    channels: u32,
+    sample_rate: u32,
+    frames_address: u32,
+    sample_count: u32,
+) void {
+    if (page_audio.path != .renderer_worklet) {
+        return;
+    }
+    const frames_view: Handle = appMemoryView("Float32Array", frames_address, sample_count);
+    defer js_free(frames_view);
+    const frames_copy: Handle = call0(frames_view, "slice");
+    defer js_free(frames_copy);
+    const copy_buffer: Handle = property(frames_copy, "buffer");
+    defer js_free(copy_buffer);
+    const stream_message: Handle = js_obj();
+    defer js_free(stream_message);
+    const kind: Handle = string("stream");
+    defer js_free(kind);
+    setProperty(stream_message, "kind", kind);
+    setNumberProperty(stream_message, "streamId", @floatFromInt(stream_id));
+    setNumberProperty(stream_message, "channels", @floatFromInt(channels));
+    setNumberProperty(stream_message, "sampleRate", @floatFromInt(sample_rate));
+    setProperty(stream_message, "frames", frames_copy);
+    const transfer_list: Handle = js_array();
+    defer js_free(transfer_list);
+    _ = js_push(transfer_list, copy_buffer);
+    postToRenderer(stream_message, transfer_list);
+    page_audio.posted_stream_message_count += 1;
+}
+
 /// Posts `sample_count` samples at `samples_address` in the app's memory to the renderer, to register under
 /// `samples_id`: `{ kind: "samples", samplesId, samples }`, the copy handed over.
 pub fn forwardSamples(samples_id: u32, samples_address: u32, sample_count: u32) void {
@@ -756,8 +1006,15 @@ pub fn forwardSamples(samples_id: u32, samples_address: u32, sample_count: u32) 
     page_audio.posted_samples_count += 1;
 }
 
-/// Posts a key's event to the renderer: `{ kind: "note", key, isDown, velocity }`.
-pub fn forwardNote(key: u32, is_down: u32, velocity: f64) void {
+/// Posts a key's event to the renderer: `{ kind: "note", key, isDown, velocity, requestedAt, pressedAt }` - the last
+/// two the times its start is measured from, on the page's clock (`mixer.NoteEvent`).
+pub fn forwardNote(
+    key: u32,
+    is_down: u32,
+    velocity: f64,
+    requested_at_ms: f64,
+    pressed_at_ms: f64,
+) void {
     if (page_audio.path != .renderer_worklet) {
         return;
     }
@@ -769,6 +1026,8 @@ pub fn forwardNote(key: u32, is_down: u32, velocity: f64) void {
     setNumberProperty(message, "key", @floatFromInt(key));
     setNumberProperty(message, "isDown", @floatFromInt(is_down));
     setNumberProperty(message, "velocity", velocity);
+    setNumberProperty(message, "requestedAt", finiteOrZero(requested_at_ms));
+    setNumberProperty(message, "pressedAt", finiteOrZero(pressed_at_ms));
     const port: Handle = property(page_audio.node, "port");
     defer js_free(port);
     callVoid1(port, "postMessage", message);
@@ -858,7 +1117,7 @@ fn onAudioProcess(event: Handle) void {
 pub fn startPulled(sample_rate: f64, channel_count: u32) f64 {
     stop();
     if (page_audio.context == 0) {
-        page_audio.context = makeAudioContext(sample_rate);
+        page_audio.context = kept(makeAudioContext(sample_rate));
     }
     if (page_audio.context == 0) {
         const no_audio: Handle = string("the sound is not played");
@@ -894,7 +1153,7 @@ pub fn startPulled(sample_rate: f64, channel_count: u32) f64 {
     const destination: Handle = property(page_audio.context, "destination");
     defer js_free(destination);
     callVoid1(node, "connect", destination);
-    page_audio.node = node;
+    page_audio.node = kept(node);
     page_audio.path = .script_processor;
     page_audio.sample_rate = numberProperty(page_audio.context, "sampleRate");
     listenForGesture();
@@ -902,12 +1161,6 @@ pub fn startPulled(sample_rate: f64, channel_count: u32) f64 {
 }
 
 // ---- What the readout and the panel show ----
-
-/// `value`, or 0 for NaN - what a missing number property reads as (`baseLatency` in an older browser).
-fn finiteOrZero(value: f64) f64 {
-    const is_nan: bool = value != value;
-    return if (is_nan) 0 else value;
-}
 
 /// Whether the context is running - started by a gesture, and not suspended since.
 fn isContextRunning() bool {
@@ -935,20 +1188,35 @@ pub fn outputLatencyMilliseconds() f64 {
     return processor_buffer_ms + 1000 * (base_latency_seconds + output_latency_seconds);
 }
 
-/// The path playing, as a code for the output's name (`audioOutputName`, in the web platform): 0 the script processor,
-/// or no output; the renderer worklet 2 while its processor starts, 3 running, 4 failed, 5 with its context not
-/// running yet (no gesture).
-pub fn pathCode() u32 {
+/// Which path plays the page's sound, and how far it has come: what page audio reports to the app's module across
+/// the bridge (`outputStatus`, as its integer) - the web platform names it (`audioOutputName`) and the audio start
+/// screen waits on it (`isAudioOutputSettled`).
+pub const OutputStatus = enum(u32) {
+    /// The script processor on the main thread - the path where no worklet can load - or no output yet.
+    script_processor = 0,
+    /// The renderer in the audio worklet, its processor starting: the module instantiated again in the worklet, the
+    /// renderer warming up.
+    worklet_starting = 1,
+    /// The renderer in the audio worklet, playing.
+    worklet_running = 2,
+    /// The renderer in the audio worklet, failed - its error in the page's log.
+    worklet_failed = 3,
+    /// The renderer in the audio worklet, ready, its audio context not running yet: no click, tap or key yet.
+    worklet_waiting_for_gesture = 4,
+};
+
+/// The output's status now (`OutputStatus`).
+pub fn outputStatus() OutputStatus {
     return switch (page_audio.path) {
-        .none, .script_processor => 0,
-        .renderer_worklet => code: {
+        .none, .script_processor => .script_processor,
+        .renderer_worklet => path: {
             if (page_audio.processor_state == .failed) {
-                break :code 4;
+                break :path .worklet_failed;
             }
             if (!isContextRunning()) {
-                break :code 5;
+                break :path .worklet_waiting_for_gesture;
             }
-            break :code if (page_audio.processor_state == .running) 3 else 2;
+            break :path if (page_audio.processor_state == .running) .worklet_running else .worklet_starting;
         },
     };
 }
@@ -956,6 +1224,15 @@ pub fn pathCode() u32 {
 /// The mixer's count of playing voices, for the panel, as it reports it each frame.
 pub fn noteMixer(voice_count: u32) void {
     page_audio.mixer_voice_count = voice_count;
+    const now_ms: f64 = pageClockMilliseconds();
+    const has_last_frame: bool = page_audio.last_frame_ms != 0;
+    if (has_last_frame) {
+        const frame_gap_ms: f64 = now_ms - page_audio.last_frame_ms;
+        page_audio.frame_gap_longest_ms = @max(page_audio.frame_gap_longest_ms, frame_gap_ms);
+        page_audio.frame_gap_sum_ms += frame_gap_ms;
+        page_audio.frame_gap_count += 1;
+    }
+    page_audio.last_frame_ms = now_ms;
 }
 
 // ---- The diagnostics panel ----
@@ -1067,10 +1344,122 @@ fn describePlayout(builder: *TextBuilder) void {
     builder.appendText(")");
 }
 
+/// Takes a reading of the output's continuity (`OutputContinuity`): the offset between the speaker's time and the
+/// context's timeline, and a step up since the last reading counted as a dropout. Nothing is read while the context
+/// does not run - suspended, or not yet started by a gesture - nor before its output has played a frame; the first
+/// reading after either starts the count afresh, so that the panel's count is since the context last started.
+/// Ties the worklet's timeline to the page's clock (`{ kind: "clock" }`) from one reading of `getOutputTimestamp`:
+/// the frame at `context_time_ms` is heard at `speaker_time_ms`, so it is rendered that much earlier as the audio
+/// still passes the browser's buffer and the device's (`outputLatencyMilliseconds`). The worklet times its blocks by
+/// it, and measures the sounds they start on the clock the page stamps requests on (`mixer.LatencySample`).
+fn tieWorkletClock(context_time_ms: f64, speaker_time_ms: f64) void {
+    const is_worklet_playing: bool = page_audio.path == .renderer_worklet and page_audio.node != 0;
+    if (!is_worklet_playing) {
+        return;
+    }
+    const rendered_at_ms: f64 = speaker_time_ms - outputLatencyMilliseconds();
+    const scope: Handle = js_mark();
+    defer js_reset(scope);
+    const tie: Handle = js_obj();
+    setProperty(tie, "kind", string("clock"));
+    setProperty(tie, "contextMs", js_num(context_time_ms));
+    setProperty(tie, "pageMs", js_num(rendered_at_ms));
+    postToRenderer(tie, js_array());
+}
+
+fn readOutputContinuity() void {
+    const continuity: *OutputContinuity = &page_audio.output_continuity;
+    if (!isContextRunning()) {
+        continuity.has_reading = false;
+        return;
+    }
+    const read_timestamp: Handle = property(page_audio.context, "getOutputTimestamp");
+    defer js_free(read_timestamp);
+    if (js_truthy(read_timestamp) == 0) {
+        return;
+    }
+    const output_timestamp: Handle = call0(page_audio.context, "getOutputTimestamp");
+    defer js_free(output_timestamp);
+    const context_time_ms: f64 = 1000 * finiteOrZero(numberProperty(output_timestamp, "contextTime"));
+    const speaker_time_ms: f64 = finiteOrZero(numberProperty(output_timestamp, "performanceTime"));
+    const has_output_played: bool = context_time_ms > 0 and speaker_time_ms > 0;
+    if (!has_output_played) {
+        return;
+    }
+    const offset_ms: f64 = speaker_time_ms - context_time_ms;
+    tieWorkletClock(context_time_ms, speaker_time_ms);
+    if (continuity.has_reading) {
+        // The top, sunk for the time since the last reading; a rise above it by the threshold is silence played.
+        const seconds_since_last_reading: f64 = (speaker_time_ms - continuity.last_reading_ms) / 1000;
+        const top_sinking_ms: f64 = offset_top_sink_ms_per_s * seconds_since_last_reading;
+        const sunk_top_ms: f64 = continuity.offset_top_ms - top_sinking_ms;
+        const rise_above_top_ms: f64 = offset_ms - sunk_top_ms;
+        if (rise_above_top_ms >= dropout_threshold_ms) {
+            continuity.dropout_count += 1;
+            continuity.silence_ms += rise_above_top_ms;
+            continuity.last_dropout_ms = speaker_time_ms;
+        }
+        continuity.offset_top_ms = @max(sunk_top_ms, offset_ms);
+        const fall_ms: f64 = continuity.last_offset_ms - offset_ms;
+        continuity.largest_fall_ms = @max(continuity.largest_fall_ms, fall_ms);
+    } else {
+        // The first reading since the context started to run: the counting starts afresh.
+        continuity.* = .{
+            .first_reading_ms = speaker_time_ms,
+            .first_offset_ms = offset_ms,
+            .offset_top_ms = offset_ms,
+        };
+    }
+    continuity.has_reading = true;
+    continuity.last_offset_ms = offset_ms;
+    continuity.last_reading_ms = speaker_time_ms;
+}
+
+/// The output's dropouts since the context last started to run (`readOutputContinuity`), on a line of their own, and
+/// beside them the offset's net shift since then - the silence truly played, jitter cancelled - and its largest fall,
+/// the jitter:
+///
+///     dropouts: none in 63 s | offset: net +0.1 ms, falls up to 0.3 ms
+///     dropouts: 3 in 63 s, 21 ms of silence, the last 2.4 s ago | offset: net +21.4 ms, falls up to 0.4 ms
+fn describeDropouts(builder: *TextBuilder) void {
+    const continuity: *const OutputContinuity = &page_audio.output_continuity;
+    if (!continuity.has_reading) {
+        return;
+    }
+    const measured_seconds: f64 = (continuity.last_reading_ms - continuity.first_reading_ms) / 1000;
+    builder.appendText("\ndropouts: ");
+    if (continuity.dropout_count == 0) {
+        builder.appendText("none in ");
+        builder.appendDecimal(measured_seconds, 0);
+        builder.appendText(" s");
+    } else {
+        builder.appendWholeNumber(continuity.dropout_count);
+        builder.appendText(" in ");
+        builder.appendDecimal(measured_seconds, 0);
+        builder.appendText(" s, ");
+        builder.appendDecimal(continuity.silence_ms, 0);
+        builder.appendText(" ms of silence, the last ");
+        const seconds_since_last: f64 = (continuity.last_reading_ms - continuity.last_dropout_ms) / 1000;
+        builder.appendDecimal(seconds_since_last, 1);
+        builder.appendText(" s ago");
+    }
+    const net_shift_ms: f64 = continuity.last_offset_ms - continuity.first_offset_ms;
+    builder.appendText(" | offset: net ");
+    if (net_shift_ms >= 0) {
+        builder.appendText("+");
+    }
+    builder.appendDecimal(net_shift_ms, 1);
+    builder.appendText(" ms, falls up to ");
+    builder.appendDecimal(continuity.largest_fall_ms, 1);
+    builder.appendText(" ms");
+}
+
 /// The panel's text: the output, the renderer, the mixer, and page audio's last warning.
 ///
 ///     audio: renderer worklet | 48000 Hz | latency 4 ms + 24 ms
-///     renderer: running | 1500 blocks (frame 191872, 0.4 s ago), loudest 0.354 | posted 1 commands, 2 notes, ...
+///     dropouts: none in 63 s
+///     renderer: running | 1500 blocks (frame 191872, 0.4 s ago), loudest 0.354, clicks 0 (largest jump 0.004) | ...
+///     worklet: longest block 1.00 ms, mean 0.120 ms, longest gap 5.0 ms (its clock counts whole ms)
 ///     mixer: voices 2
 fn describeOutput(builder: *TextBuilder) void {
     builder.appendText("audio: ");
@@ -1091,6 +1480,7 @@ fn describeOutput(builder: *TextBuilder) void {
             builder.appendText(" | the context waits for a tap or a key");
         }
         describePlayout(builder);
+        describeDropouts(builder);
     }
     if (page_audio.path == .renderer_worklet) {
         builder.appendText("\nrenderer: ");
@@ -1111,6 +1501,14 @@ fn describeOutput(builder: *TextBuilder) void {
             builder.appendDecimal(seconds_ago, 1);
             builder.appendText(" s ago), loudest ");
             builder.appendDecimal(report.loudest_sample, 3);
+            // The click watch: the clicks counted since the page started, and the largest jump in the sound's slope -
+            // over 0.02 is a click (`Renderer.watchForClicks`).
+            builder.appendText(", clicks ");
+            builder.appendWholeNumber(@trunc(report.click_count));
+            builder.appendText(" (largest jump ");
+            builder.appendDecimal(report.largest_jump, 3);
+            builder.appendText("), clipped ");
+            builder.appendWholeNumber(@trunc(report.clipped_count));
         } else {
             builder.appendText("no block yet");
         }
@@ -1124,14 +1522,29 @@ fn describeOutput(builder: *TextBuilder) void {
         if (page_audio.has_report) {
             builder.appendText("\nworklet: longest block ");
             builder.appendDecimal(page_audio.report.longest_block_ms, 2);
+            builder.appendText(" ms, mean ");
+            builder.appendDecimal(page_audio.report.mean_block_ms, 3);
             builder.appendText(" ms, longest gap ");
             builder.appendDecimal(page_audio.report.longest_gap_ms, 1);
-            builder.appendText(" ms");
+            builder.appendText(" ms, handles ");
+            builder.appendWholeNumber(@trunc(page_audio.report.worklet_handle_count));
+            if (page_audio.report.is_worklet_clock_coarse) {
+                builder.appendText(" (its clock counts whole ms)");
+            }
         }
     }
     if (page_audio.mixer_voice_count) |voice_count| {
         builder.appendText("\nmixer: voices ");
         builder.appendWholeNumber(voice_count);
+        // The page's own frames in the last second, on the main thread, beside the worklet's blocks above.
+        builder.appendText(" | page frames: longest gap ");
+        builder.appendDecimal(page_audio.shown_longest_frame_gap_ms, 1);
+        builder.appendText(" ms, mean ");
+        builder.appendDecimal(page_audio.shown_mean_frame_gap_ms, 1);
+        // The page's handle table, read as this text is written - its own few handles in it: steady from refresh to
+        // refresh while nothing leaks.
+        builder.appendText(" ms, handles ");
+        builder.appendWholeNumber(js_table_length());
     }
     if (page_audio.last_warning_length > 0) {
         builder.appendText("\n");
@@ -1139,13 +1552,59 @@ fn describeOutput(builder: *TextBuilder) void {
     }
 }
 
+/// The panel's refreshes between two censuses of the page's handles: 40, ten seconds.
+const census_refreshes: u32 = 40;
+
+/// While handles are debugged, writes to the page's log - which the page shows - the page's live handles counted by
+/// where they were made, every ten seconds: a leak shows as the code that made it, its count rising from census to
+/// census.
+fn writeCensusWhenDue() void {
+    if (!page_audio.is_debugging_handles) {
+        return;
+    }
+    page_audio.refreshes_since_census += 1;
+    if (page_audio.refreshes_since_census < census_refreshes) {
+        return;
+    }
+    page_audio.refreshes_since_census = 0;
+    const census: Handle = js_handle_census(5);
+    defer js_free(census);
+    const heading: Handle = string("zimr: the page's live handles, by where they were made:\n");
+    defer js_free(heading);
+    const console: Handle = globalNamed("console");
+    defer js_free(console);
+    callVoid2(console, "warn", heading, census);
+}
+
 /// Writes the panel's text afresh: every 250 ms, from the page's timer.
 fn refreshDiagnostics() void {
     const scope: Handle = js_mark();
     defer js_reset(scope);
+    writeCensusWhenDue();
+    readOutputContinuity();
     var builder: TextBuilder = .{};
     describeOutput(&builder);
     setProperty(page_audio.diagnostics_panel, "textContent", string(builder.writtenText()));
+}
+
+/// Turns the debugging of JavaScript handles on or off in both realms: this page's, at once, and the audio worklet's,
+/// by a message (`{ kind: "debugHandles", on }`). The worklet sends a failure's stack with its message, debugging or
+/// not; debugging adds where the handle was made and freed.
+pub fn setHandleDebugging(is_on: bool) void {
+    const scope: Handle = js_mark();
+    defer js_reset(scope);
+    js_set_handle_debugging(@intFromBool(is_on));
+    page_audio.is_debugging_handles = is_on;
+    if (page_audio.path != .renderer_worklet) {
+        return;
+    }
+    const message: Handle = js_obj();
+    const kind: Handle = string("debugHandles");
+    setProperty(message, "kind", kind);
+    const on_value: Handle = js_num(if (is_on) 1 else 0);
+    setProperty(message, "on", on_value);
+    const transfer_list: Handle = js_array();
+    postToRenderer(message, transfer_list);
 }
 
 /// Shows the sound's diagnostics panel at the top of the page, refreshed every 250 ms (`describeOutput`): over the
@@ -1172,7 +1631,7 @@ pub fn showDiagnostics() void {
     const body: Handle = property(document, "body");
     defer js_free(body);
     callVoid1(body, "appendChild", panel);
-    page_audio.diagnostics_panel = panel;
+    page_audio.diagnostics_panel = kept(panel);
     refreshDiagnostics();
     const refresh_handler: Handle = js_func(&refreshDiagnostics);
     defer js_free(refresh_handler);
@@ -1216,8 +1675,24 @@ fn exportForwardSamples(
     forwardSamples(samples_id, samples_address, sample_count);
 }
 
-fn exportForwardNote(key: u32, is_down: u32, velocity: f64) callconv(.c) void {
-    forwardNote(key, is_down, velocity);
+fn exportForwardStreamFrames(
+    stream_id: u32,
+    channels: u32,
+    sample_rate: u32,
+    frames_address: u32,
+    sample_count: u32,
+) callconv(.c) void {
+    forwardStreamFrames(stream_id, channels, sample_rate, frames_address, sample_count);
+}
+
+fn exportForwardNote(
+    key: u32,
+    is_down: u32,
+    velocity: f64,
+    requested_at_ms: f64,
+    pressed_at_ms: f64,
+) callconv(.c) void {
+    forwardNote(key, is_down, velocity, requested_at_ms, pressed_at_ms);
 }
 
 fn exportTakeNoticeBytes(
@@ -1228,6 +1703,14 @@ fn exportTakeNoticeBytes(
     return takeNoticeBytes(target_address, capacity, notice_byte_count);
 }
 
+fn exportAskAnalysis() callconv(.c) void {
+    askAnalysis();
+}
+
+fn exportTakeAnalysisFrames(target_address: u32, frame_count: u32) callconv(.c) u32 {
+    return takeAnalysisFrames(target_address, frame_count);
+}
+
 fn exportStartPulled(sample_rate: f64, channel_count: u32) callconv(.c) f64 {
     return startPulled(sample_rate, channel_count);
 }
@@ -1236,8 +1719,8 @@ fn exportOutputLatencyMilliseconds() callconv(.c) f64 {
     return outputLatencyMilliseconds();
 }
 
-fn exportPathCode() callconv(.c) u32 {
-    return pathCode();
+fn exportOutputStatus() callconv(.c) u32 {
+    return @backingInt(outputStatus());
 }
 
 fn exportNoteMixer(voice_count: u32) callconv(.c) void {
@@ -1261,11 +1744,14 @@ comptime {
         @export(&exportStartForwarding, .{ .name = "page_audio_start_forwarding" });
         @export(&exportForwardCommandBytes, .{ .name = "page_audio_forward_command_bytes" });
         @export(&exportForwardSamples, .{ .name = "page_audio_forward_samples" });
+        @export(&exportForwardStreamFrames, .{ .name = "page_audio_forward_stream_frames" });
         @export(&exportForwardNote, .{ .name = "page_audio_forward_note" });
         @export(&exportTakeNoticeBytes, .{ .name = "page_audio_take_notice_bytes" });
+        @export(&exportAskAnalysis, .{ .name = "page_audio_ask_analysis" });
+        @export(&exportTakeAnalysisFrames, .{ .name = "page_audio_take_analysis_frames" });
         @export(&exportStartPulled, .{ .name = "page_audio_start_pulled" });
         @export(&exportOutputLatencyMilliseconds, .{ .name = "page_audio_output_latency_ms" });
-        @export(&exportPathCode, .{ .name = "page_audio_path_code" });
+        @export(&exportOutputStatus, .{ .name = "page_audio_output_status" });
         @export(&exportNoteMixer, .{ .name = "page_audio_note_mixer" });
         @export(&exportShowDiagnostics, .{ .name = "page_audio_show_diagnostics" });
         @export(&exportStop, .{ .name = "page_audio_stop" });

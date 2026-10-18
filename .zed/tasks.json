@@ -126,6 +126,52 @@
         "use_new_terminal": false
     },
     {
+        "label": "zig: build audio-scale-star",
+        "command": "zig",
+        "args": [
+            "build",
+            "audio-scale-star",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release audio-scale-star",
+        "command": "zig",
+        "args": [
+            "build",
+            "audio-scale-star",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build audio-scale-star-hands",
+        "command": "zig",
+        "args": [
+            "build",
+            "audio-scale-star-hands",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release audio-scale-star-hands",
+        "command": "zig",
+        "args": [
+            "build",
+            "audio-scale-star-hands",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
         "label": "zig: build audio-sound-lab",
         "command": "zig",
         "args": [
@@ -1706,6 +1752,29 @@
         "args": [
             "build",
             "geno-fit",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build geno-lab",
+        "command": "zig",
+        "args": [
+            "build",
+            "geno-lab",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release geno-lab",
+        "command": "zig",
+        "args": [
+            "build",
+            "geno-lab",
             "-Dplatform=web",
             "-Dmode=release"
         ],
@@ -7403,6 +7472,28 @@
         "use_new_terminal": false
     },
     {
+        "label": "zig: build audio-scale-star (windows)",
+        "command": "zig",
+        "args": [
+            "build",
+            "audio-scale-star",
+            "-Dplatform=windows"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build audio-scale-star-hands (windows)",
+        "command": "zig",
+        "args": [
+            "build",
+            "audio-scale-star-hands",
+            "-Dplatform=windows"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
         "label": "zig: build audio-sound-lab (windows)",
         "command": "zig",
         "args": [
@@ -8156,6 +8247,17 @@
         "args": [
             "build",
             "geno-fit",
+            "-Dplatform=windows"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build geno-lab (windows)",
+        "command": "zig",
+        "args": [
+            "build",
+            "geno-lab",
             "-Dplatform=windows"
         ],
         "reveal": "no_focus",

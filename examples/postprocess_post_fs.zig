@@ -12,6 +12,7 @@
 
 const zm = @import("zm");
 const Vec2 = zm.Vec2;
+const splat2 = zm.splat2;
 const shader_io = @import("postprocess_post_fs_io.zig");
 const shader_externs = @import("postprocess_post_fs_externs");
 
@@ -35,7 +36,7 @@ pub fn shaderMain(io_in: Io) Out {
     const dir: Vec2 = uv - center;
 
     // Chromatic aberration: pull R outward and B inward along `dir`.
-    const off: Vec2 = dir * @as(Vec2, @splat(0.008));
+    const off: Vec2 = dir * splat2(0.008);
     const r: f32 = io_in.scene(uv + off)[0];
     const g: f32 = io_in.scene(uv)[1];
     const b: f32 = io_in.scene(uv - off)[2];

@@ -37,7 +37,11 @@ which is why zimr857 did the contained fix instead. **Decision needed from Simon
 Cheaper interim: make `writeUbo` ASSERT the invariant it documents (encoder-scoped write counter, panic on
 the second write). That converts a silent wrong-render into a loud failure without any redesign.
 
-### 2. The WGSL corpus fixture is keyed by INPUT HASH, so a compiler bump zeroes its coverage silently
+### 2. ~~The WGSL corpus fixture is keyed by INPUT HASH, so a compiler bump zeroes its coverage silently~~ — FIXED (Oct 18)
+`tools/wgsl_corpus.zig` replaced it, as proposed below: shaders keyed by source path, a reviewable interface (entry
+point, inputs, outputs, bindings, structs spelled out) compared on every compiler, byte-exact WGSL per SPIR-V (up to
+three per shader), the corpus taken from the build graph instead of the cache, and a hard fail when nothing was
+compared. The original finding:
 `tests/fixtures/wgsl_corpus.json` maps `spv_input_hash -> wgsl_output_hash`. New compiler = new SPIR-V bytes
 = every key dies at once; the 1398 bump orphaned all 138 entries and `check` still printed `✓ NO REGRESSIONS`
 having compared nothing. `corpus-refresh` then wrote `52 live + 138 carried` — the orphans can never match

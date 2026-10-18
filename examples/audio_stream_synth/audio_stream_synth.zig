@@ -1,8 +1,7 @@
-//! audio_stream_synth - port of the GL `audio_stream_synth`: a theremin on
-//! the wgpu audio bridge. Mouse Y maps (logarithmically) to a pitch in
-//! 110-1760 Hz; each frame it synthesizes sine samples and feeds them to an
-//! `AudioStream` - a 3-buffer rotation scheduled gaplessly via the bridge's
-//! `play_buffer_at` (implemented this turn). Click toggles the sound. The synth
+//! audio_stream_synth - port of the GL `audio_stream_synth`: a theremin. Mouse Y
+//! maps (logarithmically) to a pitch in 110-1760 Hz; each frame it synthesizes
+//! sine samples and feeds them to an `AudioStream` - a ring a voice of the mixer
+//! reads, written while half of it is free. Click toggles the sound. The synth's
 //! phase_turns persists across chunks so the wave doesn't click at chunk seams.
 const std = @import("std");
 const allocPrint = std.fmt.allocPrint;
@@ -65,6 +64,10 @@ fn mouseToFreq(mouse_y: f32, height: f32) f32 {
 }
 
 fn update(f: *z.Frame, state: *State) void {
+    // A black screen with a start button, until it is pressed and the audio runs (`z.showAudioStartScreen`).
+    if (z.showAudioStartScreen(f, &state.font)) {
+        return;
+    }
     _ = state.scratch.reset(.retain_capacity);
     state.frame_count += 1;
     const h: f32 = f.window.heightf();
@@ -126,7 +129,7 @@ fn update(f: *z.Frame, state: *State) void {
         .{ .size = 14, .color = c.slate_400, .font = &state.font },
     );
 
-    common.caption(f.gl, state.font, "AudioStream: live sine fed gaplessly via play_buffer_at");
+    common.caption(f.gl, state.font, "AudioStream: a live sine, fed into the mixer's ring");
     z.endDrawing(f.gl);
 }
 

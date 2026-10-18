@@ -2678,7 +2678,7 @@ fn humanBoneDirection(positions: []const rbt.Vec, from: usize, to: usize) ?rbt.V
     if (bone_length < 1.0e-6) {
         return null;
     }
-    const unit: rbt.Vec = bone / @as(rbt.Vec, @splat(bone_length));
+    const unit: rbt.Vec = bone / splat(bone_length);
     // The same Y-up -> Z-up conversion the positions use.
     return vec(unit[0], -unit[2], unit[1]);
 }
@@ -2772,7 +2772,7 @@ test "the robot's RIGHT FOREARM follows the capture's, across the clip" {
         if (l < 1.0e-6) {
             continue;
         }
-        const u: rbt.Vec = b / @as(rbt.Vec, @splat(l));
+        const u: rbt.Vec = b / splat(l);
         limb[body] = arcBetween(vec(u[0], -u[2], u[1]), normalize3(imported.model.body_pos[tip]));
     }
 
@@ -2865,7 +2865,7 @@ test "the robot's RIGHT FOREARM follows the capture's, across the clip" {
         }
         try expect(samples > 8);
         const agreement: f32 = total / float(samples);
-        mean_dir /= @as(rbt.Vec, @splat(float(samples)));
+        mean_dir /= splat(float(samples));
         var spread: f32 = 0;
         for (0..samples) |i| {
             const d: rbt.Vec = dirs[i] - mean_dir;
@@ -3430,7 +3430,7 @@ test "SCORECARD: torso, then upper arm, then elbow, then twist - in dependency o
                     const hj: i32 = human_of_body[b];
                     ik_targets[b] = if (hj < 0) vec(0, 0, 0) else blk: {
                         const rel: rbt.Vec =
-                            (pos[@intCast(hj)] - pos[0]) * @as(rbt.Vec, @splat(sc));
+                            (pos[@intCast(hj)] - pos[0]) * splat(sc);
                         break :blk vec(rel[0], -rel[2], rel[1]);
                     };
                 }
@@ -3478,8 +3478,8 @@ test "SCORECARD: torso, then upper arm, then elbow, then twist - in dependency o
                     return vec(v[0], -v[2], v[1]);
                 }
             }.f;
-            const human_torso: rbt.Vec = toZ((pos[spine_h] - root) * @as(rbt.Vec, @splat(scale)));
-            const human_arm: rbt.Vec = toZ((pos[arm_h] - root) * @as(rbt.Vec, @splat(scale)));
+            const human_torso: rbt.Vec = toZ((pos[spine_h] - root) * splat(scale));
+            const human_arm: rbt.Vec = toZ((pos[arm_h] - root) * splat(scale));
             const robot_root: rbt.Vec = data.body_xpos[torso_b];
             _ = robot_root;
 
@@ -3543,8 +3543,8 @@ test "SCORECARD: torso, then upper arm, then elbow, then twist - in dependency o
             const human_normal: rbt.Vec = crossVecLocal(human_upper, human_fore);
             if (vecLen(robot_normal) > 0.1 and vecLen(human_normal) > 0.1) {
                 card.upper_arm_twist_error_deg += angleBetweenDegrees(
-                    robot_normal / @as(rbt.Vec, @splat(vecLen(robot_normal))),
-                    human_normal / @as(rbt.Vec, @splat(vecLen(human_normal))),
+                    robot_normal / splat(vecLen(robot_normal)),
+                    human_normal / splat(vecLen(human_normal)),
                 );
             }
             // * Thigh DIRECTION and knee BEND, the leg's equivalents of stages 3 and 4.
@@ -3753,7 +3753,7 @@ test "which spine joint should drive the torso: measured by SHOULDER OFFSET, not
         }
         const joint: usize = idx orelse continue;
         const human_y: rbt.Vec =
-            (rest_pos[shoulder_h] - rest_pos[joint]) * @as(rbt.Vec, @splat(scale));
+            (rest_pos[shoulder_h] - rest_pos[joint]) * splat(scale);
         const human_offset: rbt.Vec = vec(human_y[0], -human_y[2], human_y[1]);
         const d: rbt.Vec = robot_offset - human_offset;
         const err: f32 = @sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
@@ -4179,7 +4179,7 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
         // printing it next to the robot's own span makes that unmissable.
         const scale: f32 = 1.315 / @max(@abs(rest_pos[arm_h][1]), 0.01);
         for (0..joints) |j| {
-            const p: rbt.Vec = pos[j] * @as(rbt.Vec, @splat(scale));
+            const p: rbt.Vec = pos[j] * splat(scale);
             positions_robot[j] = vec(p[0], -p[2], p[1]);
             rotations_robot[j] = qmul(qmul(yz, rot[j]), zm.conjugate(yz));
         }
@@ -4236,8 +4236,8 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
             const l1: f32 = vecLen(imported.model.body_pos[fore_b]);
             const l2: f32 = vecLen(imported.model.body_pos[hand_b]);
             const elbow_target: rbt.Vec =
-                data.body_xpos[arm_b] + upper_dir * @as(rbt.Vec, @splat(l1));
-            const hand_target: rbt.Vec = elbow_target + lower_dir * @as(rbt.Vec, @splat(l2));
+                data.body_xpos[arm_b] + upper_dir * splat(l1);
+            const hand_target: rbt.Vec = elbow_target + lower_dir * splat(l2);
             var arm_tasks: [2]rbt.IkTask = .{
                 .{ .body = fore_b, .target_world = elbow_target, .weight = 1.0 },
                 .{ .body = hand_b, .target_world = hand_target, .weight = 1.0 },
@@ -4301,8 +4301,8 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
             const ll1: f32 = vecLen(imported.model.body_pos[leg_shin_b]);
             const ll2: f32 = vecLen(imported.model.body_pos[leg_foot_b]);
             const knee_target: rbt.Vec =
-                data.body_xpos[leg_thigh_b] + up_dir * @as(rbt.Vec, @splat(ll1));
-            const ankle_target: rbt.Vec = knee_target + low_dir * @as(rbt.Vec, @splat(ll2));
+                data.body_xpos[leg_thigh_b] + up_dir * splat(ll1);
+            const ankle_target: rbt.Vec = knee_target + low_dir * splat(ll2);
             var leg_tasks: [2]rbt.IkTask = .{
                 .{ .body = leg_shin_b, .target_world = knee_target, .weight = 1.0 },
                 .{ .body = leg_foot_b, .target_world = ankle_target, .weight = 1.0 },
@@ -4995,7 +4995,7 @@ fn runCoreRetarget(flex_model: bool) !void {
         const rest_robot_frame_probe: []rbt.Vec = try gpa.alloc(rbt.Vec, hn);
         defer gpa.free(rest_robot_frame_probe);
         for (0..hn) |j| {
-            const q: rbt.Vec = rest_pos_t[j] * @as(rbt.Vec, @splat(0.0097));
+            const q: rbt.Vec = rest_pos_t[j] * splat(0.0097);
             rest_robot_frame_probe[j] = vec(q[0], -q[2], q[1]);
         }
         if (imported.model.nq <= tpose_probe.len and
@@ -5055,7 +5055,7 @@ fn runCoreRetarget(flex_model: bool) !void {
         poseFromBvhFrame(&capture, frame, pos, rot);
         const joints: usize = @min(hn, positions_robot.len);
         for (0..joints) |j| {
-            const p: rbt.Vec = pos[j] * @as(rbt.Vec, @splat(0.0097));
+            const p: rbt.Vec = pos[j] * splat(0.0097);
             positions_robot[j] = vec(p[0], -p[2], p[1]);
             rotations_robot[j] = qmul(qmul(yz, rot[j]), zm.conjugate(yz));
         }
@@ -5125,8 +5125,8 @@ fn runCoreRetarget(flex_model: bool) !void {
                 normalize3(positions_robot[foot_h2] - positions_robot[leg_h2]);
             const tl: f32 = vecLen(imported.model.body_pos[shin_bb]);
             const sl: f32 = vecLen(imported.model.body_pos[foot_bb]);
-            const knee_t: rbt.Vec = data.body_xpos[rthigh_b] + thigh_dir * @as(rbt.Vec, @splat(tl));
-            const ankle_t: rbt.Vec = knee_t + shin_dir * @as(rbt.Vec, @splat(sl));
+            const knee_t: rbt.Vec = data.body_xpos[rthigh_b] + thigh_dir * splat(tl);
+            const ankle_t: rbt.Vec = knee_t + shin_dir * splat(sl);
 
             var leg_mask2: [64]bool = undefined;
             @memset(leg_mask2[0..imported.model.nv], false);
@@ -5154,7 +5154,7 @@ fn runCoreRetarget(flex_model: bool) !void {
                     }
                     if (vecLen(imported.model.geom_pos[g]) > sl4) {
                         sl4 = vecLen(imported.model.geom_pos[g]);
-                        sole4 = imported.model.geom_pos[g] * @as(rbt.Vec, @splat(2.0));
+                        sole4 = imported.model.geom_pos[g] * splat(2.0);
                     }
                 }
                 if (toe_h4 != 0 and sl4 > 1.0e-5) {
@@ -5179,7 +5179,7 @@ fn runCoreRetarget(flex_model: bool) !void {
                     leg_t[2] = .{
                         .body = foot_bb,
                         .point_local = sole4,
-                        .target_world = ankle_t + td * @as(rbt.Vec, @splat(vecLen(sole4))),
+                        .target_world = ankle_t + td * splat(vecLen(sole4)),
                         .weight = 0.5,
                     };
                     leg_t_n = 3;
@@ -5301,7 +5301,7 @@ fn runCoreRetarget(flex_model: bool) !void {
                     }
                     if (vecLen(imported.model.geom_pos[g]) > sl3) {
                         sl3 = vecLen(imported.model.geom_pos[g]);
-                        sole3 = imported.model.geom_pos[g] * @as(rbt.Vec, @splat(2.0));
+                        sole3 = imported.model.geom_pos[g] * splat(2.0);
                     }
                 }
                 if (toe_h3 != 0 and sl3 > 1.0e-5) {
@@ -5386,7 +5386,7 @@ fn runCoreRetarget(flex_model: bool) !void {
             var knee_task: [1]rbt.IkTask = .{.{
                 .body = shin_bb,
                 .target_world = data.body_xpos[rthigh_b] +
-                    want_dir * @as(rbt.Vec, @splat(vecLen(imported.model.body_pos[shin_bb]))),
+                    want_dir * splat(vecLen(imported.model.body_pos[shin_bb])),
                 .weight = 1.0,
             }};
             var sc: [4096]f32 = undefined;
@@ -5451,7 +5451,7 @@ fn runCoreRetarget(flex_model: bool) !void {
         poseFromBvhFrame(&capture, frame, pos, rot);
         const joints: usize = @min(hn, positions_robot.len);
         for (0..joints) |j| {
-            const p: rbt.Vec = pos[j] * @as(rbt.Vec, @splat(0.0097));
+            const p: rbt.Vec = pos[j] * splat(0.0097);
             positions_robot[j] = vec(p[0], -p[2], p[1]);
             rotations_robot[j] = qmul(qmul(yz, rot[j]), zm.conjugate(yz));
         }
@@ -5495,7 +5495,7 @@ fn runCoreRetarget(flex_model: bool) !void {
             poseFromBvhFrame(&capture, f, pos, rot);
             const jj: usize = @min(hn, positions_robot.len);
             for (0..jj) |j| {
-                const p3: rbt.Vec = pos[j] * @as(rbt.Vec, @splat(0.0097));
+                const p3: rbt.Vec = pos[j] * splat(0.0097);
                 positions_robot[j] = vec(p3[0], -p3[2], p3[1]);
                 rotations_robot[j] = qmul(qmul(yz, rot[j]), zm.conjugate(yz));
             }
@@ -5544,8 +5544,8 @@ fn runCoreRetarget(flex_model: bool) !void {
                 const d2: rbt.Vec = normalize3(positions_robot[eh] - positions_robot[mh]);
                 const b1: f32 = vecLen(imported.model.body_pos[mb]);
                 const b2: f32 = vecLen(imported.model.body_pos[eb]);
-                const mid_t: rbt.Vec = data.body_xpos[ub] + d1 * @as(rbt.Vec, @splat(b1));
-                const end_t: rbt.Vec = mid_t + d2 * @as(rbt.Vec, @splat(b2));
+                const mid_t: rbt.Vec = data.body_xpos[ub] + d1 * splat(b1);
+                const end_t: rbt.Vec = mid_t + d2 * splat(b2);
                 var lm: [64]bool = undefined;
                 @memset(lm[0..imported.model.nv], false);
                 for ([_]usize{ ub, mb, eb }) |bb| {
@@ -5580,7 +5580,7 @@ fn runCoreRetarget(flex_model: bool) !void {
                             const gp: rbt.Vec = imported.model.geom_pos[g];
                             if (vecLen(gp) > sole_len) {
                                 sole_len = vecLen(gp);
-                                sole = gp * @as(rbt.Vec, @splat(2.0));
+                                sole = gp * splat(2.0);
                             }
                         }
                         if (sole_len > 1.0e-5) {
@@ -5590,7 +5590,7 @@ fn runCoreRetarget(flex_model: bool) !void {
                                 .body = eb,
                                 .point_local = sole,
                                 .target_world = end_t +
-                                    toe_dir * @as(rbt.Vec, @splat(vecLen(sole))),
+                                    toe_dir * splat(vecLen(sole)),
                                 .weight = 0.5,
                             };
                             lt_n = 3;
@@ -5954,7 +5954,7 @@ fn frame166(flex: bool) !void {
         const jj: usize = @min(hn, p_robot.len);
         for (0..jj) |j| {
             r_robot[j] = zm.qmul(to_z_up, rot[j]);
-            const q: rbt.Vec = pos[j] * @as(rbt.Vec, @splat(0.0097));
+            const q: rbt.Vec = pos[j] * splat(0.0097);
             p_robot[j] = vec(q[0], -q[2], q[1]);
         }
 
@@ -5974,8 +5974,8 @@ fn frame166(flex: bool) !void {
         const l1: f32 = vecLen(imported.model.body_pos[fore_b]);
         const l2: f32 = vecLen(imported.model.body_pos[hand_b]);
         const elbow_t: rbt.Vec = data.body_xpos[arm_b] +
-            normalize3(cap_upper) * @as(rbt.Vec, @splat(l1));
-        const hand_t: rbt.Vec = elbow_t + normalize3(cap_lower) * @as(rbt.Vec, @splat(l2));
+            normalize3(cap_upper) * splat(l1);
+        const hand_t: rbt.Vec = elbow_t + normalize3(cap_lower) * splat(l2);
         var mask: [64]bool = undefined;
         @memset(mask[0..imported.model.nv], false);
         for ([_]usize{ arm_b, fore_b }) |bb| {
@@ -6170,7 +6170,7 @@ fn runWholeBody(
         poseFromBvhFrame(&tpose, 0, pos, rot);
         const limit: usize = @min(hn, rest_rot_t.len);
         for (0..limit) |j| {
-            const q: rbt.Vec = pos[j] * @as(rbt.Vec, @splat(0.0097));
+            const q: rbt.Vec = pos[j] * splat(0.0097);
             rest_pos_t[j] = vec(q[0], -q[2], q[1]);
             rest_rot_t[j] = qmul(qmul(yz_r, rot[j]), zm.conjugate(yz_r));
         }
@@ -6457,7 +6457,7 @@ fn runWholeBody(
         // *** UNIT-CANCELLING: the same skeleton in centimetres gives the SAME scale in metres.
         var in_cm: [128]rbt.Vec = undefined;
         for (0..hn) |j| {
-            in_cm[j] = pos[j] * @as(rbt.Vec, @splat(100.0));
+            in_cm[j] = pos[j] * splat(100.0);
         }
         const cm_scale: f32 = rbt.captureScale(&imported.model, .{
             .positions = in_cm[0..hn],
@@ -6592,7 +6592,7 @@ fn runWholeBody(
         const jj: usize = @min(hn, p_robot.len);
         for (0..jj) |j| {
             r_robot[j] = zm.qmul(to_z_up, rot[j]);
-            const q: rbt.Vec = pos[j] * @as(rbt.Vec, @splat(0.0097));
+            const q: rbt.Vec = pos[j] * splat(0.0097);
             p_robot[j] = vec(q[0], -q[2], q[1]);
         }
 
@@ -6660,7 +6660,7 @@ fn runWholeBody(
                     continue;
                 }
                 retargeted[b] = retargeted[parent] +
-                    normalize3(bone) * @as(rbt.Vec, @splat(own_len));
+                    normalize3(bone) * splat(own_len);
             }
         }
 
@@ -6690,7 +6690,7 @@ fn runWholeBody(
                 counted += 1;
             }
             if (counted > 0) {
-                const shift: rbt.Vec = offset / @as(rbt.Vec, @splat(counted));
+                const shift: rbt.Vec = offset / splat(counted);
                 for (1..imported.model.nbody) |b| {
                     retargeted[b] += shift;
                 }
@@ -7022,7 +7022,7 @@ fn runWholeBody(
             const to_z_up: rbt.Quat = zm.quatFromAxisAngle(vec(1, 0, 0), -1.5707963);
             for (0..jn) |j| {
                 qr[j] = zm.qmul(to_z_up, rot[j]);
-                const q: rbt.Vec = pos[j] * @as(rbt.Vec, @splat(0.0097));
+                const q: rbt.Vec = pos[j] * splat(0.0097);
                 pr[j] = vec(q[0], -q[2], q[1]);
             }
             // -- *** THE POPS LOOP, CALLING THE SHIPPED SOLVE --

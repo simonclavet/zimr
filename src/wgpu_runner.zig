@@ -207,6 +207,10 @@ pub export fn runnerWrongSideFrees() i32 {
 
 pub fn main() !void {
     try zimr_app.run(spec.config, State, runnerInit, runnerUpdate);
+    // An app with `on_input` has it called for each press and release, between frames.
+    if (comptime spec.on_input != null) {
+        zimr_app.setInputHandler(State, spec.on_input.?);
+    }
     // On the web `run` returns and the browser drives frames through the `update` export. A native program drives
     // them itself until its window closes - a headless one for its count of frames - then tears down exactly as the
     // leak harness does.

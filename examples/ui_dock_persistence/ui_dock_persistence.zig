@@ -48,8 +48,7 @@ const State = struct {
     root: ui.Id = 0,
 
     // Visible status string for "did clear succeed" feedback.
-    clear_status_buf: [128]u8 = @splat(0),
-    clear_status_len: usize = 0,
+    clear_status: []const u8 = "",
 };
 
 fn deinit(gpa: Allocator, s: *State) void {
@@ -110,15 +109,8 @@ fn update(f: *z.Frame, s: *State) void {
             // `orelse` skips the work the second time (no key to
             // remove, save is already disabled).
             if (s.ui_host.ctx.persistence_key) |key| {
-                const status: i32 = z.dom.persistence_remove(key);
-                const msg: []const u8 = switch (status) {
-                    0 => "Cleared. Refresh page to start truly fresh.",
-                    2 => "localStorage unavailable (host build?).",
-                    else => "Unknown status.",
-                };
-                const copy_n: usize = @min(msg.len, s.clear_status_buf.len);
-                @memcpy(s.clear_status_buf[0..copy_n], msg[0..copy_n]);
-                s.clear_status_len = copy_n;
+                z.removeValue(key);
+                s.clear_status = "Cleared. Restart to start truly fresh.";
 
                 s.ui_host.ctx.persistence_key = null;
                 u.dockBuilderRemoveNode(s.root);
@@ -126,8 +118,8 @@ fn update(f: *z.Frame, s: *State) void {
             }
         }
 
-        if (s.clear_status_len > 0) {
-            u.text("{s}", .{s.clear_status_buf[0..s.clear_status_len]});
+        if (s.clear_status.len > 0) {
+            u.text("{s}", .{s.clear_status});
         }
         u.separator();
 

@@ -220,6 +220,7 @@ pub const LintRule = enum {
     no_std_timer, // std.time.Timer does not exist in the pinned std
     debug_print, // no std.debug.print in code that ships as wasm
     float_from_int, // `@as(f32, @floatFromInt(x))` is `zm.float(x)`
+    prefer_splat, // `@as(Vec, @splat(x))` is `splat(x)`
     shader_safe, // a SHADER-SAFE file stays compilable for the GPU
     scope_balance, // every begin{X} in a function has its end{X}
     screaming_const, // value consts are snake_case, at every depth
@@ -282,6 +283,7 @@ const zimr_lint_rules = [_]LintRule{
     .no_std_timer,
     .debug_print,
     .float_from_int,
+    .prefer_splat,
     .shader_safe,
     .scope_balance,
     .screaming_const,
@@ -1944,6 +1946,34 @@ const shader_codegen = @import("src/shader_codegen.zig");
 
 const ShaderPipeline = shader_codegen.ShaderPipeline;
 
+const WgslCorpus = shader_codegen.WgslCorpus;
+
+/// What a run of the corpus tool (`tools/wgsl_corpus.zig`) does with tests/fixtures/wgsl_corpus.txt.
+const WgslCorpusMode = enum { check, refresh };
+
+/// The corpus tool over every graphics shader in `corpus`: holding them to tests/fixtures/wgsl_corpus.txt, or
+/// rewriting the fixture from them.
+fn addWgslCorpusRun(
+    b: *std.Build,
+    exe: *Compile,
+    corpus: *const WgslCorpus,
+    mode: WgslCorpusMode,
+) *Run {
+    const run: *Run = b.addRunArtifact(exe);
+    // The fixture and spv2wgsl's source are read from the tree, and a refresh writes the fixture back: paths
+    // relative to the build root that the build does not track as inputs, so the run always runs.
+    run.setCwd(b.path("."));
+    run.has_side_effects = true;
+    if (mode == .refresh) {
+        run.addArg("--refresh");
+    }
+    run.addDirectoryArg(corpus.files.getDirectory());
+    run.addArg("tests/fixtures/wgsl_corpus.txt");
+    // spv2wgsl's source, which says which spv2wgsl wrote the pinned outputs.
+    run.addArgs(&.{ "src/spv2wgsl.zig", "tools/spv2wgsl.zig" });
+    return run;
+}
+
 /// The numerics modules - kompute, zimrnum and zimrrl - for one target. A module carries its target, and a compilation
 /// may analyse only one module rooted at a given file, so every native target needs its own three: the web's
 /// `kompute_mod` declares the web's target, and a native compilation that analysed it beside its own `kompute` is
@@ -2006,6 +2036,13 @@ const HostTestKernel = struct {
 /// check's subject), and zimrnum's four kernel files (the zimrnum sweep).
 const host_test_kernels = [_]HostTestKernel{
     .{ .import_name = "double_it", .source = "examples/compute_smoke/double_it.zig", .entry = "double" },
+    .{
+        .import_name = "constant_index",
+        .source = "examples/compute_smoke/constant_index.zig",
+        .entry = "writeConstantElements",
+    },
+    .{ .import_name = "zn_train", .source = "src/gpu/zn_train.zig", .entry = "fwd_hidden" },
+    .{ .import_name = "zn_mlp", .source = "src/gpu/zn_mlp.zig", .entry = "dense_fwd" },
     .{ .import_name = "sort_min", .source = "examples/sort_smoke/sort_min.zig", .entry = "clearGrid" },
     .{
         .import_name = "zn_binary",
@@ -2090,6 +2127,61 @@ fn addVulkanHostTest(
     return b.addExecutable(.{ .name = "vk_host_test", .root_module = test_mod });
 }
 
+/// The headless trainer (`tools/geno_trainer.zig`) built for `target`: the engine on the native host, `zn_mlp`'s
+/// kernels as their SPIR-V and their CPU module, the baked dance, and the command-line reader. ReleaseFast: it runs
+/// for hours. Built for the build machine it trains on that machine's Vulkan driver; built for Windows, on a Windows
+/// machine's GPU.
+fn addGenoTrainer(
+    b: *std.Build,
+    target: ResolvedTarget,
+    inputs: VulkanHostTestInputs,
+    cli_mod: *Module,
+) *Compile {
+    const native_options: *Options = b.addOptions();
+    native_options.addOption(bool, "assert_log", inputs.assert_log);
+    native_options.addOption(bool, "profile_enabled", inputs.profile_enabled);
+    native_options.addOption(bool, "ui_backend_wgpu", true);
+    native_options.addOption([]const u8, "host", "native");
+    const numerics: NumericsModules = addNumericsModules(b, null, null, inputs.zimrmath_mod);
+    const links_libc: bool = target.result.os.tag != .windows;
+    const optimize: std.builtin.OptimizeMode = .ReleaseFast;
+    const engine_mod: *Module = b.createModule(.{
+        .root_source_file = b.path("src/zimr.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = links_libc,
+    });
+    engine_mod.addImport("shader_interface", inputs.shader_interface_mod);
+    engine_mod.addImport("zm", inputs.zimrmath_mod);
+    engine_mod.addImport("zn", numerics.zimrnum);
+    engine_mod.addImport("zrl", numerics.zimrrl);
+    engine_mod.addOptions("build_options", native_options);
+    const trainer_mod: *Module = b.createModule(.{
+        .root_source_file = b.path("tools/geno_trainer.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = links_libc,
+    });
+    trainer_mod.addImport("zimr", engine_mod);
+    trainer_mod.addImport("zm", inputs.zimrmath_mod);
+    trainer_mod.addImport("cli", cli_mod);
+    const dance_clip: LazyPath = b.path("examples/geno_ppo/dance.zclip");
+    trainer_mod.addAnonymousImport("geno_dance_zclip", .{ .root_source_file = dance_clip });
+    const kernel_source: LazyPath = b.path("src/gpu/zn_mlp.zig");
+    const kernel_output: ShaderPipeline.ComputeOutput = inputs.shader_pipeline.addComputeOutput(
+        kernel_source,
+        "dense_fwd",
+        false,
+        false,
+    );
+    trainer_mod.addAnonymousImport("zn_mlp_spv", .{ .root_source_file = kernel_output.spv });
+    const kernel_mod: *Module = b.createModule(.{ .root_source_file = kernel_source });
+    kernel_mod.addImport("kompute", numerics.kompute);
+    kernel_mod.addImport("zm", inputs.zimrmath_mod);
+    trainer_mod.addImport("zn_mlp", kernel_mod);
+    return b.addExecutable(.{ .name = "geno_trainer", .root_module = trainer_mod });
+}
+
 fn addNativeWgslCheck(b: *std.Build, check_exe: *Compile, program: *Compile) *Step.Run {
     const check: *Step.Run = b.addRunArtifact(check_exe);
     check.addFileArg(program.getEmittedBin());
@@ -2106,6 +2198,8 @@ const WindowsPending = struct {
 /// the reason. Each reason names what is missing; the platforms plan has the step that writes it.
 const windows_pending = [_]WindowsPending{
     .{ .name = "net_rtc_smoke", .reason = "WebRTC exists only in the browser" },
+    // The last example with hand-written WGSL (the Vulkan plan's list of eight): the native host runs SPIR-V only.
+    .{ .name = "pipeline_sampler", .reason = "its two shaders are WGSL written by hand, not yet Zig shaders" },
 };
 
 /// The reason `name` has no native build yet, or null when it has one.
@@ -2268,6 +2362,26 @@ fn nativeAppExe(
     return b.addExecutable(.{ .name = name, .root_module = runner_mod });
 }
 
+/// `nativeAppExe`'s program compiled as an object and not linked (`platforms-check`): every line of the engine and the
+/// app compiled for the context's target, without the system's libraries a link would need.
+fn nativeAppObject(
+    ctx: AppContext,
+    app_mod: *Module,
+    name: []const u8,
+) *Compile {
+    const b: *std.Build = ctx.b;
+    const runner_mod: *Module = b.createModule(.{
+        .root_source_file = b.path("src/wgpu_runner.zig"),
+        .target = ctx.target,
+        .optimize = ctx.optimize,
+    });
+    runner_mod.addImport("zimr", ctx.zimr_mod);
+    runner_mod.addImport("zm", ctx.zimrmath_mod);
+    runner_mod.addImport("shader_interface", ctx.shader_interface_mod);
+    runner_mod.addImport("user_app", app_mod);
+    return b.addObject(.{ .name = name, .root_module = runner_mod });
+}
+
 /// The launcher's roster names each flagship in its own source, as an `@import("ex_<name>")`, and the build's list
 /// wires those imports: the two must name the same flagships. A name the build lacks leaves an import unwired; a name
 /// the launcher lacks wires a module nothing uses and makes the flagship sweep one step too long. Read at configure
@@ -2346,8 +2460,32 @@ fn addHeadlessRun(
     ctx: AppContext,
     app: App,
     script_path: ?[]const u8,
-) void {
-    _ = addHeadlessRunOf(b, ctx, ctx.buildAppModule(app), app.name, app.own_frame, script_path);
+) *Compile {
+    return addHeadlessRunOf(b, ctx, ctx.buildAppModule(app), app.name, app.own_frame, script_path);
+}
+
+/// How wide a gallery screenshot is saved (`gallery-shots`), its height in proportion: a thumbnail the native
+/// gallery shows beside the example's description.
+const gallery_shot_width: u32 = 320;
+
+/// The `gallery-shots` run of one example: its headless program run from the build root with a script on its
+/// standard input - two seconds of frames, a thumbnail saved as zig-out/gallery_shots/<name>.png, the end - and the
+/// audio start screen skipped (`ZIMR_SKIP_START_SCREEN`), so that the picture is the example's own.
+fn addGalleryShot(b: *std.Build, exe: *Compile, name: []const u8) *Run {
+    const run: *Run = b.addRunArtifact(exe);
+    run.has_side_effects = true;
+    run.setCwd(b.path("."));
+    run.setEnvironmentVariable("ZIMR_SKIP_START_SCREEN", "1");
+    // The script on the standard input: `-` says so.
+    run.setEnvironmentVariable("ZIMR_SCRIPT", "-");
+    run.setEnvironmentVariable("ZIMR_CAPTURE_DIR", b.fmt("zig-out/headless/{s}", .{name}));
+    const thumbnail_line: []const u8 = b.fmt(
+        ".{{ .capture_thumbnail = .{{ .path = \"zig-out/gallery_shots/{s}.png\", .width = {d} }} }}\n",
+        .{ name, gallery_shot_width },
+    );
+    const script: []const u8 = b.fmt(".{{ .advance = 120 }}\n{s}.quit\n", .{thumbnail_line});
+    run.setStdIn(.{ .bytes = script });
+    return run;
 }
 
 /// A program for the native Windows host (`nativeAppExe`), installed as `zig-out/windows/<name>.exe` once it has passed
@@ -2398,6 +2536,27 @@ fn appNamed(apps: []const App, name: []const u8) App {
 /// registration is `ctx.addApp(.{ .name = ..., .title = ... })` rather than an
 /// 11-argument call. (A later step promotes this and `addApp` into the public
 /// `shader_codegen` surface so external programs build zimr apps the same way.)
+/// A system `platforms-check` compiles the engine for, with no platform of its own yet (`platform/unwritten.zig`): its
+/// name and its target.
+const PlatformCheckTarget = struct {
+    name: []const u8,
+    triple: []const u8,
+};
+
+/// The systems `platforms-check` compiles the launcher for beyond the web and Windows: Linux, macOS and Android.
+const platform_check_targets = [_]PlatformCheckTarget{
+    .{ .name = "linux", .triple = "x86_64-linux-gnu" },
+    .{ .name = "macos", .triple = "aarch64-macos" },
+    .{ .name = "android", .triple = "aarch64-linux-android" },
+};
+
+/// The engine built for one of `platform_check_targets`: its target, its zimr module, its numerics modules.
+const PlatformCheckEngine = struct {
+    target: ResolvedTarget,
+    zimr_mod: *Module,
+    numerics: NumericsModules,
+};
+
 pub const AppContext = struct {
     b: *std.Build,
     wgpu_smoke_install: *Step,
@@ -2682,6 +2841,52 @@ pub fn bakeMesh(
     bake_run.addArg(ctx.b.fmt("{d}", .{grid}));
     bake_run.addArg(ctx.b.fmt("{d}", .{base}));
     mod.addAnonymousImport(import_name, .{ .root_source_file = baked_path });
+}
+
+/// Every kernel of `src/gpu/zn_mlp.zig`: the pages that build their pipeline table from the module's whole kernel
+/// list (geno_ppo, geno_lab) register them all, SAC's and SuperTrack's included.
+const zn_mlp_entries = [_][]const u8{
+    "dense_fwd",
+    "act_bwd",
+    "dense_bwd_x",
+    "dense_bwd_w",
+    "mse_bwd",
+    "mse_value",
+    "adam",
+    "ppo_mean_grad",
+    "ppo_logstd_grad",
+    "squash_fwd",
+    "squash_logp",
+    "sac_target",
+    "min_route",
+    "squash_bwd",
+    "squash_logstd_grad",
+    "alpha_grad",
+    "polyak",
+    "cp_wm_input",
+    "cp_wm_input_bwd",
+    "cp_force",
+    "cp_force_bwd",
+    "cp_step",
+    "cp_step_bwd",
+    "cp_track_bwd",
+    "add_block",
+    "lat_advance",
+    "lat_take",
+    "lat_gather",
+    "lat_act",
+    "lat_act_bwd",
+    "st_policy_fwd",
+    "st_policy_bwd",
+    "st_world_fwd",
+    "st_world_bwd",
+    "st_reduce",
+};
+
+/// geno_lab: the training lab. Embeds the dance clip the training page trains on (`examples/geno_ppo/dance.zclip`),
+/// the one file both read.
+fn configureGenoLab(ctx: AppContext, mod: *Module) void {
+    mod.addAnonymousImport("geno_dance_zclip", .{ .root_source_file = ctx.b.path("examples/geno_ppo/dance.zclip") });
 }
 
 /// geno_dance: the skinned-character viewer. Embeds the engine WGSL so its shadow and
@@ -3614,6 +3819,40 @@ fn wireHostTestImports(
     test_mod.addOptions("build_options", wiring.build_opts);
 }
 
+/// `zig build vorbis-reference`: the engine's Vorbis decoder against stb_vorbis, decoding the same file, compared frame
+/// by frame (`tools/vorbis_reference/vorbis_reference.zig`). stb_vorbis.c - public domain, Sean Barrett's - is built
+/// with zig's C compiler into this test alone: a reference for the decoder's tests, never part of the engine. The
+/// engine's codecs come in as a module of their own, with the math and zimrnum they import.
+fn addVorbisReferenceStep(
+    b: *std.Build,
+    native_target: std.Build.ResolvedTarget,
+    zimrmath_mod: *std.Build.Module,
+    zimrnum_mod: *std.Build.Module,
+) void {
+    const codecs_mod: *std.Build.Module = b.createModule(.{
+        .root_source_file = b.path("src/codecs.zig"),
+        .target = native_target,
+        .optimize = .ReleaseSafe,
+    });
+    codecs_mod.addImport("zm", zimrmath_mod);
+    codecs_mod.addImport("zn", zimrnum_mod);
+    const reference_mod: *std.Build.Module = b.createModule(.{
+        .root_source_file = b.path("tools/vorbis_reference/vorbis_reference.zig"),
+        .target = native_target,
+        .optimize = .ReleaseSafe,
+        .link_libc = true,
+    });
+    reference_mod.addImport("codecs", codecs_mod);
+    reference_mod.addCSourceFile(.{
+        .file = b.path("tools/vorbis_reference/stb_vorbis.c"),
+        .flags = &.{ "-O2", "-DSTB_VORBIS_NO_STDIO", "-DSTB_VORBIS_NO_PUSHDATA_API" },
+    });
+    const reference_test: *std.Build.Step.Compile = b.addTest(.{ .root_module = reference_mod });
+    const reference_run: *std.Build.Step.Run = b.addRunArtifact(reference_test);
+    const step: *std.Build.Step = b.step("vorbis-reference", "The Vorbis decoder against stb_vorbis, frame by frame");
+    step.dependOn(&reference_run.step);
+}
+
 pub fn build(b: *std.Build) void {
     // Pre-flight: bail out if the local .zig-cache has bloated past
     // the soft cap.  The cache is content-addressed and Zig never
@@ -3984,6 +4223,35 @@ pub fn build(b: *std.Build) void {
     zimr_headless_mod.addImport("zn", headless_numerics.zimrnum);
     zimr_headless_mod.addImport("zrl", headless_numerics.zimrrl);
     zimr_headless_mod.addOptions("build_options", build_opts_headless);
+
+    // ---- The engine for the systems the unwritten platform stands for (platforms_plan.md B9): Linux, macOS and
+    // Android, each the Windows module's twin for its own target, with `host = "native"` - built by `platforms-check`
+    // alone, which compiles the launcher for them, so that code compiling only for Windows or the browser is found the
+    // day it is written. Each opens the Vulkan loader with the C library's `dlopen`, so it links libc.
+    var platform_check_engines: [platform_check_targets.len]PlatformCheckEngine = undefined;
+    for (platform_check_targets, &platform_check_engines) |check_target, *check_engine| {
+        const check_resolved: ResolvedTarget = b.resolveTargetQuery(std.Target.Query.parse(.{
+            .arch_os_abi = check_target.triple,
+        }) catch unreachable); // lint:off catch-suppression: hardcoded-valid triples
+        const check_options: *Options = b.addOptions();
+        check_options.addOption(bool, "assert_log", assert_log);
+        check_options.addOption(bool, "profile_enabled", profile_enabled);
+        check_options.addOption(bool, "ui_backend_wgpu", true);
+        check_options.addOption([]const u8, "host", "native");
+        const check_numerics: NumericsModules = addNumericsModules(b, check_resolved, native_optimize, zimrmath_mod);
+        const check_zimr_mod: *Module = b.createModule(.{
+            .root_source_file = b.path("src/zimr.zig"),
+            .target = check_resolved,
+            .optimize = native_optimize,
+            .link_libc = true,
+        });
+        check_zimr_mod.addImport("shader_interface", shader_interface_mod);
+        check_zimr_mod.addImport("zm", zimrmath_mod);
+        check_zimr_mod.addImport("zn", check_numerics.zimrnum);
+        check_zimr_mod.addImport("zrl", check_numerics.zimrrl);
+        check_zimr_mod.addOptions("build_options", check_options);
+        check_engine.* = .{ .target = check_resolved, .zimr_mod = check_zimr_mod, .numerics = check_numerics };
+    }
 
     // zimrmath.zig's assert family reads `build_options.assert_log` on its
     // host (CPU) branch. `@import("build_options")` inside zimrmath.zig
@@ -4447,6 +4715,13 @@ pub fn build(b: *std.Build) void {
     );
     // Pure-Zig shader tools as real artifact edges (no sub-build, no C++).
     shader_pipeline.spv2wgsl_exe = spv2wgsl_tool_exe;
+    // Every graphics shader the pipeline translates, collected as it is added, for the `corpus` step. Only zimr's
+    // own build checks the corpus, so a project depending on zimr collects nothing.
+    const wgsl_corpus: *WgslCorpus = b.allocator.create(WgslCorpus) catch @panic("OOM");
+    wgsl_corpus.* = WgslCorpus.init(b);
+    if (b.pkg_hash.len == 0) {
+        shader_pipeline.wgsl_corpus = wgsl_corpus;
+    }
 
     const zls_shader_paths: [][]const u8 = collectShaderFiles(b) catch &.{};
     for (zls_shader_paths) |path| {
@@ -4550,6 +4825,9 @@ pub fn build(b: *std.Build) void {
             zimr_mod.addAnonymousImport(wgsl_import_name, .{ .root_source_file = wgsl_path });
             zimr_windows_mod.addAnonymousImport(wgsl_import_name, .{ .root_source_file = out.spv });
             zimr_headless_mod.addAnonymousImport(wgsl_import_name, .{ .root_source_file = out.spv });
+            for (&platform_check_engines) |*check_engine| {
+                check_engine.zimr_mod.addAnonymousImport(wgsl_import_name, .{ .root_source_file = out.spv });
+            }
             engine_spirv.append(b.allocator, .{ .name = sh_name, .spirv = out.spv }) catch @panic("OOM");
             captured_wgsl_path = wgsl_path;
             captured_wgsl_name = wgsl_import_name;
@@ -4581,6 +4859,9 @@ pub fn build(b: *std.Build) void {
             zimr_native_mod.addImport(b.fmt("{s}_externs", .{sh_name}), externs_mod);
             zimr_windows_mod.addImport(b.fmt("{s}_externs", .{sh_name}), externs_mod);
             zimr_headless_mod.addImport(b.fmt("{s}_externs", .{sh_name}), externs_mod);
+            for (&platform_check_engines) |*check_engine| {
+                check_engine.zimr_mod.addImport(b.fmt("{s}_externs", .{sh_name}), externs_mod);
+            }
         }
         engine_shaders.append(b.allocator, .{
             .path = glsl_gravestone,
@@ -4769,6 +5050,30 @@ pub fn build(b: *std.Build) void {
             "Build zig-out/windows/vk_host_test.exe, the Vulkan host test, to run on a Windows machine's GPU",
         );
         windows_host_test_step.dependOn(&windows_host_test_install.step);
+
+        // ---- geno-trainer: DReCon trained by PPO on Geno, headless, in a run folder (`tools/geno_trainer.zig`):
+        // installed beside the headless programs for the build machine, and beside the Windows programs for Windows.
+        //     zig build geno-trainer        then        zig-out/headless/bin/geno_trainer --run=runs/night1
+        const trainer_exe: *Compile = addGenoTrainer(b, b.graph.host, host_test_inputs, cli_mod);
+        const trainer_install: *InstallArtifact = b.addInstallArtifact(trainer_exe, .{
+            .dest_dir = .{ .override = .{ .custom = "headless/bin" } },
+        });
+        const trainer_step: *Step = b.step(
+            "geno-trainer",
+            "Build zig-out/headless/bin/geno_trainer, the headless trainer of a run folder",
+        );
+        trainer_step.dependOn(&trainer_install.step);
+        const windows_trainer_exe: *Compile = addGenoTrainer(b, windows_target, host_test_inputs, cli_mod);
+        const windows_trainer_install: *InstallArtifact = installWindowsProgram(
+            b,
+            windows_trainer_exe,
+            pdb_void_workaround_exe,
+        );
+        const windows_trainer_step: *Step = b.step(
+            "geno-trainer-windows",
+            "Build zig-out/windows/geno_trainer.exe, the headless trainer, for a Windows machine's GPU",
+        );
+        windows_trainer_step.dependOn(&windows_trainer_install.step);
     }
 
     // ---- The example build context, shared with projects that depend on zimr.
@@ -5012,6 +5317,8 @@ pub fn build(b: *std.Build) void {
         .{ .source = b.path("src/notes/tutorials/robot-mocap-tutorial.html"), .name = "robot-mocap-tutorial.html" },
         // Graphics backends: how one engine reaches WebGPU, Vulkan and Metal.
         .{ .source = b.path("src/notes/tutorials/backends-tutorial.html"), .name = "backends-tutorial.html" },
+        // Sound: samples, the mixer, its two sides, each platform's output, latency, instruments.
+        .{ .source = b.path("src/notes/tutorials/sound_tutorial.html"), .name = "sound_tutorial.html" },
         // The per-file atlas, generated as HTML by `zig build files-html`.
         .{ .source = b.path("src/notes/files.html"), .name = "files.html" },
     };
@@ -5339,6 +5646,8 @@ pub fn build(b: *std.Build) void {
         .{ .name = "input_gamepad", .title = "zimr - gamepads" },
         .{ .name = "audio_mixer", .title = "zimr - the mixer" },
         .{ .name = "audio_keyboard", .title = "zimr - keyboard" },
+        .{ .name = "audio_scale_star", .title = "zimr - the major scale in thirds" },
+        .{ .name = "audio_scale_star_hands", .title = "zimr - the scale star, two hands" },
         .{ .name = "ui_shortcuts", .title = "zimr - ui shortcuts (B2 capstone)" },
         .{ .name = "ui_mouse_drag", .title = "zimr - ui mouse drag (B1 capstone)" },
         .{ .name = "ui_custom_rendering", .title = "zimr - UI custom rendering" },
@@ -6104,47 +6413,23 @@ pub fn build(b: *std.Build) void {
                 .{
                     .basename = "zn_mlp",
                     .source_path = "src/gpu/zn_mlp.zig",
-                    .entries = &.{
-                        "dense_fwd",
-                        "act_bwd",
-                        "dense_bwd_x",
-                        "dense_bwd_w",
-                        "mse_bwd",
-                        "mse_value",
-                        "adam",
-                        "ppo_mean_grad",
-                        "ppo_logstd_grad",
-                        // The page's pipeline table is built from the module's whole kernel
-                        // list, so every kernel is registered, SAC's included.
-                        "squash_fwd",
-                        "squash_logp",
-                        "sac_target",
-                        "min_route",
-                        "squash_bwd",
-                        "squash_logstd_grad",
-                        "alpha_grad",
-                        "polyak",
-                        "cp_wm_input",
-                        "cp_wm_input_bwd",
-                        "cp_force",
-                        "cp_force_bwd",
-                        "cp_step",
-                        "cp_step_bwd",
-                        "cp_track_bwd",
-                        "add_block",
-                        "lat_advance",
-                        "lat_take",
-                        "lat_gather",
-                        "lat_act",
-                        "lat_act_bwd",
-                        "st_policy_fwd",
-                        "st_policy_bwd",
-                        "st_world_fwd",
-                        "st_world_bwd",
-                        "st_reduce",
-                    },
+                    .entries = &zn_mlp_entries,
                 },
             },
+        },
+        .{
+            // The training lab: a run folder's network shown on Geno (examples/geno_lab). The same kernels as
+            // geno_ppo's, and its dance clip.
+            .name = "geno_lab",
+            .title = "zimr - the training lab",
+            .compute_kernels = &.{
+                .{
+                    .basename = "zn_mlp",
+                    .source_path = "src/gpu/zn_mlp.zig",
+                    .entries = &zn_mlp_entries,
+                },
+            },
+            .configure = configureGenoLab,
         },
         .{
             // The XOR network trained on the GPU and the CPU in lockstep, one step per frame. The
@@ -6438,11 +6723,78 @@ pub fn build(b: *std.Build) void {
     // zig-out/headless/bin/<name>, to run again directly. `-Dscript` names the script it runs (`native_input.Command`);
     // frames it captures without a path go to zig-out/headless/<name>/. Every example the native host runs.
     const script_path: ?[]const u8 = b.option([]const u8, "script", "Headless runs: the script to run");
+    // ---- `gallery-shots`: a thumbnail of every example, for the native gallery to show beside its description -
+    // each example's headless program run for two seconds and its frame saved shrunk (`addGalleryShot`), into
+    // zig-out/gallery_shots/, where the gallery looks, from beside its own executable, at ../gallery_shots/.
+    // `-Dshots=a,b,c` takes only those examples; the step builds every example's headless program otherwise.
+    const gallery_shots_step: *Step = b.step(
+        "gallery-shots",
+        "Save a thumbnail of every example for the native gallery (-Dshots=a,b,c for only those)",
+    );
+    const shot_names_option: ?[]const u8 = b.option([]const u8, "shots", "gallery-shots: only these examples");
     for (wgpu_apps) |wgpu_app| {
         if (windowsPendingReason(wgpu_app.name) != null) {
             continue;
         }
-        addHeadlessRun(b, headless_app_ctx, wgpu_app, script_path);
+        const headless_exe: *Compile = addHeadlessRun(b, headless_app_ctx, wgpu_app, script_path);
+        const is_shot: bool = if (shot_names_option) |shot_names| listed: {
+            var listed_names = std.mem.tokenizeScalar(u8, shot_names, ',');
+            while (listed_names.next()) |listed_name| {
+                if (eql(u8, listed_name, wgpu_app.name)) {
+                    break :listed true;
+                }
+            }
+            break :listed false;
+        } else true;
+        if (is_shot) {
+            gallery_shots_step.dependOn(&addGalleryShot(b, headless_exe, wgpu_app.name).step);
+        }
+    }
+
+    // ---- audio-scale-star-check: the scale star run headless with its script - the seven notes, then the seven
+    // chords - and the sound it saved checked against its expectations, window by window: the pitch classes that sound
+    // and the loudness (`tools/sound_capture_check.zig`). Installing the program first makes zig-out/headless/, where
+    // the script saves the sound. On the machine's Vulkan driver, as every headless run.
+    {
+        const scale_star_app: App = appNamed(&wgpu_apps, "audio_scale_star");
+        const scale_star_module: *Module = headless_app_ctx.buildAppModule(scale_star_app);
+        const scale_star_exe: *Compile = nativeAppExe(headless_app_ctx, scale_star_module, "audio_scale_star", false);
+        const scale_star_install: *Step.InstallArtifact = b.addInstallArtifact(scale_star_exe, .{
+            .dest_dir = .{ .override = .{ .custom = "headless/bin" } },
+        });
+        const run_scale_star: *Run = b.addRunArtifact(scale_star_exe);
+        run_scale_star.has_side_effects = true;
+        run_scale_star.setCwd(b.path("."));
+        run_scale_star.setEnvironmentVariable("ZIMR_SCRIPT", "examples/audio_scale_star/check.script");
+        run_scale_star.setEnvironmentVariable("ZIMR_CAPTURE_DIR", "zig-out/headless/audio_scale_star");
+        run_scale_star.step.dependOn(&scale_star_install.step);
+        const check_zm_module: *Module = b.createModule(.{
+            .root_source_file = b.path("src/zimrmath.zig"),
+            .target = host_target,
+            .optimize = .ReleaseSafe,
+        });
+        check_zm_module.addOptions("build_options", build_opts_zm);
+        const sound_check_exe: *Compile = b.addExecutable(.{
+            .name = "sound_capture_check",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("tools/sound_capture_check.zig"),
+                .target = host_target,
+                .optimize = .ReleaseSafe,
+            }),
+        });
+        sound_check_exe.root_module.addImport("cli", cli_mod);
+        sound_check_exe.root_module.addImport("zm", check_zm_module);
+        const run_sound_check: *Run = b.addRunArtifact(sound_check_exe);
+        run_sound_check.has_side_effects = true;
+        run_sound_check.setCwd(b.path("."));
+        run_sound_check.addArg("zig-out/headless/audio_scale_star_check.wav");
+        run_sound_check.addArg("examples/audio_scale_star/check.expect");
+        run_sound_check.step.dependOn(&run_scale_star.step);
+        const scale_star_check_step: *Step = b.step(
+            "audio-scale-star-check",
+            "Run the scale star headless with its script and check the sound it saved (tools/sound_capture_check.zig)",
+        );
+        scale_star_check_step.dependOn(&run_sound_check.step);
     }
 
     // ---- Every example for Windows, and the gallery that starts them: each its own executable, as the web serves
@@ -6482,6 +6834,14 @@ pub fn build(b: *std.Build) void {
             false,
         );
         windows_builds.put("zimr_gallery", gallery_install) catch @panic("oom");
+        // The gallery headless (`zimr-gallery-headless`): its list and panel drawn into a captured screen, for a
+        // script to look at.
+        const gallery_headless_mod: *Module = headless_app_ctx.buildUserModShared("zimr_gallery");
+        gallery_headless_mod.addOptions("gallery_options", gallery_options);
+        gallery_headless_mod.addAnonymousImport("examples_manifest", .{
+            .root_source_file = b.path("src/web/manifest.json"),
+        });
+        _ = addHeadlessRunOf(b, headless_app_ctx, gallery_headless_mod, "zimr_gallery", false, script_path);
     }
     // The launcher's examples, one name each; `examples/launcher` imports each as `ex_<name>`.
     const flagships = [_][]const u8{
@@ -6531,6 +6891,47 @@ pub fn build(b: *std.Build) void {
             false,
         );
         windows_builds.put("launcher", launcher_windows_install) catch @panic("oom");
+    }
+    // ---- `platforms-check` (platforms_plan.md B9): the launcher - every flagship in one program - compiled for every
+    // platform: the web's page and Windows' program, as their own steps build them, and for Linux, macOS and Android
+    // an object of the launcher's program on the unwritten platform (`platform/unwritten.zig`), compiled and not
+    // linked, so that no system's libraries are needed here. Code that compiles only for Windows or the browser fails
+    // here the day it is written. The web's page joins it below, once every web build is registered.
+    const platforms_check_step: *Step = b.step(
+        "platforms-check",
+        "Compile the launcher for the web, Windows, Linux, macOS and Android",
+    );
+    {
+        platforms_check_step.dependOn(&windows_builds.get("launcher").?.step);
+        for (platform_check_targets, &platform_check_engines) |check_target, *check_engine| {
+            const check_common_mod: *Module = b.createModule(.{
+                .root_source_file = b.path("examples/example_common/example_common.zig"),
+                .target = check_engine.target,
+                .optimize = native_optimize,
+            });
+            check_common_mod.addImport("zimr", check_engine.zimr_mod);
+            check_common_mod.addImport("zm", zimrmath_mod);
+            const check_shader_cache: *StringHashMap(ShaderDep) = b.allocator.create(StringHashMap(ShaderDep)) catch
+                @panic("oom");
+            check_shader_cache.* = StringHashMap(ShaderDep).init(b.allocator);
+            var check_ctx: AppContext = windows_app_ctx;
+            check_ctx.target = check_engine.target;
+            check_ctx.zimr_mod = check_engine.zimr_mod;
+            check_ctx.common_mod = check_common_mod;
+            check_ctx.kompute_mod = check_engine.numerics.kompute;
+            check_ctx.zimrnum_mod = check_engine.numerics.zimrnum;
+            check_ctx.zimrrl_mod = check_engine.numerics.zimrrl;
+            check_ctx.shader_cache = check_shader_cache;
+            check_ctx.pdb_void_workaround = null;
+            const check_launcher_mod: *Module = check_ctx.buildUserModShared("launcher");
+            inline for (flagships) |flagship_name| {
+                const flagship_mod: *Module = check_ctx.buildAppModule(appNamed(&wgpu_apps, flagship_name));
+                check_launcher_mod.addImport("ex_" ++ flagship_name, flagship_mod);
+            }
+            const check_name: []const u8 = b.fmt("launcher_{s}", .{check_target.name});
+            const check_object: *Compile = nativeAppObject(check_ctx, check_launcher_mod, check_name);
+            platforms_check_step.dependOn(&check_object.step);
+        }
     }
     // ---- The launcher headless (`launcher-headless`): every flagship in one program, so that one build sweeps them
     // all - a script switches from each to the next with the launcher's Page Down, and captures it.
@@ -6697,6 +7098,10 @@ pub fn build(b: *std.Build) void {
             // below finds the wasm installs only through some top-level step, and natively no app step reaches them.
             if (web_builds.get(name)) |web_build| {
                 web_examples_step.dependOn(web_build);
+                // The launcher's page: the web's part of `platforms-check`.
+                if (eql(u8, name, "launcher")) {
+                    platforms_check_step.dependOn(web_build);
+                }
             }
             const dash_name: []const u8 = std.mem.replaceOwned(u8, b.allocator, name, "_", "-") catch @panic("oom");
             const app_build: *Step = appBuildFor(b, platform, name, &web_builds, &windows_builds);
@@ -6928,6 +7333,7 @@ pub fn build(b: *std.Build) void {
         "src/notes/tutorials/robot-mocap-tutorial.html",
         "src/notes/tutorials/backends-tutorial.html",
         "src/notes/tutorials/gpu-compute-tutorial.html",
+        "src/notes/tutorials/sound_tutorial.html",
     };
     const doc_folds_step: *Step = b.step(
         "doc-folds",
@@ -6977,12 +7383,20 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseSmall,
     });
     audio_test_zm_mod.addOptions("build_options", build_opts_zm);
+    // zimrnum, for the mixer's analysis (`analyser`, its transform).
+    const audio_test_zn_mod: *Module = b.createModule(.{
+        .root_source_file = b.path("src/zimrnum.zig"),
+        .target = audio_test_target,
+        .optimize = .ReleaseSmall,
+    });
+    audio_test_zn_mod.addImport("zm", audio_test_zm_mod);
     const audio_test_mod: *Module = b.createModule(.{
         .root_source_file = b.path("src/audio_worklet_test_module.zig"),
         .target = audio_test_target,
         .optimize = .ReleaseSmall,
     });
     audio_test_mod.addImport("zm", audio_test_zm_mod);
+    audio_test_mod.addImport("zn", audio_test_zn_mod);
     const audio_test_exe: *Compile = b.addExecutable(.{
         .name = "audio_worklet_test_module",
         .root_module = audio_test_mod,
@@ -7009,63 +7423,31 @@ pub fn build(b: *std.Build) void {
     audio_page_test_run.addArtifactArg(audio_test_exe);
     audio_page_test_step.dependOn(&audio_page_test_run.step);
 
-    // SPIR-V -> WGSL transpiler wasm exposed for the corpus test.
-    // Standalone wasm that JS can call repeatedly with different
-    // SPIR-V inputs.  Used by `webtests/transpiler_corpus.zig` to
-    // run the transpiler against every .rewritten.spv in the build cache
-    // and report per-shader stats.
-    const transpiler_wasm_mod: *Module = b.createModule(.{
-        .root_source_file = b.path("src/spv2wgsl_wasm.zig"),
-        .target = wasm_target,
-        .optimize = wasm_optimize,
-        .link_libc = false,
+    // ---- corpus: spv2wgsl's regression corpus (tools/wgsl_corpus.zig) ----
+    // Every graphics shader the pipeline translated (`wgsl_corpus`, filled as each one is added), held to
+    // tests/fixtures/wgsl_corpus.txt: no unresolved ids; the interface each shows the host - entry point, inputs,
+    // outputs, bindings - which is the same whichever Zig compiled it; and the WGSL spv2wgsl writes for SPIR-V it
+    // has been given before. What it checks is what this build compiles, named by source file, never what an older
+    // build left in the cache - so the step builds every shader first, and runs the tool's own tests first too.
+    // `corpus-refresh` rewrites the fixture from this build.
+    const wgsl_corpus_exe: *Compile = b.addExecutable(.{
+        .name = "wgsl_corpus",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/wgsl_corpus.zig"),
+            .target = host_target,
+            .optimize = .Debug,
+        }),
     });
-    const transpiler_wasm_exe: *Compile = b.addExecutable(.{
-        .name = "spv2wgsl",
-        .root_module = transpiler_wasm_mod,
-    });
-    transpiler_wasm_exe.wasi_exec_model = .reactor;
-    transpiler_wasm_exe.entry = .disabled;
-    transpiler_wasm_exe.rdynamic = true;
-    const transpiler_wasm_install: *InstallArtifact = b.addInstallArtifact(transpiler_wasm_exe, .{
-        .dest_dir = .{ .override = wgpu_install },
-    });
-
-    // The corpus test step: build the transpiler wasm, then run the test
-    // LOGIC against every .rewritten.spv in .zig-cache/. Default mode: check
-    // against the locked fixture at `tests/fixtures/wgsl_corpus.json` and
-    // fail on any drift. See `src/notes/webgpu-migration-plan.md` section 3
-    // Phase A3 for the regression-corpus design.
-    //
-    // DOGFOODED (Phase 5c): the test logic is webtests/transpiler_corpus.zig,
-    // compiled to wasm32 and transpiled to JS by our OWN c2js, run under Node
-    // via webtests/runner.mjs (the only hand-written JS in the path; it does
-    // WebAssembly.instantiate + fs + the host primitives the logic drives -
-    // listFiles/md5File/fileSize/sutMemWrite/sutMemRead/sutCallPacked/writeFile).
-    // The Zig logic does the MD5 of the WGSL itself (std.crypto.hash.Md5) and
-    // the placeholder scan; output is byte-identical to the old .ts, now deleted.
-    const corpus_logic_to_c: *Run = b.addSystemCommand(&.{
-        b.graph.zig_exe,       "build-obj",
-        "-ofmt=c",             "-target",
-        "wasm32-freestanding", "-OReleaseSmall",
-    });
-    corpus_logic_to_c.addFileArg(b.path("webtests/transpiler_corpus.zig"));
-    const corpus_logic_c: LazyPath = corpus_logic_to_c.addPrefixedOutputFileArg(
-        "-femit-bin=",
-        "transpiler_corpus.c",
-    );
-    const corpus_logic_to_js: *Run = b.addRunArtifact(c2js_exe);
-    corpus_logic_to_js.setStdIn(.{ .lazy_path = corpus_logic_c });
-    const corpus_logic_js: LazyPath = corpus_logic_to_js.captureStdOut(.{});
-
-    const transpiler_corpus_step: *Step = b.step(
+    wgsl_corpus_exe.root_module.addImport("cli", cli_mod);
+    const wgsl_corpus_tests: *Compile = b.addTest(.{ .root_module = wgsl_corpus_exe.root_module });
+    const wgsl_corpus_tests_run: *Run = b.addRunArtifact(wgsl_corpus_tests);
+    const wgsl_corpus_cmd: *Run = addWgslCorpusRun(b, wgsl_corpus_exe, wgsl_corpus, .check);
+    wgsl_corpus_cmd.step.dependOn(&wgsl_corpus_tests_run.step);
+    const corpus_step: *Step = b.step(
         "corpus",
-        "Run spv2wgsl against every .spv in .zig-cache and check fixture",
+        "Hold every graphics shader's WGSL to tests/fixtures/wgsl_corpus.txt",
     );
-    const transpiler_corpus_cmd: *Run = b.addSystemCommand(&.{ "node", "webtests/runner.mjs" });
-    transpiler_corpus_cmd.addFileArg(corpus_logic_js);
-    transpiler_corpus_cmd.step.dependOn(&transpiler_wasm_install.step);
-    transpiler_corpus_step.dependOn(&transpiler_corpus_cmd.step);
+    corpus_step.dependOn(&wgsl_corpus_cmd.step);
 
     // ---- c2js-diff: the transpiler's differential regression gate -----
     // The original webzig transpiler shipped a 100-case differential
@@ -7120,20 +7502,16 @@ pub fn build(b: *std.Build) void {
     const c2js_unit_run: *Run = b.addRunArtifact(c2js_unit_tests);
     c2js_diff_step.dependOn(&c2js_unit_run.step);
 
-    // Refresh the fixture from the current transpiler output.  Run
-    // after a deliberate transpiler change (e.g. a new opcode handler
-    // or output reformatting); commit the resulting JSON in the same
-    // patch as the change.  Without this step, `wgpu-corpus` would
-    // permanently fail on legitimate transpiler improvements.
-    const transpiler_corpus_refresh_step: *Step = b.step(
+    // Pin this build's shaders in the corpus fixture: after a deliberate change to a shader's interface or to
+    // spv2wgsl's output, and on each machine (each compiler) whose WGSL should be compared. Commit the fixture with
+    // the change that moved it.
+    const wgsl_corpus_refresh_cmd: *Run = addWgslCorpusRun(b, wgsl_corpus_exe, wgsl_corpus, .refresh);
+    wgsl_corpus_refresh_cmd.step.dependOn(&wgsl_corpus_tests_run.step);
+    const corpus_refresh_step: *Step = b.step(
         "corpus-refresh",
-        "Refresh tests/fixtures/wgsl_corpus.json from the current spv2wgsl output",
+        "Pin every graphics shader's interface and WGSL in tests/fixtures/wgsl_corpus.txt",
     );
-    const transpiler_corpus_refresh_cmd: *Run = b.addSystemCommand(&.{ "node", "webtests/runner.mjs" });
-    transpiler_corpus_refresh_cmd.addFileArg(corpus_logic_js);
-    transpiler_corpus_refresh_cmd.addArgs(&.{"--refresh-fixture"});
-    transpiler_corpus_refresh_cmd.step.dependOn(&transpiler_wasm_install.step);
-    transpiler_corpus_refresh_step.dependOn(&transpiler_corpus_refresh_cmd.step);
+    corpus_refresh_step.dependOn(&wgsl_corpus_refresh_cmd.step);
 
     // native_target - used by both wgpu-diff (below) and the
     // per-file test loop later.  Declared here at first use; the
@@ -7425,7 +7803,7 @@ pub fn build(b: *std.Build) void {
     tier_a_check_step.dependOn(test_step);
     tier_a_check_step.dependOn(&smoke_cmd.step);
     tier_a_check_step.dependOn(&wgpu_smoke_cmd.step);
-    tier_a_check_step.dependOn(&transpiler_corpus_cmd.step);
+    tier_a_check_step.dependOn(&wgsl_corpus_cmd.step);
 
     // ---- wgpu-check: the minimal wgpu-migration audit gate. ----------
     // Runs the test surface that matters for changes touching
@@ -7440,7 +7818,7 @@ pub fn build(b: *std.Build) void {
     //     here for convenience.  Wired further below where the fixture
     //     step itself is constructed (declaration ordering - both
     //     sides of the dependency can't be near each other).
-    //   - The corpus regression check (51 shaders).
+    //   - The spv2wgsl corpus: every graphics shader held to tests/fixtures/wgsl_corpus.txt.
     //   - The wgpu_bringup build + Node smoke (no real GPU needed).
     //
     // See `src/notes/webgpu-migration-plan.md` for the migration plan.
@@ -7449,7 +7827,7 @@ pub fn build(b: *std.Build) void {
         "check",
         "Run the minimal wgpu-migration audit (fixture + corpus + wgpu_bringup smoke).",
     );
-    wgpu_check.dependOn(&transpiler_corpus_cmd.step);
+    wgpu_check.dependOn(&wgsl_corpus_cmd.step);
     wgpu_check.dependOn(&wgpu_smoke_cmd.step);
     // The checked-in VS Code and Zed configs cover every web app, and Zed's every Windows app (`editor-configs`
     // writes them).
@@ -7543,7 +7921,7 @@ pub fn build(b: *std.Build) void {
     wgpu_check.dependOn(&doc_gate_run.step);
     // Binding/structural WGSL tripwire: run the validator over every shader in
     // the corpus. Depends on wgpu_smoke_cmd so the shaders are compiled into
-    // .zig-cache first (the tool walks the cache, like transpiler_corpus does).
+    // .zig-cache first (the tool walks the cache).
     // Fails the build on any duplicate @group@binding - the collision Dawn
     // rejects on-device that the mock smoke test can't see.
     const spv_bind_check_run: *Run = b.addRunArtifact(spv2wgsl_check_exe);
@@ -7790,6 +8168,13 @@ pub fn build(b: *std.Build) void {
             // `sound.zig` - the mixer, its renderer, the instrument and the worklet's entry points. Its closure is
             // shader-free; `zig build test-sound` runs it alone, in seconds.
             "src/sound.zig",
+            // `native_os.zig` - the native host's operating-system services: files by path, child programs, saved
+            // values. Built here without the C library, so its two tests that need it (the environment, the Vulkan
+            // loader) skip; the others need only `std.Io` and the system's own calls.
+            "src/native_os.zig",
+            // `codecs.zig` - the image and audio codecs: PNG, GIF, WAV, Ogg Vorbis. Every root here imports it already;
+            // `zig build test-codecs` runs its own tests alone.
+            "src/codecs.zig",
             "src/robot.zig",
             "src/robot_physics.zig",
             "src/robot_control.zig",
@@ -7965,6 +8350,8 @@ pub fn build(b: *std.Build) void {
                 one_step.dependOn(&fast_run.step);
             }
         }
+
+        addVorbisReferenceStep(b, native_target, zimrmath_mod, zimrnum_mod);
 
         const t: *Compile = b.addTest(.{ .root_module = test_mod });
         if (test_filter) |f| {
@@ -8724,6 +9111,13 @@ pub fn build(b: *std.Build) void {
     gate_step.dependOn(audio_worklet_test_step);
     // The page's side of it, against a stand-in browser as strict as Chrome.
     gate_step.dependOn(audio_page_test_step);
+    // c2js, which turns the page's own code - the bridge, page audio, the worklet's program - into JavaScript, against
+    // its corpus: every case agrees with the same Zig compiled natively. A change in the C that Zig emits can break the
+    // transpiler in forms the page's own tests never meet; the corpus holds those forms. About 100 s.
+    gate_step.dependOn(c2js_diff_step);
+    // The launcher compiled for every platform: the web, Windows, and as objects for Linux, macOS and Android on the
+    // unwritten platform - so that code compiling only for one system fails on the day it is written.
+    gate_step.dependOn(platforms_check_step);
     // The two projects that depend on this checkout the way a user's does. Neither is in
     // `check` (about a minute cold, too slow for the turn loop), and a consumer build no
     // aggregate step ran is how zimr_template drifted.

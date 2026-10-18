@@ -4782,6 +4782,9 @@ pub fn importWeights(self: *Self, bytes: []const u8) !void {
     // A batch half-collected under the old weights would be judged against the new ones.
     self.cursor = 0;
     self.batch = .{};
+    // The helping hand where the schedule has it after the batches these weights trained, not where a
+    // fresh trainer starts it.
+    self.env.fleet.options.task.gains.assist = self.assistAfter(self.iterations);
 }</code></pre></details>
 <p>A long run has to survive being stopped, so it runs in chunks: each loads the checkpoint, learns for
 a few minutes, and saves — weights and the optimiser's moments both, because an optimiser resumed
@@ -4929,6 +4932,298 @@ fn takeUploads(s: *State) void {
             offerWeights(s);
         } else |err| {
             setStatus(s, "refused: {s}", .{@errorName(err)});
+        }
+    }
+}</code></pre></details>
+
+<p>On Geno, every setting of this training - the characters at once, the batch's length, the networks' width,
+the learning rate, the initial exploration, the assist's schedule, the action scale and DReCon's filter - is one
+value, PPO's recipe on Geno, with each field defaulted to the training page's choice. The page builds its trainer
+from it, joined to Geno's task and DReCon bodies, so anything else that trains or shows a Geno policy starts from the
+same settings:</p>
+
+<details class="src-fold" data-src="src/robot_geno.zig" data-decl="pub const PpoRecipe = struct {"><summary><code>PpoRecipe</code></summary><pre><code class="zig">/// PPO's recipe on Geno: every scalar of the trainer's options (`ppo_track.Options`), each defaulted to the value the
+/// training page trains with. `options` joins it to Geno's task and bodies.
+pub const PpoRecipe = struct {
+    /// Characters training at once. Eight keep a decision inside a phone's frame; a desktop takes many more.
+    envs: u32 = 8,
+    /// Decisions per character per batch.
+    horizon: u32 = 64,
+    /// Passes over each batch, and the minibatch each step of a pass takes.
+    epochs: u32 = 4,
+    minibatch: u32 = 256,
+    /// The discount and the advantage's lambda (GAE).
+    gamma: f32 = 0.99,
+    lambda: f32 = 0.95,
+    /// What the clip running out counts as (`ppo_track.ClipEnd`).
+    clip_end: ppo_track.ClipEnd = .terminal,
+    /// Both networks' width.
+    hidden: u32 = 48,
+    learning_rate: f32 = 3.0e-4,
+    /// Exploration at the start: log sigma -1.2, a Gaussian of 0.3 action units - 0.36 rad of raw offset at
+    /// `student_scale`, 4 degrees at the joint once DReCon's filter has taken its fifth.
+    initial_log_std: f32 = -1.2,
+    /// Inputs scaled by their running mean and spread.
+    normalize: bool = true,
+    /// The helping hand on the root: this much at the first batch, fading to none over `assist_batches`.
+    assist_start: f32 = 1.0,
+    assist_batches: u32 = 300,
+    /// Episodes end here even while tracking is fine, in physics steps: longer than the dance's ten seconds.
+    max_episode_steps: u32 = 700,
+    /// Radians of raw pose offset per unit of action (`student_scale`, where the reasoning lives).
+    action_scale: f32 = student_scale,
+    /// Physics steps a decision is held (30 Hz decisions over 60 Hz physics), and DReCon's filter: the share of
+    /// a new action a joint receives each decision.
+    decimation: u32 = 2,
+    beta: f32 = 0.2,
+    seed: u64 = 1,
+
+    /// The trainer's options for `motion`: this recipe, Geno's task and DReCon bodies, and the motion's tag.
+    pub fn options(recipe: PpoRecipe, motion: PpoMotion) ppo_track.Options {
+        return .{
+            .envs = recipe.envs,
+            .horizon = recipe.horizon,
+            .epochs = recipe.epochs,
+            .gamma = recipe.gamma,
+            .lambda = recipe.lambda,
+            .clip_end = recipe.clip_end,
+            .hidden = recipe.hidden,
+            .minibatch = recipe.minibatch,
+            .learning_rate = recipe.learning_rate,
+            .initial_log_std = recipe.initial_log_std,
+            .normalize = recipe.normalize,
+            .assist_start = recipe.assist_start,
+            .assist_batches = recipe.assist_batches,
+            .max_episode_steps = recipe.max_episode_steps,
+            .action_scale = recipe.action_scale,
+            .task = tracking_task,
+            .bodies = drecon_bodies,
+            .tag = motion.tag(),
+            .decimation = recipe.decimation,
+            .beta = recipe.beta,
+            .seed = recipe.seed,
+        };
+    }
+};</code></pre></details>
+
+<p>The same training on Geno, <code>examples/geno_ppo</code>, is the one meant to run through a night, unattended,
+and it keeps a run by itself. After the first batch, and then every five minutes of training, it saves the newest
+weights and a training log as saved values - in the browser's storage on the web, as files in the program's folder
+under the user's application data on a computer (<code>%APPDATA%\zimr\geno_ppo</code> on Windows). At start-up it
+carries on from them without asking: a run that crashed at two in the morning resumes where its last autosave left
+it. <strong>start over</strong> discards them.</p>
+
+<pre class="sketch"><code>   start-up    an autosave of this network and motion?   yes -> resume from its batch      no -> from scratch
+               (the servo is measured alone either way)
+   training    after the first batch, then every 5 minutes of training:
+                   get-up.weights     the newest weights: both networks, Adam's state, the normaliser
+                   get-up.log.csv     one line per batch
+   morning     the weights carry on in the page, or load into another; the log opens in a spreadsheet</code></pre>
+
+<p>The log holds raw counts rather than conclusions, so that any measure can be worked out afterwards - the mean
+time to failure over any window is the steps watched divided by the failures, in seconds at 60 steps a second:</p>
+
+<pre class="sketch"><code>   batch,training_minutes,steps,steps_watched,failures,mean_reward,episodes,mean_episode_steps,assist
+   1,0.00,1024,1024,0,0.35630,2,73.0,1.000</code></pre>
+
+<details class="src-fold" data-src="examples/geno_ppo/geno_ppo.zig" data-decl="fn resumeFromAutosave("><summary><code>resumeFromAutosave</code></summary><pre><code class="zig">/// Carries on from this motion's autosave, if there is one this network accepts: its weights - and with them its
+/// batch count, Adam's state and the normaliser's statistics - and its training log. Out of memory fails the start:
+/// a log not carried on would be overwritten, empty, at the next autosave.
+fn resumeFromAutosave(
+    gpa: Allocator,
+    trainer: *Trainer,
+    task: Task,
+    training_log: *ArrayList(u8),
+    most_log_bytes: usize,
+) Allocator.Error!ResumeOutcome {
+    var key_buffer: [48]u8 = undefined;
+    const weights_buffer: []u8 = try gpa.alloc(u8, trainer.weightsByteCount());
+    defer gpa.free(weights_buffer);
+    const saved_weights: []u8 = z.loadValue(autosaveKey(task, ".weights", &amp;key_buffer), weights_buffer) orelse
+        return .nothing_saved;
+    trainer.importWeights(saved_weights) catch |err| {
+        return .{ .refused = @errorName(err) };
+    };
+    const log_buffer: []u8 = try gpa.alloc(u8, most_log_bytes);
+    defer gpa.free(log_buffer);
+    if (z.loadValue(autosaveKey(task, ".log.csv", &amp;key_buffer), log_buffer)) |saved_log| {
+        training_log.clearRetainingCapacity();
+        try training_log.appendSlice(gpa, saved_log);
+    }
+    return .resumed;
+}</code></pre></details>
+
+<p>A run need not live in a page at all. <code>geno_trainer</code> trains the same recipe headless - no window, no
+frames, as fast as the GPU and the CPU allow - in a <em>run folder</em>, which holds everything about the run, so
+that another program can watch it while it goes and anyone can carry it on later:</p>
+
+<pre class="sketch"><code>   runs/night1/
+       run.zon          the run's parameters: the motion, the recipe, when to save and when to stop
+       weights          the newest weights, rewritten whole every few minutes
+       weights_b0012000 a checkpoint: the weights after batch 12,000
+       log.csv          one line per batch, the counts above
+       status.zon       its state, batches, minutes, the servo's and the recent time to failure
+       stop             created by anyone: the trainer saves everything and exits
+
+   geno_trainer --run=runs/night1</code></pre>
+
+<p>The parameters are PPO's recipe on Geno again, read from <code>run.zon</code> with every field defaulted, so a
+file names only what it changes - <code>.{ .recipe = .{ .envs = 64 }, .stop_after_hours = 10 }</code> is a whole
+run - and a folder without one gets one written with every default, so that each folder says what it trains. A
+value the training cannot work with - no characters, a minibatch larger than the batch, a filter weight outside
+(0, 1] - refuses the run before anything starts, naming the field and its range. Every
+file is written whole to a new file and renamed over the old one: a reader never sees half a file, and a run stopped
+mid-write keeps the previous version. The weights are saved once the GPU's copy of them has caught up with the last
+update, so that the parameters in the file and the counters beside them - Adam's step, the batches, the normaliser's
+statistics - are of the same moment, and a run carried on from the file continues exactly. Started again on the same folder, the trainer carries on from the folder's
+weights and log, with the assist where its schedule has it after the batches already trained. Weights that do not
+fit the run's network - <code>run.zon</code> asking for a wider one, say - are refused, and the folder is left as it
+was. The servo alone is measured first, with the assist off, so its number is the servo's own.</p>
+
+<details class="src-fold" data-src="tools/geno_trainer.zig" data-decl="fn train("><summary><code>train</code></summary><pre><code class="zig">/// Trains until the folder's `stop` file appears or the run's limits are reached, saving as it goes; the state it
+/// ended in.
+fn train(
+    gpa: Allocator,
+    io: Io,
+    report_interval_ms: f64,
+    arena_state: *ArenaAllocator,
+    folder: []const u8,
+    parameters: geno.PpoRun,
+    trainer: *Trainer,
+    progress: *RunProgress,
+) !RunState {
+    const decisions_per_collect: u32 = 64;
+    const save_minutes: f32 = parameters.save_minutes;
+    const checkpoint_minutes: f32 = parameters.checkpoint_minutes;
+    while (true) {
+        // Paths and texts of one batch's files are made in the arena, emptied every batch.
+        _ = arena_state.reset(.retain_capacity);
+        const arena: Allocator = arena_state.allocator();
+        if (try endState(arena, io, folder, parameters, trainer, progress)) |end_state| {
+            return end_state;
+        }
+        if (!trainer.collect(decisions_per_collect)) {
+            continue;
+        }
+        const stats: ppo_track.Stats = trainer.learn();
+        progress.last_stats = stats;
+        progress.recent.add(stats);
+        const minutes_trained: f32 = trainingMinutes(progress);
+        try RunLog.appendLine(gpa, &amp;progress.log, trainer.iterations, minutes_trained, stats);
+        const minutes: f32 = trainingMinutes(progress);
+        const minutes_since_save: f32 = minutes - progress.saved_at_minutes;
+        const is_save_due: bool = !progress.has_saved_this_start or minutes_since_save &gt;= save_minutes;
+        if (is_save_due) {
+            try saveAll(gpa, arena, io, folder, trainer, progress, .training);
+        }
+        const minutes_since_checkpoint: f32 = minutes - progress.checkpointed_at_minutes;
+        const is_checkpoint_due: bool = checkpoint_minutes &gt; 0 and minutes_since_checkpoint &gt;= checkpoint_minutes;
+        if (is_checkpoint_due) {
+            try saveCheckpoint(gpa, arena, io, folder, trainer, progress);
+        }
+        reportProgress(io, report_interval_ms, trainer, progress, stats);
+    }
+}</code></pre></details>
+
+<p>What a run has learned is watched in the training lab, <code>examples/geno_lab</code>. It lists the run folders
+in <code>runs</code>, beside its own executable; a run chosen there is loaded - its <code>run.zon</code>, then its
+newest weights into a network built to it - and shown: Geno on the floor following the dance, with the reference
+beside him, while the camera follows him around the room. The network needs one character's worth of memory: how
+many characters trained does not change its shape. While the trainer runs, <strong>reload weights</strong> reads the
+folder's newest weights again into the same network.</p>
+
+<p>Beside each run's name the lab shows its state, its batch and its latest time to failure, as its
+<code>status.zon</code> says; under the list, every run's learning curve on one plot, read from its log every few
+seconds. Each curve is the time to failure over the last eight batches, against minutes of training, on a
+logarithmic scale from 1 s to 60 s - so that going from the servo's two seconds to twenty takes the same room as
+going from six to a minute. A window in which nothing failed is drawn at the top, and each run's servo, measured alone
+before its training, is a dashed line of its colour:</p>
+
+<pre class="sketch"><code>   60s |            ________________________     a run whose characters stopped failing - drawn at the top
+       |           /                        \
+   20s |      /\/\/                          \   the assist fading: failures come back
+       |     /
+    5s |    /
+       | - - - - - - - - - - - - - - - - - - -   the servo alone, measured before training
+    1s +-------------------------------------
+       0 min                              2 min</code></pre>
+
+<p>A click on a curve shows the run at that point: the checkpoint nearest the clicked batch, kept by the trainer
+as <code>weights_b</code> and the batch's number, or the newest weights for a curve's last point - so that a policy
+from before a run went wrong can be watched beside what it became. A run whose status says it trains, but whose
+status was written longer ago than three of its save intervals, is shown as <em>silent</em>: its trainer died, or its
+machine slept, without a word. Each status carries the wall-clock time it was written, so a lab started long after
+can tell at once.</p>
+
+<p>A run's log is read from where the last read stopped: only whole lines, so that a line the trainer is still
+writing waits for the next read; a log shorter than before - a run carried on from an earlier save - is read again
+from its start.</p>
+
+<p>The physics keeps the step the policy was trained on, 1/60 s, and each frame advances it by whole steps: the
+frame's duration in steps, rounded down unless within a quarter of the next whole step, so one step a frame at 60
+frames a second and two at 30. Nothing is carried from one frame to the next, so the motion stays even; a device that
+cannot keep up shows the dance in slight slow motion rather than in jumps.</p>
+
+<pre class="sketch"><code>   frames a second    steps in a frame    + a quarter    steps taken    the dance's speed
+        60               1.00                1.25           1             real time
+        50               1.20                1.45           1             0.83
+        40               1.50                1.75           1             0.67
+        30               2.00                2.25           2             real time</code></pre>
+
+<p>A shown policy acts as a judged one does: each decision the policy's mean action, without exploration, through
+DReCon's filter, on a fleet of its own. Judging (<code>evaluate</code>) lives many decisions in one call and returns
+only what they came to; a show lives them one physics step at a time, from frame to frame, so that every step can be
+drawn. On the judge's starting frames, with as many characters, the two live the same steps and lose the reference at
+the same ones.</p>
+
+<pre class="sketch"><code>   startShow    a fleet of its own, DReCon's filter, the actions        (seeded: where the characters start)
+   stepShow     a decision due?  observe, normalise, the mean action, clamp
+                then the filter, one physics step, and what was lived: steps watched, failures
+   endShow      the fleet, the filter and the actions released</code></pre>
+
+<details class="src-fold" data-src="src/robot_ppo_track.zig" data-decl="        pub fn stepShow(self: *Self, show: *Show) void {"><summary><code>stepShow</code></summary><pre><code class="zig">/// One physics step of the show: when a decision is due, every character observed and the policy's mean
+/// action taken (clamped to the action's range, as `evaluate` does); then DReCon's filter, the step, and the
+/// count of what was lived.
+pub fn stepShow(self: *Self, show: *Show) void {
+    const dofs: usize = self.env.subset.dofs;
+    const fleet: *track.Fleet = show.fleet;
+    const steps_per_decision: u32 = @max(self.options.decimation, 1);
+    if (show.held_steps_left == 0) {
+        for (0..show.characters) |character| {
+            const first_component: usize = character * dofs;
+            const action: []f32 = show.actions[first_component..][0..dofs];
+            const clip: *const dance.Clip = fleet.clips[fleet.clip_of[character]];
+            const previous_action: []const f32 = show.controller.lastAction(character);
+            track.stateOf(self.m, &amp;fleet.data[character], &amp;self.env.sim_state);
+            policy.observeFrom(
+                self.m,
+                self.env.subset,
+                fleet,
+                clip,
+                fleet.frame[character],
+                self.env.sim_state,
+                &amp;self.env.views,
+                previous_action,
+                self.obs_scratch,
+            );
+            self.normalizeObservations(self.obs_scratch, false);
+            self.ppo.actMean(self.obs_scratch, action);
+            for (action) |*component| {
+                component.* = clamp(component.*, -1.0, 1.0);
+            }
+        }
+        show.held_steps_left = steps_per_decision;
+    }
+    const filtered_actions: []const f32 = show.controller.apply(show.actions);
+    _ = show.fleet.step(filtered_actions);
+    show.held_steps_left -= 1;
+    for (0..show.characters) |character| {
+        show.exposure += 1;
+        if (show.fleet.failures[character]) {
+            show.failures += 1;
+        }
+        if (show.fleet.dones[character]) {
+            show.controller.forget(character);
         }
     }
 }</code></pre></details>

@@ -27,6 +27,7 @@ const clamp = zm.clamp;
 const Vec = zm.Vec;
 const nan = zm.nan;
 const inf = zm.inf;
+const splat = zm.splat;
 
 export fn zmGpuProbe(
     out: *addrspace(.storage_buffer) Vec,
@@ -38,16 +39,16 @@ export fn zmGpuProbe(
     acc += zm.floatMin(Vec);
 
     // Clamped against the vector `floatMax`, which is the shape a saturating accumulate wants.
-    acc = clamp(x + acc, @as(Vec, @splat(0.0)), zm.floatMax(Vec));
+    acc = clamp(x + acc, splat(0.0), zm.floatMax(Vec));
 
     // `isFinite` returns a vector of bools for a vector input, which is what makes the NaN guard
     // a `@select` rather than a branch - branches are what a shader cannot afford per lane.
-    acc = @select(f32, zm.isFinite(acc), acc, @as(Vec, @splat(0.0)));
+    acc = @select(f32, zm.isFinite(acc), acc, splat(0.0));
 
     // A NaN and an infinity built on the GPU side, then selected away. If `nan`/`inf` stopped
     // compiling for a vector type this line would fail before anything ran.
     const poisoned: Vec = nan(Vec) + inf(Vec);
-    acc = @select(f32, zm.isNan(poisoned), acc, acc + @as(Vec, @splat(1.0)));
+    acc = @select(f32, zm.isNan(poisoned), acc, acc + splat(1.0));
 
     // Folded into the output so ReleaseFast cannot delete the whole thing and call it verified.
     out.* = acc;

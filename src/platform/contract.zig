@@ -59,6 +59,9 @@ pub const KeyDown = struct {
     repeat: bool,
     label: u21 = 0,
     modifiers: Modifiers,
+    /// When it happened, on the platform's clock (`now`), in milliseconds - the clock a sound's start is measured on
+    /// (`mixer.LatencySample`); 0 when the platform does not say.
+    time_ms: f64 = 0,
 };
 
 /// A key coming up.
@@ -109,6 +112,9 @@ pub const MouseButton = struct {
     x: f32,
     y: f32,
     modifiers: Modifiers,
+    /// When it happened, on the platform's clock (`now`), in milliseconds - the clock a sound's start is measured on
+    /// (`mixer.LatencySample`); 0 when the platform does not say.
+    time_ms: f64 = 0,
 };
 
 /// A wheel's turn, in notches: one per step of a stepped wheel, fractions from smooth wheels and touchpads; positive
@@ -124,6 +130,9 @@ pub const Touch = struct {
     id: u32,
     x: f32,
     y: f32,
+    /// When it happened, on the platform's clock (`now`), in milliseconds - the clock a sound's start is measured on
+    /// (`mixer.LatencySample`); 0 when the platform does not say.
+    time_ms: f64 = 0,
 };
 
 /// The device's acceleration, in meters per second squared, and the screen's rotation in degrees - the browser's

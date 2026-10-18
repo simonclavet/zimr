@@ -57,6 +57,7 @@ const Color = zm.Color;
 const float = zm.float;
 const vec = zm.vec;
 const CameraProjection = zm.CameraProjection;
+const splat = zm.splat;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 /// Character one: mesh, skin weights, and the rig its clusters were bound to. Its own take is
@@ -2401,8 +2402,8 @@ fn shoulderAxes(s: *State, rest_world: []const Vec) ?struct { robot: Vec, human:
         return null;
     }
     return .{
-        .robot = robot_axis / @as(Vec, @splat(robot_len)),
-        .human = human_y_up / @as(Vec, @splat(human_len)),
+        .robot = robot_axis / splat(robot_len),
+        .human = human_y_up / splat(human_len),
     };
 }
 
@@ -2440,7 +2441,7 @@ fn refreshRobotTwists(
     // unit cancels. **A scale derived from one quantity cannot disagree with itself.**
     const rest_scale: f32 = captureScale(s, source);
     for (0..source_joint_count) |joint| {
-        const y_up: Vec = source.rest_positions[joint] * @as(Vec, @splat(rest_scale));
+        const y_up: Vec = source.rest_positions[joint] * splat(rest_scale);
         rest_robot_frame[joint] = vec(y_up[0], -y_up[2], y_up[1]);
     }
 
@@ -2652,7 +2653,7 @@ fn refreshRobotMap(s: *State) !void {
         if (human_length < 1.0e-6) {
             continue;
         }
-        const human_unit: Vec = human_bone_y_up / @as(Vec, @splat(human_length));
+        const human_unit: Vec = human_bone_y_up / splat(human_length);
         const human_dir: Vec = vec(human_unit[0], -human_unit[2], human_unit[1]);
 
         s.robot_limb_correction[body] = shortestArcBetween(human_dir, robot_dir);
@@ -2748,7 +2749,7 @@ fn buildRetargetedSkeleton(
             out[b] = out[parent] + model.body_pos[b];
             continue;
         }
-        out[b] = out[parent] + normalize3(bone) * @as(Vec, @splat(own_length));
+        out[b] = out[parent] + normalize3(bone) * splat(own_length);
     }
 
     var offset: Vec = .{ 0, 0, 0, 0 };
@@ -2762,7 +2763,7 @@ fn buildRetargetedSkeleton(
         counted += 1;
     }
     if (counted > 0) {
-        const shift: Vec = offset / @as(Vec, @splat(counted));
+        const shift: Vec = offset / splat(counted);
         for (1..limit) |b| {
             out[b] += shift;
         }
@@ -2930,7 +2931,7 @@ fn poseRobot(s: *State, frame: usize) void {
     var rotations_robot: [128]Quat = undefined;
     const joint_count: usize = @min(source_joint_count, positions_robot.len);
     for (0..joint_count) |joint| {
-        const p_y: Vec = (source.positions[joint] - source_root_y_up) * @as(Vec, @splat(scale));
+        const p_y: Vec = (source.positions[joint] - source_root_y_up) * splat(scale);
         positions_robot[joint] = root_z_up + vec(p_y[0], -p_y[2], p_y[1]);
         rotations_robot[joint] = zm.qmul(
             zm.qmul(y_up_to_z_up, source.rotations[joint]),
@@ -3070,7 +3071,7 @@ fn lightTarget(s: *State) Vec {
     for (&s.characters) |*c| {
         sum += c.positions[0] + c.offset;
     }
-    var mid: Vec = sum / @as(Vec, @splat(float(s.characters.len)));
+    var mid: Vec = sum / splat(float(s.characters.len));
     mid[1] = 0.9;
     return mid;
 }
@@ -3355,12 +3356,12 @@ fn drawTposeComparison(s: *State, gl: *z.WgpuGl) void {
         if (parent < 0) {
             continue;
         }
-        const from: Vec = source.rest_positions[@intCast(parent)] * @as(Vec, @splat(draw_scale));
-        const to: Vec = source.rest_positions[joint] * @as(Vec, @splat(draw_scale));
+        const from: Vec = source.rest_positions[@intCast(parent)] * splat(draw_scale);
+        const to: Vec = source.rest_positions[joint] * splat(draw_scale);
         drawBoneSegment(gl, from, to, Color{ .r = 240, .g = 150, .b = 60, .a = 255 }, 0.012);
     }
     for (0..joint_count) |joint| {
-        const at: Vec = source.rest_positions[joint] * @as(Vec, @splat(draw_scale));
+        const at: Vec = source.rest_positions[joint] * splat(draw_scale);
         drawJointFrame(gl, at, source.rest_orientations[joint], 0.05);
     }
 
@@ -3419,7 +3420,7 @@ fn drawTransformAxes(gl: *z.WgpuGl, origin: Vec, rotation: Quat, length: f32) vo
         .{ .dir = vec(0, 0, 1), .color = .{ .r = 80, .g = 140, .b = 255, .a = 255 } },
     };
     for (axes) |axis| {
-        const tip: Vec = origin + zm.rotate(rotation, axis.dir * @as(Vec, @splat(length)));
+        const tip: Vec = origin + zm.rotate(rotation, axis.dir * splat(length));
         z.drawLine3D(gl, origin, tip, axis.color);
     }
 }
@@ -4124,7 +4125,7 @@ fn update(f: *z.Frame, s: *State) void {
     const light_dir: Vec = lightDirFrom(s.light_yaw, s.light_pitch);
     const focus: Vec = lightTarget(s);
     const light_cam: Camera3D = .{
-        .position = focus - light_dir * @as(Vec, @splat(light_distance)),
+        .position = focus - light_dir * splat(light_distance),
         .target = focus,
         .up = vec(0, 1, 0),
         .fovy_deg = light_extent * 2.0,

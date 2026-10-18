@@ -17,6 +17,7 @@ const Vec3 = zm.Vec3;
 const clamp01 = zm.clamp01;
 const dot = zm.dot;
 const normalize = zm.normalize;
+const splat3 = zm.splat3;
 const shader_io = @import("fog_fs_io.zig");
 const shader_externs = @import("fog_fs_externs");
 
@@ -62,7 +63,7 @@ pub fn shaderMain(io_in: Io) Out {
         io_in.u.base_color[0],
         io_in.u.base_color[1],
         io_in.u.base_color[2],
-    } * @as(Vec3, @splat(lighting)) + @as(Vec3, @splat(spec * n_dot_l));
+    } * splat3(lighting) + splat3(spec * n_dot_l);
 
     // The fog: distance from the CAMERA (not depth - fog is radial, so
     // spinning in place doesn't make the corners of the screen clear up).
@@ -71,7 +72,7 @@ pub fn shaderMain(io_in: Io) Out {
     const visibility: f32 = clamp01(1.0 / @exp(dd * dd));
 
     const fog: Vec3 = .{ io_in.u.fog_color[0], io_in.u.fog_color[1], io_in.u.fog_color[2] };
-    const final: Vec3 = fog + (lit - fog) * @as(Vec3, @splat(visibility));
+    const final: Vec3 = fog + (lit - fog) * splat3(visibility);
 
     out.final_color = .{ final[0], final[1], final[2], 1.0 };
     return out;

@@ -15,6 +15,7 @@
 const zm = @import("zm");
 const Vec = zm.Vec;
 const clamp = zm.clamp;
+const splat = zm.splat;
 const shader_io = @import("effect_palette_fs_io.zig");
 const shader_externs = @import("effect_palette_fs_externs");
 
@@ -37,7 +38,7 @@ pub fn shaderMain(io_in: Io) Out {
         const fi: f32 = @floatFromInt(i);
         const d: f32 = index - fi;
         const hit: f32 = if (d * d < 0.25) 1.0 else 0.0;
-        color += io_in.u.palette[i] * @as(Vec, @splat(hit));
+        color += io_in.u.palette[i] * splat(hit);
     }
 
     out.final_color = .{ color[0], color[1], color[2], texel[3] };

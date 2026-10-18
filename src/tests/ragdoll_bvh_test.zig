@@ -44,6 +44,7 @@ const Quat = zm.Quat;
 const vec = zm.vec;
 const radFromDeg = zm.radFromDeg;
 const float = zm.float;
+const splat = zm.splat;
 const expect = std.testing.expect;
 const Io = std.Io;
 const testing_allocator = std.testing.allocator;
@@ -107,7 +108,7 @@ test "ragdoll: the real Geno skeleton plays the real dance frame exactly" {
     for (data.joints, 0..) |j, i| {
         names[i] = j.name;
         parents[i] = j.parent;
-        offsets[i] = vec(j.offset[0], j.offset[1], j.offset[2]) * @as(Vec, @splat(cm_to_m));
+        offsets[i] = vec(j.offset[0], j.offset[1], j.offset[2]) * splat(cm_to_m);
     }
 
     var m: rbt.Model = try rbt.skeletonToModel(gpa, names, parents, offsets, .{});
@@ -138,7 +139,7 @@ test "ragdoll: the real Geno skeleton plays the real dance frame exactly" {
             }
         }
         if (i == 0) {
-            root_translation = pos * @as(Vec, @splat(cm_to_m));
+            root_translation = pos * splat(cm_to_m);
         }
         rots[i] = quatFromChannels(j.channels, vals);
     }

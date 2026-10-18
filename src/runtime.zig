@@ -50,6 +50,7 @@ const Ray = zm.Ray;
 const radFromDeg = zm.radFromDeg;
 const sqrt1_2 = zm.sqrt1_2;
 const clamp = zm.clamp;
+const splat = zm.splat;
 
 /// The platform's clock, in milliseconds: `platform.current.now()` - monotonic, in nanoseconds - which every platform
 /// implements: `performance.now()` in the browser, the performance counter on Windows, the monotonic clock elsewhere.
@@ -63,6 +64,36 @@ fn platformMilliseconds() f64 {
 // ============================================================================
 
 pub const core = struct {
+    /// Which of the display's frames an app draws, to hold it to a highest rate (`Config.max_frames_per_second`):
+    /// a browser asks for a frame at the display's own rate - 120 a second on many phones - and an app drawing each
+    /// one does twice the work of one drawn at 60, on a phone that heats and slows, its audio thread among the work's
+    /// neighbours. Frames are due on a beat, one period apart: a frame runs when the display's frame comes at most
+    /// `early_allowance_ms` before the next beat, and the beat moves on by one period from where it was, not from
+    /// when the frame came - so a 120 Hz display draws every other frame, and a 90 Hz one two frames in three, both
+    /// 60 a second on average. A frame later than a whole period past its beat - a stall, a hidden tab, the first
+    /// frame - starts the beat again from itself, so that the frames missed are not run in a burst to catch up.
+    pub const FramePacer = struct {
+        next_due_ms: f64 = 0,
+
+        /// How early a display frame may come and still be taken for the beat: 2 ms. Display frames come with some
+        /// jitter, and one a hair before the beat would otherwise wait a whole display frame more.
+        pub const early_allowance_ms: f64 = 2;
+
+        /// Whether the display's frame at `now_ms` is drawn, at `frames_per_second` at most; when it is, the beat
+        /// moves on.
+        pub fn shouldRun(pacer: *FramePacer, now_ms: f64, frames_per_second: f32) bool {
+            const period_ms: f64 = 1000.0 / @as(f64, frames_per_second);
+            const is_too_early: bool = now_ms + early_allowance_ms < pacer.next_due_ms;
+            if (is_too_early) {
+                return false;
+            }
+            const next_on_beat_ms: f64 = pacer.next_due_ms + period_ms;
+            const has_fallen_behind: bool = next_on_beat_ms < now_ms;
+            pacer.next_due_ms = if (has_fallen_behind) now_ms + period_ms else next_on_beat_ms;
+            return true;
+        }
+    };
+
     /// The frame clock's filter: from each frame's measured duration, the duration animation advances by. A display
     /// shows frames at an even pace - once per refresh - but the moments a program measures between them jitter by a
     /// millisecond or two, as the system schedules it; animation advanced by the measured durations moves unevenly
@@ -1400,6 +1431,11 @@ pub const input = struct {
         touch: Touch = .{},
         motion: Motion = .{},
         paste: Paste = .{},
+        /// When each key last went down, and when the latest press of anything did - a key, a mouse button, a touch -
+        /// on the platform's clock in milliseconds, as its events say (`pushPressTime`); 0 where unknown. A sound
+        /// started in answer carries the time, so that its lag is measured from the press (`mixer.NoteEvent`).
+        key_press_times_ms: [max_keyboard_keys]f64 = @splat(0),
+        last_press_time_ms: f64 = 0,
         /// The frame's request for text input (`wantTextInput`); `endFrame` clears it.
         text_input_wish: ?TextInputWish = null,
     };
@@ -1425,6 +1461,34 @@ pub const input = struct {
     // Bounds checks are deliberate - JS can hand us anything.  Out-of-
     // range keycodes are silently dropped rather than panicking.
     // ===========================================================================
+
+    /// Records a press's time (`InputState.key_press_times_ms`): `key`'s own, when a key, and the latest press's.
+    /// A time of 0 - the platform does not say - records nothing.
+    pub fn pushPressTime(state: *InputState, key: ?i32, time_ms: f64) void {
+        if (time_ms <= 0) {
+            return;
+        }
+        state.last_press_time_ms = time_ms;
+        const key_number: i32 = key orelse return;
+        if (key_number <= 0 or key_number >= max_keyboard_keys) {
+            return;
+        }
+        state.key_press_times_ms[@intCast(key_number)] = time_ms;
+    }
+
+    /// When `key` last went down (`pushPressTime`), on the platform's clock in milliseconds; 0 when unknown.
+    pub fn keyPressTime(state: *const InputState, key: KeyboardKey) f64 {
+        const key_number: i32 = @backingInt(key);
+        if (key_number <= 0 or key_number >= max_keyboard_keys) {
+            return 0;
+        }
+        return state.key_press_times_ms[@intCast(key_number)];
+    }
+
+    /// When the latest press of anything happened (`pushPressTime`); 0 when unknown.
+    pub fn lastPressTime(state: *const InputState) f64 {
+        return state.last_press_time_ms;
+    }
 
     pub fn pushKeyDown(
         state: *InputState,
@@ -2108,6 +2172,26 @@ pub const input = struct {
         endFrame(&state);
         try expectEqual(@as(usize, 0), charsTyped(&state).len);
         try expect(getCharPressed(&state) == null);
+    }
+
+    test "a press's time: each key's own, and the latest of anything; a time of 0 records nothing" {
+        var state: InputState = .{};
+        const a_number: i32 = @backingInt(KeyboardKey.a);
+        const b_number: i32 = @backingInt(KeyboardKey.b);
+        pushPressTime(&state, a_number, 1000.5);
+        pushPressTime(&state, b_number, 1004);
+        try expectEqual(@as(f64, 1000.5), keyPressTime(&state, .a));
+        try expectEqual(@as(f64, 1004), keyPressTime(&state, .b));
+        try expectEqual(@as(f64, 1004), lastPressTime(&state));
+        // A pointer's press: the latest press, no key's.
+        pushPressTime(&state, null, 1010);
+        try expectEqual(@as(f64, 1010), lastPressTime(&state));
+        try expectEqual(@as(f64, 1004), keyPressTime(&state, .b));
+        // A platform that does not say: nothing changes.
+        pushPressTime(&state, a_number, 0);
+        try expectEqual(@as(f64, 1000.5), keyPressTime(&state, .a));
+        try expectEqual(@as(f64, 1010), lastPressTime(&state));
+        try expectEqual(@as(f64, 0), keyPressTime(&state, .c));
     }
 
     test "a tap shorter than a frame is pressed and released in it, and down at neither frame's start" {
@@ -5835,7 +5919,7 @@ pub const camera = struct {
     /// Scalar multiply `v * s` (`@splat` broadcast - zmath has no
     /// `scale` function, scalar-vector multiply is the operator).
     inline fn v3Scale(v: Vec, s: f32) Vec {
-        return v3FromZm(v3ToZm(v) * @as(Vec, @splat(s)));
+        return v3FromZm(v3ToZm(v) * splat(s));
     }
     /// Normalize a 3-vector.
     inline fn v3Normalize(v: Vec) Vec {
@@ -6179,13 +6263,13 @@ pub const camera = struct {
             }
             forward = normalize3(forward);
         }
-        forward = forward * @as(Vec, @splat(distance));
+        forward = forward * splat(distance);
         cam.position = cam.position + forward;
         cam.target = cam.target + forward;
     }
 
     pub fn cameraMoveUp(cam: *Camera3D, distance: f32) void {
-        const up: Vec = getCameraUp(cam) * @as(Vec, @splat(distance));
+        const up: Vec = getCameraUp(cam) * splat(distance);
         cam.position = cam.position + up;
         cam.target = cam.target + up;
     }
@@ -6206,7 +6290,7 @@ pub const camera = struct {
             }
             right = normalize3(right);
         }
-        right = right * @as(Vec, @splat(distance));
+        right = right * splat(distance);
         cam.position = cam.position + right;
         cam.target = cam.target + right;
     }
@@ -6218,7 +6302,7 @@ pub const camera = struct {
             dist = 0.001;
         }
         const forward: Vec = getCameraForward(cam);
-        cam.position = cam.target + forward * @as(Vec, @splat(-dist));
+        cam.position = cam.target + forward * splat(-dist);
     }
 
     // ---- Rotation (radians)

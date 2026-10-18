@@ -46,6 +46,7 @@ const float = zm.float;
 const Vec2 = zm.Vec2;
 const assertf = zm.assertf;
 const assertUnreachable = zm.assertUnreachable;
+const splat2 = zm.splat2;
 
 /// Where a kompute kernel runs. The SAME kernel source, on any of them.
 ///
@@ -176,6 +177,9 @@ pub fn komputeRegistry(comptime M: type) type {
     return jobs.Registry(komputeTable(M), .{
         .max_input = @sizeOf(JobHeader(M)) + @sizeOf(M.Buffers),
         .max_output = @sizeOf(M.Buffers),
+        // The kernel works in `M.g`, the module's globals: natively, inline rather than on a thread, which would share
+        // them with the app while its frame reads them.
+        .kernels_work_in_globals = true,
     });
 }
 
@@ -1769,7 +1773,7 @@ test "Compute CPU backend: multi-buffer gravity step (pos + vel)" {
                 return;
             }
             g.B.vel[c.id][1] = g.B.vel[c.id][1] + c.params.gravity * c.params.dt;
-            g.B.pos[c.id] = g.B.pos[c.id] + g.B.vel[c.id] * @as(Vec2, @splat(c.params.dt));
+            g.B.pos[c.id] = g.B.pos[c.id] + g.B.vel[c.id] * splat2(c.params.dt);
         }
     };
     var pipe = Compute(M).initCpu();

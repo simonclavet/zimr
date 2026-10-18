@@ -33,6 +33,7 @@ const zm = @import("zm");
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const Color = zm.Color;
+const splat2 = zm.splat2;
 const c = Color;
 const Vec2 = zm.Vec2;
 const float = zm.float;
@@ -118,8 +119,8 @@ fn shadowQuad(light: Vec2, sp: Vec2, ep: Vec2, extend: f32) [4]Vec2 {
     return .{
         sp,
         ep,
-        ep + ev * @as(Vec2, @splat(extend)),
-        sp + sv * @as(Vec2, @splat(extend)),
+        ep + ev * splat2(extend),
+        sp + sv * splat2(extend),
     };
 }
 

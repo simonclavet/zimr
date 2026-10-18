@@ -216,6 +216,78 @@
             "problemMatcher": []
         },
         {
+            "label": "zig: build audio-scale-star",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "audio-scale-star",
+                "-Dplatform=web"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: release audio-scale-star",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "audio-scale-star",
+                "-Dplatform=web",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build audio-scale-star-hands",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "audio-scale-star-hands",
+                "-Dplatform=web"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: release audio-scale-star-hands",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "audio-scale-star-hands",
+                "-Dplatform=web",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "zig: build audio-sound-lab",
             "type": "shell",
             "command": "zig",
@@ -2689,6 +2761,42 @@
             "args": [
                 "build",
                 "geno-fit",
+                "-Dplatform=web",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build geno-lab",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "geno-lab",
+                "-Dplatform=web"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: release geno-lab",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "geno-lab",
                 "-Dplatform=web",
                 "-Dmode=release"
             ],
@@ -11600,6 +11708,38 @@
             "problemMatcher": []
         },
         {
+            "label": "zig: build audio-scale-star (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "audio-scale-star",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build audio-scale-star-hands (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "audio-scale-star-hands",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "zig: build audio-sound-lab (windows)",
             "type": "shell",
             "command": "zig",
@@ -12694,6 +12834,22 @@
             "args": [
                 "build",
                 "geno-fit",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build geno-lab (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "geno-lab",
                 "-Dplatform=windows"
             ],
             "presentation": {

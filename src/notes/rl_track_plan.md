@@ -9,6 +9,453 @@ the recipe decisions, the world model's form, scale, the kit's parity, a gate, a
 
 ---
 
+## Resumption, prepared Oct 17 (Simon: "Look at where we are with the reinforcement learning plan. What are the next
+## steps? ... prepare more precisely the next few turns")
+
+**Where it stands.** No learner tracks the dance yet. The bench (B1, Sep 28) found the open problem: SuperTrack's
+world model learns (trust 3.1 -> 0.23) and its policy exploits it (exploitation ~100; MTTF 1.52 s untrained ->
+0.56 s). The work since built ingredients (Stage I: I1 measured harmful, I3's TrackEnv and SacTrack), then BMPC and
+EfficientTDMPC reproduced and reviewed on the CPU (R1: B1-B6, N7a-N7f-2 - two planners, the prefix objective, the
+dynamics ensemble, its scoring, pessimistic reanalyze, the cross-scoring diagnostic's model side). The cartpole gate
+learns (0.333 up vs 0.153 random) at about a hundredth of BMPC's budget, and Oct 4 decided: no more CPU learning
+runs - real training is on the GPU. R5 (Oct 5) is the direction: SuperTrack's pathwise loss for the common case,
+BMPC's pessimistic critic and a sparse planning teacher where gradients fail, one objective (R5.8), its judge (R5.9).
+Stage D (AccelWorld) is not started.
+
+**What Oct 16-17 found, natively.** The GPU path is the critical one, and it does not run on Vulkan yet: headless on
+lavapipe, `zimrnum_train` stops at `zn_train`'s `loss_value` pipeline and `cartpole_duel` at `zn_mlp`'s
+`mse_value` (both -13, VK_ERROR_UNKNOWN; platforms_plan.md, Oct 17). `zn_mlp` is the kit of every RL page
+(cartpole_duel, track_train, geno_train, getup_train, geno_ppo). The two refused kernels share one shape: a
+single-thread reduction - every thread past the first returns, a loop sums squared errors, a division, a scalar
+store. The pages pass on WebGPU, where the SPIR-V is translated to WGSL; natively the driver compiles it.
+
+**The next turns** (each verified headless here - Windows waits for Simon):
+
+  T1 THE PIPELINE CHECK, AND THE REFUSAL FOUND. `vk-host-test` gains `pipelines`: a pipeline for every entry of every
+     GPU module (zn_train, zn_mlp, zn_binary, zn_unary, zn_matmul, zrl_binary) - today it fails on two. Then the
+     refusal bisected on that check, one construct at a time against lavapipe: the early return past thread 0, the
+     loop's sum, the division by `zm.float`, the second store, the entry wrapper (`kompute.installKernelLean`). The
+     fix where the fault is - the kernel's form, kompute's wrapper, or how the Zig backend is driven - and a driver
+     workaround only if the SPIR-V is shown valid, with the reason at the site. DONE WHEN every entry makes a pipeline
+     on lavapipe and `zimrnum_train` and `cartpole_duel` start headless.
+     T1 PROGRESS (Oct 17): the cause found - zig-spirv-quirks.md's Quirk 5. A constant index into a storage-buffer
+     array gets its base's pointer type (a pointer to the array, not the element): invalid SPIR-V that WGSL
+     translation ignores and a Vulkan driver refuses. Reproduced in one line (`b_data[0] = 1.0`); SPIRV-Tools and the
+     Khronos validation layer installed from Ubuntu's archive (vk-host-test requires the layer). spirv-val over the
+     cache's 57 modules: 7 invalid - the two compute modules (Quirk 5), two graphics shaders whose run-time-sized
+     storage arrays lack the Block decoration, two fragment shaders writing FragDepth without DepthReplacing, and
+     `zm_gpu_probe` (a compile-only probe, never a pipeline). NEXT: the host's legalising pass (each access chain's
+     result type set to the pointer to the type it reaches), tested on hand-made modules; the `pipelines` check with
+     a constant-index kernel; then the two graphics faults.
+     T1 DONE (Oct 17) for the fault: `spv_vulkan.legalize` gained a sixth adjustment (`accessChainRetypes`): each
+     access chain walked from its base's type through its indices (a struct's member number a constant), its stated
+     type set to the pointer to the type reached, the pointer type declared before the first function where missing.
+     Four tests on hand-made modules (the quirk in place - one word changed; a new pointer type with the bound raised;
+     right chains word for word; a struct member and a ptr chain's first index); the cache's 56 modules all valid by
+     spirv-val once legalised (the graphics faults were already the pass's 1st and 5th adjustments, not new). And
+     headless with the validation layer on: `zimrnum_train` PASS - losses equal at step 0, 1.04e-7 apart at step
+     40, both converged - and `cartpole_duel`'s GPU PPO training (iteration 28, 0 errors). On the way:
+     `has_ptr_access_chain` now counts `OpInBoundsPtrAccessChain` too, which gives `ArrayStride` meaning as well.
+     Left of T1: the `pipelines` check in `vk-host-test` (every entry of every GPU module, with a constant-index
+     kernel) - taken into T2.
+     MASTER (Oct 17): the project moved to Zig 0.18.0-dev.253, which fixes the compiler's defect at its source
+     (`derivePtr`'s element step); verified on master - lint, test-fast, c2js-diff (103 + 2), test-sound, the
+     worklet and page tests, `zimrnum_field` web and native (112/112).
+  T2 PROGRESS (Oct 17): `vk-host-test` gained `pipelines` (every pipeline of `zn_train` and `zn_mlp` made under the
+     validation layer) and `constant` (`examples/compute_smoke/constant_index.zig`: `values[2]` of a `[16]f32` and
+     `grid[1][2]` of a `[4][3]f32` written by constant indices, read back - the written elements hold their values,
+     every other element zero); green on lavapipe, no validation messages. Left: the XOR training as an automatic
+     native check, `cartpole_duel`'s GPU update against its CPU twin natively, `zimrnum_train` into the catalog.
+  T2 TRAINING ON VULKAN, CHECKED END TO END. `zimrnum_train`'s own check made automatic: the XOR network trained on
+     Vulkan for 40 steps against zimrnum's Graph, the losses agreeing as on the web (about 1e-7); `cartpole_duel`'s GPU
+     PPO update against its CPU twin, natively. `zimrnum_train` into the gallery's catalog. DONE WHEN both run green
+     on lavapipe and both pages build for Windows.
+  T3 N7f-3, THE DIAGNOSTIC'S ENVIRONMENT SIDE - EfficientTDMPC complete on the CPU. The cartpole as a value type whose
+     copy is a snapshot; each plan (single head, ensemble, the policy's) stepped open-loop in a copy, discounted real
+     rewards then the learned value at the end; the report's Delta R per planner and evaluator. KNOWN ANSWERS by hand
+     on the cartpole; a control that steps the real environment instead of the copy fails them.
+  T4 N9a, THE KIT'S MISSING OPERATIONS. BMPC's update and planner listed against `zn_mlp` (dense forward and
+     backward, the activations, MSE, Adam, Polyak exist); the missing ones written with CPU twins from the same
+     source: NormedDense (LayerNorm + Mish, forward and backward), SimNorm, the two-hot categorical cross-entropy.
+     KNOWN ANSWERS: each kernel against zimrnum's graph operation on the same inputs, values and gradients.
+  T5 N9b, THE WORLD MODEL'S UPDATE ON THE GPU: the rollout under every dynamics head, the consistency, reward and
+     value losses, Adam - against `Bmpc(T)`'s CPU update at reduced widths, by zimrnum_train's method (agreement over
+     the first steps, then both converging).
+  T6 N9c, MPPI ON THE GPU: candidates rolled under every head, ensemble scoring, pessimism - against the CPU actor's
+     decisions on the same states.
+  THEN N8's first long run - the cartpole gate at BMPC's budget, on the GPU (natively or in a browser), overnight -
+  and R5's P1, the value tail on SuperTrack's loss.
+
+## Night run and demo, prepared Oct 17 (Simon: "I would like to do the mocap tracking night run on windows with the
+## best possible rl algo soon. I want to then easily embed the weights and ship a single html file demo showing robot
+## tracking")
+
+**The algorithm for the first night.** Of what is built and verified: PPO with DReCon's recipe on Geno (`geno_ppo`:
+`ppo_track`, the DReCon bodies, the action filter, normalised inputs, the fading root assist, the dance from 5 s to
+15 s) - and since Oct 17 its update runs on the GPU natively (`zn_mlp`, the access-chain fix). SuperTrack
+(`geno_train`) learns a world model its policy then exploits (the Sep 28 bench); BMPC and EfficientTDMPC are verified
+on the CPU but lack their GPU kit (N9, several turns). So the first night is PPO; the R5 path continues by day and
+takes over the nights once it beats PPO on the same judge (R5.9).
+
+**The turns** (each verified headless here; Windows waits for Simon). NR1 was built; the run-folder design below
+(RT1-RT9) replaced NR2-NR4 the same day; RT10 (Oct 18) adds the training wheels - help the policy asks for, priced,
+gone after the first hour:
+
+  NR1 GENO_PPO, UNATTENDED. The newest weights saved every few minutes as a saved value (`z.saveValue`: files under
+      %APPDATA% on Windows), offered for resuming at the next start, so a crash loses minutes; the training curve
+      (batches, mean time to failure, reward, losses) kept as a CSV beside them, for the morning; nothing in the run
+      waiting for a press. DONE WHEN a headless run saves, a second run resumes from it, and the CSV reads back.
+      NR1 DONE (Oct 17). `geno_ppo`: after the first batch and every 5 minutes of training, the newest weights
+      (`<motion>.weights`) and a CSV log of raw counts per batch (`<motion>.log.csv`) saved as values
+      (`autosaveIfDue`); at start-up, resumed without asking when the trainer accepts them (`resumeFromAutosave`,
+      the servo still measured first; out of memory fails the start, so an old log is never overwritten empty);
+      "start over" removes them. `ppo_track` gained `weightsByteCount` (the file's size from the network's shape,
+      before any readback). Engine: a headless run keeps its saved values as files in `ZIMR_VALUES_DIR` when it
+      names one (read at `headless.start`, before the app's init; `native_os.loadValueIn` and kin made public), in
+      memory otherwise; `native_os`'s two libc tests skip in builds without libc. Checked: run 1 trained 33 batches,
+      autosaved batch 1 (285 KB of weights, the log's header and first line); run 2 from the same folder "resumed
+      from batch 1". Lint, test-fast, doc-folds green; robot-mocap tutorial 10.5 describes it.
+  Simon, Oct 17: "It will be important to run training headless on windows, starting from parameters written in
+  a zon file in a folder for this run. Weights and maybe other files will be written in this folder. After and
+  while it is training the independent visual app can load the folder zon and weights from a file dialog to test."
+  So the night run moves to a TRAINER PROGRAM and a VIEWER APP sharing a RUN FOLDER; NR1's page autosave stays for
+  pages. The run folder:
+
+      run.zon          the run's parameters: the motion, the learner's scalars, the run's own controls
+      weights          the newest weights, rewritten whole (new file, then renamed over the old)
+      weights_b<N>     checkpoints, every so many minutes
+      log.csv          one line per batch, raw counts (as NR1's)
+      status.zon       batches, minutes, the latest window's time to failure - for a person or the viewer
+      stop             created by hand: the trainer saves and exits
+
+  RT1 THE RUN'S PARAMETERS. `robot_geno.PpoRun`: the motion, the learner's scalar options (environments,
+      horizon, epochs, gamma, lambda, the clip's end, width, minibatch, learning rate, initial exploration,
+      normalising, the assist's schedule, the episode cap, action scale, decimation, the filter's beta, seed), and the
+      run's controls (checkpoint minutes, stop after so many hours or batches); read from ZON with every field
+      defaulted (`std.zon.parse.fromSlice`), written back the same way, turned into `Options` with the motion's own
+      task and bodies. Tests: defaults, a partial file, an unknown field refused by name, a round trip.
+      RT1 DONE (Oct 17). In `robot_geno.zig`, beside `SuperTrackRecipe`: `PpoMotion` (get-up, dance; label, tag),
+      `PpoRecipe` (every scalar of `ppo_track.Options`, defaulted to the page's values; `options(motion)` adds Geno's
+      task, DReCon bodies and the motion's tag), `PpoRun` (motion, recipe, save and checkpoint minutes, stop after
+      hours or batches; `parse` from ZON with the parser's description on failure, `write` back). Three tests: the
+      empty file is the page's training, a partial file and a misspelt field (refused, named), a round trip. The
+      page now builds its trainer from `PpoRecipe{}` - its old weights still load (same shape and tag), checked by
+      resuming the earlier autosave. `st_bench` still compiles with `robot_geno` importing `robot_ppo_track`.
+  RT2 THE TRAINER. A standalone native program, like `st_bench` (its own `main(init)`, `cli` for the folder) and
+      like `vk-host-test` (the Vulkan host without a window, `z.Compute` with `zn_mlp`): read run.zon, resume from
+      the folder's weights if they fit, train flat out, write weights/log/status atomically and checkpoints on
+      schedule, stop on `stop` or the configured limit. Built for Windows and for the host; checked headless here on
+      a tiny run: files written, a second start resumes, `stop` stops it.
+      RT2 DONE (Oct 17). `tools/geno_trainer.zig` (`zig build geno-trainer`, `geno-trainer-windows`): `--run=<folder>`
+      (made if missing); run.zon read with `PpoRun.parse` (one with every default written when absent); the Vulkan
+      host without a window, `zn_mlp` from its SPIR-V, Geno as the page builds it; resumed from the folder's weights
+      and log (refused, folder untouched, when they do not fit); the servo measured alone; then `collect`/`learn`
+      flat out, a log line per batch, weights + log + status rewritten whole (new file, rename) after the first
+      batch and every `save_minutes`, checkpoints `weights_b<N>` every `checkpoint_minutes`; ends on `stop` (consumed)
+      or `stop_after_hours`/`stop_after_batches`; a progress line at most every 10 s. Exit 0 ended, 1 refused, 2 GPU.
+      Found and fixed on the way: (1) the servo baseline was measured WITH the root assist (full at batch 1), so it
+      read "never fails" - in the trainer, `geno_ppo` and `getup_train` it is now measured with the assist off (2.0 s
+      on lavapipe); (2) a resumed trainer ran its first batch at the assist's START, not where the schedule had it -
+      `Trainer.assistAfter(iterations)`, used by `learn` and by `importWeights`. Checked on lavapipe: a 3-batch run
+      (files, `.finished`), a resume to 5 (assist 0.990, 0.987), a stop (`.stopped`, the file removed), a refusal of a
+      wider network (weights byte-identical), a refusal of `.envz` (named), a default run.zon written; the Windows
+      build compiles. Lint, test-fast green; robot-mocap tutorial 10.5 describes the run folder.
+  Simon, Oct 17, later: "with the visual app, we can also start a new training, by choosing values for the
+  parameters in a ui. It saves the zon and starts the headless training as a separate program. We can start multiple
+  trainings like that and compare their learning curves. We can kill them when we see that they are finished or when
+  they dont work. The ui makes it easy to choose which network to run on the character." So the viewer becomes a
+  TRAINING LAB (native), and the web keeps the viewer and the demo:
+
+  RT3 TWO ENGINE PIECES, each one definition for its users. (a) Child programs: the gallery's start, watch and stop
+      (`std.process.spawn`, a watcher thread recording the exit, the system's own termination by the id taken at
+      start) moved into the engine, the gallery its first user. (b) Files by path, natively: read, write (new file
+      then rename), list a folder, the program's own folder; a web build declares them unavailable with a comptime
+      error naming why.
+      RT3 DONE (Oct 17), and reviewed against Simon's rule ("passing allocs and io to functions that need to
+      allocate or do io ... by default we pass it ... we like static functions with many args"). `native_os.zig`
+      (exported as `z.native_os`): files by path - `readWhole`, `writeWhole` (new file, rename), `fileExists`,
+      `deleteFileIfPresent`, `makeFolder`, `listFolder`/`freeFolderEntries`, `executableFolder`, each taking the
+      caller's `gpa` and `io`, a web build refused at compile time; `ChildProgram` (start with the caller's `io`,
+      watched by a thread that receives it, stopped by the system's call, `deinit`), the watcher a member of it.
+      `servicesIo()` (was `io()`) only for callers with no `Io` to pass: the platform contract's saved values and an
+      app. The gallery uses both (its own process code, `kernel32` declarations and `Io.Threaded` gone); the
+      trainer's `Run` became `RunProgress` (plain state) and its work static functions taking `gpa`, `arena`, `io`,
+      the folder, the trainer and the progress. `native_os.zig` a fast test root (its two libc tests skip there).
+      Checked: native_os's tests, test-fast (full), lint, both gallery builds and the trainer, the trainer's
+      scenarios (to 3, resume to 5, stop, wider refused), the gallery starting and watching an example. Then
+      `geno_ppo`'s helpers: `appendLogLine(gpa, training_log, batches, training_seconds, stats)` returns its error,
+      `autosaveIfDue(gpa, trainer, task, training_log, progress)` returns whether it saved, `resumeFromAutosave(gpa,
+      trainer, task, training_log)` returns a `ResumeOutcome` (nothing saved, refused by name, resumed) - the page's
+      status set by the callers. `startTask`/`startOver` keep the page state: they swap the page's trainer and clip.
+      Resuming checked again headless.
+  RT4 THE LAB, THE CHARACTER. A native app: a run folder chosen (a list of the folders under the lab's runs folder,
+      or a file dialog), its `run.zon` and newest weights - or one of its checkpoints - loaded; Geno on the floor
+      follows the dance with that policy's corrections, the reference beside it; reloading picks up newer weights.
+      RT4 STEP 1 (Oct 17): `ppo_track.Trainer.Show` - a policy shown, not trained or judged: characters on a fleet
+      of their own, each decision the policy's mean action through DReCon's filter exactly as `evaluate` acts, but a
+      physics step at a time (`startShow(gpa, characters, seed)`, `stepShow`, `endShow(gpa, show)`), kept between
+      calls for a viewer to draw. Test: on the judge's seed with as many characters, `decisions x decimation` steps of
+      a show count exactly the exposure and failures `evaluate(decisions)` judges; control: another seed lives a
+      different show.
+      RT4 DONE (Oct 17). `examples/geno_lab` (registered like geno_ppo: `zn_mlp_entries`, one list in build.zig for
+      both; `configureGenoLab` embeds geno_ppo's dance.zclip): lists the run folders in `runs` beside its
+      executable (`listRuns`: `native_os.listFolder`, folders only, by name), shows the first at start, a click shows
+      another (`loadRun`: run.zon, `PpoRecipe.options` with one environment, the trainer, `readWeights`, a show of
+      one), "reload weights" reads the newest weights into the same network, "refresh" lists again. Each frame one
+      `stepShow`; the character and the reference drawn as the page draws them; the camera follows the character's
+      root. Native only for the folder list (comptime `is_browser`): the web build compiles without it. Found on
+      the way: the dance carries Geno ~4 m from the origin, outside a camera orbiting the origin - in geno_ppo too,
+      which never showed its character headless; both cameras now follow (`yUpOf` the root). Checked: the lab
+      headless beside a runs folder of two runs (dance-a shown at batch 146, Geno and the reference mid-dance), the
+      web and Windows builds, geno_ppo headless (character 0 in view, servo 2.0 s). Tutorial 10.5: the lab and
+      showing a policy. NOT YET in RT4: choosing one of a run's checkpoints (RT5, with the curves: a checkpoint is a
+      point on its run's line), and a file dialog (RT7, the web viewer; natively the runs list replaces it).
+      REVIEW (Oct 17, Simon: "verify it, make it more precise, review our code, look for bugs"), fixed and checked:
+      (1) `native_os.listFolder` freed `entries.items` - shorter than the list's allocation - on a failure part-way:
+      an invalid free; now the names, then the list. (2) the lab's "refresh" kept the shown run's INDEX, so
+      "reload weights" could read another run, or past the list's end; the shown run now keeps its folder name and a
+      refresh finds it again by name. (3) the trainer promised exit 2 for any setup failure but only a failed Vulkan
+      start gave it; `main` now refuses (1) and `runTraining` fails (2): the GPU, the robot, a file not written.
+      (4) `ChildProgram.start` left a child unwatched - `running` for good - when its watcher thread could not start;
+      such a child is now ended at once, `not_started`. (5) `PpoRun.problem`: every value checked against what the
+      trainer needs (at least one character, decision, pass, unit; minibatch within envs x horizon; gamma, lambda,
+      beta in range; positive finite step size, scale, save interval) - the trainer refuses, naming the field; the
+      lab refuses to load such a run; test. (6) the lab stepped one physics step a frame - a 144 Hz display played
+      the dance 2.4 times too fast; it now steps the frame's time, at most 4 steps. (7) `exportWeights` wrote GPU
+      parameters from the latest READBACK beside the trainer's CURRENT counters (Adam's step, batches, normaliser):
+      a saved file could pair one update's parameters with the next's counters; `isReadbackCurrent` /
+      `waitForReadback` - the trainer waits before every save and checkpoint, the page autosaves only on a batch whose
+      readback is current. Checked: PpoRun's tests (5), the show test, native_os's tests, lint, the trainer and lab
+      builds; the trainer's scenarios (to 3, resume to 5 with the assist at 0.987, stop, `envs = 0` refused by name,
+      a wider network refused with the weights untouched); the lab headless (Geno in different poses at frames 60 and
+      120).
+      REVIEW 2 (Oct 17, Simon: "intermediate locals everywhere to reduce expression complexity to the minimum
+      possible ... optimise for understanding"; `dt` a local for `f.time.delta_time`). The lab, the trainer,
+      `stepShow`, `PpoRun.problem`, `assistAfter`, zbuild's `fixedFileReport`, the gallery and geno_ppo's drawing:
+      nested calls split into named steps, values that do not change hoisted out of loops (the lab's steps owed
+      computed before its loop, the show's steps per decision before its characters), compound conditions named
+      (`is_gamma_in_range`, `is_save_due`), the trainer's first save of a start a flag (`has_saved_this_start`)
+      instead of minutes compared within 1e-6. Found by naming: the drawn floor's slab sat 0.4 m below the grid,
+      where the physics floor is - in the lab and in geno_ppo; now its top is 5 mm below (`floor_top`). Checked:
+      lint, the show and PpoRun tests, zbuild's tests, the trainer's scenarios, the lab and geno_ppo headless (Geno
+      on the drawn floor), the Windows gallery build.
+      PARAMETERS, NOT GLOBALS (Oct 17, Simon: "I dont like globals, they give a bad feeling even if they are
+      const"). File-scope values sorted four ways: VOCABULARY (imports, aliases, types, embedded bytes) stays; FACTS
+      OF DATA are read from the data (the lab's timestep is `model.opt.timestep`; derived values are locals); SHARED
+      DEFINITIONS become types in the shared module - `geno.physicsOptions()` (Geno's physics, now also used by six of
+      robot_geno's own builders), `geno.RunFile` (the run folder's files: names, `most_bytes`, `checkpointName`),
+      `geno.RunLog` (the log's header and `appendLine`, with a test), `ppo_track.secondsToFailure(steps_watched,
+      failures, physics_steps_per_second) ?f32` (null when nothing failed; `status.zon` writes null), the trainer's
+      `Exit` enum, `RecentBatches.window_batches` a declaration of the measure; PARAMETERS become defaulted structs in
+      the state, passed to static functions - the lab's `Look`, `Floor`, `Pacing` (`stepShowForFrame(trainer, show,
+      pacing, timestep, dt, owed_seconds)`, `drawFloor`), the trainer's report interval the option
+      `--report-seconds`. `rbt`'s import moved to robot_geno's top. Checked: lint, test-fast (full), the RunLog,
+      PpoRun and show tests, the trainer's scenarios and exit codes, the lab headless. Then geno_ppo the same way:
+      `Look`, `Floor` (`drawFloor`) and `Autosave` (interval, the log's limit - passed to `autosaveIfDue` and
+      `resumeFromAutosave`) in its state; its `PpoRecipe` a state field (`Task.options(task, recipe)`, the servo's
+      buffer sized by it, the servo counting its fleet's characters); `history_len`, `window_batches`,
+      `milestones` declarations of `Progress`, whose arrays they size; its time to failure `ppo_track.
+      secondsToFailure` at the model's steps per second (`physicsStepsPerSecond`, passed to `recentWindow` and
+      `drawCurve`); its log `geno.RunLog`; its physics `geno.physicsOptions()`. FOUND: the page never autosaved since
+      review fix (7) - it checked right after `learn()`, which has just dispatched an update, so the readback was
+      never current; now checked every frame (after the first batch), it saves a frame or two after each update.
+      Checked: lint; the page headless twice on one values folder - batch 1 saved (its log through RunLog), the
+      second run "resumed from batch 1"; its web build; the folds.
+      EVEN STEPS (Oct 18, Simon: "for now we can do the smooth slowdown with fixed physics dt"; physics
+      interpolation later; animation playback with its own timescale is a separate question). The lab's stepping
+      carried a remainder and took the whole steps owed - at a steady 60 the remainder settles at a step's boundary,
+      and the filtered frame time, never exactly 1/60, tips it into frames of no step or two (a freeze, a jump).
+      `ppo_track.ShowPacing` (most steps per frame, a quarter-step tolerance) and `showStepsForFrame(dt, timestep,
+      pacing)`: the frame's duration in steps plus the tolerance, rounded down, at least 1, at most 4, nothing
+      carried - one step a frame at 60 (jitter of 2 ms either way included), 50 and 40 in slow motion (0.83, 0.67),
+      two at 30; test of each case. Rejected: a shorter last step per frame (the policy, the clip's frames and the
+      decisions are on the 1/60 grid; the show would no longer live what the judge judges). Not fixable without
+      interpolation: a 144 Hz display shows the pacer's 60 frames for 2 or 3 refreshes each.
+  RT5 THE LAB, THE CURVES. What is read: every run folder's `log.csv` (the columns `geno_trainer` writes) and
+      `status.zon` (its state, the servo's time to failure), read again every 5 s - the log from the byte it was read
+      to, its last line kept back when it has no newline yet. What is drawn, one line a run, in its own colour, all
+      on one pair of axes: x = training minutes (the log's second column); y = the time to failure over the window
+      of the run's last 8 batches, in seconds - the steps watched over the failures, at 60 steps a second, the
+      trainer's own `RecentBatches` measure - plotted on a log scale from 1 s to 60 s, a window with no failure drawn
+      at the top edge; the servo's time to failure a dashed line of the run's colour. Beside each run's name: its
+      state from `status.zon`, or "silent" when the status says training but has not changed for 3 x save_minutes
+      (a trainer that died without a word); its batch; its latest time to failure. A click on a point of a line shows
+      the checkpoint nearest that batch (`weights_b<N>`), or the newest weights for the line's end. The parsing is a
+      function of the text alone (log text -> points), tested: a window with no failure, a log kept back mid-line, a
+      header-only log. DONE WHEN, headless: a runs folder of two logs of different shapes gives a capture with two
+      lines, their names and states; the parsing tests pass.
+      RT5 STEP 1 (Oct 18): the reading. `geno.RunLog.Line` / `parseLine` (a batch's line read back into named
+      fields, the inverse of `appendLine`; null for the header, a missing or extra column, a column not a number);
+      `RunLog.window_batches` (8) - the trainer's `RecentBatches` and the page's `Progress` now take their window from
+      it; `geno.RunCurve` (`readMore(gpa, log_text, physics_steps_per_second)`: the whole lines past `bytes_read`, a
+      last line without its newline waiting, a shorter log read again from its start, a stranger's line skipped and
+      counted; a `Point` per batch - batch, training minutes, the window's `?f32` time to failure). Tests: a written
+      line read back field for field, the header and malformed lines refused; three batches give none, 20 s, 10 s;
+      a partial last line waits then is read once, a shorter log restarts, a stranger's line is counted. Checked:
+      lint, the tests, the trainer (to 3) and the page with the shared window.
+      RT5 STEP 2 (Oct 18): the lab draws them. Engine: `ui.plotCurves(label, curves, opts) ?PlotClick` beside
+      `plotLines` - several `PlotCurve`s (xs, ys, colour, an optional dashed baseline) on one pair of axes, y linear
+      or logarithmic (`PlotScale`), marked values with faint lines and numbers, the x range's ends under the frame,
+      values outside an axis held at its edge, where it was clicked returned in its own units; each point placed once.
+      `geno.RunState` / `RunStatus` (with `parse`) moved from the trainer to robot_geno, so the lab reads what the
+      trainer writes. The lab: a `RunWatch` per run (its `RunCurve`, the plot's xs/ys, its status), read at a
+      refresh and every `CurvesRefresh.interval_seconds` (5); each run's line under its name in its colour (state,
+      batch, latest time to failure); the plot (`CurvePlot`: 1-60 s, log, marks 1/5/20/60, 180 px; `Look.runs`
+      colours; nothing-failed at the top; the servo dashed). Found: the plot did not advance the layout (the buttons
+      drawn over it) - `advanceLayout` added. Checked: lint, the trainer, the lab headless beside dance-a (146
+      batches) and dance-b (7).
+      RT5 DONE (Oct 18). A click on the curves: `nearestCurvePoint` (distance measured as drawn: minutes as a share of
+      the x range, `decadesAboveLowest` as a share of the log y range), `showPickedPoint` - the run's checkpoint
+      nearest the batch (`weightsNearest`: `RunFile.checkpointBatch`, the inverse of `checkpointName`, over the
+      folder's names) or its newest weights for a curve's last point; `loadRun`/`readWeights`/`showRunWith` take the
+      weights' file name. Silence: `RunStatus.written_at_seconds` (the trainer stamps every status with
+      `native_os.wallClockSeconds`; 0 = unknown, never judged) and `RunStatus.isSilent(now, save_minutes)` (training
+      or measuring, older than 3 save intervals); the lab reads each run's `save_minutes` from its run.zon once.
+      Tests: checkpoint names both ways; silence (recent, old, finished, unknown age). Checked: lint, the tests, the
+      trainer (six checkpoints, a stamped status), the lab headless - a click near the first point of a run's curve
+      showed `weights_b0000001`, batch 1.
+  RT6 THE LAB, STARTING AND STOPPING RUNS. A form: the motion; every field of `PpoRecipe`, each a number box
+      starting at the run's default; save and checkpoint minutes; the stop limits; the run's name (starting as the
+      motion and the start's date and time). "start" is refused while `PpoRun.problem` names a problem or a folder of
+      that name exists; otherwise it makes `runs/<name>`, writes its `run.zon` whole (`PpoRun.write`,
+      `native_os.writeWhole`), and starts the trainer beside the lab's executable on it (`ChildProgram.start` with
+      `--run=<folder>`). Several at once: each its own `ChildProgram`, its state and exit code beside its line (RT5).
+      "stop" writes the folder's `stop` file (the trainer saves, then exits 0); "end now" ends the process
+      (`ChildProgram.stop`: the last save is the newest kept). Runs the lab did not start - another lab's, a trainer
+      started by hand - show their state from `status.zon` and are stopped by their `stop` file only. DONE WHEN,
+      headless: a script fills the form (envs 4, stop after 3 batches) and starts it; the folder appears with its
+      `run.zon`; the trainer exits 0; the run's line is drawn; a second run started and stopped by its file ends
+      `stopped`.
+  RT7 THE WEB VIEWER AND THE DEMO. On the web the lab shows a run chosen by file dialog (`z.userfile`): its
+      `run.zon` and a weights file, picked together; the curves and the form stay native. THE DEMO: the lab built
+      with one run embedded (`-Drun=<folder>`: its `run.zon` and `weights` as anonymous imports) shows that run from
+      the start with no panel but the run's name and batch - one standalone HTML file, in release mode, its size
+      reported. DONE WHEN: the demo page's headless check shows Geno with the embedded run's batch, and a file-dialog
+      load in the web viewer's test shows a run's batch.
+  RT8 THE WINDOWS PACKAGE. `zig build lab-package-windows`: one zip of `geno_lab.exe`, `geno_trainer.exe`, a
+      `runs` folder with one example `run.zon`, and a checklist (start the lab; start a run from the form; watch its
+      line; reload; stop by file; where the weights are; how to build the demo from a run folder). DONE WHEN: the
+      step makes the zip and its listing is exactly those files.
+  RT9 THROUGHPUT. The characters of the trainer's fleet stepped on the CPU's cores (the engine's job threads), the
+      networks' update unchanged on the GPU; more characters per batch. Measured as batches per hour, and minutes to
+      each time-to-failure milestone, on the same run folder before and after, on Simon's Windows machine - the first
+      measurement this plan makes, now that the pieces are assembled.
+  Simon, Oct 18: "a new action dimension, that is a magic force that pushes on every bone so it comes back to
+  reference ... using this action would reduce the reward ... It would be like training wheels that the agent can
+  decide to use when needed instead of always being there." Then, after the discussion: "just one schedule, no phase
+  2 ... after one hour, there is no force ... increase price and reduce cap at the same time, gradually ... I just
+  want to speed up the training so the first hour has more facility finding directions for how to balance."
+  RT10 THE TRAINING WHEELS - help the policy asks for, priced, gone after an hour. Needs RT6 (the lab starts the arms
+      below) and nothing after it. Built behind one option, off by default: every run without it is today's to the bit.
+      DECIDED (Simon, Oct 18): the force on every body, in proportion to its mass; ONE action number in [0, 1] - "this
+      much training wheel now"; ONE schedule, no second phase; no force after the first hour; the price sets itself
+      and rises as the cap falls; the cap falls smoothly to zero.
+      WHY. In the first hour most of PPO's episodes end in a fall within a second or two (the servo alone: 1.53 s), and
+      a fall is a CLIFF - the rest of the episode's reward is lost at once, and the policy learns balance only from the
+      falls it actually has. Today's root assist (`Gains.assist` - its idea is ZEST's; the comment's credit to RFC is
+      corrected in this step) holds the character up on a fixed fade the policy neither chooses nor sees. ZEST
+      (Sleiman et al., RAI / Boston Dynamics, arXiv 2602.00401, Jan 2026; read Oct 18 with its supplementary S6): a
+      model-based wrench at the torso - a PD on its orientation (200, 10), damping only on its velocity (0, 10: no pull
+      toward where the reference is), the reference's accelerations fed forward, gravity cancelled with the whole-body
+      mass - scaled by kappa <= 0.6, set per time bin of the clip from that bin's running failure average, held for the
+      episode, zero once the bin tracks at 0.8; the actor never sees it, the critic does. Their ablation: without it,
+      20 h of training reaches about what 10 h reaches with it, mostly on motions with large torso rotations; easy
+      motions barely need it. Simon's version turns the cliff into a SLOPE: the policy asks for help with one number and
+      pays for every step of it, so the help it buys is a graded measure of how close it came to falling, and the
+      directions toward balance are found down that slope - in the hour when falls would otherwise end most episodes.
+      And it is state-driven, not clock- or bin-driven: it helps THIS rollout when it is in trouble.
+      THE FORCE - every body b, in proportion to its mass, at its centre of mass (`body_xipos`, `body_mass`):
+          f_b = kappa * m_b * (a_ref_b - g + k * (r_ref_b - r_b) + c * (v_ref_b - v_b))
+        r_b is the body's place RELATIVE TO THE CHARACTER'S CENTRE OF MASS (the reference body's likewise, relative to
+        the reference's), v_b its velocity, a_ref_b the reference body's acceleration (its velocities at frames f and
+        f + 1, from the reference states the tracking error already builds), g gravity; k = 200, c = 10 - ZEST's
+        numbers. Summed over the bodies this is ZEST's wrench done exactly, applied where the mass is:
+          - the total force is M * (a_ref_com - g + c * (v_ref_com - v_com)): gravity cancelled, the centre of mass's
+            velocity damped toward the reference's, and NO spring on its position (ZEST's 0) - drift stays the task's;
+          - the moment about the centre of mass is k * I_com * theta for a whole-body rotation theta, damped by
+            c * I_com: a rotational spring on the body's TRUE composite inertia (ZEST approximates it with a nominal
+            torso inertia), so tipping is resisted at the same rate whatever the pose; gravity's share has no moment;
+          - what remains pulls the limbs toward the reference's shape - 200 against the servo's 20 Hz spring (w^2
+            ~ 15,800; ~1,650 after the implicit step's softening at 60 Hz), so it is small beside the joints, which
+            already do that job.
+        NOT smaller in total than a root wrench: the force and moment that save a fall are physics, and gravity's
+        share is kappa * M * g however it is spread. What IS smaller is the force at any one point and the loads it
+        puts through the joints - no hook at the pelvis holding a sagging torso up through the spine. Into the
+        equations as generalised forces by `rbt.applyForceAtPoint` (J^T, one body at a time): no mass matrix, cheaper
+        than `rootAssist`'s dense one every step. Recomputed every physics step from that step's state; explicit at
+        60 Hz, w dt = 0.24 and c dt = 0.17, well inside the explicit spring's bound (robot_maximal's
+        h^2 + 4 zeta h < 4). With kappa 0 the function is not entered.
+      THE GATE - one more action number: gate = max(0, a), a the policy's clamped action in [-1, 1], so "no help" is a
+        whole half of the range and exploration noise around a negative mean does not leak help; through Simon's
+        filter like every action (the force does not flicker at 30 Hz; it lags ~0.15 s, as every offset does);
+        kappa = cap(s) * applied gate. Its output starts at 1 (that one output's bias), so the first batches are helped
+        as today's are. The policy sees the applied gate (DReCon's observation already ends with the applied action)
+        and two more numbers, the cap and the price; the critic sees what the policy sees (ZEST measured noisier values
+        when its critic could not see the assist).
+      THE CLOCK - s = training minutes / `minutes` (60), clamped to [0, 1]: the trainer's own clock (`trainingMinutes`,
+        carried across resumes), because "after one hour there is no force" is the rule. The cost of a clock in
+        minutes: a run's help depends on its machine's speed - so every batch's cap and price go into its log line,
+        any run reads back exactly the help it had, and the tests drive the schedule through s directly.
+      THE CAP - cap(s) = start_cap * (1 - smoothstep(0, 1, s)) = start_cap * (1 - 3 s^2 + 2 s^3) (`zm.smoothstep`),
+        start_cap 0.6 - ZEST's most, below 1 because at full gravity cancelling Geno weighs nothing: his feet press on
+        nothing, friction vanishes, and no footwork is learned while he is held. Flat at the start (97% of the help
+        left at six minutes), half at thirty, and FLAT AT THE END: the last of the force fades with zero slope, so the
+        hour ends without a step. cap(s >= 1) = 0 and the force is not entered - no force after the hour, by
+        construction. (Considered: (1 - s)^2, the quadratic that also lands flat - but it gives up a fifth of the help
+        in the first six minutes, the minutes the help is for.)
+      THE PRICE - every step's reward pays price * applied gate. Linear, so a little help is not free: L1's sparsity -
+        help where it is worth its price and exactly none elsewhere, where a squared cost would allow a little
+        everywhere. It never makes a step worse than asking for nothing, so falling on purpose to stop paying is never
+        the better deal. The price SETS ITSELF to hold the batch's mean applied gate at `share` (0.25) of the help
+        available - a PI update after every batch (Stooke, Achiam, Abbeel 2020, the PID Lagrangian: the proportional
+        term damps the overshoot of plain dual ascent):
+            e = mean applied gate - share;  I = clamp(I + e, 0, price_max / k_i);  price = clamp(k_p e + k_i I, 0, price_max)
+        k_p 0.5, k_i 0.05 (help used 0.25 over the share is priced at about 0.25 within ten batches), price_max 1 (help
+        that costs a whole step's best reward). The share is of what is AVAILABLE, so the price climbs by itself as the
+        cap falls: the same gate buys less help, the policy asks for more, the price answers - price up and cap down
+        together, one schedule. The clamps are the windup guard (claude.md: a never-zero error winds an integrator to
+        its limit): where the body truly cannot do without help, the price stops at price_max rather than growing
+        without bound - and help whose use will not fall there marks the frames the body cannot follow (Stage F's
+        question, answered for free). After the hour the price is frozen and not charged; the gate's output is read by
+        nothing (and nothing at run time - the lab's show and RT7's demo run at cap 0).
+      THE STATE AND THE OPTIONS - the price, its integral and the clock travel with the trainer's other counters in the
+        weights file, so a resumed run continues where its help was; the log line gains cap, price, mean applied gate
+        and mean kappa (`geno.RunLog`, `parseLine`). `PpoRecipe.wheels`: enabled, minutes, start_cap, share, price_max,
+        k_p, k_i, policy_gated, spring, damping - checked by `PpoRun.problem` (minutes above 0, start_cap in [0, 1),
+        share in (0, 1), and `assist_start` 0 when the wheels are on: one helping hand at a time). With the wheels on
+        the policy has one more output, so weights without it are refused as a different shape, as a wider network is.
+      THE JUDGE stays unhelped: the servo, `evaluate` and the lab's show all run at cap 0. During the hour the training
+        batches measure a helped task, so the trainer also judges the policy with the help off every 5 training
+        minutes of the hour and logs it, and the lab draws THOSE as the run's line until the hour ends (the helped
+        batches stay in the log).
+      THE A/B, from the lab (RT6): same seed and recipe, 3 hours each.
+          0  no help (`assist_start` 0)
+          1  today: the root assist, fading from 1 over 300 batches
+          2  the body force on the clock, no gate and no price (`policy_gated` false: kappa = cap(s); the observation
+             as arm 3's) - ZEST's force on Simon's schedule, which separates THE FORCE from THE GATE (an A/B that
+             changes two things measures neither)
+          3  the training wheels
+        The verdict: minutes until the UNHELPED time to failure reaches 5 s, 10 s and 20 s; and no dip in arm 3's line
+        as its hour ends (arm 1's may dip as its help drains - the lab sketch's "failures come back"). A second seed
+        before adopting anything (I1b's rule); into `PpoRecipe`'s defaults only on a clear win.
+      KNOWN ANSWERS: (1) THE FORCE - at rest on the reference with kappa 1 and no contact, every body's force is
+        -m_b g and one step leaves every velocity zero (weightless); the reference rotated by a small theta about the
+        centre of mass gives the angular acceleration 200 theta whatever the pose (the inertia cancels); the reference
+        TRANSLATED gives no force at all - negative control: a planted spring on the centre of mass's position fails
+        exactly this one; kappa 0 leaves the fleet bit for bit. (2) THE SIGN, the root assist test's shape: the servo
+        alone at a constant kappa 0.6 ends fewer episodes than without. (3) THE GATE - an action of -0.5 applies
+        nothing; the reward paid equals price x applied gate on a planted decision; with `policy_gated` false, kappa
+        follows cap(s) exactly. (4) THE CAP - 0.6 at s 0, 0.3 at 0.5, 0 at 1 and after, slope zero at both ends; past
+        the hour the fleet is the unhelped fleet bit for bit. (5) THE PRICE on planted use sequences - above the share
+        raises it, below lowers it, never under 0 or over price_max, the integral never under 0. (6) A run stopped at
+        minute 20 and resumed continues with the same price and cap.
+      DONE WHEN: headless here, a tiny run with `minutes` 1 shows the cap reaching 0 at its first training minute, the
+        price moving, the log's new columns, a resume mid-hour carrying price and cap, and the lab drawing its unhelped
+        looks; on Simon's machine, the four arms' curves on the lab's plot. SIZE: 3 turns - the force and its tests;
+        the gate, clock, cap and price in PPO; the trainer, log and lab.
+      CARRIES TO R5: on SuperTrack's pathwise loss the price is one more differentiable term and the gate one more
+        action the world model reads (R5.8's gym, "a curriculum from generous to human strength").
+
 ## 0. Standing rules (every turn)
 
 **No test or run longer than 5 minutes (Simon, Sep 28).** A bench arm is at most 4-5 minutes; a comparison is made
@@ -2794,7 +3241,9 @@ SuperTrack, but more robust to large perturbations, and even invent get-ups to g
     perturbations: pushes (cube impacts of growing mass), drops followed by 150 steps of random torques (PHC's
     fallen starts), far starts (2-5 m, any heading), trips mid-dance; no termination by falling, only by length;
     the replay balanced near / far (R5.5's risk 4). If get-ups are not invented: a curriculum from generous to human
-    strength and from slow to full speed, as "Learning to Get Up" (Tao et al. 2022) does - to verify when read.
+    strength and from slow to full speed, as "Learning to Get Up" (Tao et al. 2022) does - to verify when read; or
+    RT10's training wheels (help the policy asks for, mass-proportional on every body, priced, gone on a clock),
+    carried to the pathwise loss.
 
 **R5.9 The judge for the north star** (mean time to failure becomes meaningless once a policy recovers):
   PRECISION on the dance from random starts, unperturbed: local and global mean per-joint position error (mm),

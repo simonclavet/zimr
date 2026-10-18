@@ -76,7 +76,8 @@ implementation and a matching set of GPU kernels. This document covers the libra
   <li><a href="#calc">Calculus and Fourier</a>
     <ol><li><a href="#fft">The transform</a></li>
         <li><a href="#rfft">Real input</a></li>
-        <li><a href="#signal">Convolution</a></li></ol></li>
+        <li><a href="#signal">Convolution</a></li>
+        <li><a href="#imdct">The inverse MDCT</a></li></ol></li>
   <li><a href="#autograd">Autograd</a>
     <ol><li><a href="#agvalues">Values are indices</a></li>
         <li><a href="#agtape">Eager forward, recorded backward</a></li>
@@ -18929,16 +18930,17 @@ pub fn fft(comptime T: type, data: []ComplexNumber(T), exponent_sign: T) Error!v
         }
     }
 
-    // Butterflies, stage by stage.
+    // Butterflies, stage by stage. A stage of blocks `width` long uses `width / 2` twiddles, the same in
+    // every block: each is computed once, and applied to its place in every block.
     var width: usize = 2;
     while (width &lt;= n) : (width &lt;&lt;= 1) {
         const step: T = exponent_sign * @as(T, tau) / @as(T, @floatFromInt(width));
-        var block: usize = 0;
-        while (block &lt; n) : (block += width) {
-            var k: usize = 0;
-            while (k &lt; width / 2) : (k += 1) {
-                const angle: T = step * @as(T, @floatFromInt(k));
-                const twiddle: ComplexNumber(T) = .{ .re = scalarCos(angle), .im = scalarSin(angle) };
+        var k: usize = 0;
+        while (k &lt; width / 2) : (k += 1) {
+            const angle: T = step * @as(T, @floatFromInt(k));
+            const twiddle: ComplexNumber(T) = .{ .re = scalarCos(angle), .im = scalarSin(angle) };
+            var block: usize = 0;
+            while (block &lt; n) : (block += width) {
                 const even: ComplexNumber(T) = data[block + k];
                 const odd: ComplexNumber(T) = twiddle.mul(data[block + k + width / 2]);
                 data[block + k] = even.add(odd);
@@ -19168,6 +19170,171 @@ is named for the mathematics and does.</p>
 <p>Every mode is a window onto <code>full</code> and exactly that rather than
 checking each mode's numbers independently &mdash; an off-by-one in <code>same</code> or
 <code>valid</code> is the classic error, and a standalone test of either would not see it.</p>
+
+<h3 id="imdct">13.4 The inverse MDCT<a class="anchor" href="#imdct">#</a></h3>
+
+<pre><code class="zig">try zn.imdct(f32, block, coefficients, scratch);   // block is 2N, scratch is N/2, N a power of two
+try zn.imdctDirect(f64, block, coefficients);      // the definition, any N</code></pre>
+<div class="zn-source">
+<details class="src-fold"><summary><code>imdct</code></summary><pre><code class="zig">/// The inverse modified discrete cosine transform of `coefficients` - `N` of them, a power of two, at least
+/// 2 - into `out`, its `2N` samples, as `imdctDirect` defines it; `scratch` holds `N/2` complex values.
+///
+/// WHAT IT IS FOR
+///
+/// Transform codecs - Vorbis, AAC, Opus's CELT - cut sound into blocks of `2N` samples, each overlapping
+/// half of the next, and describe each block by `N` coefficients: half as many numbers as samples, so the
+/// blocks' overlap costs nothing. The `N` coefficients cannot hold `2N` samples, and the inverse does not
+/// give them back: each half of its block comes out with a mirror image of itself added - time-domain
+/// aliasing - the first half's mirror negated, the second's not. Windowed, and added to the halves of the
+/// blocks either side, the mirrors cancel: time-domain aliasing cancellation (Princen and Bradley, 1986).
+/// With a window `w` whose halves meet `w[t]^2 + w[t + N]^2 = 1`, the sum is the signal again, times
+/// `N/2` for this unscaled pair.
+///
+/// HOW: A DCT-IV, UNFOLDED
+///
+/// The cosine at sample `t` is the DCT-IV's cosine at `m = t + N/2`:
+///
+///     Y[m] = sum over k of  coefficients[k] * cos(pi/N * (m + 1/2) * (k + 1/2)),   m = 0 .. N-1
+///
+/// and past `m = N` the cosine's symmetries fold `m` back - about `N` with its sign turned, about `2N`
+/// with its sign turned again. So the `2N` samples are the `N` values of `Y`, each written twice:
+///
+///     t in [0, N/2):        out[t] =  Y[t + N/2]
+///     t in [N/2, 3N/2):     out[t] = -Y[3N/2 - 1 - t]
+///     t in [3N/2, 2N):      out[t] = -Y[t - 3N/2]
+///
+/// AND THE DCT-IV THROUGH ONE COMPLEX TRANSFORM OF N/2 POINTS
+///
+/// The even coefficients go into the real parts and the odd ones, from the top down, into the imaginary
+/// parts: `z[j] = coefficients[2j] + i * coefficients[N - 1 - 2j]`. Turned by `e^(-i pi (4j + 1) / 4N)`,
+/// transformed, and turned again by `e^(-i pi j / N)`, the results hold the DCT-IV's outputs in pairs:
+/// `Y[2j]` is the real part, and `Y[N - 1 - 2j]` the imaginary part negated. The work is the `N/2`-point
+/// `fft` and two passes of `N/2` turns - against the definition's `2N^2` products.
+///
+/// `imdctDirect` checks it at every power of two from 2 to 1024, sample for sample.
+pub fn imdct(
+    comptime T: type,
+    out: []T,
+    coefficients: []const T,
+    scratch: []ComplexNumber(T),
+) Error!void {
+    comptime requireFloat(T);
+    const n: usize = coefficients.len;
+    if (n &lt; 2 or (n &amp; (n - 1)) != 0) {
+        return Error.UnsupportedShape;
+    }
+    if (out.len != 2 * n or scratch.len != n / 2) {
+        return Error.ShapeMismatch;
+    }
+    const n_float: T = @floatFromInt(n);
+    // Packed, the odd coefficients reversed, and turned by e^(-i pi (4j + 1) / 4N): -(4j + 1) / 8N of a turn.
+    for (scratch, 0..) |*point, j| {
+        const packed_point: ComplexNumber(T) = .{ .re = coefficients[2 * j], .im = coefficients[n - 1 - 2 * j] };
+        const turns: T = -@as(T, @floatFromInt(4 * j + 1)) / (8 * n_float);
+        const turn: ComplexNumber(T) = .{ .re = scalarCosTurns(turns), .im = scalarSinTurns(turns) };
+        point.* = packed_point.mul(turn);
+    }
+    try fft(T, scratch, -1);
+    // Turned by e^(-i pi j / N) - -j / 2N of a turn - into the DCT-IV's outputs in pairs, each written to its
+    // two places in the block.
+    for (scratch, 0..) |point, j| {
+        const turns: T = -@as(T, @floatFromInt(j)) / (2 * n_float);
+        const turn: ComplexNumber(T) = .{ .re = scalarCosTurns(turns), .im = scalarSinTurns(turns) };
+        const turned: ComplexNumber(T) = point.mul(turn);
+        writeImdctOutput(T, out, n, 2 * j, turned.re);
+        writeImdctOutput(T, out, n, n - 1 - 2 * j, -turned.im);
+    }
+}
+</code></pre></details>
+<details class="src-fold"><summary><code>imdctDirect</code></summary><pre><code class="zig">/// The inverse modified discrete cosine transform, written out: of `N` coefficients, the `2N` samples
+///
+///     out[t] = sum over k of  coefficients[k] * cos(pi/N * (t + 1/2 + N/2) * (k + 1/2)),   t = 0 .. 2N-1
+///
+/// unscaled, as `dft` is. O(N^2), and the one thing `imdct` can be checked against that is not another
+/// fast transform. The phase is kept exact: the cosine's angle is pi * (2t + 1 + N) * (2k + 1) / (4N),
+/// so its turns are the integer (2t + 1 + N) * (2k + 1), taken modulo 8N, over 8N - where the product
+/// itself, near 2N^2 for the last sample and coefficient, would have lost its fraction in a float.
+pub fn imdctDirect(comptime T: type, out: []T, coefficients: []const T) Error!void {
+    comptime requireFloat(T);
+    const n: usize = coefficients.len;
+    if (n == 0) {
+        return Error.UnsupportedShape;
+    }
+    if (out.len != 2 * n) {
+        return Error.ShapeMismatch;
+    }
+    const turn_denominator: usize = 8 * n;
+    for (out, 0..) |*sample, t| {
+        var sum: T = 0;
+        for (coefficients, 0..) |coefficient, k| {
+            const phase_numerator: usize = ((2 * t + 1 + n) * (2 * k + 1)) % turn_denominator;
+            const phase_turns: T = @as(T, @floatFromInt(phase_numerator)) / @as(T, @floatFromInt(turn_denominator));
+            sum += coefficient * scalarCosTurns(phase_turns);
+        }
+        sample.* = sum;
+    }
+}
+</code></pre></details>
+</div><!--/zn-source-->
+
+<p>Transform codecs - Vorbis, AAC, the CELT half of Opus - describe sound as a run of blocks of <code>2N</code> samples,
+each overlapping half of the next, and each block by <code>N</code> coefficients: how much of each of <code>N</code>
+cosines it holds. Half as many numbers as samples, so the overlap costs nothing; the price is that one block's
+coefficients cannot give back its samples. The inverse transform, the IMDCT, gives each half of the block back with a
+mirror image of itself added - the first half's mirror negated, the second's not. This is <em>time-domain
+aliasing</em>, and it is meant: windowed, and added to the halves of the blocks either side, the mirrors cancel, and
+the sound between is exact.</p>
+
+<pre class="sketch"><code>   the sound   . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+   block 0     [  a0           |  b0          ]
+   block 1                     [  a1           |  b1          ]
+   block 2                                     [  a2           |  b2          ]
+
+   each block, back from its coefficients:   [ a - mirror(a) | b + mirror(b) ]
+
+   b0 + mirror(b0)  overlaps  a1 - mirror(a1): the same stretch of sound, windowed
+   twice; added, the mirrors cancel and the stretch is whole again</code></pre>
+
+<p>The definition is a sum of cosines, one for each coefficient <code>k</code>, read at each sample <code>t</code> of the
+block, <code>2N</code> of them:</p>
+
+<pre class="sketch"><code>   out[t] = sum over k of  X[k] * cos(pi/N * (t + 1/2 + N/2) * (k + 1/2))      t = 0 .. 2N-1</code></pre>
+
+<p>With <code>N = 2</code> the whole of it fits on a line. A block of four samples from two coefficients; each
+coefficient alone:</p>
+
+<pre class="sketch"><code>   X = [1, 0]    out = [ +0.383  -0.383 | -0.924  -0.924 ]
+   X = [0, 1]    out = [ -0.924  +0.924 | -0.383  -0.383 ]
+                         first half:       second half:
+                         odd - its mirror  even - its mirror
+                         negated           added</code></pre>
+
+<p>That shape - every block's first half odd about its middle, its second half even - is the aliasing, there before
+any window: the block's own halves are folded onto themselves. The window that cancels it needs its two halves to
+meet <code>w[t]^2 + w[t + N]^2 = 1</code> (Princen and Bradley); the sine window,
+<code>w[t] = sin(pi * (t + 1/2) / 2N)</code>, does, and Vorbis's window is a smoother one that also does. With both
+transforms unscaled, as these are, overlapped blocks give the sound back times <code>N/2</code>.</p>
+
+<p><code>imdct</code> computes the same <code>2N</code> samples in two moves. The cosine at sample <code>t</code> is
+that of a smaller transform, the DCT-IV, at <code>m = t + N/2</code>; past <code>m = N</code> the cosine's symmetries
+fold <code>m</code> back, with a sign. So the block is the DCT-IV's <code>N</code> outputs <code>Y</code>, each written
+twice:</p>
+
+<pre class="sketch"><code>   samples t           0 .. N/2         N/2 .. 3N/2               3N/2 .. 2N
+   out[t]              Y[t + N/2]       -Y[3N/2 - 1 - t]          -Y[t - 3N/2]
+
+   N = 4:  out = [ Y2  Y3 | -Y3 -Y2 -Y1 -Y0 | -Y0 -Y1 ]</code></pre>
+
+<p>And the DCT-IV of <code>N</code> real values goes through one complex transform of <code>N/2</code> points (13.1):
+the even coefficients as real parts and the odd ones, from the top down, as imaginary parts; turned by
+<code>e^(-i pi (4j + 1) / 4N)</code>, transformed, and turned by <code>e^(-i pi j / N)</code>, each result holds two
+outputs - the real part <code>Y[2j]</code>, the imaginary part negated <code>Y[N - 1 - 2j]</code>. For a Vorbis long
+block, <code>N = 1024</code>: a 512-point FFT and two passes of 512 turns, where the definition takes two million
+products.</p>
+
+<p>The fast transform is checked against the definition at every power of two from 2 to 1024, sample for sample; and
+four overlapping blocks of a random signal, windowed, transformed forward by the definition and back by
+<code>imdct</code>, give the signal back times <code>N/2</code> wherever two blocks meet.</p>
 
 <h2 id="io">14. Saving and loading<a class="anchor" href="#io">#</a></h2>
 
@@ -21712,6 +21879,8 @@ design; for an elementwise or row-wise operation it means a kernel has not been 
 <tr><td><code>ifft</code></td><td><code>ifft(comptime T: type, data: []ComplexNumber(T)) Error!void</code></td><td><span class="host">host</span></td><td>The whole 1/n lives here.</td></tr>
 <tr><td><code>fftFreq</code></td><td><code>fftFreq(comptime T: type, out: []T, spacing: T) Error!void</code></td><td><span class="host">host</span></td><td>Second half is negative frequencies.</td></tr>
 <tr><td><code>rfft</code></td><td><code>rfft(comptime T: type, out: []ComplexNumber(T), input: []const T, scratch: []ComplexNumber(T)) Error!void</code></td><td><span class="host">host</span></td><td>Real input, n/2 + 1 bins. Half the transform, not a full one halved.</td></tr>
+<tr><td><code>imdctDirect</code></td><td><code>imdctDirect(comptime T: type, out: []T, coefficients: []const T) Error!void</code></td><td><span class="host">host</span></td><td>O(N&sup2;), any N: 2N samples from N coefficients. The reference `imdct` is checked against.</td></tr>
+<tr><td><code>imdct</code></td><td><code>imdct(comptime T: type, out: []T, coefficients: []const T, scratch: []ComplexNumber(T)) Error!void</code></td><td><span class="host">host</span></td><td>N a power of two: a DCT-IV through one N/2-point fft, unfolded. Overlapped blocks give back N/2 times the signal.</td></tr>
 <tr><td><code>ConvMode</code></td><td><code>ConvMode = enum</code></td><td><span class="host">host</span></td><td>full, same, valid. Each is a window onto full.</td></tr>
 <tr><td><code>outputLen</code></td><td><code>outputLen(self: ConvMode, a: usize, v: usize) usize</code></td><td><span class="host">method</span></td><td>Outputs a mode produces. `length` is reserved.</td></tr>
 <tr><td><code>convolve</code></td><td><code>convolve(comptime T: type, out: []T, a: []const T, v: []const T, extent: ConvMode) Error!void</code></td><td><span class="host">host</span></td><td>Flips the kernel.</td></tr>

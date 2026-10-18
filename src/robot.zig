@@ -12328,7 +12328,7 @@ pub fn skeletonToModel(
             // * The capsule spans BACKWARD from this body's origin toward its parent, because
             // the offset is measured FROM the parent. Centring it forward would put every limb
             // one segment ahead of where it actually is.
-            const capsule_centre: Vec = offset_from_parent * @as(Vec, @splat(-0.5));
+            const capsule_centre: Vec = offset_from_parent * splat(-0.5);
 
             geoms = try a.alloc(GeomSpec, 1);
             geoms[0] = .{
@@ -13211,7 +13211,7 @@ test "jacBody: every column matches a finite-difference perturbation of its own 
         kinematics(&m, &d);
         const original: Vec = d.body_xpos[body] + zm.rotate(d.body_xrot[body], local_offset);
 
-        const measured_velocity: Vec = (moved - original) / @as(Vec, @splat(epsilon));
+        const measured_velocity: Vec = (moved - original) / splat(epsilon);
         inline for (0..3) |axis| {
             const predicted: f32 = jacp[axis * m.nv + dof];
             worst_error = @max(worst_error, @abs(measured_velocity[axis] - predicted));
@@ -13902,7 +13902,7 @@ pub fn referenceOrientationsFromBoneDirections(
         if (bone_length < 1.0e-6) {
             continue;
         }
-        const unit: Vec = direction / @as(Vec, @splat(bone_length));
+        const unit: Vec = direction / splat(bone_length);
         out_reference_orientations[body] = shortestArcFromYAxis(unit);
     }
 }
@@ -14064,7 +14064,7 @@ fn shortestArcBetweenVectors(from: Vec, to: Vec) Quat {
 
 fn removeComponentAlong(v: Vec, axis: Vec) Vec {
     const along: f32 = v[0] * axis[0] + v[1] * axis[1] + v[2] * axis[2];
-    return v - axis * @as(Vec, @splat(along));
+    return v - axis * splat(along);
 }
 
 fn vecLength(v: Vec) f32 {
@@ -14108,7 +14108,7 @@ pub fn aimBoneWithTwist(
         // a straight arm jitter as noise in the capture flips the normal.
         return swing;
     }
-    const human_normal: Vec = human_normal_raw / @as(Vec, @splat(human_normal_len));
+    const human_normal: Vec = human_normal_raw / splat(human_normal_len);
 
     // Where the child's hinge axis currently points, with only the swing applied.
     const hinge_now: Vec = zm.rotate(swing, child_hinge_axis_local);
@@ -14125,8 +14125,8 @@ pub fn aimBoneWithTwist(
         // choose.
         return swing;
     }
-    const a: Vec = hinge_flat / @as(Vec, @splat(hinge_len));
-    const b: Vec = human_flat / @as(Vec, @splat(human_flat_len));
+    const a: Vec = hinge_flat / splat(hinge_len);
+    const b: Vec = human_flat / splat(human_flat_len);
 
     const cosine: f32 = clamp(a[0] * b[0] + a[1] * b[1] + a[2] * b[2], -1.0, 1.0);
     const sine_vec: Vec = crossVec(a, b);
@@ -14409,7 +14409,7 @@ pub fn computeTwistChainOffsets(
                 quat_identity;
             out_twist[body] = computeTwistOffset(
                 robot_bone,
-                source_bone / @as(Vec, @splat(bone_length)),
+                source_bone / splat(bone_length),
                 source_rest_rotation,
             );
             previous = out_twist[body];
@@ -14432,8 +14432,8 @@ pub fn computeTwistChainOffsets(
                     source_axis[1] * source_axis[1] + source_axis[2] * source_axis[2]);
                 if (robot_len > 1.0e-6 and source_len > 1.0e-6) {
                     out_twist[carrier] = computeTwistOffset(
-                        robot_axis / @as(Vec, @splat(robot_len)),
-                        source_axis / @as(Vec, @splat(source_len)),
+                        robot_axis / splat(robot_len),
+                        source_axis / splat(source_len),
                         quat_identity,
                     );
                     // * Children inherit the corrected value, or they undo a twist their parent
@@ -14586,14 +14586,14 @@ fn orthonormalBasis(primary: Vec, secondary: Vec) ?[3]Vec {
     if (p_len < 1.0e-6) {
         return null;
     }
-    const x: Vec = primary / @as(Vec, @splat(p_len));
+    const x: Vec = primary / splat(p_len);
     const along: f32 = secondary[0] * x[0] + secondary[1] * x[1] + secondary[2] * x[2];
-    const perpendicular: Vec = secondary - x * @as(Vec, @splat(along));
+    const perpendicular: Vec = secondary - x * splat(along);
     const s_len: f32 = vecLength(perpendicular);
     if (s_len < 1.0e-6) {
         return null;
     }
-    const y: Vec = perpendicular / @as(Vec, @splat(s_len));
+    const y: Vec = perpendicular / splat(s_len);
     const z: Vec = crossVec(x, y);
     return .{ x, y, z };
 }
@@ -14748,7 +14748,7 @@ pub fn solveTwoBoneLimb(
             .clamped = true,
         };
     }
-    const hand_direction: Vec = to_hand / @as(Vec, @splat(reach));
+    const hand_direction: Vec = to_hand / splat(reach);
 
     // Law of cosines: the interior angle at the middle joint, then its departure from straight.
     const interior_cosine: f32 = clamp(
@@ -14787,7 +14787,7 @@ pub fn solveTwoBoneLimb(
         zm.rotate(quatFromAxisAngle(plane_normal, swing), hand_direction);
 
     return .{
-        .joint_position = shoulder + upper_direction * @as(Vec, @splat(upper_length)),
+        .joint_position = shoulder + upper_direction * splat(upper_length),
         .flexion = flexion,
         .clamped = was_clamped,
     };
@@ -14867,7 +14867,7 @@ fn solveLimbHere(
     }
     const world_target: Quat = shortestArcBetweenVectors(
         local_bone,
-        to_joint / @as(Vec, @splat(to_joint_length)),
+        to_joint / splat(to_joint_length),
     );
     const parent_world: Quat = d.body_xrot[m.body_parent[body]];
     _ = fitBodyRotation(m, d, body, qmul(conjugate(parent_world), world_target));
@@ -15065,7 +15065,7 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
                             bone[2] * bone[2]);
                         if (len > 1.0e-6) {
                             const local_bone: Vec = normalize3(m.body_pos[child]);
-                            const target_dir: Vec = bone / @as(Vec, @splat(len));
+                            const target_dir: Vec = bone / splat(len);
 
                             // ** WHERE THE CHILD IS A HINGE, CHOOSE THE TWIST TOO. A shortest
                             // arc adds no rotation about the bone, and a hinge's axis rides in
@@ -15087,7 +15087,7 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
                                             target_dir,
                                             m.jnt_axis[m.body_jnt_adr[child]],
                                             target_dir,
-                                            child_bone / @as(Vec, @splat(child_len)),
+                                            child_bone / splat(child_len),
                                         );
                                     }
                                 }
@@ -15196,7 +15196,7 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
                 }
                 const tasks: []IkTask = in.solve_tasks.?;
                 const knee_target: Vec =
-                    d.body_xpos[body] + want_dir * @as(Vec, @splat(bone_len));
+                    d.body_xpos[body] + want_dir * splat(bone_len);
                 tasks[0] = .{ .body = child, .target_world = knee_target, .weight = 1.0 };
                 var task_total: usize = 1;
 
@@ -15221,8 +15221,8 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
                                     tasks[1] = .{
                                         .body = grand,
                                         .target_world = knee_target +
-                                            (next / @as(Vec, @splat(next_len))) *
-                                                @as(Vec, @splat(own_len)),
+                                            (next / splat(next_len)) *
+                                                splat(own_len),
                                         // * LIGHT. The child's own bone direction is the primary
                                         // thing; the grandchild only picks the plane. At 0.5 it
                                         // competed and took the thigh from 4.8 to 25.3 degrees.
@@ -15337,7 +15337,7 @@ pub fn solveRestPoseFromSource(
             continue;
         }
         targets[body] = parent_target +
-            (source_bone / @as(Vec, @splat(source_length))) * @as(Vec, @splat(own_length));
+            (source_bone / splat(source_length)) * splat(own_length);
     }
 
     // * One translation so the ANCHOR body lands on its mapped joint. The shape is already
@@ -15406,7 +15406,7 @@ pub fn solveRestPoseFromSource(
             const offset: Vec = m.geom_pos[geom];
             if (vecLength(offset) > far_length) {
                 far_length = vecLength(offset);
-                far_geom = offset * @as(Vec, @splat(2.0));
+                far_geom = offset * splat(2.0);
             }
         }
         if (far_length < 1.0e-5) {
@@ -15422,8 +15422,8 @@ pub fn solveRestPoseFromSource(
             .body = body,
             .point_local = far_geom,
             .target_world = targets[body] +
-                (tip_direction / @as(Vec, @splat(tip_length))) *
-                    @as(Vec, @splat(vecLength(far_geom))),
+                (tip_direction / splat(tip_length)) *
+                    splat(vecLength(far_geom)),
             .weight = 0.5,
         };
         task_count += 1;
@@ -15566,8 +15566,8 @@ pub fn hingeAngleForFlexion(axis: Vec, bone: Vec, flexion: f32) ?f32 {
     if (axis_length < 1.0e-6 or bone_length < 1.0e-6) {
         return null;
     }
-    const unit_axis: Vec = axis / @as(Vec, @splat(axis_length));
-    const unit_bone: Vec = bone / @as(Vec, @splat(bone_length));
+    const unit_axis: Vec = axis / splat(axis_length);
+    const unit_bone: Vec = bone / splat(bone_length);
 
     const cos_gamma: f32 = clamp(
         unit_axis[0] * unit_bone[0] + unit_axis[1] * unit_bone[1] + unit_axis[2] * unit_bone[2],
@@ -15598,8 +15598,8 @@ pub fn maximumFlexion(axis: Vec, bone: Vec) f32 {
     if (axis_length < 1.0e-6 or bone_length < 1.0e-6) {
         return 0;
     }
-    const unit_axis: Vec = axis / @as(Vec, @splat(axis_length));
-    const unit_bone: Vec = bone / @as(Vec, @splat(bone_length));
+    const unit_axis: Vec = axis / splat(axis_length);
+    const unit_bone: Vec = bone / splat(bone_length);
     const cos_gamma: f32 = clamp(
         unit_axis[0] * unit_bone[0] + unit_axis[1] * unit_bone[1] + unit_axis[2] * unit_bone[2],
         -1.0,
@@ -15907,8 +15907,8 @@ pub fn solvePointCloud(
                     "solvePointCloud: sample {d} targets body {d} but retargeted holds {d}",
                     .{ i, target_body, opts.retargeted.len },
                 );
-                target = opts.retargeted[target_body] * @as(Vec, @splat(1.0 - opts.position_pull)) +
-                    opts.positions[sample.human] * @as(Vec, @splat(opts.position_pull));
+                target = opts.retargeted[target_body] * splat(1.0 - opts.position_pull) +
+                    opts.positions[sample.human] * splat(opts.position_pull);
             }
         }
         if (sample.human_parent) |parent_joint| {
@@ -15923,7 +15923,7 @@ pub fn solvePointCloud(
             const bone_has_direction: bool = vecLength(bone) > 1.0e-5;
             if (bone_has_direction) {
                 target = opts.positions[parent_joint] +
-                    normalize3(bone) * @as(Vec, @splat(sample.own_length));
+                    normalize3(bone) * splat(sample.own_length);
             }
         }
         const target_is_relative: bool = sample.relative_local != null and sample.human_parent != null;
@@ -16071,7 +16071,7 @@ pub fn buildPointSamples(
                 if (vecLength(side) < 0.1) {
                     side = crossVec(normalize3(bone), vec(1, 0, 0));
                 }
-                side = normalize3(side) * @as(Vec, @splat(0.06));
+                side = normalize3(side) * splat(0.06);
                 const hb: usize = @intCast(in.human_of_body[b]);
                 const in_human: Vec = zm.rotate(
                     conjugate(in.rest_rotations[hb]),
@@ -16143,7 +16143,7 @@ pub fn buildPointSamples(
             }
             if (vecLength(m.geom_pos[g]) > far_length) {
                 far_length = vecLength(m.geom_pos[g]);
-                far = m.geom_pos[g] * @as(Vec, @splat(2.0));
+                far = m.geom_pos[g] * splat(2.0);
             }
         }
         // -- ** A SPHERE HAS NO DIRECTION - and an ARBITRARY axis is not a substitute --

@@ -63,9 +63,11 @@
 //! FALLBACK IS NOT OPTIONAL
 //! ===========================================================================
 //! `new Worker()` THROWS in a sandboxed iframe (the Claude artifact preview is one:
-//! SecurityError on the blob: URL). It is also absent on the host. In BOTH cases
-//! `submit` runs the kernel INLINE, through the very same `invoke` the worker calls,
-//! and the job is already complete when you first `poll` it.
+//! SecurityError on the blob: URL). There `submit` runs the kernel INLINE, through the
+//! very same `invoke` the worker calls, and the job is already complete when you first
+//! `poll` it. A native program runs its jobs on threads of its own instead (`native_jobs`),
+//! where they land like a worker's, a few frames later - except a registry whose kernels
+//! work in their module's globals (`Options.kernels_work_in_globals`), which runs inline.
 //!
 //! So the API cannot fail, there is ONE code path, and an example that uses jobs works
 //! everywhere - where workers are unavailable it merely hitches, exactly as it would
@@ -76,8 +78,12 @@ const std = @import("std");
 const Io = std.Io;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const asBytes = std.mem.asBytes;
+const eql = std.mem.eql;
 const builtin = @import("builtin");
-// lint:off browser-call: the browser's workers; jobs on threads come with C4
+const host = @import("host.zig");
+const zm = @import("zm");
+const clamp = zm.clamp;
+// lint:off browser-call: the browser's workers - where a page's jobs run (`job_host`)
 const web = @import("web.zig");
 const jobs_abi = @import("jobs_abi.zig");
 const wgpu = @import("wgpu.zig");
@@ -98,6 +104,364 @@ pub const Error = error{
     QueueFull,
     OutOfMemory,
 };
+
+/// Whether jobs run on threads of the program's own: every native build - Windows, Linux, macOS, Android, a headless
+/// run, the tests - where the web's run on Web Workers (`web.jobs`). A single-threaded build runs them inline.
+const has_job_threads: bool = !host.is_browser and !builtin.single_threaded;
+
+/// The jobs of a native program, run on threads: what `web.jobs` is in a browser, with the same calls - a job named by
+/// a handle, polled without blocking, its result taken once it has landed.
+///
+/// A job's life, in its slot of the table (`Slot.state`):
+///
+///     submit      queued      its input copied into the slot; waiting for a thread
+///     (a poll)    running     started on a thread (`startQueuedJobs`), at most `running_limit` at once
+///     the thread  landed      its result written and `is_done` set, as the thread's last write
+///     take        free        the result copied to the app; the slot's buffers released, its generation moved on
+///
+/// The threads are a `std.Io.Threaded`'s (`jobIo`), one `concurrent` call per running job. That pool does not queue -
+/// past its limit a call fails, and each call it takes starts a thread kept for good - so the table queues, and
+/// starts a waiting job only when a running one has landed: the threads stay as few as `running_limit`, and a job
+/// only ever runs inline, freezing the frame, where no thread can be had at all. Waiting jobs are started from the
+/// app's thread, at its next `submit` or `poll` - an app polls every frame, so a free thread is taken within a frame.
+///
+/// A job lands by its slot's flag (`Slot.is_done`), stored with release ordering after everything the thread wrote, and
+/// read with acquire ordering - so the result is complete when the flag is seen. `poll` reads the flag without
+/// waiting; the future is awaited only once the flag is set, when it returns at once: the app's thread never waits for
+/// a kernel. Every buffer a job holds - its input, its kernel's arena, its output, allocated by its thread as it starts
+/// so that a waiting job holds no output - comes from the program's thread-safe allocator (`std.heap.smp_allocator`),
+/// never the app's, which the app may have made for one thread. The result reaches the app's allocator only at
+/// `take`, on the app's thread. A running job cancelled is abandoned rather than waited for, and its slot reclaimed
+/// once it lands (`reapAbandoned`).
+///
+/// The table is the app's thread's: `submit`, `poll`, `take`, `cancel` and `errorName` are called there, and the only
+/// field a job's thread shares with it is the slot it was given, until its flag is set.
+const native_jobs = struct {
+    /// What `poll` answers while the job waits or runs; any other negative answer is a failure.
+    pub const pending: i32 = -1;
+    /// What `poll` answers when the kernel failed: its error's name kept (`errorName`).
+    const failed: i32 = -2;
+    /// What `poll` answers when the kernel wrote more than its output's bound - `error.WriteFailed` from its writer -
+    /// which the inline path reports as `Error.OutputTooLarge`, and so does a `Job` here.
+    pub const output_too_large: i32 = -3;
+
+    /// A kernel as a job's thread calls it: its header's bytes and the payload in, its result written to `out` - each
+    /// kernel's own, erased to one type (`Registry`'s `ThreadInvoker`).
+    pub const Invoker = *const fn (
+        arena: Allocator,
+        header_bytes: []const u8,
+        payload: []const u8,
+        out: *Writer,
+    ) anyerror!void;
+
+    /// How many jobs can be in the table at once, waiting, running or landed: a full table answers `submit` with no
+    /// handle, `Error.QueueFull`.
+    const slot_count: usize = 64;
+
+    /// A handle's layout: the slot's index plus one in its low bits - so that 0 is no handle - and the slot's
+    /// generation above them.
+    const handle_index_bits: u5 = 8;
+    const handle_index_mask: u32 = (1 << handle_index_bits) - 1;
+
+    /// Where a slot is in its job's life (`native_jobs`'s table).
+    const SlotState = enum {
+        /// No job.
+        free,
+        /// A job submitted, waiting for a thread.
+        queued,
+        /// A job started on a thread: running, or landed if its flag is set.
+        running,
+        /// A job cancelled while it ran: the slot is reclaimed once it lands (`reapAbandoned`).
+        abandoned,
+    };
+
+    /// One job's place: what its thread reads (the kernel, the input, the output's bound) and writes (the output, the
+    /// failure, the flag).
+    const Slot = struct {
+        /// Moves on each time the slot is freed, so that a handle to an earlier job names nothing.
+        generation: u24 = 0,
+        state: SlotState = .free,
+        /// The order jobs were submitted in, so that waiting ones start oldest first.
+        submit_order: u64 = 0,
+        /// Set by the job's thread as its last write, with release ordering: what it wrote before is then visible to
+        /// the thread that sees the flag with acquire ordering.
+        is_done: std.atomic.Value(bool) = .init(false),
+        /// The running job's future, awaited once it has landed; null for a job run inline, or not yet started.
+        future: ?Io.Future(void) = null,
+        kernel_name: []const u8 = "",
+        invoker: Invoker = undefined,
+        max_output: usize = 0,
+        /// The job's input, header then payload, in one buffer of the slot's own.
+        input: []u8 = &.{},
+        header_length: usize = 0,
+        /// The output buffer - `max_output` bytes, allocated by the job's thread as it starts - and how much of it the
+        /// kernel wrote.
+        output: []u8 = &.{},
+        output_length: usize = 0,
+        is_failed: bool = false,
+        error_name_buffer: [48]u8 = @splat(0),
+        error_name_length: usize = 0,
+        is_failure_logged: bool = false,
+    };
+
+    // lint:off module-var: the program's job table, one for every registry - a handle names a slot of it
+    var slots: [slot_count]Slot = @splat(.{});
+    // lint:off module-var: the count `submit_order` is taken from, so that waiting jobs start oldest first
+    var next_submit_order: u64 = 0;
+    // lint:off module-var: the job threads' pool, started at the first job and kept for the program's life
+    var threaded: ?Io.Threaded = null;
+    // lint:off module-var: how many jobs may run at once, worked out at the first job (`runningLimit`)
+    var cached_running_limit: ?usize = null;
+
+    const job_allocator: Allocator = std.heap.smp_allocator;
+
+    /// The job threads' `Io`, the pool started at its first use. The jobs' own, not the program's services'
+    /// (`native_os.servicesIo`): `native_os` needs the C library on Linux, and jobs are also built without it - their
+    /// tests.
+    fn jobIo() Io {
+        if (threaded == null) {
+            threaded = Io.Threaded.init(job_allocator, .{});
+        }
+        return threaded.?.io();
+    }
+
+    /// How many jobs may run at once: one less than the logical cores, so that the app's own thread keeps one, and
+    /// at least one and at most four - more spreads a phone's work over cores that each run slower (the module's
+    /// header measures it), for no job landing sooner.
+    fn runningLimit() usize {
+        if (cached_running_limit) |known_limit| {
+            return known_limit;
+        }
+        const core_count: usize = std.Thread.getCpuCount() catch 2;
+        const cores_beside_the_app: usize = core_count -| 1;
+        const limit: usize = clamp(cores_beside_the_app, 1, 4);
+        cached_running_limit = limit;
+        return limit;
+    }
+
+    /// A slot's handle: its index plus one in the low bits, its generation above.
+    fn handleOf(index: usize) u32 {
+        const generation_bits: u32 = @as(u32, slots[index].generation) << handle_index_bits;
+        const index_plus_one: u32 = @intCast(index + 1);
+        return generation_bits | index_plus_one;
+    }
+
+    /// The slot a handle names - a job waiting, running or landed, of the handle's own generation - or null when the
+    /// handle is stale or names no job.
+    fn slotOf(handle: u32) ?*Slot {
+        const index_plus_one: usize = handle & handle_index_mask;
+        const is_index_in_table: bool = index_plus_one >= 1 and index_plus_one <= slot_count;
+        if (!is_index_in_table) {
+            return null;
+        }
+        const slot: *Slot = &slots[index_plus_one - 1];
+        const handle_generation: u24 = @truncate(handle >> handle_index_bits);
+        const is_owned_job: bool = slot.state == .queued or slot.state == .running;
+        const is_current: bool = is_owned_job and slot.generation == handle_generation;
+        return if (is_current) slot else null;
+    }
+
+    /// Frees a slot whose job has landed, or never started: its future awaited - it has returned, or is returning -
+    /// its buffers released, its generation moved on.
+    fn release(slot: *Slot) void {
+        if (slot.future) |*future| {
+            future.await(jobIo());
+        }
+        job_allocator.free(slot.input);
+        job_allocator.free(slot.output);
+        const next_generation: u24 = slot.generation +% 1;
+        slot.* = .{ .generation = next_generation };
+    }
+
+    /// Reclaims the slots of jobs cancelled while they ran, once they have landed.
+    fn reapAbandoned() void {
+        for (&slots) |*slot| {
+            const has_landed: bool = slot.is_done.load(.acquire);
+            if (slot.state == .abandoned and has_landed) {
+                release(slot);
+            }
+        }
+    }
+
+    /// How many jobs are on threads now: started, and not yet landed.
+    fn runningCount() usize {
+        var count: usize = 0;
+        for (&slots) |*slot| {
+            const is_on_thread: bool = slot.state == .running or slot.state == .abandoned;
+            if (is_on_thread and !slot.is_done.load(.acquire)) {
+                count += 1;
+            }
+        }
+        return count;
+    }
+
+    /// The oldest waiting job's slot, or null when none waits.
+    fn oldestQueued() ?*Slot {
+        var oldest: ?*Slot = null;
+        for (&slots) |*slot| {
+            if (slot.state != .queued) {
+                continue;
+            }
+            const is_older: bool = if (oldest) |current| slot.submit_order < current.submit_order else true;
+            if (is_older) {
+                oldest = slot;
+            }
+        }
+        return oldest;
+    }
+
+    /// Starts waiting jobs, oldest first, while fewer than `runningLimit` run. A job the pool cannot take runs here,
+    /// on the app's thread, and has landed when this returns.
+    fn startQueuedJobs() void {
+        var running_count: usize = runningCount();
+        while (running_count < runningLimit()) {
+            const slot: *Slot = oldestQueued() orelse return;
+            slot.state = .running;
+            running_count += 1;
+            slot.future = jobIo().concurrent(runSlot, .{slot}) catch inline_run: {
+                runSlot(slot);
+                running_count -= 1;
+                break :inline_run null;
+            };
+        }
+    }
+
+    /// A job's thread: its output buffer, the kernel with an arena of its own writing into it, then the flag. The
+    /// output is allocated here, as the job starts, so that a waiting job holds none.
+    fn runSlot(slot: *Slot) void {
+        defer slot.is_done.store(true, .release);
+        const output: []u8 = job_allocator.alloc(u8, slot.max_output) catch {
+            recordFailure(slot, "OutOfMemory");
+            return;
+        };
+        slot.output = output;
+        var kernel_arena: ArenaAllocator = .init(job_allocator);
+        defer kernel_arena.deinit();
+        var output_writer: Writer = .fixed(output);
+        const header_bytes: []const u8 = slot.input[0..slot.header_length];
+        const payload: []const u8 = slot.input[slot.header_length..];
+        if (slot.invoker(kernel_arena.allocator(), header_bytes, payload, &output_writer)) {
+            slot.output_length = output_writer.end;
+        } else |err| {
+            recordFailure(slot, @errorName(err));
+        }
+    }
+
+    /// Keeps a failed job's error name in its slot, cut to the slot's room.
+    fn recordFailure(slot: *Slot, error_name: []const u8) void {
+        const kept_length: usize = @min(error_name.len, slot.error_name_buffer.len);
+        @memcpy(slot.error_name_buffer[0..kept_length], error_name[0..kept_length]);
+        slot.error_name_length = kept_length;
+        slot.is_failed = true;
+    }
+
+    pub fn available() bool {
+        return true;
+    }
+
+    /// Queues a job: its input copied into a free slot of the table, then started on a thread if one is free
+    /// (`startQueuedJobs`). Its handle; 0 when the table is full or the input cannot be held.
+    pub fn submit(
+        kernel_name: []const u8,
+        invoker: Invoker,
+        header_bytes: []const u8,
+        payload: []const u8,
+        max_output: usize,
+    ) u32 {
+        reapAbandoned();
+        const free_index: usize = for (slots, 0..) |slot, slot_index| {
+            if (slot.state == .free) {
+                break slot_index;
+            }
+        } else return 0;
+        const input_length: usize = header_bytes.len + payload.len;
+        const input: []u8 = job_allocator.alloc(u8, input_length) catch return 0;
+        @memcpy(input[0..header_bytes.len], header_bytes);
+        @memcpy(input[header_bytes.len..], payload);
+        const slot: *Slot = &slots[free_index];
+        // The new job's slot, from locals: the generation read before the slot is written.
+        const kept_generation: u24 = slot.generation;
+        const submit_order: u64 = next_submit_order;
+        next_submit_order += 1;
+        slot.* = .{
+            .generation = kept_generation,
+            .state = .queued,
+            .submit_order = submit_order,
+            .kernel_name = kernel_name,
+            .invoker = invoker,
+            .max_output = max_output,
+            .input = input,
+            .header_length = header_bytes.len,
+        };
+        const handle: u32 = handleOf(free_index);
+        startQueuedJobs();
+        return handle;
+    }
+
+    /// Whether the job has landed, without waiting: `pending` while it waits or runs, `output_too_large` or `failed`
+    /// if its kernel failed (the name logged, once, here on the app's thread), else its result's length. Starts any
+    /// waiting job a landed one made room for.
+    pub fn poll(handle: u32) i32 {
+        reapAbandoned();
+        startQueuedJobs();
+        const slot: *Slot = slotOf(handle) orelse return failed;
+        const has_landed: bool = slot.state == .running and slot.is_done.load(.acquire);
+        if (!has_landed) {
+            return pending;
+        }
+        if (!slot.is_failed) {
+            return @intCast(slot.output_length);
+        }
+        const error_name: []const u8 = slot.error_name_buffer[0..slot.error_name_length];
+        if (eql(u8, error_name, "WriteFailed")) {
+            return output_too_large;
+        }
+        const should_log: bool = !slot.is_failure_logged and !builtin.is_test;
+        if (should_log) {
+            slot.is_failure_logged = true;
+            std.log.err("zimr.jobs: kernel '{s}' failed: {s}", .{ slot.kernel_name, error_name });
+        }
+        return failed;
+    }
+
+    /// Copies a landed job's result into `destination` and frees its slot: the bytes copied, 0 for a job not landed.
+    pub fn take(handle: u32, destination: []u8) usize {
+        const slot: *Slot = slotOf(handle) orelse return 0;
+        const has_landed: bool = slot.state == .running and slot.is_done.load(.acquire);
+        if (!has_landed) {
+            return 0;
+        }
+        const copied_length: usize = @min(slot.output_length, destination.len);
+        @memcpy(destination[0..copied_length], slot.output[0..copied_length]);
+        release(slot);
+        startQueuedJobs();
+        return copied_length;
+    }
+
+    /// Drops a job: one waiting or landed freed now, one running abandoned - its slot reclaimed once it lands.
+    pub fn cancel(handle: u32) void {
+        const slot: *Slot = slotOf(handle) orelse return;
+        const is_on_thread_still: bool = slot.state == .running and !slot.is_done.load(.acquire);
+        if (is_on_thread_still) {
+            slot.state = .abandoned;
+            return;
+        }
+        release(slot);
+        startQueuedJobs();
+    }
+
+    /// A failed job's error name, copied into `destination`: the bytes copied.
+    pub fn errorName(handle: u32, destination: []u8) usize {
+        const slot: *Slot = slotOf(handle) orelse return 0;
+        const copied_length: usize = @min(slot.error_name_length, destination.len);
+        @memcpy(destination[0..copied_length], slot.error_name_buffer[0..copied_length]);
+        return copied_length;
+    }
+};
+
+/// Where a submitted job is: on the program's own threads natively (`native_jobs`), on the page's Web Workers in a
+/// browser (`web.jobs`). The two answer the same calls, so a `Job` reads either the same way.
+const job_host = if (has_job_threads) native_jobs else web.jobs;
 
 /// A job in flight. Poll it once a frame; it never blocks.
 ///
@@ -181,19 +545,26 @@ pub const Job = struct {
 
         // ---- is it finished? -----------------------------------------------------------
         const time_before_ready_check: f64 = wgpu.nowMs();
-        const result_length_or_status: i32 = web.jobs.poll(self.handle);
+        const result_length_or_status: i32 = job_host.poll(self.handle);
         last_ready_ms = @floatCast(wgpu.nowMs() - time_before_ready_check);
 
-        const job_is_still_running: bool = result_length_or_status == web.jobs.pending;
+        const job_is_still_running: bool = result_length_or_status == job_host.pending;
         if (job_is_still_running) {
             return null;
         }
 
+        if (comptime has_job_threads) {
+            if (result_length_or_status == native_jobs.output_too_large) {
+                job_host.cancel(self.handle);
+                self.handle = 0;
+                return Error.OutputTooLarge;
+            }
+        }
         const kernel_reported_failure: bool = result_length_or_status < 0;
         if (kernel_reported_failure) {
             // Take the NAME before cancelling - `cancel` clears the host's record of it.
             self.captureErrorName();
-            web.jobs.cancel(self.handle);
+            job_host.cancel(self.handle);
             self.handle = 0;
             return Error.KernelFailed;
         }
@@ -202,7 +573,7 @@ pub const Job = struct {
         const result_length: usize = @intCast(result_length_or_status);
         const destination_is_big_enough: bool = result_length <= destination_buffer.len;
         if (!destination_is_big_enough) {
-            web.jobs.cancel(self.handle);
+            job_host.cancel(self.handle);
             self.handle = 0;
             return Error.OutputTooLarge;
         }
@@ -211,7 +582,7 @@ pub const Job = struct {
         const destination_slice: []u8 = destination_buffer[0..result_length];
 
         const time_before_copy: f64 = wgpu.nowMs();
-        _ = web.jobs.take(self.handle, destination_slice);
+        _ = job_host.take(self.handle, destination_slice);
         last_copy_ms = @floatCast(wgpu.nowMs() - time_before_copy);
 
         self.handle = 0;
@@ -235,21 +606,30 @@ pub const Job = struct {
         if (self.handle == 0) {
             return null;
         }
-        const n: i32 = web.jobs.poll(self.handle);
-        if (n == web.jobs.pending) {
+        const n: i32 = job_host.poll(self.handle);
+        if (n == job_host.pending) {
             return null;
         }
+        if (comptime has_job_threads) {
+            if (n == native_jobs.output_too_large) {
+                job_host.cancel(self.handle);
+                self.handle = 0;
+                return Error.OutputTooLarge;
+            }
+        }
         if (n < 0) {
+            // Take the NAME before cancelling, as `pollInto` does - `cancel` clears the host's record of it.
+            self.captureErrorName();
             // Retire it host-side too, or the failure marker sits in the host's result
             // map for the life of the page.
-            web.jobs.cancel(self.handle);
+            job_host.cancel(self.handle);
             self.handle = 0;
             return Error.KernelFailed;
         }
         const len: usize = @intCast(n);
         const gpa = self.gpa orelse return Error.KernelFailed;
         const buf: []u8 = gpa.alloc(u8, len) catch return Error.OutOfMemory;
-        _ = web.jobs.take(self.handle, buf);
+        _ = job_host.take(self.handle, buf);
         self.handle = 0;
         self.result = buf;
         return buf;
@@ -285,13 +665,13 @@ pub const Job = struct {
 
     /// Fetch an error name the HOST is holding for us (the worker path).
     fn captureErrorName(self: *Job) void {
-        const written: usize = web.jobs.errorName(self.handle, &self.error_name_buf);
+        const written: usize = job_host.errorName(self.handle, &self.error_name_buf);
         self.error_name_len = @intCast(@min(written, self.error_name_buf.len));
     }
 
     pub fn deinit(self: *Job) void {
         if (self.handle != 0) {
-            web.jobs.cancel(self.handle);
+            job_host.cancel(self.handle);
         }
         if (self.result) |r| {
             if (self.gpa) |gpa| {
@@ -307,7 +687,7 @@ pub const Job = struct {
 /// Behaviour is identical either way - this is for telling the USER why the frame
 /// hitched, and for nothing else.
 pub fn parallel() bool {
-    return web.jobs.available();
+    return job_host.available();
 }
 
 pub const Options = struct {
@@ -317,6 +697,12 @@ pub const Options = struct {
     /// Largest result a kernel may produce. `out` is a fixed writer over a buffer this
     /// size, so a runaway kernel gets `error.WriteFailed` rather than eating memory.
     max_output: usize = 24 << 20,
+    /// Whether the kernels work in their module's globals - `compute_host`'s do, reading and writing `M.g` - rather
+    /// than only in their arguments. In a browser's worker those globals are the worker's own, and inline the kernel
+    /// restores them before the app sees them; on a thread they would be the app's, written while its frame reads
+    /// them. So natively such a registry's jobs run inline - the frame hitches, as with no worker - and never on a
+    /// thread.
+    kernels_work_in_globals: bool = false,
 };
 
 /// Check the table's shape at comptime, so a malformed entry is a clear message here
@@ -740,7 +1126,17 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
             //
             // The worker still receives exactly the same bytes. `invoke` splits them back
             // apart at `@sizeOf(H)`, on whichever side runs the kernel - see `runInline`.
-            if (!web.jobs.available()) {
+            // Natively, on a thread of the program's own (`native_jobs`) - unless the kernels work in their module's
+            // globals, which a thread would share with the app (`Options.kernels_work_in_globals`).
+            if (comptime has_job_threads and !opts.kernels_work_in_globals) {
+                const invoker: native_jobs.Invoker = ThreadInvoker(kernel).invoke;
+                const native_handle: u32 = native_jobs.submit(name, invoker, header_bytes, payload, opts.max_output);
+                if (native_handle == 0) {
+                    return Error.QueueFull;
+                }
+                return .{ .handle = native_handle, .gpa = gpa };
+            }
+            if (has_job_threads or !web.jobs.available()) {
                 return runInline(gpa, name, kernel, header_bytes, payload);
             }
 
@@ -749,6 +1145,23 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
                 return Error.QueueFull;
             }
             return .{ .handle = handle, .gpa = gpa };
+        }
+
+        /// `kernel` as a job's thread calls it (`native_jobs.Invoker`): its header taken from the bytes - copied, since
+        /// they carry no alignment - then the kernel itself.
+        fn ThreadInvoker(comptime kernel: anytype) type {
+            return struct {
+                fn invoke(
+                    arena: Allocator,
+                    header_bytes: []const u8,
+                    payload: []const u8,
+                    out: *Writer,
+                ) anyerror!void {
+                    var header: HeaderOf(kernel) = undefined;
+                    @memcpy(asBytes(&header), header_bytes);
+                    return kernel(arena, header, payload, out);
+                }
+            };
         }
 
         /// The no-worker path. Everything is heap here: an app that never gets a worker
@@ -939,6 +1352,20 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
 
 const testing = std.testing;
 
+/// Polls `job` until it lands, as an app's frames would: on a thread a job lands a little after `submit`, inline at
+/// once. Gives up after a bounded number of tries, as a failure.
+fn landedResult(job: *Job) Error![]const u8 {
+    var tries: u32 = 0;
+    while (tries < 1_000_000) : (tries += 1) {
+        if (try job.poll()) |result| {
+            return result;
+        }
+        // lint:off catch-suppression: a yield that fails only spins the loop once more
+        std.Thread.yield() catch {};
+    }
+    return Error.KernelFailed;
+}
+
 fn tkRamp(
     gpa: Allocator,
     hdr: extern struct { n: u32 },
@@ -980,11 +1407,61 @@ fn tkBoom(
 }
 
 const test_opts: Options = .{ .max_input = 4096, .max_output = 4096 };
+/// Writes the id of the thread it runs on, as 8 bytes: where a job ran.
+fn tkThreadId(
+    gpa: Allocator,
+    hdr: extern struct { pad: u32 },
+    payload: []const u8,
+    out: *Writer,
+) !void {
+    _ = gpa;
+    _ = hdr;
+    _ = payload;
+    const thread_id: u64 = std.Thread.getCurrentId();
+    try out.writeAll(asBytes(&thread_id));
+}
+
 const test_registry = Registry(.{
     .{ "ramp", tkRamp },
     .{ "echo", tkEcho },
     .{ "boom", tkBoom },
+    .{ "thread_id", tkThreadId },
 }, test_opts);
+
+test "jobs: natively, jobs beyond the running limit wait their turn, and every one lands with its own result" {
+    if (comptime !has_job_threads) {
+        return error.SkipZigTest;
+    }
+    const job_count: usize = 20;
+    var queued_jobs: [job_count]Job = undefined;
+    for (&queued_jobs, 0..) |*queued_job, job_index| {
+        const ramp_length: u32 = @intCast(job_index + 1);
+        queued_job.* = try test_registry.submit(testing.allocator, tkRamp, .{ .n = ramp_length }, &.{});
+    }
+    defer for (&queued_jobs) |*queued_job| {
+        queued_job.deinit();
+    };
+    // Never more on threads than the limit, while they are all collected - each its own ramp, of its own length.
+    for (&queued_jobs, 0..) |*queued_job, job_index| {
+        try testing.expect(native_jobs.runningCount() <= native_jobs.runningLimit());
+        const result: []const u8 = try landedResult(queued_job);
+        try testing.expectEqual(job_index + 1, result.len);
+        try testing.expectEqual(@as(u8, @truncate(job_index *% 2)), result[job_index]);
+    }
+}
+
+test "jobs: natively, a job runs on a thread of its own, not the one that submitted it" {
+    if (comptime !has_job_threads) {
+        return error.SkipZigTest;
+    }
+    var job: Job = try test_registry.submit(testing.allocator, tkThreadId, .{ .pad = 0 }, &.{});
+    defer job.deinit();
+    const result: []const u8 = try landedResult(&job);
+    try testing.expectEqual(@as(usize, 8), result.len);
+    var job_thread_id: u64 = 0;
+    @memcpy(asBytes(&job_thread_id), result[0..8]);
+    try testing.expect(job_thread_id != @as(u64, std.Thread.getCurrentId()));
+}
 
 test "jobs: a kernel is just a function - call it directly, no engine involved" {
     var buf: [16]u8 = undefined;
@@ -1004,7 +1481,7 @@ test "jobs: submit/poll works end-to-end on the host via the inline fallback" {
     // This is EXACTLY the code an app writes in a browser with real workers.
     var job: Job = try test_registry.submit(gpa, tkRamp, .{ .n = 5 }, &.{});
     defer job.deinit();
-    const got: []const u8 = (try job.poll()).?;
+    const got: []const u8 = (try landedResult(&job));
     try testing.expectEqualSlices(u8, &[_]u8{ 0, 2, 4, 6, 8 }, got);
 }
 
@@ -1012,13 +1489,13 @@ test "jobs: payload round-trips, and a failing kernel surfaces as an error" {
     const gpa = testing.allocator;
     var job: Job = try test_registry.submit(gpa, tkEcho, .{ .pad = 0 }, "hello zimr");
     defer job.deinit();
-    try testing.expectEqualStrings("hello zimr", (try job.poll()).?);
+    try testing.expectEqualStrings("hello zimr", (try landedResult(&job)));
 
     // A failing kernel now surfaces at POLL, never at SUBMIT - see the dedicated test below
     // for why that matters.
     var boom: Job = try test_registry.submit(gpa, tkBoom, .{ .pad = 0 }, &.{});
     defer boom.deinit();
-    try testing.expectError(Error.KernelFailed, boom.poll());
+    try testing.expectError(Error.KernelFailed, landedResult(&boom));
 }
 
 test "jobs: two kernels sharing a header TYPE still resolve to the right one" {
@@ -1029,13 +1506,13 @@ test "jobs: two kernels sharing a header TYPE still resolve to the right one" {
     const gpa = testing.allocator;
     var job: Job = try test_registry.submit(gpa, tkEcho, .{ .pad = 0 }, "distinct");
     defer job.deinit();
-    try testing.expectEqualStrings("distinct", (try job.poll()).?);
+    try testing.expectEqualStrings("distinct", (try landedResult(&job)));
     // ...and tkBoom, submitted through the SAME registry, still blows up - proving the table
     // resolved it by function identity and not by its (identical) type. Failures arrive at
     // POLL now, never at SUBMIT.
     var boom: Job = try test_registry.submit(gpa, tkBoom, .{ .pad = 0 }, &.{});
     defer boom.deinit();
-    try testing.expectError(Error.KernelFailed, boom.poll());
+    try testing.expectError(Error.KernelFailed, landedResult(&boom));
 }
 
 test "jobs: a kernel that overruns its output is OutputTooLarge, not a corrupted result" {
@@ -1044,7 +1521,7 @@ test "jobs: a kernel that overruns its output is OutputTooLarge, not a corrupted
     // Failures arrive at POLL now, never at SUBMIT - see "a failed kernel surfaces at POLL".
     var overrun: Job = try tiny.submit(gpa, tkRamp, .{ .n = 99 }, &.{});
     defer overrun.deinit();
-    try testing.expectError(Error.OutputTooLarge, overrun.poll());
+    try testing.expectError(Error.OutputTooLarge, landedResult(&overrun));
 }
 
 test "jobs: oversized input is rejected before it can corrupt anything" {
@@ -1060,7 +1537,7 @@ test "jobs: a job dropped WITHOUT ever polling it leaks nothing" {
 
 test "jobs: deinit is idempotent, and polling a retired job is not a use-after-free" {
     var job: Job = try test_registry.submit(testing.allocator, tkRamp, .{ .n = 3 }, &.{});
-    _ = try job.poll();
+    _ = try landedResult(&job);
     job.deinit();
     job.deinit(); // twice: must not double-free
     try testing.expectEqual(@as(?[]const u8, null), try job.poll()); // and must not resurrect
@@ -1071,7 +1548,7 @@ test "jobs: a hundred submits in a row do not accumulate" {
     var i: u32 = 0;
     while (i < 100) : (i += 1) {
         var job: Job = try test_registry.submit(testing.allocator, tkEcho, .{ .pad = 0 }, "x");
-        try testing.expectEqualStrings("x", (try job.poll()).?);
+        try testing.expectEqualStrings("x", (try landedResult(&job)));
         job.deinit();
     }
 }
@@ -1079,8 +1556,8 @@ test "jobs: a hundred submits in a row do not accumulate" {
 test "jobs: polling twice returns the same bytes and does not re-allocate" {
     var job: Job = try test_registry.submit(testing.allocator, tkRamp, .{ .n = 4 }, &.{});
     defer job.deinit();
-    const a: []const u8 = (try job.poll()).?;
-    const b: []const u8 = (try job.poll()).?;
+    const a: []const u8 = (try landedResult(&job));
+    const b: []const u8 = (try landedResult(&job));
     try testing.expectEqual(a.ptr, b.ptr); // cached, not re-fetched
 }
 
@@ -1114,11 +1591,13 @@ test "jobs.Group: every job lands exactly once, and each gets its OWN header" {
     var buf: [64]u8 = undefined;
     var seen: [4]bool = @splat(false);
 
-    // Drain. On the host every job runs inline, so all four land immediately - but the loop
-    // is written the way an app must write it, because in a browser they land whenever the
-    // workers finish, in whatever order they finish.
+    // Drain, the way an app must: natively the jobs land on threads, and in a browser on
+    // workers, each whenever it finishes and in whatever order. Each pass yields, as a
+    // frame would, within a bound.
     var guard: u32 = 0;
-    while (!g.complete() and guard < 100) : (guard += 1) {
+    while (!g.complete() and guard < 1_000_000) : (guard += 1) {
+        // lint:off catch-suppression: a yield that fails only spins the loop once more
+        std.Thread.yield() catch {};
         while (try g.next(&buf)) |landed| {
             // The n-th job produced the n-th header's ramp - proof each job carried its own
             // header, not the last one submitted. (A shared staging buffer would break this
@@ -1151,8 +1630,11 @@ test "jobs.Group: progress is monotonic and an empty group is complete" {
 
     var buf: [16]u8 = undefined;
     var last: f32 = 0;
+    // Each pass yields, as a frame would, within a bound: the jobs land on threads, whenever they finish.
     var guard: u32 = 0;
-    while (!g.complete() and guard < 50) : (guard += 1) {
+    while (!g.complete() and guard < 1_000_000) : (guard += 1) {
+        // lint:off catch-suppression: a yield that fails only spins the loop once more
+        std.Thread.yield() catch {};
         _ = try g.next(&buf);
         try testing.expect(g.progress() >= last); // never goes backwards
         last = g.progress();
@@ -1167,7 +1649,7 @@ test "jobs: submit passes header and payload SEPARATELY, and the kernel still se
     // The kernel must not be able to tell the difference. This test is what says so.
     var job: Job = try test_registry.submit(testing.allocator, tkEcho, .{ .pad = 0 }, "payload-bytes");
     defer job.deinit();
-    const result: []const u8 = (try job.poll()).?;
+    const result: []const u8 = (try landedResult(&job));
     try testing.expectEqualStrings("payload-bytes", result);
 }
 
@@ -1185,7 +1667,7 @@ test "jobs: a failed kernel surfaces at POLL, inline or on a worker, and NAMES i
     var job: Job = try test_registry.submit(testing.allocator, tkBoom, .{ .pad = 0 }, &.{});
     defer job.deinit();
 
-    try testing.expectError(Error.KernelFailed, job.poll());
+    try testing.expectError(Error.KernelFailed, landedResult(&job));
     try testing.expectEqualStrings("Nope", job.errorName()); // tkBoom returns error.Nope
 }
 
@@ -1202,7 +1684,19 @@ test "jobs.Group: the failed kernel's name OUTLIVES the group's jobs" {
 
     var g: G = try .submitAll(testing.allocator, &headers, &.{});
     var buf: [16]u8 = undefined;
-    try testing.expectError(Error.KernelFailed, g.next(&buf));
+    // The failure arrives at a `next`, once the job has landed - polled as an app's frames would.
+    var failure_seen: ?Error = null;
+    var tries: u32 = 0;
+    while (failure_seen == null and tries < 1_000_000) : (tries += 1) {
+        if (g.next(&buf)) |maybe_landed| {
+            try testing.expect(maybe_landed == null); // a failing kernel lands nothing
+        } else |err| {
+            failure_seen = err;
+        }
+        // lint:off catch-suppression: a yield that fails only spins the loop once more
+        std.Thread.yield() catch {};
+    }
+    try testing.expectEqual(@as(?Error, Error.KernelFailed), failure_seen);
 
     const name_before: []const u8 = g.lastErrorName();
     try testing.expectEqualStrings("Nope", name_before);

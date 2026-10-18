@@ -24,6 +24,7 @@ const float = zm.float;
 const clamp01 = zm.clamp01;
 const dot = zm.dot;
 const normalize = zm.normalize;
+const splat3 = zm.splat3;
 const shader_io = @import("hybrid_raymarch_fs_io.zig");
 const shader_externs = @import("hybrid_raymarch_fs_externs");
 
@@ -33,10 +34,6 @@ pub const Out = shader_externs.Out;
 const max_steps: u32 = 64;
 const t_max: f32 = 24.0;
 const sun: Vec3 = .{ 0.45, 0.75, 0.5 };
-
-fn splat3(x: f32) Vec3 {
-    return @splat(x);
-}
 
 fn vlen(v: Vec3) f32 {
     return @sqrt(@max(dot(v, v), 1.0e-12));

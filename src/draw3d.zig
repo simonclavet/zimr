@@ -86,6 +86,7 @@ const WgpuBackend = @import("gpu_iface.zig").WgpuBackend;
 const types = @import("types.zig");
 const Color = zm.Color;
 const Camera3D = zm.Camera3D;
+const splat = zm.splat;
 
 // ============================================================================
 // Static unit-cube geometry (CPU-side, expanded per drawCube into the batch)
@@ -4261,7 +4262,7 @@ inline fn v3Add(a: Vec, b: Vec) Vec {
 
 /// Scalar multiply `v * s` (`@splat` broadcast).
 inline fn v3Scale(v: Vec, s: f32) Vec {
-    return v3FromZm(v3ToZm(v) * @as(Vec, @splat(s)));
+    return v3FromZm(v3ToZm(v) * splat(s));
 }
 
 /// Negate a vector.
@@ -4419,8 +4420,8 @@ pub fn getScreenToWorldRay(
     // Unproject near (z=0 in WebGPU's [0,1] clip) and far (z=1).
     const near_h: Vec = mulMatVec(inv_vp, .{ ndc_x, ndc_y, 0.0, 1.0 });
     const far_h: Vec = mulMatVec(inv_vp, .{ ndc_x, ndc_y, 1.0, 1.0 });
-    const near_p: Vec = near_h / @as(Vec, @splat(@max(near_h[3], 1.0e-9)));
-    const far_p: Vec = far_h / @as(Vec, @splat(@max(far_h[3], 1.0e-9)));
+    const near_p: Vec = near_h / splat(@max(near_h[3], 1.0e-9));
+    const far_p: Vec = far_h / splat(@max(far_h[3], 1.0e-9));
 
     var dir: Vec = far_p - near_p;
     dir[3] = 0;
@@ -5639,7 +5640,7 @@ pub fn loadModelAnimations(
                             out_vals[b_off + 2],
                             out_vals[b_off + 3],
                         );
-                        const q = qa + (qb - qa) * @as(Vec, @splat(t_norm));
+                        const q: Vec = qa + (qb - qa) * splat(t_norm);
                         // Normalize so the lerp doesn't drift over time.
                         // `normalize4` returns 0/0/0/0 if input is zero
                         // not what we want for an animation drift fix.
@@ -8915,7 +8916,7 @@ pub fn skinMeshCpu(
             if (joint >= skin.len) {
                 continue;
             }
-            acc += mulMatVec(skin[joint], rest) * @as(Vec, @splat(weight));
+            acc += mulMatVec(skin[joint], rest) * splat(weight);
             total += weight;
         }
         // A vertex no bone claims stays put rather than collapsing to the origin.
@@ -8951,10 +8952,10 @@ pub fn skinMeshCpu(
             if (joint >= skin.len) {
                 continue;
             }
-            acc_n += mulMatVec(skin[joint], rest_n) * @as(Vec, @splat(weight));
+            acc_n += mulMatVec(skin[joint], rest_n) * splat(weight);
         }
         const nlen: f32 = @sqrt(acc_n[0] * acc_n[0] + acc_n[1] * acc_n[1] + acc_n[2] * acc_n[2]);
-        const n_out: Vec = if (nlen > 1.0e-8) acc_n / @as(Vec, @splat(nlen)) else rest_n;
+        const n_out: Vec = if (nlen > 1.0e-8) acc_n / splat(nlen) else rest_n;
         out_normals[v * 3 + 0] = n_out[0];
         out_normals[v * 3 + 1] = n_out[1];
         out_normals[v * 3 + 2] = n_out[2];
@@ -9384,7 +9385,7 @@ test "fbx model: the bind pose is the pose the MESH is in" {
         if (cnt[j] == 0) {
             continue;
         }
-        const centroid: Vec = sum[j] / @as(Vec, @splat(float(cnt[j])));
+        const centroid: Vec = sum[j] / splat(float(cnt[j]));
         const bind_pos: Vec = vec(
             loaded.bind[j][3][0],
             loaded.bind[j][3][1],
@@ -9465,7 +9466,7 @@ test "fbx model: a second, unrelated rig loads and binds correctly too" {
         if (cnt[j] == 0) {
             continue;
         }
-        const centroid: Vec = sum[j] / @as(Vec, @splat(float(cnt[j])));
+        const centroid: Vec = sum[j] / splat(float(cnt[j]));
         const bind_pos: Vec = vec(
             loaded.bind[j][3][0],
             loaded.bind[j][3][1],

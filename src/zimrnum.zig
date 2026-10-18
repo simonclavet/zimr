@@ -106,6 +106,8 @@ const scalarAsin = zm.asinRad;
 const scalarAcos = zm.acosRad;
 const scalarAtan = zm.atanRad;
 const scalarCos = zm.cosRad;
+const scalarSinTurns = zm.sinTurns;
+const scalarCosTurns = zm.cosTurns;
 const scalarTrunc = zm.trunc;
 const scalarRound = zm.round;
 const scalarClamp = zm.clamp;
@@ -20166,16 +20168,17 @@ pub fn fft(comptime T: type, data: []ComplexNumber(T), exponent_sign: T) Error!v
         }
     }
 
-    // Butterflies, stage by stage.
+    // Butterflies, stage by stage. A stage of blocks `width` long uses `width / 2` twiddles, the same in
+    // every block: each is computed once, and applied to its place in every block.
     var width: usize = 2;
     while (width <= n) : (width <<= 1) {
         const step: T = exponent_sign * @as(T, tau) / @as(T, @floatFromInt(width));
-        var block: usize = 0;
-        while (block < n) : (block += width) {
-            var k: usize = 0;
-            while (k < width / 2) : (k += 1) {
-                const angle: T = step * @as(T, @floatFromInt(k));
-                const twiddle: ComplexNumber(T) = .{ .re = scalarCos(angle), .im = scalarSin(angle) };
+        var k: usize = 0;
+        while (k < width / 2) : (k += 1) {
+            const angle: T = step * @as(T, @floatFromInt(k));
+            const twiddle: ComplexNumber(T) = .{ .re = scalarCos(angle), .im = scalarSin(angle) };
+            var block: usize = 0;
+            while (block < n) : (block += width) {
                 const even: ComplexNumber(T) = data[block + k];
                 const odd: ComplexNumber(T) = twiddle.mul(data[block + k + width / 2]);
                 data[block + k] = even.add(odd);
@@ -20271,6 +20274,123 @@ pub fn rfft(
         const angle: T = step * @as(T, @floatFromInt(k));
         const twiddle: ComplexNumber(T) = .{ .re = scalarCos(angle), .im = scalarSin(angle) };
         slot.* = even.add(twiddle.mul(odd));
+    }
+}
+
+/// The inverse modified discrete cosine transform, written out: of `N` coefficients, the `2N` samples
+///
+///     out[t] = sum over k of  coefficients[k] * cos(pi/N * (t + 1/2 + N/2) * (k + 1/2)),   t = 0 .. 2N-1
+///
+/// unscaled, as `dft` is. O(N^2), and the one thing `imdct` can be checked against that is not another
+/// fast transform. The phase is kept exact: the cosine's angle is pi * (2t + 1 + N) * (2k + 1) / (4N),
+/// so its turns are the integer (2t + 1 + N) * (2k + 1), taken modulo 8N, over 8N - where the product
+/// itself, near 2N^2 for the last sample and coefficient, would have lost its fraction in a float.
+pub fn imdctDirect(comptime T: type, out: []T, coefficients: []const T) Error!void {
+    comptime requireFloat(T);
+    const n: usize = coefficients.len;
+    if (n == 0) {
+        return Error.UnsupportedShape;
+    }
+    if (out.len != 2 * n) {
+        return Error.ShapeMismatch;
+    }
+    const turn_denominator: usize = 8 * n;
+    for (out, 0..) |*sample, t| {
+        var sum: T = 0;
+        for (coefficients, 0..) |coefficient, k| {
+            const phase_numerator: usize = ((2 * t + 1 + n) * (2 * k + 1)) % turn_denominator;
+            const phase_turns: T = @as(T, @floatFromInt(phase_numerator)) / @as(T, @floatFromInt(turn_denominator));
+            sum += coefficient * scalarCosTurns(phase_turns);
+        }
+        sample.* = sum;
+    }
+}
+
+/// Writes the DCT-IV's output `Y[m]` - `value` - to its two places in an inverse MDCT's block of `2N`
+/// samples (`imdct`): `out[m - N/2]` where `m >= N/2`, else `-out[m + 3N/2]`; and `-out[3N/2 - 1 - m]`.
+fn writeImdctOutput(
+    comptime T: type,
+    out: []T,
+    n: usize,
+    m: usize,
+    value: T,
+) void {
+    const half: usize = n / 2;
+    out[3 * half - 1 - m] = -value;
+    if (m >= half) {
+        out[m - half] = value;
+    } else {
+        out[m + 3 * half] = -value;
+    }
+}
+
+/// The inverse modified discrete cosine transform of `coefficients` - `N` of them, a power of two, at least
+/// 2 - into `out`, its `2N` samples, as `imdctDirect` defines it; `scratch` holds `N/2` complex values.
+///
+/// WHAT IT IS FOR
+///
+/// Transform codecs - Vorbis, AAC, Opus's CELT - cut sound into blocks of `2N` samples, each overlapping
+/// half of the next, and describe each block by `N` coefficients: half as many numbers as samples, so the
+/// blocks' overlap costs nothing. The `N` coefficients cannot hold `2N` samples, and the inverse does not
+/// give them back: each half of its block comes out with a mirror image of itself added - time-domain
+/// aliasing - the first half's mirror negated, the second's not. Windowed, and added to the halves of the
+/// blocks either side, the mirrors cancel: time-domain aliasing cancellation (Princen and Bradley, 1986).
+/// With a window `w` whose halves meet `w[t]^2 + w[t + N]^2 = 1`, the sum is the signal again, times
+/// `N/2` for this unscaled pair.
+///
+/// HOW: A DCT-IV, UNFOLDED
+///
+/// The cosine at sample `t` is the DCT-IV's cosine at `m = t + N/2`:
+///
+///     Y[m] = sum over k of  coefficients[k] * cos(pi/N * (m + 1/2) * (k + 1/2)),   m = 0 .. N-1
+///
+/// and past `m = N` the cosine's symmetries fold `m` back - about `N` with its sign turned, about `2N`
+/// with its sign turned again. So the `2N` samples are the `N` values of `Y`, each written twice:
+///
+///     t in [0, N/2):        out[t] =  Y[t + N/2]
+///     t in [N/2, 3N/2):     out[t] = -Y[3N/2 - 1 - t]
+///     t in [3N/2, 2N):      out[t] = -Y[t - 3N/2]
+///
+/// AND THE DCT-IV THROUGH ONE COMPLEX TRANSFORM OF N/2 POINTS
+///
+/// The even coefficients go into the real parts and the odd ones, from the top down, into the imaginary
+/// parts: `z[j] = coefficients[2j] + i * coefficients[N - 1 - 2j]`. Turned by `e^(-i pi (4j + 1) / 4N)`,
+/// transformed, and turned again by `e^(-i pi j / N)`, the results hold the DCT-IV's outputs in pairs:
+/// `Y[2j]` is the real part, and `Y[N - 1 - 2j]` the imaginary part negated. The work is the `N/2`-point
+/// `fft` and two passes of `N/2` turns - against the definition's `2N^2` products.
+///
+/// `imdctDirect` checks it at every power of two from 2 to 1024, sample for sample.
+pub fn imdct(
+    comptime T: type,
+    out: []T,
+    coefficients: []const T,
+    scratch: []ComplexNumber(T),
+) Error!void {
+    comptime requireFloat(T);
+    const n: usize = coefficients.len;
+    if (n < 2 or (n & (n - 1)) != 0) {
+        return Error.UnsupportedShape;
+    }
+    if (out.len != 2 * n or scratch.len != n / 2) {
+        return Error.ShapeMismatch;
+    }
+    const n_float: T = @floatFromInt(n);
+    // Packed, the odd coefficients reversed, and turned by e^(-i pi (4j + 1) / 4N): -(4j + 1) / 8N of a turn.
+    for (scratch, 0..) |*point, j| {
+        const packed_point: ComplexNumber(T) = .{ .re = coefficients[2 * j], .im = coefficients[n - 1 - 2 * j] };
+        const turns: T = -@as(T, @floatFromInt(4 * j + 1)) / (8 * n_float);
+        const turn: ComplexNumber(T) = .{ .re = scalarCosTurns(turns), .im = scalarSinTurns(turns) };
+        point.* = packed_point.mul(turn);
+    }
+    try fft(T, scratch, -1);
+    // Turned by e^(-i pi j / N) - -j / 2N of a turn - into the DCT-IV's outputs in pairs, each written to its
+    // two places in the block.
+    for (scratch, 0..) |point, j| {
+        const turns: T = -@as(T, @floatFromInt(j)) / (2 * n_float);
+        const turn: ComplexNumber(T) = .{ .re = scalarCosTurns(turns), .im = scalarSinTurns(turns) };
+        const turned: ComplexNumber(T) = point.mul(turn);
+        writeImdctOutput(T, out, n, 2 * j, turned.re);
+        writeImdctOutput(T, out, n, n - 1 - 2 * j, -turned.im);
     }
 }
 
@@ -28905,6 +29025,94 @@ test "zn calculus: exact on the basis each rule is built from" {
     var two: [2]f64 = @splat(0);
     try expectError(Error.DomainError, interp(f64, &two, &two_at, &backwards, &backwards));
     try expectError(Error.ShapeMismatch, interp(f64, &two, &at, &xs, &line));
+}
+
+test "zn imdct: the fast transform against the definition, and blocks that overlap back into the signal" {
+    const ta: Allocator = testing_allocator;
+    const C = ComplexNumber(f64);
+
+    // THE FAST TRANSFORM AGAINST THE DEFINITION, at every power of two from 2 to 1024, sample for sample.
+    inline for (.{ 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024 }) |n| {
+        const coefficients: []f64 = try ta.alloc(f64, n);
+        defer ta.free(coefficients);
+        const fast: []f64 = try ta.alloc(f64, 2 * n);
+        defer ta.free(fast);
+        const slow: []f64 = try ta.alloc(f64, 2 * n);
+        defer ta.free(slow);
+        const scratch: []C = try ta.alloc(C, n / 2);
+        defer ta.free(scratch);
+        Rng.init(2026).fillNormal(f64, coefficients);
+        try imdct(f64, fast, coefficients, scratch);
+        try imdctDirect(f64, slow, coefficients);
+        for (fast, slow) |fast_sample, slow_sample| {
+            try expect(approxEqAbs(f64, slow_sample, fast_sample, 1.0e-10 * float64(n)));
+        }
+    }
+
+    // In single precision, as a decoder runs it: a block of 2048 samples from 1024 coefficients.
+    {
+        const n: usize = 1024;
+        const coefficients: []f32 = try ta.alloc(f32, n);
+        defer ta.free(coefficients);
+        const fast: []f32 = try ta.alloc(f32, 2 * n);
+        defer ta.free(fast);
+        const slow: []f32 = try ta.alloc(f32, 2 * n);
+        defer ta.free(slow);
+        const scratch: []ComplexNumber(f32) = try ta.alloc(ComplexNumber(f32), n / 2);
+        defer ta.free(scratch);
+        Rng.init(2027).fillNormal(f32, coefficients);
+        try imdct(f32, fast, coefficients, scratch);
+        try imdctDirect(f32, slow, coefficients);
+        var largest_sample: f32 = 0;
+        for (slow) |slow_sample| {
+            largest_sample = @max(largest_sample, @abs(slow_sample));
+        }
+        for (fast, slow) |fast_sample, slow_sample| {
+            try expect(approxEqAbs(f32, slow_sample, fast_sample, 1.0e-4 * largest_sample));
+        }
+    }
+
+    // BLOCKS THAT OVERLAP BACK INTO THE SIGNAL. Four blocks of 2N samples, each half over the next, each
+    // windowed by the sine window - its halves meet w[t]^2 + w[t + N]^2 = 1 - transformed forward by the
+    // definition, back by `imdct`, windowed again and added: where two blocks overlap, their aliasing
+    // cancels, and the signal comes back times N/2.
+    {
+        const n: usize = 16;
+        const block_count: usize = 4;
+        var signal: [(block_count + 1) * n]f64 = undefined;
+        Rng.init(9).fillNormal(f64, &signal);
+        var window: [2 * n]f64 = undefined;
+        for (&window, 0..) |*weight, t| {
+            weight.* = scalarSinTurns((float64(t) + 0.5) / float64(4 * n));
+        }
+        var rebuilt: [(block_count + 1) * n]f64 = @splat(0);
+        var scratch: [n / 2]C = undefined;
+        for (0..block_count) |block_index| {
+            const block_start: usize = block_index * n;
+            // The forward transform, by its definition:
+            //     X[k] = sum over t of x[t] w[t] cos(pi/N (t + 1/2 + N/2)(k + 1/2))
+            var coefficients: [n]f64 = undefined;
+            for (&coefficients, 0..) |*coefficient, k| {
+                var sum: f64 = 0;
+                for (0..2 * n) |t| {
+                    const sample_position: f64 = float64(t) + 0.5 + float64(n) / 2;
+                    const phase_turns: f64 = sample_position * (float64(k) + 0.5) / float64(2 * n);
+                    sum += signal[block_start + t] * window[t] * scalarCosTurns(phase_turns);
+                }
+                coefficient.* = sum;
+            }
+            var block: [2 * n]f64 = undefined;
+            try imdct(f64, &block, &coefficients, &scratch);
+            for (block, 0..) |sample, t| {
+                rebuilt[block_start + t] += sample * window[t];
+            }
+        }
+        // The first and last half-blocks have one block each, and keep its aliasing; between, every sample is
+        // the signal's, times N/2.
+        for (n..block_count * n) |t| {
+            try expect(approxEqAbs(f64, signal[t] * float64(n) / 2, rebuilt[t], 1.0e-9));
+        }
+    }
 }
 
 test "zn fft: the fast transform against the slow one, and the round trip" {

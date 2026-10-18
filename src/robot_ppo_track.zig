@@ -40,6 +40,7 @@ const Random = std.Random;
 const asBytes = std.mem.asBytes;
 const eql = std.mem.eql;
 const sliceAsBytes = std.mem.sliceAsBytes;
+const expectEqual = std.testing.expectEqual;
 
 /// Every evaluation starts its episodes from the same frames, whatever training has done to the
 /// training fleet's random stream.
@@ -101,6 +102,72 @@ pub const Options = struct {
 };
 
 /// How one iteration went.
+/// Seconds of character-time between failures: the steps watched over the failures, at
+/// `physics_steps_per_second`. Null when nothing failed: there is no time to failure to tell yet - not a time of
+/// zero, nor an infinite one. The measure every tracking page, trainer and curve reports.
+pub fn secondsToFailure(
+    steps_watched: u64,
+    failures: u64,
+    physics_steps_per_second: f32,
+) ?f32 {
+    if (failures == 0) {
+        return null;
+    }
+    const steps_per_failure: f32 = float(steps_watched) / float(failures);
+    return steps_per_failure / physics_steps_per_second;
+}
+
+/// How a show keeps up with the frames that draw it (`showStepsForFrame`).
+pub const ShowPacing = struct {
+    /// The most physics steps one frame takes: after a long frame - a window dragged, a run loaded - the show
+    /// resumes rather than racing through what it missed.
+    most_steps_per_frame: u32 = 4,
+    /// How far short of a whole step a frame may be and still take it: a quarter of a step. The pacer's frames
+    /// jitter by a millisecond or two around their beat, and a frame a hair short of a step would otherwise take none.
+    step_tolerance: f32 = 0.25,
+};
+
+/// The physics steps a frame of `dt` seconds takes, at `timestep` seconds a step: the frame's duration in steps,
+/// rounded down unless within `step_tolerance` of the next whole step, at least one and at most
+/// `most_steps_per_frame`. One step a frame at 60 frames a second, two at 30.
+///
+/// Nothing is carried from frame to frame. Physics keeps its fixed step - the one the policy was trained on - and
+/// each frame advances it by whole steps, so the motion stays even: a device that cannot keep up shows the motion in
+/// slight slow motion (at 50 frames a second, five sixths of real time) rather than in jumps, and never faster than
+/// real time by more than the tolerance allows. It assumes frames no faster than the physics, as the engine's pacer
+/// gives them (60 a second at most).
+///
+///     frames a second    steps in a frame    + tolerance    steps taken    the show's speed
+///          60               1.00               1.25            1             real time
+///          50               1.20               1.45            1             0.83
+///          40               1.50               1.75            1             0.67
+///          30               2.00               2.25            2             real time
+pub fn showStepsForFrame(dt: f32, timestep: f32, pacing: ShowPacing) u32 {
+    const steps_in_frame: f32 = dt / timestep;
+    const steps_with_tolerance: f32 = steps_in_frame + pacing.step_tolerance;
+    const steps_allowed: f32 = float(pacing.most_steps_per_frame);
+    const steps_kept: f32 = clamp(steps_with_tolerance, 1.0, steps_allowed);
+    return @floor(steps_kept);
+}
+
+test "showStepsForFrame: one step a frame at 60 frames a second, jitter or not; whole steps when slower" {
+    const timestep: f32 = 1.0 / 60.0;
+    const pacing: ShowPacing = .{};
+    const millisecond: f32 = 0.001;
+    try expectEqual(@as(u32, 1), showStepsForFrame(timestep, timestep, pacing));
+    try expectEqual(@as(u32, 1), showStepsForFrame(timestep - 2 * millisecond, timestep, pacing));
+    try expectEqual(@as(u32, 1), showStepsForFrame(timestep + 2 * millisecond, timestep, pacing));
+    try expectEqual(@as(u32, 1), showStepsForFrame(1.0 / 50.0, timestep, pacing));
+    try expectEqual(@as(u32, 1), showStepsForFrame(1.0 / 40.0, timestep, pacing));
+    try expectEqual(@as(u32, 2), showStepsForFrame(1.0 / 30.0, timestep, pacing));
+    try expectEqual(@as(u32, 2), showStepsForFrame(1.0 / 31.0, timestep, pacing));
+    try expectEqual(@as(u32, 2), showStepsForFrame(1.0 / 29.0, timestep, pacing));
+    try expectEqual(@as(u32, 3), showStepsForFrame(1.0 / 20.0, timestep, pacing));
+    // A long frame takes the most, and a frame of no time - the first, a paused clock - still one.
+    try expectEqual(@as(u32, 4), showStepsForFrame(1.0, timestep, pacing));
+    try expectEqual(@as(u32, 1), showStepsForFrame(0.0, timestep, pacing));
+}
+
 pub const Stats = struct {
     /// Physics steps watched and failures among them (the reference LOST - not the clip ending).
     /// Their ratio is the mean time to failure, the number a tracker is judged by: it does not
@@ -363,13 +430,26 @@ pub fn Trainer(comptime M: type) type {
             obs_count: u64 = 0,
         };
 
+        /// The size of this trainer's weights file (`exportWeights`), in bytes: the header, both networks'
+        /// parameters with Adam's two moments, and the normaliser's means and variances when inputs are
+        /// normalised. Known from the network's shape alone, before anything has been read back from the
+        /// GPU - what a page needs to hold a saved file of these weights.
+        pub fn weightsByteCount(self: *const Self) usize {
+            const parameter_floats: usize = 3 * self.ppo.param_count;
+            const normaliser_floats: usize = if (self.options.normalize) 2 * self.n_obs else 0;
+            return @sizeOf(Header) + (parameter_floats + normaliser_floats) * @sizeOf(f32);
+        }
+
         /// The weights as a file's worth of bytes: both networks, Adam's two moments and its step,
         /// and how much experience has gone in - enough to carry on training exactly, or just to
         /// act. The caller owns the result.
         ///
-        /// This is what a page offers for download. On a GPU the numbers come from the latest
-        /// readback, so they may be a frame behind the update in flight, which for a file saved by
-        /// hand is nothing.
+        /// On a GPU the parameters and Adam's moments come from the latest readback, while the counters
+        /// written beside them (Adam's step, the batches, the normaliser's statistics) are the trainer's
+        /// own: the two agree only once the readback reflects every update dispatched
+        /// (`isReadbackCurrent`). A program without frames waits for that first (`waitForReadback`); a page
+        /// saves when it holds; a file saved by hand mid-update is a frame behind, which for looking at
+        /// it is nothing.
         pub fn exportWeights(self: *Self, gpa: Allocator) ![]u8 {
             const count: usize = self.ppo.param_count;
             const params: []const f32 = self.ppo.pipe.readLatest(.params) orelse return error.NoReadback;
@@ -477,6 +557,34 @@ pub fn Trainer(comptime M: type) type {
             // A batch half-collected under the old weights would be judged against the new ones.
             self.cursor = 0;
             self.batch = .{};
+            // The helping hand where the schedule has it after the batches these weights trained, not where a
+            // fresh trainer starts it.
+            self.env.fleet.options.task.gains.assist = self.assistAfter(self.iterations);
+        }
+
+        /// Whether the latest readback reflects every update dispatched, so that `exportWeights` writes parameters
+        /// and counters of the same moment. Always, on the CPU: it has no queue.
+        pub fn isReadbackCurrent(self: *Self) bool {
+            const generation: compute_host.Compute(M).Generation = self.ppo.pipe.readGeneration();
+            return generation.mirrored >= generation.submitted;
+        }
+
+        /// Waits until the readback reflects every update dispatched (`isReadbackCurrent`), polling it - each
+        /// poll starts a copy when none is in flight, and takes one that has landed. For a program without frames,
+        /// natively; never in a page, whose readbacks land only between its frames.
+        pub fn waitForReadback(self: *Self) void {
+            while (!self.isReadbackCurrent()) {
+                _ = self.ppo.pipe.readLatest(.params);
+            }
+        }
+
+        /// The root assist's strength for the batch after `iterations` batches: `assist_start`, fading linearly to
+        /// nothing over `assist_batches`.
+        pub fn assistAfter(self: *const Self, iterations: u64) f32 {
+            const fade_batches: f32 = float(@max(self.options.assist_batches, 1));
+            const faded_share: f32 = float(iterations) / fade_batches;
+            const remaining_share: f32 = @max(0.0, 1.0 - faded_share);
+            return self.options.assist_start * remaining_share;
         }
 
         /// The weights to a file, for runs on a machine with a disk. Written to a temporary name
@@ -634,9 +742,7 @@ pub fn Trainer(comptime M: type) type {
             self.batch = .{};
             self.cursor = 0;
             const assist_now: f32 = self.env.fleet.options.task.gains.assist;
-            // The next batch's helping hand: linearly down to nothing over `assist_batches`.
-            const fade: f32 = float(self.iterations) / float(@max(self.options.assist_batches, 1));
-            self.env.fleet.options.task.gains.assist = self.options.assist_start * @max(0.0, 1.0 - fade);
+            self.env.fleet.options.task.gains.assist = self.assistAfter(self.iterations);
             return .{
                 .exposure = batch.exposure,
                 .failures = batch.failures,
@@ -828,6 +934,106 @@ pub fn Trainer(comptime M: type) type {
                 .exposure = exposure,
                 .failures = failures,
             };
+        }
+
+        /// A policy SHOWN rather than trained or judged: characters on a fleet of their own, each decision the
+        /// policy's mean action through DReCon's filter - exactly as `evaluate` acts - but one physics step at a time
+        /// (`stepShow`), kept from call to call, so that a viewer draws every step. A character whose episode ends
+        /// starts another, as in training. Started with the fleet's seed, a show of `options.envs` characters lives
+        /// what `evaluate` judges, step for step.
+        pub const Show = struct {
+            fleet: *track.Fleet,
+            controller: policy.Controller,
+            characters: usize,
+            /// The policy's raw actions, every character's in a row, decided every `decimation` physics steps.
+            actions: []f32,
+            /// Physics steps before the next decision.
+            held_steps_left: u32 = 0,
+            /// What the show has lived so far, counted as `evaluate` counts: a unit of exposure per physics step per
+            /// character, and a failure when the fleet says the reference was lost.
+            exposure: u64 = 0,
+            failures: u32 = 0,
+        };
+
+        /// A show of `characters` characters on a fleet seeded with `seed` (`evaluation_seed` to live what
+        /// `evaluate` judges). End it with `endShow`.
+        pub fn startShow(
+            self: *Self,
+            gpa: Allocator,
+            characters: usize,
+            seed: u64,
+        ) !Show {
+            const fleet: *track.Fleet = try .init(gpa, self.m, self.env.fleet.clips, .{
+                .envs = characters,
+                .capacity = 16,
+                .seed = seed,
+                .action_scale = self.options.action_scale,
+                .task = self.options.task,
+                .body_names = self.body_names,
+            });
+            errdefer fleet.deinit();
+            var controller: policy.Controller = try .init(gpa, self.m, self.env.subset, characters, .{
+                .beta = self.options.beta,
+                .decimation = self.options.decimation,
+            });
+            errdefer controller.deinit();
+            const actions: []f32 = try gpa.alloc(f32, characters * self.env.subset.dofs);
+            @memset(actions, 0.0);
+            return .{ .fleet = fleet, .controller = controller, .characters = characters, .actions = actions };
+        }
+
+        /// One physics step of the show: when a decision is due, every character observed and the policy's mean
+        /// action taken (clamped to the action's range, as `evaluate` does); then DReCon's filter, the step, and the
+        /// count of what was lived.
+        pub fn stepShow(self: *Self, show: *Show) void {
+            const dofs: usize = self.env.subset.dofs;
+            const fleet: *track.Fleet = show.fleet;
+            const steps_per_decision: u32 = @max(self.options.decimation, 1);
+            if (show.held_steps_left == 0) {
+                for (0..show.characters) |character| {
+                    const first_component: usize = character * dofs;
+                    const action: []f32 = show.actions[first_component..][0..dofs];
+                    const clip: *const dance.Clip = fleet.clips[fleet.clip_of[character]];
+                    const previous_action: []const f32 = show.controller.lastAction(character);
+                    track.stateOf(self.m, &fleet.data[character], &self.env.sim_state);
+                    policy.observeFrom(
+                        self.m,
+                        self.env.subset,
+                        fleet,
+                        clip,
+                        fleet.frame[character],
+                        self.env.sim_state,
+                        &self.env.views,
+                        previous_action,
+                        self.obs_scratch,
+                    );
+                    self.normalizeObservations(self.obs_scratch, false);
+                    self.ppo.actMean(self.obs_scratch, action);
+                    for (action) |*component| {
+                        component.* = clamp(component.*, -1.0, 1.0);
+                    }
+                }
+                show.held_steps_left = steps_per_decision;
+            }
+            const filtered_actions: []const f32 = show.controller.apply(show.actions);
+            _ = show.fleet.step(filtered_actions);
+            show.held_steps_left -= 1;
+            for (0..show.characters) |character| {
+                show.exposure += 1;
+                if (show.fleet.failures[character]) {
+                    show.failures += 1;
+                }
+                if (show.fleet.dones[character]) {
+                    show.controller.forget(character);
+                }
+            }
+        }
+
+        /// Releases a show's fleet, filter and actions.
+        pub fn endShow(gpa: Allocator, show: *Show) void {
+            gpa.free(show.actions);
+            show.controller.deinit();
+            show.fleet.deinit();
         }
 
         /// GAE over each environment's column of the rollout, then normalised over the batch.

@@ -34,6 +34,7 @@ const Canvas = z.Canvas;
 const Color = zm.Color;
 const Vec2 = zm.Vec2;
 const clamp = zm.clamp;
+const splat2 = zm.splat2;
 const allocPrint = std.fmt.allocPrint;
 const Io = std.Io;
 const eql = std.mem.eql;
@@ -349,8 +350,8 @@ fn curvedEdge(
     for (&pts, 0..) |*pt, k| {
         const t: f32 = float(k) / float(edge_segments);
         const u: f32 = 1 - t;
-        pt.* = a * @as(Vec2, @splat(u * u * u)) + c1 * @as(Vec2, @splat(3 * u * u * t)) +
-            c2 * @as(Vec2, @splat(3 * u * t * t)) + b * @as(Vec2, @splat(t * t * t));
+        pt.* = a * splat2(u * u * u) + c1 * splat2(3 * u * u * t) +
+            c2 * splat2(3 * u * t * t) + b * splat2(t * t * t);
     }
     canvas.polyline(&pts, col, thickness, false);
 }

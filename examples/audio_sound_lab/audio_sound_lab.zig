@@ -185,6 +185,10 @@ fn applyPositioning(s: *State, listener: Vec2, span: f32) Placement {
 }
 
 fn update(f: *z.Frame, s: *State) void {
+    // A black screen with a start button, until it is pressed and the audio runs (`z.showAudioStartScreen`).
+    if (z.showAudioStartScreen(f, &s.font)) {
+        return;
+    }
     const fw: f32 = f.window.widthf();
     const fh: f32 = f.window.heightf();
 

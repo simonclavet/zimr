@@ -94,6 +94,10 @@ fn inRect(px: f32, py: f32, x: f32, y: f32, w: f32, h: f32) bool {
 }
 
 fn update(f: *z.Frame, state: *State) void {
+    // A black screen with a start button, until it is pressed and the audio runs (`z.showAudioStartScreen`).
+    if (z.showAudioStartScreen(f, &state.font)) {
+        return;
+    }
     _ = state.scratch.reset(.retain_capacity);
     state.frame_count += 1;
     z.clearViewport(f, .{ .r = 18, .g = 20, .b = 30, .a = 255 });

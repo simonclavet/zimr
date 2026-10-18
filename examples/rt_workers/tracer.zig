@@ -30,6 +30,7 @@ const dot = zm.dot;
 const normalize = zm.normalize;
 const clamp = zm.clamp;
 const Vec3 = zm.Vec3;
+const splat3 = zm.splat3;
 const expectEqual = std.testing.expectEqual;
 const expectEqualSlices = std.testing.expectEqualSlices;
 const expectError = std.testing.expectError;
@@ -163,11 +164,11 @@ fn hitSphere(
             return null;
         }
     }
-    const p: Vec3 = ro + rd * @as(Vec3, @splat(t));
+    const p: Vec3 = ro + rd * splat3(t);
     return .{
         .t = t,
         .p = p,
-        .n = (p - c) / @as(Vec3, @splat(s.r)),
+        .n = (p - c) / splat3(s.r),
         .albedo = .{ s.mr, s.mg, s.mb },
         .mat = s.mat,
     };
@@ -207,8 +208,8 @@ fn radiance(
             const t: f32 = 0.5 * (normalize(rd)[1] + 1.0);
             const white: Vec3 = .{ 1.0, 1.0, 1.0 };
             const blue: Vec3 = .{ 0.35, 0.55, 1.0 };
-            const sky: Vec3 = white + (blue - white) * @as(Vec3, @splat(t));
-            acc += throughput * sky * @as(Vec3, @splat(0.7));
+            const sky: Vec3 = white + (blue - white) * splat3(t);
+            acc += throughput * sky * splat3(0.7);
             break;
         };
 
@@ -218,8 +219,8 @@ fn radiance(
         }
 
         if (h.mat == mat_metal) {
-            const refl: Vec3 = rd - h.n * @as(Vec3, @splat(2.0 * dot(rd, h.n)));
-            rd = normalize(refl + rng.inUnitSphere() * @as(Vec3, @splat(0.08)));
+            const refl: Vec3 = rd - h.n * splat3(2.0 * dot(rd, h.n));
+            rd = normalize(refl + rng.inUnitSphere() * splat3(0.08));
         } else {
             rd = normalize(h.n + rng.inUnitSphere());
         }
@@ -281,13 +282,13 @@ pub fn traceTile(
                 const v: f32 = (float(y) + rng.unit()) / fh;
                 const sx: f32 = (u * 2.0 - 1.0) * aspect;
                 const sy: f32 = -(v * 2.0 - 1.0);
-                const ray: Vec3 = right * @as(Vec3, @splat(sx)) +
-                    up * @as(Vec3, @splat(sy)) +
-                    fwd * @as(Vec3, @splat(hdr.focal));
+                const ray: Vec3 = right * splat3(sx) +
+                    up * splat3(sy) +
+                    fwd * splat3(hdr.focal);
                 const dir: Vec3 = normalize(ray);
                 col += radiance(spheres, eye, dir, hdr.bounces, &rng);
             }
-            col *= @as(Vec3, @splat(inv_samples));
+            col *= splat3(inv_samples);
 
             // gamma 2.0, then to 8-bit.
             const r: u8 = toByte(@sqrt(col[0]));

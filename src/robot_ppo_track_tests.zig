@@ -418,6 +418,49 @@ test "robot_ppo_track: an untrained policy is the servo, and the wiring says so"
     try expect(shaken.mean_reward < first.mean_reward - 0.01);
 }
 
+test "robot_ppo_track: a show lives, a physics step at a time, exactly what evaluate judges" {
+    // THE KNOWN ANSWER. On the judge's seed, with as many characters, a show stepped `decisions x decimation`
+    // physics steps acts as `evaluate` does over `decisions` decisions - the same starts, the same mean actions,
+    // the same filter - so it must count the same exposure and the same failures, exactly.
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    var setup: Setup = undefined;
+    setup.init(gpa, threaded.io(), "assets/lafan1/walk1_subject2.bvh", walk_first) catch return error.SkipZigTest;
+    defer setup.deinit();
+    const m: *rbt.Model = &setup.imported.model;
+    const clips = [_]*const dance.Clip{&setup.clip};
+    var host: Host = .initCpu();
+    const characters: u32 = 2;
+    const trainer: *Trainer(zn_mlp) = try .init(gpa, &host, m, setup.imported.names, &clips, .{
+        .envs = characters,
+        .horizon = 8,
+    });
+    defer trainer.deinit();
+    // Some training first, so that the policy is not the servo and its actions matter.
+    _ = trainer.iterate();
+    const decisions: usize = 40;
+    const judged: Stats = try trainer.evaluate(decisions, false);
+
+    var show: Trainer(zn_mlp).Show = try trainer.startShow(gpa, characters, ppo_track.evaluation_seed);
+    defer Trainer(zn_mlp).endShow(gpa, &show);
+    const physics_steps: usize = decisions * @max(trainer.options.decimation, 1);
+    for (0..physics_steps) |_| {
+        trainer.stepShow(&show);
+    }
+    try expectEqual(judged.exposure, show.exposure);
+    try expectEqual(judged.failures, show.failures);
+
+    // THE CONTROL. Another seed starts the characters elsewhere: the same policy lives a different show.
+    var elsewhere: Trainer(zn_mlp).Show = try trainer.startShow(gpa, characters, ppo_track.evaluation_seed + 1);
+    defer Trainer(zn_mlp).endShow(gpa, &elsewhere);
+    for (0..physics_steps) |_| {
+        trainer.stepShow(&elsewhere);
+    }
+    const first_character_frames_differ: bool = show.fleet.frame[0] != elsewhere.fleet.frame[0];
+    try expect(first_character_frames_differ or show.failures != elsewhere.failures);
+}
+
 test "robot_ppo_track: a checkpoint carries a run on exactly" {
     // Save after some training, load into a trainer built from a DIFFERENT seed, and the two must
     // be the same learner: the same weights to the bit, the same optimiser state, the same count of

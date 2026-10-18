@@ -22,6 +22,7 @@
 //! Windows only, for now: a second platform replaces `win32.zig`, and this file's window type with it.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Io = std.Io;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const native_input = @import("native_input.zig");
@@ -57,6 +58,13 @@ var input: native_input.InputQueue = .{};
 // The queued events' conversion into the contract's, which keeps the pointer's last position from frame to frame.
 // lint:off module-var: the conversion's state, kept between frames as the queue is
 var contract_events: native_input.ContractEvents = .{};
+
+// The timer the frame's wait wakes on between its askings (`waitForFrame`): a high-resolution one, asked for at the
+// first wait and kept for the program's life - null where the system has none.
+// lint:off module-var: the window loop's own timer, one for the program
+var frame_wait_timer: ?win32.HANDLE = null;
+// lint:off module-var: whether the timer has been asked for, so that a system without one is asked once only
+var has_asked_for_frame_wait_timer: bool = false;
 
 // Whether each input event is printed (`ZIMR_LOG_INPUT=1`), read once when the window opens.
 // lint:off module-var: a setting read once, at startup
@@ -466,7 +474,12 @@ fn deliverInput(receive_event: EventFunction) void {
     queueDroppedFiles();
 }
 
-pub const OpenError = win32.WindowError || error{OutOfMemory};
+pub const OpenError = win32.WindowError || error{ OutOfMemory, WindowUnwritten };
+
+/// Whether this system's window and its loop are written: Windows' only, so far. Elsewhere - the systems the unwritten
+/// platform stands for (`platform/unwritten.zig`) - `openWindow`, `run` and `finish` refuse, and the Win32 code they
+/// would call is never compiled; the headless loop (`headless`) and the scripts (`script`) are every system's.
+const has_window_loop: bool = builtin.target.os.tag == .windows;
 
 /// What the Vulkan host's validation layer counted.
 pub const Counts = vulkan_host.MessageCounts;
@@ -543,6 +556,10 @@ pub fn size() contract.Size {
 
 /// Opens the program's window and gives it to the Vulkan host.
 pub fn openWindow(options: win32.WindowOptions) OpenError!void {
+    if (comptime !has_window_loop) {
+        console.log(.err, "the window and its loop are not written for this system: the program stops here");
+        return error.WindowUnwritten;
+    }
     try window.open(options);
     // The input method starts off: it turns on only while a text field takes text (`startTextInput`).
     window.setInputMethodEnabled(false);
@@ -568,7 +585,9 @@ pub const script = struct {
     const allocator: Allocator = std.heap.smp_allocator;
 
     /// Saves the frame last drawn as a PNG file at `path`, its directory made when missing; returns whether it could.
-    pub const CaptureFunction = *const fn (io: Io, path: []const u8) bool;
+    /// Saves the frame last drawn as a PNG file at `path`, shrunk to `width` pixels across - its height in
+    /// proportion - when `width` is less than the frame's; 0 saves it whole. Whether it could.
+    pub const CaptureFunction = *const fn (io: Io, path: []const u8, width: u32) bool;
 
     /// How a run went: the frames it drew, and the lines it could not run.
     pub const Outcome = struct {
@@ -778,8 +797,9 @@ pub const script = struct {
         fn execute(session: *Session, command: native_input.Command) void {
             switch (command) {
                 .advance => |frame_count| session.drawFrames(frame_count),
-                .capture => session.captureFrame(null),
-                .capture_to => |path| session.captureFrame(path),
+                .capture => session.captureFrame(null, 0),
+                .capture_to => |path| session.captureFrame(path, 0),
+                .capture_thumbnail => |thumbnail| session.captureFrame(thumbnail.path, thumbnail.width),
                 .capture_audio_to => |path| session.captureAudio(path),
                 .sync => |token| session.reply("synced {s}", .{token}),
                 .quit => {},
@@ -869,7 +889,7 @@ pub const script = struct {
 
         /// Saves the frame last drawn, at `path` or as frame_<n>.png in the capture directory, and replies with the
         /// file written.
-        fn captureFrame(session: *Session, path: ?[]const u8) void {
+        fn captureFrame(session: *Session, path: ?[]const u8, width: u32) void {
             if (session.outcome.frame_count == 0) {
                 session.fail("nothing has been drawn yet to capture", .{});
                 return;
@@ -884,7 +904,7 @@ pub const script = struct {
                 session.fail("the capture directory's name is too long", .{});
                 return;
             };
-            if (!session.capture(session.io, capture_path)) {
+            if (!session.capture(session.io, capture_path, width)) {
                 session.fail("capturing to {s} failed", .{capture_path});
                 return;
             }
@@ -1257,7 +1277,56 @@ fn serviceWindow(receive_event: EventFunction) WindowPass {
         reported_size = current_size;
         deliverWindowEvent(receive_event, .{ .resized = current_size });
     }
+    // The pass's input arrived now, as far as the frame's wait can tell (`waitForFrame` hands it over as it comes).
+    contract_events.arrival_ms = native_os.monotonicMilliseconds();
     deliverInput(receive_event);
+    return .draw;
+}
+
+/// How long the frame's wait sleeps between its askings, in units of 100 ns: a millisecond.
+const frame_wait_step_100ns: i64 = 10_000;
+
+/// The frame's wait, before the frame: until the next frame can begin without waiting inside it - the frame slot free
+/// and a swapchain image in hand (`vulkan_host.tryAcquireAhead`) - the window's messages are handled as they arrive
+/// (`serviceWindow`), so that input reaches the engine, and an app's `on_input`, the moment it comes rather than at
+/// the next frame; the frame then draws at the display's pace, as before.
+///
+/// Between askings the thread sleeps on the message queue and a high-resolution waitable timer together
+/// (`MsgWaitForMultipleObjectsEx`), waking for a message at once and otherwise after a millisecond. The timer must be
+/// a high-resolution one (Windows 10 version 1803 and later): an ordinary timer, or a timeout, waits for the system's
+/// tick - 15.6 ms unless a program asks for less - and the frame could start a refresh late. Where the system has
+/// none, there is no wait here: the frame waits inside its own acquire, as before this wait existed, and its input is
+/// read at its start. A window minimized or closed during the wait ends it, with what the loop does for it.
+fn waitForFrame(receive_event: EventFunction) WindowPass {
+    if (!has_asked_for_frame_wait_timer) {
+        has_asked_for_frame_wait_timer = true;
+        frame_wait_timer = win32.CreateWaitableTimerExW(
+            null,
+            null,
+            win32.CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+            win32.TIMER_ALL_ACCESS,
+        );
+    }
+    const timer: win32.HANDLE = frame_wait_timer orelse return .draw;
+    while (!vulkan_host.tryAcquireAhead()) {
+        // Due one step from now - a negative due time is relative. Setting the timer also clears a signal left from
+        // an earlier wait, so this wait ends at the step, or at a message.
+        const due_in_one_step: i64 = -frame_wait_step_100ns;
+        _ = win32.SetWaitableTimer(timer, &due_in_one_step, 0, null, null, 0);
+        const wait_handles: [1]win32.HANDLE = .{timer};
+        _ = win32.MsgWaitForMultipleObjectsEx(
+            1,
+            &wait_handles,
+            win32.INFINITE,
+            win32.QS_ALLINPUT,
+            win32.MWMO_INPUTAVAILABLE,
+        );
+        // Whichever woke it - a message, or the step - the window's messages are handled and its input handed over.
+        const pass: WindowPass = serviceWindow(receive_event);
+        if (pass != .draw) {
+            return pass;
+        }
+    }
     return .draw;
 }
 
@@ -1393,13 +1462,22 @@ pub fn run(
     receive_event: EventFunction,
     capture: script.CaptureFunction,
 ) ?script.Outcome {
+    if (comptime !has_window_loop) {
+        // No window was opened (`openWindow`): no frames to run.
+        return null;
+    }
     reported_size = size();
     var setting_buffer: [512]u8 = undefined;
     if (native_os.environmentVariable("ZIMR_SCRIPT", &setting_buffer)) |script_path| {
         return runScriptInWindow(update, receive_event, capture, script_path);
     }
     while (true) {
-        switch (serviceWindow(receive_event)) {
+        const pass: WindowPass = switch (serviceWindow(receive_event)) {
+            // The frame's wait, here, input handed over as it arrives (`waitForFrame`).
+            .draw => waitForFrame(receive_event),
+            else => |other| other,
+        };
+        switch (pass) {
             .draw => update(native_os.monotonicMilliseconds()),
             .hidden => win32.Sleep(16),
             .closed => return null,
@@ -1461,6 +1539,11 @@ pub const headless = struct {
     pub fn start(width: u32, height: u32) Allocator.Error!void {
         try vulkan_host.startHeadlessWithScreen(width, height);
         headless_platform.setSize(float(width), float(height));
+        // Saved values kept as files in the folder the run names, from before the app's init - which may read them.
+        var folder_buffer: [512]u8 = undefined;
+        if (native_os.environmentVariable("ZIMR_VALUES_DIR", &folder_buffer)) |values_folder| {
+            headless_platform.keepValuesIn(values_folder);
+        }
     }
 
     /// Runs the script (see `headless`), and returns how it went. Reports the frames run against those drawn on the
@@ -1530,6 +1613,10 @@ pub const headless = struct {
 
 /// Shuts the Vulkan host down (its validation layer reports anything still alive as an error) and closes the window.
 pub fn finish() Counts {
+    if (comptime !has_window_loop) {
+        // Nothing was opened: no host to shut down, no window to close.
+        return .{};
+    }
     const counts: Counts = vulkan_host.shutdown();
     window.close();
     return counts;

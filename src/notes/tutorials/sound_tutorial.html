@@ -1,0 +1,2546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sound — how zimr makes and plays sound on every platform</title>
+<!--docfmt:style-->
+<!--
+  Editing this page? Its CODE is generated, so never paste code into it.
+  Every code block names where it comes from: data-src (the file) and data-decl (how the
+  declaration's first line starts; add data-in="..." when that alone is ambiguous). To show
+  another declaration, add an empty tagged block like the others and run
+      zig build doc-folds
+  which fills in every block from the source. What is left to keep in sync by hand is the prose
+  around the code. Diagrams are marked class="sketch": they illustrate, they do not quote.
+-->
+</head>
+<body>
+<h1>Sound</h1>
+<p class="sub">How zimr makes sound and plays it, on every platform, from the same app code: what a sample is,
+how many sounds become one, how the result crosses from the engine to a speaker, and how long that takes. Every
+platform plays through the engine's own mixer - in a browser, on Windows, and in a headless run with no speaker at
+all - so one explanation covers them all, and the platforms differ only in their last step. The code is in
+<code>src/sound.zig</code> (the mixer, its renderer and its instruments), <code>src/audio_worklet.zig</code> and
+<code>src/page_audio.zig</code> (the browser's side), and the platform files under <code>src/platform/</code>.</p>
+
+<p>Code is shown in folds, generated from the source files on every build, so it is always the code that ships. A
+closed fold opens with a click; the prose reads straight through without opening any. The companion tutorial on
+<a href="backends-tutorial.html">graphics backends</a> covers the rest of each platform: windows, input, the GPU.</p>
+
+<nav>
+<strong>Contents</strong>
+<ol>
+  <li><a href="#numbers">Sound as numbers</a>
+    <ol><li><a href="#samples">Samples and the sample rate</a></li>
+        <li><a href="#frames">Channels and frames</a></li>
+        <li><a href="#blocks">Blocks and deadlines</a></li>
+        <li><a href="#decibels">Loudness and decibels</a></li></ol></li>
+  <li><a href="#using">Using sound</a>
+    <ol><li><a href="#starting">Starting the output</a></li>
+        <li><a href="#voices">Voices</a></li>
+        <li><a href="#sources">Sources</a></li>
+        <li><a href="#loaded">Sounds loaded from files</a></li>
+        <li><a href="#notes">Notes</a></li>
+        <li><a href="#music">Music</a></li>
+        <li><a href="#analyser">The analyser</a></li></ol></li>
+  <li><a href="#names">Voices and their names</a></li>
+  <li><a href="#arithmetic">The arithmetic of a block</a>
+    <ol><li><a href="#pitch">Pitch: reading between samples</a></li>
+        <li><a href="#pan">Pan</a></li>
+        <li><a href="#ramps">Changing volume without a click</a></li>
+        <li><a href="#fades">Stopping, pausing and unloading</a></li>
+        <li><a href="#sum">Summing and limiting</a></li>
+        <li><a href="#subnormals">Subnormal numbers</a></li></ol></li>
+  <li><a href="#sides">The two sides of the mixer</a>
+    <ol><li><a href="#commands">Commands and notices</a></li>
+        <li><a href="#queues">Queues without a lock</a></li>
+        <li><a href="#ownership">Memory the renderer may still read</a></li></ol></li>
+  <li><a href="#outputs">Outputs</a>
+    <ol><li><a href="#pulling">An output pulls</a></li>
+        <li><a href="#windows">Windows</a></li>
+        <li><a href="#headless">A run with no speaker</a></li>
+        <li><a href="#browser">The browser</a></li></ol></li>
+  <li><a href="#instruments">Instruments</a>
+    <ol><li><a href="#keys">Keys and frequencies</a></li>
+        <li><a href="#notequeues">Notes on their way to the renderer</a></li>
+        <li><a href="#sine">The sine instrument</a></li>
+        <li><a href="#stealing">A seventeenth note</a></li>
+        <li><a href="#shepard">The Shepard instrument</a></li></ol></li>
+  <li><a href="#latency">Timing</a>
+    <ol><li><a href="#terms">From a key to the ear</a></li>
+        <li><a href="#readout">Measuring it</a></li>
+        <li><a href="#dropouts">Dropouts</a></li>
+        <li><a href="#clicks">Clicks</a></li></ol></li>
+  <li><a href="#vorbis">Reading Ogg Vorbis</a>
+    <ol><li><a href="#oggpages">Pages and packets</a></li>
+        <li><a href="#vorbisheaders">The three headers</a></li>
+        <li><a href="#packetbits">A sound packet's bits</a></li>
+        <li><a href="#codewords">Codewords</a></li>
+        <li><a href="#floor1">The floor</a></li>
+        <li><a href="#vorbiswindows">Windows</a></li>
+        <li><a href="#residue">The residue</a></li>
+        <li><a href="#coupling">Coupling</a></li>
+        <li><a href="#vorbissamples">From spectrum to samples</a></li>
+        <li><a href="#vorbisseek">Seeking</a></li></ol></li>
+</ol>
+</nav>
+
+<h2 id="numbers">1. Sound as numbers</h2>
+
+<h3 id="samples">1.1 Samples and the sample rate</h3>
+
+<p>A loudspeaker makes sound by moving its cone in and out. The engine describes that movement as a list of numbers:
+the cone's position, measured at evenly spaced moments. Each number is a <em>sample</em>, from -1 (the cone fully
+in) to 1 (fully out), with 0 at rest. The number of samples per second is the <em>sample rate</em>. The engine
+mixes at 48 000.</p>
+
+<figure><svg viewBox="-10 -14 590 186" width="100%" style="max-width:640px" role="img" aria-label="a sine wave sampled at regular moments"><line x1="0" y1="75" x2="560" y2="75" stroke="currentColor" stroke-opacity="0.3"/><path d="M0.0,75.0 L4.0,70.1 L8.0,65.2 L12.0,60.4 L16.0,55.7 L20.0,51.1 L24.0,46.8 L28.0,42.7 L32.0,38.8 L36.0,35.2 L40.0,32.0 L44.0,29.1 L48.0,26.6 L52.0,24.4 L56.0,22.7 L60.0,21.4 L64.0,20.5 L68.0,20.1 L72.0,20.1 L76.0,20.5 L80.0,21.4 L84.0,22.7 L88.0,24.4 L92.0,26.6 L96.0,29.1 L100.0,32.0 L104.0,35.2 L108.0,38.8 L112.0,42.7 L116.0,46.8 L120.0,51.1 L124.0,55.7 L128.0,60.4 L132.0,65.2 L136.0,70.1 L140.0,75.0 L144.0,79.9 L148.0,84.8 L152.0,89.6 L156.0,94.3 L160.0,98.9 L164.0,103.2 L168.0,107.3 L172.0,111.2 L176.0,114.8 L180.0,118.0 L184.0,120.9 L188.0,123.4 L192.0,125.6 L196.0,127.3 L200.0,128.6 L204.0,129.5 L208.0,129.9 L212.0,129.9 L216.0,129.5 L220.0,128.6 L224.0,127.3 L228.0,125.6 L232.0,123.4 L236.0,120.9 L240.0,118.0 L244.0,114.8 L248.0,111.2 L252.0,107.3 L256.0,103.2 L260.0,98.9 L264.0,94.3 L268.0,89.6 L272.0,84.8 L276.0,79.9 L280.0,75.0 L284.0,70.1 L288.0,65.2 L292.0,60.4 L296.0,55.7 L300.0,51.1 L304.0,46.8 L308.0,42.7 L312.0,38.8 L316.0,35.2 L320.0,32.0 L324.0,29.1 L328.0,26.6 L332.0,24.4 L336.0,22.7 L340.0,21.4 L344.0,20.5 L348.0,20.1 L352.0,20.1 L356.0,20.5 L360.0,21.4 L364.0,22.7 L368.0,24.4 L372.0,26.6 L376.0,29.1 L380.0,32.0 L384.0,35.2 L388.0,38.8 L392.0,42.7 L396.0,46.8 L400.0,51.1 L404.0,55.7 L408.0,60.4 L412.0,65.2 L416.0,70.1 L420.0,75.0 L424.0,79.9 L428.0,84.8 L432.0,89.6 L436.0,94.3 L440.0,98.9 L444.0,103.2 L448.0,107.3 L452.0,111.2 L456.0,114.8 L460.0,118.0 L464.0,120.9 L468.0,123.4 L472.0,125.6 L476.0,127.3 L480.0,128.6 L484.0,129.5 L488.0,129.9 L492.0,129.9 L496.0,129.5 L500.0,128.6 L504.0,127.3 L508.0,125.6 L512.0,123.4 L516.0,120.9 L520.0,118.0 L524.0,114.8 L528.0,111.2 L532.0,107.3 L536.0,103.2 L540.0,98.9 L544.0,94.3 L548.0,89.6 L552.0,84.8 L556.0,79.9 L560.0,75.0" fill="none" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.5"/><line x1="0.0" y1="75" x2="0.0" y2="75.0" stroke="currentColor" stroke-opacity="0.45"/><circle cx="0.0" cy="75.0" r="2.6" fill="currentColor"/><line x1="17.5" y1="75" x2="17.5" y2="54.0" stroke="currentColor" stroke-opacity="0.45"/><circle cx="17.5" cy="54.0" r="2.6" fill="currentColor"/><line x1="35.0" y1="75" x2="35.0" y2="36.1" stroke="currentColor" stroke-opacity="0.45"/><circle cx="35.0" cy="36.1" r="2.6" fill="currentColor"/><line x1="52.5" y1="75" x2="52.5" y2="24.2" stroke="currentColor" stroke-opacity="0.45"/><circle cx="52.5" cy="24.2" r="2.6" fill="currentColor"/><line x1="70.0" y1="75" x2="70.0" y2="20.0" stroke="currentColor" stroke-opacity="0.45"/><circle cx="70.0" cy="20.0" r="2.6" fill="currentColor"/><line x1="87.5" y1="75" x2="87.5" y2="24.2" stroke="currentColor" stroke-opacity="0.45"/><circle cx="87.5" cy="24.2" r="2.6" fill="currentColor"/><line x1="105.0" y1="75" x2="105.0" y2="36.1" stroke="currentColor" stroke-opacity="0.45"/><circle cx="105.0" cy="36.1" r="2.6" fill="currentColor"/><line x1="122.5" y1="75" x2="122.5" y2="54.0" stroke="currentColor" stroke-opacity="0.45"/><circle cx="122.5" cy="54.0" r="2.6" fill="currentColor"/><line x1="140.0" y1="75" x2="140.0" y2="75.0" stroke="currentColor" stroke-opacity="0.45"/><circle cx="140.0" cy="75.0" r="2.6" fill="currentColor"/><line x1="157.5" y1="75" x2="157.5" y2="96.0" stroke="currentColor" stroke-opacity="0.45"/><circle cx="157.5" cy="96.0" r="2.6" fill="currentColor"/><line x1="175.0" y1="75" x2="175.0" y2="113.9" stroke="currentColor" stroke-opacity="0.45"/><circle cx="175.0" cy="113.9" r="2.6" fill="currentColor"/><line x1="192.5" y1="75" x2="192.5" y2="125.8" stroke="currentColor" stroke-opacity="0.45"/><circle cx="192.5" cy="125.8" r="2.6" fill="currentColor"/><line x1="210.0" y1="75" x2="210.0" y2="130.0" stroke="currentColor" stroke-opacity="0.45"/><circle cx="210.0" cy="130.0" r="2.6" fill="currentColor"/><line x1="227.5" y1="75" x2="227.5" y2="125.8" stroke="currentColor" stroke-opacity="0.45"/><circle cx="227.5" cy="125.8" r="2.6" fill="currentColor"/><line x1="245.0" y1="75" x2="245.0" y2="113.9" stroke="currentColor" stroke-opacity="0.45"/><circle cx="245.0" cy="113.9" r="2.6" fill="currentColor"/><line x1="262.5" y1="75" x2="262.5" y2="96.0" stroke="currentColor" stroke-opacity="0.45"/><circle cx="262.5" cy="96.0" r="2.6" fill="currentColor"/><line x1="280.0" y1="75" x2="280.0" y2="75.0" stroke="currentColor" stroke-opacity="0.45"/><circle cx="280.0" cy="75.0" r="2.6" fill="currentColor"/><line x1="297.5" y1="75" x2="297.5" y2="54.0" stroke="currentColor" stroke-opacity="0.45"/><circle cx="297.5" cy="54.0" r="2.6" fill="currentColor"/><line x1="315.0" y1="75" x2="315.0" y2="36.1" stroke="currentColor" stroke-opacity="0.45"/><circle cx="315.0" cy="36.1" r="2.6" fill="currentColor"/><line x1="332.5" y1="75" x2="332.5" y2="24.2" stroke="currentColor" stroke-opacity="0.45"/><circle cx="332.5" cy="24.2" r="2.6" fill="currentColor"/><line x1="350.0" y1="75" x2="350.0" y2="20.0" stroke="currentColor" stroke-opacity="0.45"/><circle cx="350.0" cy="20.0" r="2.6" fill="currentColor"/><line x1="367.5" y1="75" x2="367.5" y2="24.2" stroke="currentColor" stroke-opacity="0.45"/><circle cx="367.5" cy="24.2" r="2.6" fill="currentColor"/><line x1="385.0" y1="75" x2="385.0" y2="36.1" stroke="currentColor" stroke-opacity="0.45"/><circle cx="385.0" cy="36.1" r="2.6" fill="currentColor"/><line x1="402.5" y1="75" x2="402.5" y2="54.0" stroke="currentColor" stroke-opacity="0.45"/><circle cx="402.5" cy="54.0" r="2.6" fill="currentColor"/><line x1="420.0" y1="75" x2="420.0" y2="75.0" stroke="currentColor" stroke-opacity="0.45"/><circle cx="420.0" cy="75.0" r="2.6" fill="currentColor"/><line x1="437.5" y1="75" x2="437.5" y2="96.0" stroke="currentColor" stroke-opacity="0.45"/><circle cx="437.5" cy="96.0" r="2.6" fill="currentColor"/><line x1="455.0" y1="75" x2="455.0" y2="113.9" stroke="currentColor" stroke-opacity="0.45"/><circle cx="455.0" cy="113.9" r="2.6" fill="currentColor"/><line x1="472.5" y1="75" x2="472.5" y2="125.8" stroke="currentColor" stroke-opacity="0.45"/><circle cx="472.5" cy="125.8" r="2.6" fill="currentColor"/><line x1="490.0" y1="75" x2="490.0" y2="130.0" stroke="currentColor" stroke-opacity="0.45"/><circle cx="490.0" cy="130.0" r="2.6" fill="currentColor"/><line x1="507.5" y1="75" x2="507.5" y2="125.8" stroke="currentColor" stroke-opacity="0.45"/><circle cx="507.5" cy="125.8" r="2.6" fill="currentColor"/><line x1="525.0" y1="75" x2="525.0" y2="113.9" stroke="currentColor" stroke-opacity="0.45"/><circle cx="525.0" cy="113.9" r="2.6" fill="currentColor"/><line x1="542.5" y1="75" x2="542.5" y2="96.0" stroke="currentColor" stroke-opacity="0.45"/><circle cx="542.5" cy="96.0" r="2.6" fill="currentColor"/><line x1="560.0" y1="75" x2="560.0" y2="75.0" stroke="currentColor" stroke-opacity="0.45"/><circle cx="560.0" cy="75.0" r="2.6" fill="currentColor"/><text x="0" y="168" font-size="11" fill="currentColor">time: one dot per frame, 48 000 a second</text><text x="380" y="-2" font-size="11" fill="currentColor">amplitude 1</text><text x="380" y="71" font-size="11" fill="currentColor">0</text></svg><figcaption>Two cycles of a sine, sampled: each dot is one sample. At 48 000 a second, a
+440 Hz tone - the A above middle C - takes about 109 samples per cycle.</figcaption></figure>
+
+<p>A wave needs at least two samples per cycle to be told apart from a slower one, so a rate of 48 000 holds
+frequencies up to 24 000 Hz, above the 20 000 Hz where hearing ends. A file recorded at another rate, often 44 100,
+is converted as it plays (4.1).</p>
+
+<h3 id="frames">1.2 Channels and frames</h3>
+
+<p>Stereo sound has one list of samples per speaker. The engine stores them <em>interleaved</em>, left then right,
+and calls the two samples of one moment a <em>frame</em>:</p>
+
+<pre class="sketch"><code>   samples:   L0  R0  L1  R1  L2  R2  L3  R3 ...
+   frames:   [ 0    ][ 1    ][ 2    ][ 3    ] ...     one frame = one moment, both channels
+
+   48 000 frames a second          one frame lasts 1/48 000 s = 20.8 microseconds
+   one second of stereo sound      48 000 frames x 2 samples x 4 bytes (a 32-bit float) = 384 000 bytes</code></pre>
+
+<p>In an engine, "frame" also means one picture drawn on the screen. This tutorial says <em>drawn frame</em> for
+the picture; a frame alone is a frame of sound. At 60 drawn frames a second, one drawn frame lasts 800 frames of
+sound. Durations of sound are counted in frames, which are exact; milliseconds appear only where a clock is
+read.</p>
+
+<h3 id="blocks">1.3 Blocks and deadlines</h3>
+
+<p>Sound is computed in <em>blocks</em>: runs of frames, made in one go when the device asks for them. A browser
+asks for 128 frames at a time; on Windows the device decides:</p>
+
+<pre class="sketch"><code>   block size                       frames    duration     blocks a second
+   a browser                          128       2.67 ms          375
+   Windows, low-latency stream        128       2.67 ms          375     (the shortest a device allows)
+   Windows, standard stream           480      10.00 ms          100</code></pre>
+
+<p>Each block has a deadline. The device must receive it before it has finished playing the one before; a late
+block cannot be played later, and the device plays silence in its place, heard as a click or a gap - a
+<em>dropout</em>. So the code that makes a block may not wait for anything whose duration it does not control: no
+lock, no memory allocation, no file. Chapter 5 shows how the mixer is built around that rule.</p>
+
+<h3 id="decibels">1.4 Loudness and decibels</h3>
+
+<p>Multiplying every sample by a number, a <em>gain</em>, scales the wave's amplitude: a gain of 0.5 halves it. The
+power a wave carries goes with the square of its amplitude, so halving the amplitude quarters the power.</p>
+
+<p>Hearing judges loudness by ratios, so loudness is compared in <em>decibels</em>: an amplitude ratio a is
+20 log<sub>10</sub>(a) dB, which is also 10 log<sub>10</sub>(p) for the power ratio p = a<sup>2</sup>. The values
+the engine meets:</p>
+
+<table>
+<tr><th>gain (amplitude ratio)</th><th>power ratio</th><th>decibels</th><th>where the engine meets it</th></tr>
+<tr><td>1</td><td>1</td><td>0 dB</td><td>a sound played as recorded</td></tr>
+<tr><td>0.707</td><td>0.5</td><td>-3 dB</td><td>each speaker's gain for a sound at the centre (4.2)</td></tr>
+<tr><td>0.5</td><td>0.25</td><td>-6 dB</td><td>half the amplitude</td></tr>
+<tr><td>0.354</td><td>0.125</td><td>-9 dB</td><td>a note at velocity 0.5, at the centre</td></tr>
+<tr><td>0.1</td><td>0.01</td><td>-20 dB</td><td></td></tr>
+<tr><td>0.0001</td><td>0.00000001</td><td>-80 dB</td><td>where a fading note is counted silent (7.3)</td></tr>
+</table>
+
+<p>About 1 dB is the smallest change most listeners notice. A sound 80 dB below full scale is inaudible under
+music, which is why a fading note can stop there.</p>
+
+<h2 id="using">2. Using sound</h2>
+
+<p>This chapter is what an app calls. The chapters after it explain how each call is carried out.</p>
+
+<h3 id="starting">2.1 Starting the output</h3>
+
+<p>An app that plays sound starts the audio device once, in its init:</p>
+
+<pre class="sketch"><code>   z.audio_device.init(f.audio_device);                 starts the mixer and the platform's output
+   z.audio_device.showDiagnostics(f.audio_device);      optional: the sound's state, shown over the page</code></pre>
+
+<p>A browser lets a page make sound only after the person has interacted with it. The engine starts its audio at
+the first click, tap or key press on the page; until then the app's calls work as they will afterwards and nothing
+is heard, so an app needs no special case. A tap counts when the finger lifts.</p>
+
+<p>The examples that play sound open on a <em>start screen</em>: a black page with one button, "start", in its
+middle. An app shows it by calling <code>z.showAudioStartScreen</code> first in its update, and draws and plays
+nothing else while it returns true:</p>
+
+<pre class="sketch"><code>   fn update(f: *z.Frame, s: *State) void {
+       if (z.showAudioStartScreen(f, &s.font)) {
+           return;
+       }
+       // the app's own frame
+   }</code></pre>
+
+<p>The press is the gesture the browser waits for. The screen then stays until the output runs - on a page, until the
+audio worklet has loaded, linked and warmed up (6.4) - so that the app's first sound is not played while the output is
+still starting. Natively the output runs from <code>init</code>, and the press alone ends the screen.</p>
+
+<h3 id="voices">2.2 Voices</h3>
+
+<p>Everything the engine plays is a <em>voice</em>: a source of sound with its own volume, pan and pitch.
+<em>Volume</em> is a gain, 1 for the sound as recorded. <em>Pan</em> places the voice between the speakers, from -1
+(left) through 0 (centre) to 1 (right). <em>Pitch</em> is the speed the source is read at: 2 is twice as fast and an
+octave higher, 0.5 half as fast and an octave lower.</p>
+
+<p>An app plays a voice through the frame's mixer, <code>f.mixer</code>, and gets back the voice's name, a
+<code>Voice</code>, which the later calls take:</p>
+
+<pre class="sketch"><code>   const voice: z.mixer.Voice = f.mixer.play(source, .{ .volume = 0.8, .pan = -0.5, .pitch = 1.5 });
+
+   f.mixer.setVolume(voice, 0.2)     f.mixer.setPan(voice, 0)        f.mixer.setPitch(voice, 1)
+   f.mixer.pauseVoice(voice)         f.mixer.resumeVoice(voice)      f.mixer.stopVoice(voice)
+   f.mixer.isPlaying(voice)          f.mixer.isPaused(voice)
+   f.mixer.setMasterVolume(0.5)      the volume of everything at once</code></pre>
+
+<p>A voice plays until its source ends or it is stopped. From then on its name refers to nothing: calls with it do
+nothing and <code>isPlaying</code> returns false, even once its slot plays another voice (chapter 3). An app can
+keep a name as long as it likes, without tracking which voices have ended. <code>play</code> returns
+<code>Voice.none</code> when all 48 voices are in use.</p>
+
+<h3 id="sources">2.3 Sources</h3>
+
+<p>A voice reads one of three kinds of source:</p>
+
+<table>
+<tr><th>source</th><th>what it is</th><th>made</th></tr>
+<tr><td>samples</td><td>sound in memory - a decoded file, a buffer the app computed - with 1 or 2 channels and its
+own rate, played once or looped</td><td>in advance</td></tr>
+<tr><td>generator</td><td>a function that fills each block, with up to 64 bytes of state copied into the voice - a
+tone, a synthesizer, noise</td><td>where the mixer runs, as it mixes</td></tr>
+<tr><td>stream</td><td>frames the app writes into a ring as it goes - a decoder, a synthesizer in the app's own
+code</td><td>wherever the app likes</td></tr>
+</table>
+
+<p>The <code>audio_mixer</code> example plays one of each. Its blip is samples, a quarter of a second of a 660 Hz
+tone computed once and played at a random pan and pitch:</p>
+
+<details class="src-fold" data-src="examples/audio_mixer/audio_mixer.zig" data-decl="fn playBlip("><summary><code>playBlip</code></summary><pre><code class="zig">/// Plays a blip somewhere between the speakers, a little higher or lower each time.
+fn playBlip(f: *z.Frame, s: *State) void {
+    const pan: f32 = f.random.float(f32) * 1.6 - 0.8;
+    const pitch: f32 = 0.75 + f.random.float(f32) * 0.75;
+    const blip_source: z.mixer.Source = .{ .samples = .{
+        .samples = s.blip_samples,
+        .channels = 1,
+        .sample_rate = z.mixer.sample_rate,
+    } };
+    _ = f.mixer.play(blip_source, .{ .pan = pan, .pitch = pitch });
+    s.blips_played += 1;
+}</code></pre></details>
+
+<p>Its tone is a generator. The function receives a copy of the voice's state (here the tone's frequency), the
+frames to fill, and the index of the first of them since the voice started, from which it knows where in its cycle
+each frame falls:</p>
+
+<details class="src-fold" data-src="examples/audio_mixer/audio_mixer.zig" data-decl="fn generateTone("><summary><code>generateTone</code></summary><pre><code class="zig">/// The tone's generator: a sine at the frequency its state holds - the voice's own copy of `tone_frequency`, made when
+/// it plays - the same on both channels. The sample at the voice's frame `n` is `amplitude x sin(2 pi f n / rate)` -
+/// in turns, `sinTurns(f n / rate)`.
+fn generateTone(state: *anyopaque, frames: []f32, first_frame: u64) void {
+    const frequency: *const f32 = @ptrCast(@alignCast(state));
+    const sample_rate: f32 = float(z.mixer.sample_rate);
+    const frame_count: usize = frames.len / 2;
+    for (0..frame_count) |frame_offset| {
+        const frame_number: f32 = float(first_frame + frame_offset);
+        const phase_turns: f32 = frequency.* * frame_number / sample_rate;
+        const sample: f32 = tone_amplitude * sinTurns(phase_turns);
+        frames[frame_offset * 2] = sample;
+        frames[frame_offset * 2 + 1] = sample;
+    }
+}</code></pre></details>
+
+<details class="src-fold" data-src="examples/audio_mixer/audio_mixer.zig" data-decl="fn toggleTone("><summary><code>toggleTone</code></summary><pre><code class="zig">/// Starts the tone, or stops it if it plays.
+fn toggleTone(f: *z.Frame, s: *State) void {
+    if (f.mixer.isPlaying(s.tone_voice)) {
+        f.mixer.stopVoice(s.tone_voice);
+        return;
+    }
+    const tone_source: z.mixer.Source = .{ .generator = .{
+        .generate = &amp;generateTone,
+        .initial_state = asBytes(&amp;s.tone_frequency),
+    } };
+    s.tone_voice = f.mixer.play(tone_source, .{});
+}</code></pre></details>
+
+<p>A generator runs where the sound is made: on Windows on an audio thread, in a browser in a second copy of the
+app's program (6.4). It may use only its state and its arguments, never the app's variables, which another thread may
+be changing or which may be in another memory. That is why its state is copied into the voice rather than pointed
+to.</p>
+
+<p>Streams are <code>z.streams</code>: <code>load</code> makes one, <code>update</code> writes frames into it, and
+<code>isProcessed</code> says whether it wants more. Each stream owns a ring of 2048 frames, 43 ms, and
+<code>isProcessed</code> is true while half of it is free - so an app that tops a stream up every drawn frame keeps
+between 21 and 43 ms queued:</p>
+
+<pre class="sketch"><code>   a ring of 2 048 frames, wrapping round at its end
+
+        free          read position                  write position         free
+   . . . . . . . . . . . | queued: the next to play ....... | . . . . . . . . . . . .
+                         the voice reads here               the game writes here
+
+   isProcessed: true while half the ring or more is free. A game that tops it up each frame
+   keeps between 1 024 and 2 048 frames queued - 21 to 43 ms.</code></pre>
+
+<p>If the app falls behind and the ring runs dry, the voice plays silence for the missing frames and counts them.
+Pausing a stream pauses its voice, the frames waiting in the ring; stopping or unloading it fades its voice out
+(4.4).</p>
+
+<h3 id="loaded">2.4 Sounds loaded from files</h3>
+
+<p>For recorded sounds, loaded once and played many times, the engine keeps raylib's shape: a <code>Wave</code> is
+decoded samples, and a <code>Sound</code> is a wave made ready to play, in <code>z.waves</code> and
+<code>z.sounds</code>:</p>
+
+<pre class="sketch"><code>   var audio: z.AudioState = .{};                                    the tables of waves and sounds
+   const wave: z.Wave = ...                                          decoded from a WAV file, or made
+                                                                     by z.composer (a tone, a drum)
+   const sound: z.Sound = try z.sounds.loadFromWave(&amp;audio.sounds, f.audio_device, gpa, wave);
+
+   z.sounds.play(&amp;audio.sounds, sound)          a new voice, at the sound's volume, pitch and pan
+   z.sounds.setVolume(...)  setPitch(...)  setPan(...)  setLooping(...)
+   z.sounds.stop(...)  pause(...)  resumeSound(...)  isPlaying(...)  the sound's most recent voice
+   z.sounds.unload(&amp;audio.sounds, sound)        safe while it still plays (4.4)</code></pre>
+
+<p>Playing a sound while it plays starts a second voice beside the first, so a footstep heard twice in quick
+succession overlaps itself. The calls that act on a playing sound act on its most recent voice.</p>
+
+<h3 id="notes">2.5 Notes</h3>
+
+<p>An instrument is played by keys rather than voices: a key goes down and a note starts; it comes up and the note
+dies away. The mixer holds one instrument, set once, and the app sends it each key's movement as a <em>note
+event</em> - a key number, down or up, and how hard:</p>
+
+<pre class="sketch"><code>   f.mixer.setInstrument(z.mixer.sine_instrument)          once, at start-up
+   f.mixer.sendNote(.{ .key = 69, .is_down = true, .velocity = 0.5 })      A above middle C, struck
+   f.mixer.sendNote(.{ .key = 69, .is_down = false })                      released</code></pre>
+
+<p>Keys are numbered as in MIDI: 60 is middle C, and each step is a semitone. The engine has two instruments, a
+sine and a Shepard tone (chapter 7). The <code>audio_keyboard</code> example plays seventeen keys from the
+computer's keyboard and the pointer:</p>
+
+<details class="src-fold" data-src="examples/audio_keyboard/audio_keyboard.zig" data-decl="fn sendNote("><summary><code>sendNote</code></summary><pre><code class="zig">/// Sends a note's key going down or up to the instrument.
+fn sendNote(
+    f: *z.Frame,
+    s: *State,
+    note_index: usize,
+    is_down: bool,
+    pressed_at_ms: f64,
+) void {
+    const key: u8 = lowest_key + @as(u8, @intCast(note_index));
+    // The press's own time, when there is one, so that the readout measures the note's lag from the press.
+    const note: z.mixer.NoteEvent = .{
+        .key = key,
+        .is_down = is_down,
+        .velocity = 0.5,
+        .pressed_at_ms = pressed_at_ms,
+    };
+    const is_sent: bool = f.mixer.sendNote(note);
+    if (is_sent and is_down) {
+        s.notes_started += 1;
+    }
+}</code></pre></details>
+
+<p>Notes go to the renderer in a queue of their own, apart from the voices' commands, so that a thread other than
+the app's can send them (7.2).</p>
+
+<h3 id="music">2.6 Music</h3>
+
+<p>A song is too long to decode whole before it plays - 96 seconds of stereo is 34 MB of samples - so
+<code>z.music</code> decodes it as it plays. A music is a decoder feeding a stream (2.3). Loading it reads only the
+file's headers, and <code>z.music.update</code>, called each drawn frame like raylib's
+<code>UpdateMusicStream</code>, decodes half a ring of frames whenever the stream has room for them:</p>
+
+<pre class="sketch"><code>   file bytes --decoder--> half a ring of frames --write--> stream's ring --voice--> mixer
+                ^                                                |
+                '----------- update, each frame, while half the ring is free'</code></pre>
+
+<pre class="sketch"><code>   const track: z.Music = try z.music.loadFromMemory(&audio.music, f.audio_device, &audio.waves, gpa, ".ogg", song);
+   z.music.setLooping(&audio.music, track, true);
+   z.music.play(&audio.music, track);
+   // each frame:
+   z.music.update(&audio.music, track);
+   const seconds: f32 = z.music.getTimePlayed(&audio.music, track);</code></pre>
+
+<p>Ogg Vorbis files are decoded by the engine's own decoder (chapter 9); a WAV file is converted whole when it
+loads. The stream's voice reads the frames at the file's rate, 44 100 Hz for the example song, converting it to the
+mixer's.</p>
+
+<p>A looping music starts its decoder over the moment it reaches the end and writes on into the same ring, so the
+end and the start meet inside the ring and play as one signal, with no gap. Without looping, the ring plays out and
+the music stops. The time a music reports is what has been heard: the frames written, less those still waiting in
+the ring. A seek finds the right part of the file by its pages (9.10) and decodes only a few thousand frames, wherever
+it lands.</p>
+
+<h3 id="analyser">2.7 The analyser</h3>
+
+<p>An analyser, <code>z.analyser</code>, gives the spectrum of everything playing - one byte per band of
+frequencies - for drawing the bars of a visualizer. It reads a copy of the sound and changes nothing that is
+heard:</p>
+
+<pre class="sketch"><code>   const spectrum_analyser: z.analyser.Analyser = z.analyser.attach(f.audio_device, 1024);
+   // each frame:
+   var bins: [512]u8 = undefined;
+   const bin_count: u32 = z.analyser.read(f.audio_device, spectrum_analyser, &bins);
+   // at the end:
+   z.analyser.detach(f.audio_device, spectrum_analyser);</code></pre>
+
+<p>The renderer keeps the last 2048 frames it mixed, each the mean of its two channels. A read takes the last N of
+them - N is the size given to <code>attach</code>, a power of two from 32 to 2048 - and turns them into N/2 bytes,
+the same way as a browser's <code>AnalyserNode</code> at its defaults:</p>
+
+<pre class="sketch"><code>   window      x[n] times 0.42 - 0.5 cos(2 pi n / N) + 0.08 cos(4 pi n / N)
+   transform   X[k], the real transform of the N windowed frames
+   magnitude   |X[k]| / N
+   smoothing   m[k] = 0.8 m[k] + 0.2 |X[k]| / N, m[k] carried from the last read
+   bytes       20 log10 m[k] decibels, -100 dB to -30 dB onto 0 to 255, floored and held within</code></pre>
+
+<p>The window falls to zero at both ends of the frames. Without it the frames would start and stop abruptly, and an
+abrupt edge contains every frequency, so every bin would show a little of every tone. Bin k covers the frequencies
+around k x 48 000 / N: with 2048 frames the bins are 23.4 Hz apart, and a 440 Hz tone, 18.8 bins up, lights bins 18
+and 19. The smoothing makes a bar rise quickly and fall back over a few tenths of a second.</p>
+
+<p>For example, a sine of amplitude 0.5. The window's average is 0.42, so the tone's bin holds 0.42 x 0.5 / 2 =
+0.105, which is -19.6 dB. On the first read the smoothing starts from 0, so the level is a fifth of that, -33.6 dB,
+and the byte is 255 x (100 - 33.6) / 70 = 241. Over the next reads the level rises to -19.6 dB, above the -30 dB top
+of the range, and the byte stays at 255.</p>
+
+<h2 id="names">3. Voices and their names</h2>
+
+<p>The renderer - the part of the mixer that makes the sound (chapter 5) - has 64 slots, each able to play one voice:
+48 for the voices an app plays and 16 for an instrument's notes. A voice's name is its slot together with the slot's
+<em>generation</em>, a count that moves on each time the slot's voice ends. Both fit in one 32-bit number, the slot
+in the low 8 bits and the generation in the 24 above:</p>
+
+<pre class="sketch"><code>   name = generation x 256 + slot
+
+   slot 5, generation 3          name = 3 x 256 + 5 = 773 = 0x305
+   the voice ends:               slot 5's generation becomes 4, and the slot is free
+   play(explosion) takes it:     slot 5, generation 4, name 0x405
+
+   setVolume(0x305, 0)           slot 5 is at generation 4, the name says 3: it names no voice, nothing changes</code></pre>
+
+<details class="src-fold" data-src="src/sound.zig" data-decl="pub const Voice = enum(u32)"><summary><code>Voice</code></summary><pre><code class="zig">/// A voice's name: the index of its slot in the low 8 bits, and that slot's generation in the 24 bits above. A
+/// slot's generation moves on when its voice ends, so a name kept after its voice ended names nothing: the slot's
+/// next voice answers to a new name, and a call with the old one finds no voice and does nothing. `none` names no
+/// voice; it cannot be made by a slot, since slot 255 is past the capacity.
+pub const Voice = enum(u32) {
+    none = zm.maxInt(u32),
+    _,
+
+    /// The name of the voice now playing in slot `slot_index`, whose generation is `slot_generation`.
+    fn ofSlot(slot_index: usize, slot_generation: u24) Voice {
+        const generation_bits: u32 = @as(u32, slot_generation) &lt;&lt; 8;
+        const slot_bits: u32 = @intCast(slot_index);
+        return @fromBackingInt(generation_bits | slot_bits);
+    }
+
+    fn slotIndex(voice: Voice) usize {
+        const slot_bits: u32 = @backingInt(voice) &amp; 0xff;
+        return slot_bits;
+    }
+
+    fn generation(voice: Voice) u24 {
+        const generation_bits: u32 = @backingInt(voice) &gt;&gt; 8;
+        return @intCast(generation_bits);
+    }
+};</code></pre></details>
+
+<p>The generation makes an old name harmless. Without it, code that kept a footstep's name to fade it out later would
+fade out whatever the slot plays next; with it, the old name matches no voice and every call with it does nothing. It
+takes 16 million voices in one slot for a generation to come round to the same value.</p>
+
+<p>The app's side of the mixer answers every question about voices from its own record of names, without asking the
+renderer. A slot is <em>held</em> from the moment a voice starts in it until the renderer reports the voice ended; a
+name is <em>live</em> while it names a playing voice. The two differ while a stopped voice fades out (4.4):</p>
+
+<table>
+<tr><th>moment</th><th>slot held</th><th>name live</th><th><code>isPlaying</code></th></tr>
+<tr><td><code>play</code> returns the name</td><td>yes</td><td>yes</td><td>true</td></tr>
+<tr><td><code>stopVoice(name)</code>: the voice begins its fade</td><td>yes</td><td>no - its generation moved on</td><td>false</td></tr>
+<tr><td>the renderer reports the fade done</td><td>no: free for a new voice</td><td>no</td><td>false</td></tr>
+</table>
+
+<p>A sound that ends by itself - its samples run out - ends on the renderer's side, and the app's side learns of it
+from the renderer's report, read once a drawn frame; until then <code>isPlaying</code> still answers true, at most a
+frame late. A stopped voice's name dies at once, so an app that stops one voice and plays another in the same drawn
+frame never confuses the two.</p>
+
+<h2 id="arithmetic">4. The arithmetic of a block</h2>
+
+<p>For each block the renderer does the same four things:</p>
+
+<pre class="sketch"><code>   1. apply what was asked since the last block     plays, stops, changes of volume, pan and pitch, notes
+   2. start from silence                             every sample of the block 0
+   3. for each voice playing:                        read its source at its pitch       (4.1)
+                                                     multiply by its two gains          (4.2, 4.3)
+                                                     add into the block                 (4.5)
+   4. for the whole block:                           the master volume, then the limiter (4.5)</code></pre>
+
+<p>This chapter is steps 3 and 4. Step 1, and how the requests reach the renderer, is chapter 5.</p>
+
+<h3 id="pitch">4.1 Pitch: reading between samples</h3>
+
+<p>A voice reads its source at its own speed. For each frame it mixes, its position in the source moves by a
+<em>step</em>:</p>
+
+<pre class="sketch"><code>   step = pitch x source rate / mixer rate
+
+   a 48 000 Hz source, pitch 1      step = 1          every source frame, once
+   a 48 000 Hz source, pitch 2      step = 2          every other frame: twice as fast, an octave up
+   a 44 100 Hz source, pitch 1      step = 0.91875    a little under one: the sound at its recorded speed
+   a 24 000 Hz source, pitch 1.5    step = 0.75</code></pre>
+
+<p>A step is rarely a whole number, so the position usually falls between two source frames. The value there is read
+on the straight line between them - <em>linear interpolation</em>: at position i + f, a fraction f of the way from
+frame i to frame i + 1, the value is s[i] + (s[i+1] - s[i]) x f.</p>
+
+<figure><svg viewBox="0 0 560 186" width="100%" style="max-width:640px" role="img" aria-label="source samples and the positions a pitch of 1.5 reads between them"><line x1="30" y1="90" x2="520" y2="90" stroke="currentColor" stroke-opacity="0.3"/><line x1="40.0" y1="90.0" x2="150.0" y2="34.0" stroke="currentColor" stroke-opacity="0.4" stroke-dasharray="4 3"/><line x1="150.0" y1="34.0" x2="260.0" y2="69.0" stroke="currentColor" stroke-opacity="0.4" stroke-dasharray="4 3"/><line x1="260.0" y1="69.0" x2="370.0" y2="125.0" stroke="currentColor" stroke-opacity="0.4" stroke-dasharray="4 3"/><line x1="370.0" y1="125.0" x2="480.0" y2="104.0" stroke="currentColor" stroke-opacity="0.4" stroke-dasharray="4 3"/><circle cx="40.0" cy="90.0" r="4" fill="currentColor"/><text x="30.0" y="172" font-size="11" fill="currentColor">s[0]</text><circle cx="150.0" cy="34.0" r="4" fill="currentColor"/><text x="140.0" y="172" font-size="11" fill="currentColor">s[1]</text><circle cx="260.0" cy="69.0" r="4" fill="currentColor"/><text x="250.0" y="172" font-size="11" fill="currentColor">s[2]</text><circle cx="370.0" cy="125.0" r="4" fill="currentColor"/><text x="360.0" y="172" font-size="11" fill="currentColor">s[3]</text><circle cx="480.0" cy="104.0" r="4" fill="currentColor"/><text x="470.0" y="172" font-size="11" fill="currentColor">s[4]</text><rect x="35.0" y="85.0" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2"/><text x="48.0" y="82.0" font-size="11" fill="currentColor">0 : 0.00</text><rect x="200.0" y="46.5" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2"/><text x="213.0" y="43.5" font-size="11" fill="currentColor">1.5 : 0.55</text><rect x="365.0" y="120.0" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2"/><text x="378.0" y="117.0" font-size="11" fill="currentColor">3 : -0.50</text></svg><figcaption>Five source samples (dots) and the positions a step of 1.5 reads (squares):
+0, 1.5 and 3. At 1.5, halfway from s[1] = 0.8 to s[2] = 0.3: 0.8 + (0.3 - 0.8) x 0.5 = 0.55.</figcaption></figure>
+
+<p>The position is a 64-bit fixed-point number, <em>32.32</em>: the high 32 bits count whole source frames, the low
+32 bits fractions of a frame, in units of 2<sup>-32</sup>. The step is rounded to that grid once per block and then
+added exactly. A floating-point position would round every addition, and the errors would add up:</p>
+
+<pre class="sketch"><code>   step = 0.91875 frames;  in 32.32: 0.91875 x 2^32 = 3 946 001 203.2, kept as 3 946 001 203
+
+   after one second, 48 000 additions:   48 000 x 3 946 001 203  = 189 408 057 744 000
+   exactly 44 100 frames:                44 100 x 2^32           = 189 408 057 753 600
+   behind by                             9 600 / 2^32            = 0.000002 frames
+
+   a 32-bit float near frame 40 000 can hold positions only to 1/256 of a frame, so each addition
+   of 0.91875 rounds, the same way each time: the voice falls tens of frames behind in its first
+   second, and further every second after</code></pre>
+
+<details class="src-fold" data-src="src/sound.zig" data-decl="fn readSampleSource("><summary><code>readSampleSource</code></summary><pre><code class="zig">/// Reads a buffer of samples at the voice's pitch, resampled to the mixer's rate.
+///
+/// Resampling. A buffer recorded at 44 100 frames a second, played by a mixer making 48 000, must be read a little
+/// slower than one source frame per mixed frame: 44 100 / 48 000 = 0.91875 source frames for each mixed frame. The
+/// pitch multiplies that speed - at pitch 2 the buffer is read twice as fast, so it sounds an octave higher and
+/// lasts half as long. So the voice keeps a position in its source, which each mixed frame moves on by
+///
+///     step = pitch x source rate / mixer rate          (0.91875 at pitch 1, for 44 100 played at 48 000)
+///
+/// Fixed point. The position is not a float but a 64-bit integer counting 2^32ths of a source frame: its high 32
+/// bits are the whole frame, its low 32 bits the fraction of the way to the next one.
+///
+///     position 1.8375 frames  =  1 x 2^32  +  0.8375 x 2^32
+///                                high 32 bits: 1          low 32 bits: 3 597 035 110
+///
+/// The step is rounded to that grid once - 0.91875 x 2^32 = 3 946 001 203.2, so 3 946 001 203 - and then added
+/// exactly, frame after frame. The only error is that one rounding: at most about a ten-billionth of a frame per
+/// mixed frame, a fiftieth of a frame after an hour of playing. A float position would lose precision as it grew -
+/// at a million frames a float32 holds the fraction only to an eighth of a frame, and past 2^24 frames, under six
+/// minutes at 48 000 a second, not at all - and a float step, added millions of times, rounds at every addition.
+///
+/// Interpolation. A position usually falls between two source frames, `index` and `index + 1`, a `fraction` of the
+/// way from the first to the second; the sample there is read off the straight line between them:
+///
+///     sample  =  s[index] + (s[index + 1] - s[index]) x fraction
+///     at 1.8375, between s[1] = 0.2 and s[2] = 0.6:   0.2 + 0.4 x 0.8375  =  0.535
+///
+/// A straight line is the simplest curve through the samples, and the cheapest: two reads, a subtraction and a
+/// multiplication. It softens the highest frequencies a little; and read fast, at a high pitch, it lets
+/// frequencies above what the mixer's rate can carry fold back as false tones (aliasing). Finer filters avoid both
+/// at many times the cost; for a game's sounds the straight line is the usual choice.
+///
+/// The end. A buffer that does not loop stops at its end, and the voice reads fewer frames than asked for - which
+/// ends it (`Renderer.mixVoiceInto`). A looping buffer goes on from its start, the position wrapped by the
+/// remainder of the buffer's length: a step can be longer than the whole buffer - a short loop at a high pitch -
+/// and one subtraction of the length could leave the position still past the end. At the last frame there is no
+/// next one to draw the line to: a looping buffer draws it to its first frame, the one heard next; one that does
+/// not loop holds its last sample.
+///
+/// Channels. A mono buffer's single sample goes to both channels. A stereo buffer gives its left and its right; a
+/// buffer of more channels gives its first two.
+fn readSampleSource(
+    voice_slot: *VoiceSlot,
+    sample_source: Samples,
+    voice_samples: []f32,
+) usize {
+    const frames_wanted: usize = voice_samples.len / channel_count;
+    const source_channel_count: usize = sample_source.channels;
+    const source_frame_count: usize = sample_source.samples.len / source_channel_count;
+    if (source_frame_count == 0) {
+        return 0;
+    }
+    // The step: source frames per mixed frame, then on the fixed-point grid.
+    const source_rate: f64 = @floatFromInt(sample_source.sample_rate);
+    const mixer_rate: f64 = @floatFromInt(sample_rate);
+    // A pitch of 0 would hold the voice on one sample forever, and a negative one would read backward past the
+    // start: pitch is held between 1/64 - six octaves down - and 64.
+    const pitch: f64 = clamp(voice_slot.pitch, lowest_pitch, highest_pitch);
+    const source_frames_per_mixed_frame: f64 = pitch * source_rate / mixer_rate;
+    const one_frame_as_float: f64 = @floatFromInt(position_one_frame);
+    const position_step: u64 = @round(source_frames_per_mixed_frame * one_frame_as_float);
+    const source_end_position: u64 = @as(u64, source_frame_count) &lt;&lt; position_fraction_bits;
+    // A frame's right sample is its second, or - in a mono buffer - the same one as its left.
+    const right_channel_offset: usize = if (source_channel_count &gt; 1) 1 else 0;
+    // The position, in a local for the loop and written back to the slot once, however the loop ends. Kept in
+    // the slot, it would be read and written through memory every frame: `voice_samples` is a slice of floats
+    // the compiler cannot prove apart from the slot, so each write to it could have changed the position.
+    var source_position: u64 = voice_slot.source_position;
+    defer voice_slot.source_position = source_position;
+    var frame_index: usize = 0;
+    while (frame_index &lt; frames_wanted) : (frame_index += 1) {
+        const is_past_source_end: bool = source_position &gt;= source_end_position;
+        if (is_past_source_end) {
+            if (!sample_source.is_looping) {
+                return frame_index;
+            }
+            source_position %= source_end_position;
+        }
+        // The position, split: its whole frame, and its fraction of the way to the next.
+        const source_frame_index: usize = @intCast(source_position &gt;&gt; position_fraction_bits);
+        const fraction_as_integer: u64 = source_position &amp; position_fraction_mask;
+        const fraction_as_integer_float: f32 = @floatFromInt(fraction_as_integer);
+        const fraction_between_frames: f32 = fraction_as_integer_float * position_fraction_to_float;
+        // The frame the line is drawn to: the next one; at the last frame, the first again (looping) or the last
+        // itself.
+        const is_last_source_frame: bool = source_frame_index + 1 &gt;= source_frame_count;
+        const next_source_frame_index: usize = if (!is_last_source_frame)
+            source_frame_index + 1
+        else if (sample_source.is_looping)
+            0
+        else
+            source_frame_index;
+        const first_sample_index: usize = source_frame_index * source_channel_count;
+        const next_sample_index: usize = next_source_frame_index * source_channel_count;
+        const left_at_frame: f32 = sample_source.samples[first_sample_index];
+        const left_at_next_frame: f32 = sample_source.samples[next_sample_index];
+        const right_at_frame: f32 = sample_source.samples[first_sample_index + right_channel_offset];
+        const right_at_next_frame: f32 = sample_source.samples[next_sample_index + right_channel_offset];
+        // The straight line between the two frames, read at the fraction.
+        const left_change: f32 = left_at_next_frame - left_at_frame;
+        const right_change: f32 = right_at_next_frame - right_at_frame;
+        const interpolated_left: f32 = left_at_frame + left_change * fraction_between_frames;
+        const interpolated_right: f32 = right_at_frame + right_change * fraction_between_frames;
+        const left_sample_index: usize = frame_index * channel_count;
+        const right_sample_index: usize = left_sample_index + 1;
+        voice_samples[left_sample_index] = interpolated_left;
+        voice_samples[right_sample_index] = interpolated_right;
+        source_position += position_step;
+    }
+    return frames_wanted;
+}</code></pre></details>
+
+<p>Linear interpolation slightly dulls the highest frequencies, and at large changes of pitch adds a little
+aliasing: frequencies the source cannot hold at the new speed fold back down. For sound effects and moderate pitch
+changes neither is heard.</p>
+
+<h3 id="pan">4.2 Pan</h3>
+
+<p>Pan sets two gains, one per speaker. For a <em>mono</em> source - one channel of samples, or a generator whose two
+channels are the same sound - the engine uses the <em>constant-power law</em>: the pan turns an angle from 0 to a
+quarter turn, the left gain is the angle's cosine and the right gain its sine. Since cos<sup>2</sup> + sin<sup>2</sup>
+= 1, the total power, and so the loudness, is the same wherever the sound is placed:</p>
+
+<table>
+<tr><th>pan</th><th>angle</th><th>left</th><th>right</th><th>left&#178; + right&#178;</th></tr>
+<tr><td>-1</td><td>0</td><td>1.000</td><td>0.000</td><td>1</td></tr>
+<tr><td>-0.5</td><td>1/16 turn</td><td>0.924</td><td>0.383</td><td>1</td></tr>
+<tr><td>0</td><td>1/8 turn</td><td>0.707</td><td>0.707</td><td>1</td></tr>
+<tr><td>0.5</td><td>3/16 turn</td><td>0.383</td><td>0.924</td><td>1</td></tr>
+<tr><td>1</td><td>1/4 turn</td><td>0.000</td><td>1.000</td><td>1</td></tr>
+</table>
+
+<figure><svg viewBox="0 0 560 210" width="100%" style="max-width:640px" role="img" aria-label="left and right gains across the pan, constant-power against linear"><line x1="50" y1="170" x2="490" y2="170" stroke="currentColor" stroke-opacity="0.3"/><path d="M50.0,30.0 L54.4,30.0 L58.8,30.1 L63.2,30.2 L67.6,30.3 L72.0,30.4 L76.4,30.6 L80.8,30.8 L85.2,31.1 L89.6,31.4 L94.0,31.7 L98.4,32.1 L102.8,32.5 L107.2,32.9 L111.6,33.4 L116.0,33.9 L120.4,34.4 L124.8,35.0 L129.2,35.6 L133.6,36.2 L138.0,36.9 L142.4,37.5 L146.8,38.3 L151.2,39.0 L155.6,39.8 L160.0,40.7 L164.4,41.5 L168.8,42.4 L173.2,43.3 L177.6,44.3 L182.0,45.3 L186.4,46.3 L190.8,47.3 L195.2,48.4 L199.6,49.5 L204.0,50.6 L208.4,51.8 L212.8,53.0 L217.2,54.2 L221.6,55.5 L226.0,56.7 L230.4,58.0 L234.8,59.4 L239.2,60.7 L243.6,62.1 L248.0,63.5 L252.4,65.0 L256.8,66.5 L261.2,67.9 L265.6,69.5 L270.0,71.0 L274.4,72.6 L278.8,74.2 L283.2,75.8 L287.6,77.4 L292.0,79.1 L296.4,80.8 L300.8,82.5 L305.2,84.2 L309.6,85.9 L314.0,87.7 L318.4,89.5 L322.8,91.3 L327.2,93.1 L331.6,95.0 L336.0,96.9 L340.4,98.7 L344.8,100.6 L349.2,102.6 L353.6,104.5 L358.0,106.4 L362.4,108.4 L366.8,110.4 L371.2,112.4 L375.6,114.4 L380.0,116.4 L384.4,118.5 L388.8,120.5 L393.2,122.6 L397.6,124.7 L402.0,126.7 L406.4,128.8 L410.8,130.9 L415.2,133.1 L419.6,135.2 L424.0,137.3 L428.4,139.5 L432.8,141.6 L437.2,143.8 L441.6,145.9 L446.0,148.1 L450.4,150.3 L454.8,152.5 L459.2,154.6 L463.6,156.8 L468.0,159.0 L472.4,161.2 L476.8,163.4 L481.2,165.6 L485.6,167.8 L490.0,170.0" fill="none" stroke="currentColor" stroke-width="2"/><path d="M50.0,170.0 L54.4,167.8 L58.8,165.6 L63.2,163.4 L67.6,161.2 L72.0,159.0 L76.4,156.8 L80.8,154.6 L85.2,152.5 L89.6,150.3 L94.0,148.1 L98.4,145.9 L102.8,143.8 L107.2,141.6 L111.6,139.5 L116.0,137.3 L120.4,135.2 L124.8,133.1 L129.2,130.9 L133.6,128.8 L138.0,126.7 L142.4,124.7 L146.8,122.6 L151.2,120.5 L155.6,118.5 L160.0,116.4 L164.4,114.4 L168.8,112.4 L173.2,110.4 L177.6,108.4 L182.0,106.4 L186.4,104.5 L190.8,102.6 L195.2,100.6 L199.6,98.7 L204.0,96.9 L208.4,95.0 L212.8,93.1 L217.2,91.3 L221.6,89.5 L226.0,87.7 L230.4,85.9 L234.8,84.2 L239.2,82.5 L243.6,80.8 L248.0,79.1 L252.4,77.4 L256.8,75.8 L261.2,74.2 L265.6,72.6 L270.0,71.0 L274.4,69.5 L278.8,67.9 L283.2,66.5 L287.6,65.0 L292.0,63.5 L296.4,62.1 L300.8,60.7 L305.2,59.4 L309.6,58.0 L314.0,56.7 L318.4,55.5 L322.8,54.2 L327.2,53.0 L331.6,51.8 L336.0,50.6 L340.4,49.5 L344.8,48.4 L349.2,47.3 L353.6,46.3 L358.0,45.3 L362.4,44.3 L366.8,43.3 L371.2,42.4 L375.6,41.5 L380.0,40.7 L384.4,39.8 L388.8,39.0 L393.2,38.3 L397.6,37.5 L402.0,36.9 L406.4,36.2 L410.8,35.6 L415.2,35.0 L419.6,34.4 L424.0,33.9 L428.4,33.4 L432.8,32.9 L437.2,32.5 L441.6,32.1 L446.0,31.7 L450.4,31.4 L454.8,31.1 L459.2,30.8 L463.6,30.6 L468.0,30.4 L472.4,30.3 L476.8,30.2 L481.2,30.1 L485.6,30.0 L490.0,30.0" fill="none" stroke="currentColor" stroke-width="2" stroke-opacity="0.6"/><path d="M50.0,30.0 L54.4,31.4 L58.8,32.8 L63.2,34.2 L67.6,35.6 L72.0,37.0 L76.4,38.4 L80.8,39.8 L85.2,41.2 L89.6,42.6 L94.0,44.0 L98.4,45.4 L102.8,46.8 L107.2,48.2 L111.6,49.6 L116.0,51.0 L120.4,52.4 L124.8,53.8 L129.2,55.2 L133.6,56.6 L138.0,58.0 L142.4,59.4 L146.8,60.8 L151.2,62.2 L155.6,63.6 L160.0,65.0 L164.4,66.4 L168.8,67.8 L173.2,69.2 L177.6,70.6 L182.0,72.0 L186.4,73.4 L190.8,74.8 L195.2,76.2 L199.6,77.6 L204.0,79.0 L208.4,80.4 L212.8,81.8 L217.2,83.2 L221.6,84.6 L226.0,86.0 L230.4,87.4 L234.8,88.8 L239.2,90.2 L243.6,91.6 L248.0,93.0 L252.4,94.4 L256.8,95.8 L261.2,97.2 L265.6,98.6 L270.0,100.0 L274.4,101.4 L278.8,102.8 L283.2,104.2 L287.6,105.6 L292.0,107.0 L296.4,108.4 L300.8,109.8 L305.2,111.2 L309.6,112.6 L314.0,114.0 L318.4,115.4 L322.8,116.8 L327.2,118.2 L331.6,119.6 L336.0,121.0 L340.4,122.4 L344.8,123.8 L349.2,125.2 L353.6,126.6 L358.0,128.0 L362.4,129.4 L366.8,130.8 L371.2,132.2 L375.6,133.6 L380.0,135.0 L384.4,136.4 L388.8,137.8 L393.2,139.2 L397.6,140.6 L402.0,142.0 L406.4,143.4 L410.8,144.8 L415.2,146.2 L419.6,147.6 L424.0,149.0 L428.4,150.4 L432.8,151.8 L437.2,153.2 L441.6,154.6 L446.0,156.0 L450.4,157.4 L454.8,158.8 L459.2,160.2 L463.6,161.6 L468.0,163.0 L472.4,164.4 L476.8,165.8 L481.2,167.2 L485.6,168.6 L490.0,170.0" fill="none" stroke="currentColor" stroke-dasharray="5 4" stroke-opacity="0.45"/><path d="M50.0,170.0 L54.4,168.6 L58.8,167.2 L63.2,165.8 L67.6,164.4 L72.0,163.0 L76.4,161.6 L80.8,160.2 L85.2,158.8 L89.6,157.4 L94.0,156.0 L98.4,154.6 L102.8,153.2 L107.2,151.8 L111.6,150.4 L116.0,149.0 L120.4,147.6 L124.8,146.2 L129.2,144.8 L133.6,143.4 L138.0,142.0 L142.4,140.6 L146.8,139.2 L151.2,137.8 L155.6,136.4 L160.0,135.0 L164.4,133.6 L168.8,132.2 L173.2,130.8 L177.6,129.4 L182.0,128.0 L186.4,126.6 L190.8,125.2 L195.2,123.8 L199.6,122.4 L204.0,121.0 L208.4,119.6 L212.8,118.2 L217.2,116.8 L221.6,115.4 L226.0,114.0 L230.4,112.6 L234.8,111.2 L239.2,109.8 L243.6,108.4 L248.0,107.0 L252.4,105.6 L256.8,104.2 L261.2,102.8 L265.6,101.4 L270.0,100.0 L274.4,98.6 L278.8,97.2 L283.2,95.8 L287.6,94.4 L292.0,93.0 L296.4,91.6 L300.8,90.2 L305.2,88.8 L309.6,87.4 L314.0,86.0 L318.4,84.6 L322.8,83.2 L327.2,81.8 L331.6,80.4 L336.0,79.0 L340.4,77.6 L344.8,76.2 L349.2,74.8 L353.6,73.4 L358.0,72.0 L362.4,70.6 L366.8,69.2 L371.2,67.8 L375.6,66.4 L380.0,65.0 L384.4,63.6 L388.8,62.2 L393.2,60.8 L397.6,59.4 L402.0,58.0 L406.4,56.6 L410.8,55.2 L415.2,53.8 L419.6,52.4 L424.0,51.0 L428.4,49.6 L432.8,48.2 L437.2,46.8 L441.6,45.4 L446.0,44.0 L450.4,42.6 L454.8,41.2 L459.2,39.8 L463.6,38.4 L468.0,37.0 L472.4,35.6 L476.8,34.2 L481.2,32.8 L485.6,31.4 L490.0,30.0" fill="none" stroke="currentColor" stroke-dasharray="5 4" stroke-opacity="0.45"/><circle cx="270.0" cy="71.0" r="4" fill="currentColor"/><text x="278.0" y="65.0" font-size="11" fill="currentColor">0.707 each</text><circle cx="270.0" cy="100.0" r="3" fill="none" stroke="currentColor"/><text x="278.0" y="114.0" font-size="11" fill="currentColor">0.5 each (linear)</text><text x="40" y="190" font-size="11" fill="currentColor">pan -1 (left)</text><text x="240" y="190" font-size="11" fill="currentColor">0</text><text x="420" y="190" font-size="11" fill="currentColor">1 (right)</text><text x="56" y="24" font-size="11" fill="currentColor">left gain</text><text x="420" y="24" font-size="11" fill="currentColor">right gain</text></svg><figcaption>The left and right gains across the pan (solid), against a linear crossfade
+(dashed). The linear one gives each side 0.5 at the centre: a power of 0.5, so a sound panned through the middle
+dips by 3 dB. The constant-power one gives 0.707 each, and keeps it level.</figcaption></figure>
+
+<p>A <em>stereo</em> source - two channels of samples, or a generator that declares two - is already split between
+the speakers, and at the centre both channels should play as recorded. For it the pan is a <em>balance</em>: the side
+the pan moves toward stays as recorded, and the other side fades out along a cosine:</p>
+
+<table>
+<tr><th>pan</th><th>stereo: left</th><th>stereo: right</th><th>mono: left</th><th>mono: right</th></tr>
+<tr><td>-1</td><td>1.000</td><td>0.000</td><td>1.000</td><td>0.000</td></tr>
+<tr><td>-0.5</td><td>1.000</td><td>0.707</td><td>0.924</td><td>0.383</td></tr>
+<tr><td>0</td><td>1.000</td><td>1.000</td><td>0.707</td><td>0.707</td></tr>
+<tr><td>0.5</td><td>0.707</td><td>1.000</td><td>0.383</td><td>0.924</td></tr>
+<tr><td>1</td><td>0.000</td><td>1.000</td><td>0.000</td><td>1.000</td></tr>
+</table>
+
+<details class="src-fold" data-src="src/sound.zig" data-decl="fn gainsForPan("><summary><code>gainsForPan</code></summary><pre><code class="zig">/// A voice's left and right gains: its volume, times the gains its pan gives by `pan_law` (`PanLaw`).
+fn gainsForPan(volume: f32, pan: f32, pan_law: PanLaw) StereoGains {
+    const clamped_pan: f32 = clamp(pan, -1, 1);
+    switch (pan_law) {
+        .constant_power =&gt; {
+            // From 0 at the left to 2 at the right, then to an angle from 0 to a quarter turn.
+            const pan_from_left_edge: f32 = clamped_pan + 1;
+            const pan_angle_turns: f32 = pan_from_left_edge / 8;
+            const left_gain: f32 = cosTurns(pan_angle_turns);
+            const right_gain: f32 = sinTurns(pan_angle_turns);
+            return .{ .left = volume * left_gain, .right = volume * right_gain };
+        },
+        .balance =&gt; {
+            // The side away from the pan fades along a cosine, from 1 at the centre to 0 at the edge: at pan
+            // 0.5 an eighth of a turn, 0.707.
+            const far_side_angle_turns: f32 = @abs(clamped_pan) / 4;
+            const far_side_gain: f32 = cosTurns(far_side_angle_turns);
+            const is_toward_right: bool = clamped_pan &gt; 0;
+            const left_gain: f32 = if (is_toward_right) far_side_gain else 1;
+            const right_gain: f32 = if (is_toward_right) 1 else far_side_gain;
+            return .{ .left = volume * left_gain, .right = volume * right_gain };
+        },
+    }
+}</code></pre></details>
+
+<p>The voice's volume multiplies both gains: at volume 0.5 and at the centre, a mono voice is mixed at 0.354 on each
+side and a stereo one at 0.5.</p>
+
+<h3 id="ramps">4.3 Changing volume without a click</h3>
+
+<p>A gain that jumped between two samples would put a step in the waveform, and a step is heard as a click. So a
+voice remembers the gains its last block ended with, and each block moves from those to the gains its volume and pan
+now ask for, in equal steps, one per frame:</p>
+
+<pre class="sketch"><code>   setVolume(voice, 0) on a voice at volume 1, mono at the centre (gains 0.707), blocks of 128 frames:
+
+   frame of the next block    1                 2                  ...    127              128
+   gain on each side          0.707 x 127/128   0.707 x 126/128    ...    0.707 x 1/128    0
+
+   a fall over 2.7 ms instead of a step; after the block the gain is exactly 0, whatever
+   rounding the 128 small steps gathered</code></pre>
+
+<details class="src-fold" data-src="src/sound.zig" data-decl="fn mixVoiceInto("><summary><code>mixVoiceInto</code></summary><pre><code class="zig">/// Adds one voice's frames for this block into `mix_block`.
+///
+/// The voice's source is read first, into the scratch block: interleaved stereo at the mixer's rate, its pitch
+/// applied by the reading (`readVoiceSource`). Then each frame is added in, its left sample times the left gain
+/// and its right sample times the right gain. The gains never jump from one block to the next: they move in
+/// equal steps, frame by frame, from where the last block left them to where the voice's volume and pan now ask
+/// for - a change of volume is a short ramp, not a click. Raised from 0.5 to 1.0, over a block of n frames:
+///
+///     frame       1              2              ...   n
+///     gain        0.5 + 0.5/n    0.5 + 1.0/n    ...   1.0
+///
+/// A voice fading out - stopped or paused - is mixed for what remains of its fade, as much as this block holds,
+/// its gains falling by the same step every frame, so that a fade split across blocks is one straight line,
+/// reaching silence at its last frame whichever block that falls in (`gainsPartWayDown`). Its source moves on
+/// no further than it is heard, so a paused voice resumes where it fell silent. A source that runs out before
+/// the block's end - a sound that has finished - ends its voice.
+fn mixVoiceInto(
+    renderer: *Renderer,
+    renderer_queues: *RendererQueues,
+    slot_index: usize,
+    mix_block: []f32,
+) void {
+    const voice_slot: *VoiceSlot = &amp;renderer.voice_slots[slot_index];
+    // A note placed by its time starts that many frames into the block (`placementOfNote`): the voice's
+    // frames are mixed from there, the block's before it left as they are.
+    const delay_frame_count: usize = @min(voice_slot.start_delay_frames, mix_block.len / channel_count);
+    voice_slot.start_delay_frames = 0;
+    const delayed_block: []f32 = mix_block[delay_frame_count * channel_count ..];
+    const block_frame_count: usize = delayed_block.len / channel_count;
+    // Mixed, the voice is heard: a stop or a pause from now on fades it rather than ending it at once.
+    voice_slot.is_new = false;
+    const fade: FadeOut = voice_slot.fade_out;
+    const is_fading_out: bool = fade != .none;
+    const fade_frames_left_before: u32 = voice_slot.fade_frames_left;
+    const fade_frames_in_block: usize = @min(fade_frames_left_before, block_frame_count);
+    const frames_wanted: usize = if (is_fading_out) fade_frames_in_block else block_frame_count;
+    const voice_sample_count: usize = frames_wanted * channel_count;
+    const voice_samples: []f32 = renderer.voice_scratch_samples[0..voice_sample_count];
+    const frames_read: usize = readVoiceSource(voice_slot, voice_samples);
+    // The gains: from where the last block left them, to where this block must leave them.
+    const starting_gains: StereoGains = voice_slot.last_block_gains;
+    const fading_gains: StereoGains = gainsPartWayDown(starting_gains, frames_wanted, fade_frames_left_before);
+    const panned_gains: StereoGains = gainsForPan(voice_slot.volume, voice_slot.pan, voice_slot.pan_law);
+    const target_gains: StereoGains = if (is_fading_out) fading_gains else panned_gains;
+    const ramp_frame_count: f32 = @floatFromInt(frames_wanted);
+    const left_gain_step: f32 = (target_gains.left - starting_gains.left) / ramp_frame_count;
+    const right_gain_step: f32 = (target_gains.right - starting_gains.right) / ramp_frame_count;
+    var left_gain: f32 = starting_gains.left;
+    var right_gain: f32 = starting_gains.right;
+    var frame_index: usize = 0;
+    while (frame_index &lt; frames_read) : (frame_index += 1) {
+        left_gain += left_gain_step;
+        right_gain += right_gain_step;
+        const left_sample_index: usize = frame_index * channel_count;
+        const right_sample_index: usize = left_sample_index + 1;
+        const left_voice_sample: f32 = voice_samples[left_sample_index];
+        const right_voice_sample: f32 = voice_samples[right_sample_index];
+        delayed_block[left_sample_index] += left_voice_sample * left_gain;
+        delayed_block[right_sample_index] += right_voice_sample * right_gain;
+    }
+    // The gains this block ends at, exactly - whatever rounding the steps gathered - for the next to start
+    // from.
+    voice_slot.last_block_gains = target_gains;
+    const has_source_ended: bool = frames_read &lt; frames_wanted;
+    if (has_source_ended) {
+        renderer.endVoice(renderer_queues, slot_index);
+        return;
+    }
+    if (!is_fading_out) {
+        return;
+    }
+    voice_slot.fade_frames_left = fade_frames_left_before - @as(u32, @intCast(frames_wanted));
+    const is_fade_finished: bool = voice_slot.fade_frames_left == 0;
+    if (!is_fade_finished) {
+        return;
+    }
+    switch (fade) {
+        .then_stop =&gt; renderer.endVoice(renderer_queues, slot_index),
+        .then_pause =&gt; {
+            voice_slot.fade_out = .none;
+            voice_slot.is_paused = true;
+        },
+        .none =&gt; assertUnreachable(@src(), "sound: a voice's fade ended with nothing to do after it", .{}),
+    }
+}</code></pre></details>
+
+<p>A new voice starts at its gains at once, with no ramp, so that a drum's attack keeps its edge. A change of pan
+ramps like a change of volume, since both change the same two gains. A change of pitch takes effect at the next block:
+it changes how fast the source is read, not how loud it is, and leaves no step.</p>
+
+<h3 id="fades">4.4 Stopping, pausing and unloading</h3>
+
+<p>A stop is a change of volume to nothing, and would click like any jump. So a stopped voice fades to silence over
+240 frames - 5 ms, too short to be heard as a fade - then ends and frees its slot. Its name dies at once (chapter 3).
+The fade is one straight line to zero, whatever blocks it falls across:</p>
+
+<pre class="sketch"><code>   a stop arrives just before a block; blocks of 128 frames; the gain before the stop: g
+
+   block 1, frames   1 .. 128     the gain falls from g to g x 112/240    (128 of the 240 frames)
+   block 2, frames 129 .. 240     the gain falls from g x 112/240 to 0    (the 112 frames left)
+   the voice ends, and the renderer reports its slot free</code></pre>
+
+<details class="src-fold" data-src="src/sound.zig" data-decl="fn gainsPartWayDown("><summary><code>gainsPartWayDown</code></summary><pre><code class="zig">/// The gains `frames_mixed` frames into a fall to silence that had `frames_left` frames to go: the starting gains,
+/// down by the fraction of the fall those frames make. A fall over 240 frames, 100 of them mixed in one block,
+/// leaves 140/240 of the starting gains; the next block falls from there over the 140 left - by the same step per
+/// frame, so the two blocks make one straight line down to silence.
+fn gainsPartWayDown(
+    starting_gains: StereoGains,
+    frames_mixed: usize,
+    frames_left: u32,
+) StereoGains {
+    // No fall under way: nothing to scale (a voice not fading never uses the result).
+    if (frames_left == 0) {
+        return starting_gains;
+    }
+    const frames_mixed_float: f32 = @floatFromInt(frames_mixed);
+    const frames_left_float: f32 = @floatFromInt(frames_left);
+    const fraction_of_fall_done: f32 = frames_mixed_float / frames_left_float;
+    const fraction_remaining: f32 = 1 - fraction_of_fall_done;
+    return .{
+        .left = starting_gains.left * fraction_remaining,
+        .right = starting_gains.right * fraction_remaining,
+    };
+}</code></pre></details>
+
+<p>Pausing fades the same way. The voice's position moves on only by the fade's frames, so it resumes where it fell
+silent, ramping back up across its next block (4.3). A voice stopped before the renderer has mixed any of it has
+nothing to fade, and simply ends.</p>
+
+<p>Unloading a sound that voices still play is the hard case: its samples are about to be freed, and cutting the
+voices off would click. The renderer copies. Each voice reading those samples reads its next 240 frames, at its own
+pitch, into a buffer kept for its slot, and fades out over that copy. Only then does the renderer report the samples
+released, and only after that report does the app's side free them (5.3).</p>
+
+<details class="src-fold" data-src="src/sound.zig" data-decl="fn fadeVoicesReading("><summary><code>fadeVoicesReading</code></summary><pre><code class="zig">/// Lets every voice playing the samples registered under `samples_id` fade out before those samples are freed:
+/// a sound unloaded while voices of it, or of its aliases, still sound. A fade needs 5 ms more of the sound, so
+/// each such voice first copies its next `fade_out_frames` frames - read at its own pitch, and so already at
+/// the mixer's rate - into a buffer of its own, and fades out over that copy. Nothing reads the samples after
+/// this, and nothing is cut off. A voice not yet heard, or paused, is silent already, and ends at once.
+fn fadeVoicesReading(
+    renderer: *Renderer,
+    renderer_queues: *RendererQueues,
+    samples_id: SamplesId,
+) void {
+    for (&amp;renderer.voice_slots, 0..) |*voice_slot, slot_index| {
+        if (!voice_slot.is_playing) {
+            continue;
+        }
+        // A generator, or a voice already playing its own copy, reads no registered samples.
+        const voice_samples_id: SamplesId = voice_slot.samples_id orelse continue;
+        const is_reading_these_samples: bool = voice_samples_id == samples_id;
+        if (!is_reading_these_samples) {
+            continue;
+        }
+        const is_silent_already: bool = voice_slot.is_new or voice_slot.is_paused;
+        if (is_silent_already) {
+            renderer.endVoice(renderer_queues, slot_index);
+            continue;
+        }
+        // Its next 5 ms, into the copy kept for its slot: interleaved stereo at the mixer's rate, its pitch
+        // applied by the reading.
+        const tail_buffer: []f32 = &amp;renderer.tail_copies[slot_index];
+        const tail_frames_read: usize = readVoiceSource(voice_slot, tail_buffer);
+        const tail_sample_count: usize = tail_frames_read * channel_count;
+        const tail_samples_read: []const f32 = tail_buffer[0..tail_sample_count];
+        // From now on the voice plays its copy - at the mixer's rate and at pitch 1, its pitch being in the
+        // copy already - fading out to the copy's end.
+        voice_slot.source = .{ .samples = .{
+            .samples = tail_samples_read,
+            .channels = channel_count,
+            .sample_rate = sample_rate,
+        } };
+        voice_slot.samples_id = null;
+        voice_slot.source_position = 0;
+        voice_slot.pitch = 1;
+        voice_slot.fade_out = .then_stop;
+        voice_slot.fade_frames_left = fade_out_frames;
+        voice_slot.generation +%= 1;
+    }
+}</code></pre></details>
+
+<h3 id="sum">4.5 Summing and limiting</h3>
+
+<p>Mixing is addition. The block starts silent, each voice adds its frames times its gains, and each of the
+instrument's notes adds its own; then the master volume scales the block.</p>
+
+<p>Two voices at full volume can add up to 2, beyond what a device plays. Waves of different frequencies seldom peak
+together, though: a sum's typical level grows with the square root of the number of voices, its worst case with the
+number itself:</p>
+
+<pre class="sketch"><code>   three notes at velocity 0.5, mono at the centre:    each peaks at 0.5 x 0.707 = 0.354
+   their peaks, if they met:                           3 x 0.354 = 1.06 - above 1, held
+   their typical level (RMS), as sines of different    each 0.354 / sqrt(2) = 0.25; together
+   frequencies, whose powers add:                      sqrt(3 x 0.25^2) = 0.43</code></pre>
+
+<p>The block's last stage handles the rare peak without cutting it flat, since a flattened peak has a corner, heard
+as crackle. A <em>limiter</em> turns the whole block down while its peaks pass 0.7, its gain following a peak envelope
+over a millisecond so that the gain itself never steps. What still passes 0.8 is bent toward full scale by a
+hyperbolic tangent, which joins the straight part without a corner:</p>
+
+<pre class="sketch"><code>   out
+   1.0 |                              ___________________     above 0.8: 0.8 + 0.2 tanh((|in| - 0.8) / 0.2)
+   0.8 |                       ___---                         approaches 1, never reaches it
+       |                  __---
+       |             __---                                    below 0.8: unchanged
+       |        __---
+     0 +-------+-------+-------+-------+-------+------- in
+       0      0.4     0.8     1.2     1.6     2.0
+
+   a sine a third past full scale: cut flat, it jumps 0.034 at each corner; bent, it curves 0.010 at most</code></pre>
+
+<details class="src-fold" data-src="src/sound.zig" data-decl="fn limitAndBend("><summary><code>limitAndBend</code></summary><pre><code class="zig">/// The mix's last stage, frame by frame: the master volume; then the limiter (`limiter_threshold`), one gain
+/// for both channels, so that the sound's place between the speakers holds; then the soft bend under full scale
+/// (`softClip`) for what still passes the knee. The limiter follows the frame's peak with an envelope that
+/// rises at once and falls slowly - 100 ms to fall by a factor of e - and aims its gain at the threshold over
+/// the envelope, reaching for it over about a millisecond: no step in the gain, so no click, and no wait - the
+/// mix is not delayed to see a peak coming, so the first millisecond of a sudden peak passes to the bend. A
+/// sample that would pass full scale without the limiter is counted, each channel's on its own (`takeClicks`).
+fn limitAndBend(renderer: *Renderer, mix_block: []f32) void {
+    const frame_count: usize = mix_block.len / channel_count;
+    var envelope: f32 = renderer.limiter_envelope;
+    var gain: f32 = renderer.limiter_gain;
+    for (0..frame_count) |frame_index| {
+        const frame: []f32 = mix_block[frame_index * channel_count ..][0..channel_count];
+        var frame_peak: f32 = 0;
+        for (frame) |*mixed_sample| {
+            mixed_sample.* *= renderer.master_volume;
+            const magnitude: f32 = @abs(mixed_sample.*);
+            // A sample the output would have clipped without the limiter: counted, each channel's on its own.
+            if (magnitude &gt; 1) {
+                renderer.clipped_samples_since_taken += 1;
+            }
+            frame_peak = @max(frame_peak, magnitude);
+        }
+        envelope = @max(frame_peak, envelope * limiter_release_factor);
+        const target_gain: f32 = if (envelope &gt; limiter_threshold) limiter_threshold / envelope else 1;
+        gain += (target_gain - gain) * limiter_attack_weight;
+        // An approach by a share of the gap stalls short of its target in floating point: once a 48th of the
+        // gap is under half a unit in the last place, it rounds to nothing - just below 1, where a unit is
+        // 6e-8, with the gap still up to 24 units, 1.4e-6 - and the gain would stay there for good, every later
+        // sample scaled by 0.9999986. Within ten millionths of its target, it takes it.
+        if (@abs(target_gain - gain) &lt; limiter_gain_snap) {
+            gain = target_gain;
+        }
+        for (frame) |*mixed_sample| {
+            mixed_sample.* = softClip(mixed_sample.* * gain);
+        }
+    }
+    renderer.limiter_envelope = envelope;
+    renderer.limiter_gain = gain;
+}</code></pre></details>
+
+<details class="src-fold" data-src="src/sound.zig" data-decl="fn softClip("><summary><code>softClip</code></summary><pre><code class="zig">/// The mix's last stage: a sample is kept as it is up to `soft_clip_knee`, and above it bent toward full scale
+/// by a hyperbolic tangent - `knee + (1 - knee) tanh((|x| - knee) / (1 - knee))` - which leaves the knee at the
+/// same value and the same slope, 1, and approaches 1 without reaching it. Cutting the wave flat at full scale,
+/// as an output does with what passes it, makes corners - each a jump in the wave's slope, a click, a dense
+/// mix's peaks heard as crackle; the curve has none. Above the knee the sound is gently saturated rather than
+/// broken. The peaks of a loud chord of many notes pass full scale; quiet sound never reaches the knee.
+fn softClip(sample: f32) f32 {
+    const magnitude: f32 = @abs(sample);
+    if (magnitude &lt;= soft_clip_knee) {
+        return sample;
+    }
+    const headroom: f32 = 1 - soft_clip_knee;
+    const overshoot_in_headrooms: f32 = (magnitude - soft_clip_knee) / headroom;
+    const bent_magnitude: f32 = soft_clip_knee + headroom * tanh(overshoot_in_headrooms);
+    return if (sample &lt; 0) -bent_magnitude else bent_magnitude;
+}</code></pre></details>
+
+<p>The limiter only protects the device and the ear. A game that plays many sounds at once keeps each well below full
+volume, or lowers the master volume.</p>
+
+<h3 id="subnormals">4.6 Subnormal numbers</h3>
+
+<p>A 32-bit float holds numbers down to about 1.2 x 10<sup>-38</sup> at full precision. Below that lie the
+<em>subnormal</em> numbers, which reach closer to zero with fewer digits, and which many processors handle far more
+slowly: on x86 an operation that meets one can take a hundred cycles instead of a few.</p>
+
+<p>Sound makes them easily: anything that decays, such as a note's release, passes through the subnormal range on its
+way to zero. A block in which every operation suddenly costs a hundred times more misses its deadline, though the
+values are far below hearing - 10<sup>-38</sup> is 760 dB below full scale. So the renderer tells the processor to
+treat subnormal numbers as zero while it makes a block, and restores the previous mode afterwards: on x86 the MXCSR
+register's flush-to-zero and denormals-are-zero bits, on ARM the FPCR register's flush-to-zero bit:</p>
+
+<pre class="sketch"><code>   each block:   save the thread's floating-point mode, set "subnormals are zero"
+                 apply commands, mix                               no operation meets a subnormal
+                 restore the saved mode                            the thread's other code is unaffected</code></pre>
+
+<details class="src-fold" data-src="src/sound.zig" data-decl="fn enterFlushToZero("><summary><code>enterFlushToZero</code></summary><pre><code class="zig">/// Sets the calling thread's floating point unit to treat subnormal numbers as zero, and returns its mode as it
+/// was, for `restoreFloatingPointMode`. The renderer computes each block this way (`Renderer.render`).
+///
+/// Why. A float has a smallest normal magnitude - about 1.2e-38 for an f32 - and below it, down to 1.4e-45, the
+/// subnormal numbers: the exponent stops shrinking and the mantissa loses digits instead. Many processors compute
+/// with them far more slowly than with normal numbers - on x86 a multiplication with a subnormal operand or result
+/// can take a hundred cycles instead of four. Sound makes them easily: a release multiplies a level by 0.9997
+/// each frame, a filter feeds its output back scaled down, and a decaying value passes through the subnormal
+/// range on its way to zero. A block in which every sample takes a hundred cycles more is a block that misses its
+/// deadline - heard as a gap - so real-time audio code runs with them flushed: a value that small is silence by
+/// a margin of 700 dB, and zero is the same silence, computed at full speed. JUCE sets the same bits for each
+/// block it renders (`ScopedNoDenormals`), as do most audio engines.
+///
+/// Set for a block and put back after it, rather than once for the thread: the renderer runs on an audio thread
+/// of its own on Windows, but on the main thread for the headless output, whose app must keep the ordinary
+/// arithmetic. Reading and writing the register costs some tens of cycles a block.
+///
+/// Each write is declared to change the register (the `.mxcsr` and `.fpcr` clobbers), so that the compiler keeps
+/// the block's float operations between the two writes rather than moving one across either.
+///
+/// Where there is no such register. WebAssembly - the renderer in the browser's worklet - has none: its arithmetic
+/// is fixed by its specification, subnormal numbers included, so a block there is computed as it is, and the
+/// renderer keeps its own values out of the subnormal range instead (an instrument's note ends at -80 dB). Any
+/// other CPU is a compile error until its register is added here: a native port to a new CPU must decide, not
+/// inherit silence. (A GPU's equivalent is no register either: SPIR-V's float controls are execution modes fixed
+/// when a shader is compiled, and WebGPU exposes none - nothing here applies to shaders.)
+fn enterFlushToZero() FloatingPointMode {
+    switch (builtin.cpu.arch) {
+        .x86_64 =&gt; {
+            // MXCSR moves only through memory: `stmxcsr` stores it at an address, `ldmxcsr` loads it from one.
+            // The address is passed in rax and named in the template, a form both of Zig's x86-64 code generators
+            // accept - its own, which builds debug programs, rejects a memory operand made from an operand's name.
+            var saved_control: u32 = undefined;
+            asm volatile ("stmxcsr (%%rax)"
+                :
+                : [control_address] "{rax}" (&amp;saved_control),
+                : .{ .memory = true });
+            const flushing_control: u32 = saved_control | mxcsr_flush_to_zero | mxcsr_denormals_are_zero;
+            asm volatile ("ldmxcsr (%%rax)"
+                :
+                : [control_address] "{rax}" (&amp;flushing_control),
+                : .{ .memory = true, .mxcsr = true });
+            return .{ .control = saved_control };
+        },
+        .aarch64 =&gt; {
+            const saved_control: u64 = asm volatile ("mrs %[control], fpcr"
+                : [control] "=r" (-&gt; u64),
+            );
+            asm volatile ("msr fpcr, %[control]"
+                :
+                : [control] "r" (saved_control | fpcr_flush_to_zero),
+                : .{ .fpcr = true });
+            return .{ .control = saved_control };
+        },
+        .wasm32, .wasm64 =&gt; return .{ .control = 0 },
+        else =&gt; @compileError("enterFlushToZero: no floating point control for this CPU yet - add its register " ++
+            "beside MXCSR and FPCR, or say here why it has none"),
+    }
+}</code></pre></details>
+
+<p>The mode is set for each block rather than once for the thread, because in a headless run the renderer runs on
+the app's own thread, whose arithmetic must stay as it was. WebAssembly has no such mode; in a browser the renderer
+keeps its values out of the range itself - an instrument's note ends at -80 dB, far above it.</p>
+
+<h2 id="sides">5. The two sides of the mixer</h2>
+
+<p>The app plays and changes sounds from its own code, once a drawn frame. The sound is made in blocks when the output
+asks for them - on Windows on the output's audio thread, in a browser on the browser's audio thread. So the mixer has
+two sides, which never touch the same data at the same time:</p>
+
+<pre class="sketch"><code>   the main side, Mixer                              the renderer, Renderer
+   runs with the app's code                          runs where the blocks are made
+     names each voice when it is played                owns the voices: their sources, positions, gains
+     answers every question about voices               applies what was asked, then mixes, each block
+     asks the renderer for every change                tells the main side what ended</code></pre>
+
+<p>The sides talk only through queues, so the same code works whether the renderer runs on another thread, on the
+same thread, or in another memory:</p>
+
+<table>
+<tr><th>platform</th><th>where the renderer runs</th><th>how the queues reach it</th></tr>
+<tr><td>Windows</td><td>the output's audio thread</td><td>shared memory, one thread on each side of each queue</td></tr>
+<tr><td>headless</td><td>the app's own thread, at each frame</td><td>the same queues, emptied on the same thread</td></tr>
+<tr><td>a browser</td><td>the browser's audio thread, in a second instance of the app's program</td><td>the
+queues' contents copied across in messages, once a drawn frame (6.4)</td></tr>
+</table>
+
+<h3 id="commands">5.1 Commands and notices</h3>
+
+<p>Every change the app asks for becomes a <em>command</em> in a queue the renderer empties at the start of each
+block: start this source in slot 5, fade out slot 2, set this voice's volume. Everything the app's side must learn
+comes back as a <em>notice</em>, in a second queue: slot 5's voice has ended; nothing reads samples 12 any more. The
+app's side reads the notices once a drawn frame:</p>
+
+<pre class="sketch"><code>   main side                                                 renderer, at each block
+     play(sound)  -> names the voice at once, in slot 5
+                  -> command: start it in slot 5     ----->    1. apply every command waiting
+     stopVoice    -> command: fade it out            ----->    2. apply every note waiting
+     sendNote     -> note event                      ----->    3. mix the block
+     once a frame <- notice: slot 5's voice ended    <-----    a voice ended: tell the main side
+                  <- notice: samples 12 let go of    <-----    samples no voice reads: tell it
+                  <- measurements of starts          <-----    when each start was asked for and heard (8.2)</code></pre>
+
+<p>The app's side names a voice before its command is even sent (chapter 3), so the app never waits for an answer.
+Notes travel in queues of their own (7.2). A queue holds 1024 commands, or 256 notes - more than any app sends between
+two blocks. Where the renderer runs on the app's thread or in another memory, a full queue is applied or forwarded at
+once. Only a renderer on an audio thread can make the app's side wait: if it stops taking commands - its device lost,
+say - the app's side waits a while for room, then gives up with a message rather than wait forever.</p>
+
+<h3 id="queues">5.2 Queues without a lock</h3>
+
+<p>The usual way for two threads to share data is a lock, held by one thread while the other waits. The audio thread
+must never wait (1.3): if the app's thread held the lock when the device asked for a block - paused by the system in
+the middle of a change, say - the block would be late. The mixer's queues need no lock, because each has exactly one
+thread pushing and one thread popping.</p>
+
+<p>Items lie in a ring of places, used round and round. Two counters say where things stand - the number of items
+pushed so far, and the number popped - and each is written by one thread only. Their difference is the number of
+items waiting. An item's place is its count modulo the ring's size, a power of two, so the modulo is a mask. With room
+for four, after six pushes and three pops:</p>
+
+<pre class="sketch"><code>   place       0        1        2        3
+   item        item 4   item 5   -        item 3        pushed 6, popped 3: three items waiting
+                                 ^ the next push goes here (6 mod 4 = 2)
+                                                   ^ the next pop takes this one (3 mod 4 = 3)</code></pre>
+
+<p>The order in which writes become visible matters: a processor, and the compiler before it, may let another core
+see one core's writes in a different order than they were made. So the counters are atomic. The pushing thread writes
+the item, then stores its new count with <em>release</em> ordering; the popping thread loads the count with
+<em>acquire</em> ordering before it reads the item. A count loaded with acquire guarantees that everything written
+before its release is visible, so an item is never read half written. The popping thread's count works the same way
+in the other direction.</p>
+
+<p>Two refinements keep the queue fast. Each counter sits on a 64-byte cache line of its own: cores exchange memory by
+lines, and two counters on one line would make every push and pop pull the line from the other core. And each side
+keeps a copy of the other's counter, loading the real one only when its copy says the queue is full or empty; a copy
+can only lag, which can only make the queue look fuller or emptier than it is, never wrong. This is Erik Rigtorp's
+design.</p>
+
+<details class="src-fold" data-src="src/sound.zig" data-decl="pub fn SingleProducerSingleConsumerQueue("><summary><code>SingleProducerSingleConsumerQueue</code></summary><pre><code class="zig">/// A queue of items between two threads - one only ever pushing items in, the other only ever popping them out -
+/// with no lock: neither thread ever waits for the other.
+///
+/// The items lie in a ring of `capacity` places, used round and round. Two counters say where things stand:
+/// `pushed_count`, the items pushed since the start, and `popped_count`, the items popped. Each is written by one
+/// thread only - the pushing thread writes its count, the popping thread its own - so no two threads ever write the
+/// same variable. Their difference is the items waiting: none means empty, `capacity` means full. An item's place
+/// is its count modulo the capacity. With room for 4, after 6 pushes and 3 pops:
+///
+///     place          0       1       2       3
+///     item           item 4  item 5  -       item 3       pushed_count 6, popped_count 3: 3 waiting
+///                                    ^ next push (6 mod 4 = 2)          ^ next pop (3 mod 4 = 3)
+///
+/// The capacity is a power of two, so "modulo the capacity" is a bit mask: 6 mod 4 is 6 &amp; 3, which keeps the low
+/// two bits of 110 - 10, that is 2 - and needs no division.
+///
+/// The order of writes. A processor, and the compiler before it, may make writes visible to other cores in another
+/// order than the program wrote them. So the counters are atomic, and their stores and loads say what must be seen
+/// in order: the pushing thread writes the item, then stores its counter with release ordering - every write before
+/// it is visible to a thread that loads the counter with acquire ordering and sees the new count. So the popping
+/// thread, loading the count before reading the item, always finds the item whole. The same holds the other way:
+/// the popping thread stores its count after reading the item out, and the pushing thread loads that count before
+/// it writes over the place, so it never overwrites an item not yet read.
+///
+/// Cache lines. Cores pass memory between them in lines of 64 bytes (128 on some), and a core writing a line takes
+/// it from the others. Were both counters on one line, each push would take the line from the popping core and each
+/// pop would take it back. So each side's counter sits on a line of its own; and each side keeps the other's
+/// counter as it last loaded it, loading the real one only when that copy says the queue is full (for the pushing
+/// thread) or empty (for the popping thread) - most calls touch no line the other side writes. A copy can only be
+/// behind the real counter, which only makes the queue look fuller or emptier than it is: never wrong.
+///
+/// Wrapping. The counters are `usize` - a 32-bit target has no 64-bit atomic operations - so after 4 294 967 295
+/// pushes a count wraps around to 0. Every subtraction and addition of counts wraps the same way (`-%`, `+%`), and
+/// the difference stays right: pushed 2 (after wrapping) less popped 4 294 967 294 (not yet) is 4, the true number
+/// waiting. And a power of two divides 2^32, so the mask still finds the right place.
+pub fn SingleProducerSingleConsumerQueue(comptime Item: type, comptime capacity: usize) type {
+    comptime {
+        const is_power_of_two: bool = capacity != 0 and (capacity &amp; (capacity - 1)) == 0;
+        if (!is_power_of_two) {
+            @compileError("a queue's capacity is a power of two");
+        }
+    }
+    return struct {
+        /// What the queue carries.
+        pub const Element = Item;
+        /// The ring of places.
+        items: [capacity]Item = undefined,
+        /// The pushing thread's cache line, and the popping thread's.
+        pushing_side: PushingSide align(cache_line) = .{},
+        popping_side: PoppingSide align(cache_line) = .{},
+
+        const Queue = @This();
+        /// A count's place in the ring is its low bits: the capacity less one, as a mask.
+        const item_index_mask: usize = capacity - 1;
+
+        const PushingSide = struct {
+            /// Items pushed since the start, wrapping: stored by the pushing thread, loaded by the popping one.
+            pushed_count: std.atomic.Value(usize) = .{ .raw = 0 },
+            /// `popped_count` as the pushing thread last loaded it, never ahead of the real one.
+            popped_count_last_seen: usize = 0,
+        };
+
+        const PoppingSide = struct {
+            /// Items popped since the start, wrapping: stored by the popping thread, loaded by the pushing one.
+            popped_count: std.atomic.Value(usize) = .{ .raw = 0 },
+            /// `pushed_count` as the popping thread last loaded it, never ahead of the real one.
+            pushed_count_last_seen: usize = 0,
+        };
+
+        /// Appends `item`; false, and nothing appended, when the queue is full. Pushing thread only.
+        pub fn push(queue: *Queue, item: Item) bool {
+            const pushed_count: usize = queue.pushing_side.pushed_count.load(.monotonic);
+            const waiting_by_last_seen_count: usize = pushed_count -% queue.pushing_side.popped_count_last_seen;
+            if (waiting_by_last_seen_count == capacity) {
+                // Full by the popping thread's count as last seen - it may have popped since: load its count.
+                queue.pushing_side.popped_count_last_seen = queue.popping_side.popped_count.load(.acquire);
+                const waiting_now: usize = pushed_count -% queue.pushing_side.popped_count_last_seen;
+                if (waiting_now == capacity) {
+                    return false;
+                }
+            }
+            const item_index: usize = pushed_count &amp; item_index_mask;
+            queue.items[item_index] = item;
+            // Stored after the item is written: a popping thread that sees the new count sees the item whole.
+            const new_pushed_count: usize = pushed_count +% 1;
+            queue.pushing_side.pushed_count.store(new_pushed_count, .release);
+            return true;
+        }
+
+        /// Takes the oldest item; null when the queue is empty. Popping thread only.
+        pub fn pop(queue: *Queue) ?Item {
+            const popped_count: usize = queue.popping_side.popped_count.load(.monotonic);
+            const is_empty_by_last_seen_count: bool = popped_count == queue.popping_side.pushed_count_last_seen;
+            if (is_empty_by_last_seen_count) {
+                // Empty by the pushing thread's count as last seen - it may have pushed since: load its count.
+                queue.popping_side.pushed_count_last_seen = queue.pushing_side.pushed_count.load(.acquire);
+                const is_empty_now: bool = popped_count == queue.popping_side.pushed_count_last_seen;
+                if (is_empty_now) {
+                    return null;
+                }
+            }
+            const item_index: usize = popped_count &amp; item_index_mask;
+            const item: Item = queue.items[item_index];
+            // Stored after the item is read out: a pushing thread that sees the new count may write over its place.
+            const new_popped_count: usize = popped_count +% 1;
+            queue.popping_side.popped_count.store(new_popped_count, .release);
+            return item;
+        }
+    };
+}</code></pre></details>
+
+<p>A stream's ring (2.3) works the same way, with frames as the unit: the app writes runs of frames in, the renderer
+reads runs out, and one counter update covers a whole run. A run that reaches the ring's end continues at its start. A
+read that finds fewer frames than it wanted takes what there is and counts the rest as <em>dry</em>.</p>
+
+<h3 id="ownership">5.3 Memory the renderer may still read</h3>
+
+<p>The renderer also never allocates or frees memory, since asking the system for memory can mean waiting. It
+allocates its buffers once, when it starts. Freeing is the app's side's work - but it must not free memory the
+renderer may still read: the samples of a sound unloaded while a voice still plays them.</p>
+
+<p>So the renderer reads samples only through a registry of its own, by an id. The first time samples play, the app's
+side registers them under a free id, with a command like any other. Unloading sends a release; the renderer applies it
+at its next block, copying what each voice still needs (4.4), removes the id, and sends a notice. The app's side frees
+the samples only when it reads that notice:</p>
+
+<pre class="sketch"><code>   main side                                          renderer
+   z.sounds.unload(sound)
+     -> command: release samples 12          ----->     voices reading samples 12 copy their next 5 ms
+                                                        id 12 leaves the registry: nothing reads them now
+     the samples are kept for now            &lt;-----     notice: samples 12 released
+     reads the notice: frees the samples, and the id may name new samples</code></pre>
+
+<p>An id also crosses where an address cannot. In a browser the renderer runs in another memory (6.4), where an
+address in the app's memory means nothing; the samples are copied there when they are registered, and the id names
+the same samples on both sides.</p>
+
+<h2 id="outputs">6. Outputs</h2>
+
+<p>An output is the platform's last step: it hands the sound to a device, and asks the renderer for each block.</p>
+
+<h3 id="pulling">6.1 An output pulls</h3>
+
+<p>Every output <em>pulls</em>: when its device needs a block it asks the renderer, which makes the block then.
+Nothing waits between the renderer and the device, so a sound asked for since the last block starts in the next one.
+The platform contract names what an output provides:</p>
+
+<pre class="sketch"><code>   startAudioPull(wanted, render_callback) granted    open the output at a format (48 000 frames a second, 2
+                                                       channels); from now on call render_callback for each
+                                                       block the device needs, on the output's thread
+   stopAudio()                                         close the output: no call to the renderer after it returns
+   audioClockMilliseconds()                            the clock sound is timed by
+   audioOutputLatencyMilliseconds()                    how long a block still takes after it is handed over
+   audioOutputName()                                   which of the platform's paths plays</code></pre>
+
+<p>With each call the output says when it asked for the block, and when the block's first frame will reach the
+device, both on the output's clock - the two times the engine measures latency with (8.2):</p>
+
+<table>
+<tr><th>output</th><th>where it pulls</th><th>block</th></tr>
+<tr><td>Windows (WASAPI)</td><td>the output's audio thread, at the device's signal</td><td>the device's room: a
+period, 2.7 or 10 ms</td></tr>
+<tr><td>headless</td><td>the app's thread, at each drawn frame</td><td>the frames the run's clock passed: 800 at
+60 Hz</td></tr>
+<tr><td>a browser, audio worklet</td><td>the browser's audio thread, in a second instance of the app</td><td>128
+frames, 2.7 ms</td></tr>
+<tr><td>a browser, script processor</td><td>the page's main thread, between drawn frames</td><td>2 048 frames,
+42.7 ms</td></tr>
+</table>
+
+<h3 id="windows">6.2 Windows</h3>
+
+<p>On Windows the output is WASAPI, on a render thread the output starts for itself. The thread owns everything of
+WASAPI's, from initializing COM to the stream's end:</p>
+
+<pre class="sketch"><code>   render thread
+     scheduled as "Pro Audio" (MMCSS)          ahead of ordinary threads
+     CoInitializeEx                            COM, for this thread
+     MMDeviceEnumerator                        finds devices; tells us when the default output changes
+     GetDefaultAudioEndpoint -> Activate       the default output device
+     a low-latency stream (IAudioClient3)      the shortest period the device allows - 128 frames on many
+       or else a standard one                  10 ms periods; Windows converts the engine's 48 000 Hz float
+                                               stereo to the device's own format
+     fill the whole buffer, then Start         the first period has something to play
+     loop: wait for the device's signal        WASAPI signals each time its buffer has room
+           GetCurrentPadding                   the frames still waiting to play
+           GetBuffer(room)                     the renderer writes the block straight into the device's buffer
+           ReleaseBuffer
+     a lost device, or a new default           open the default device again at once
+     any other failure                         open it again after 100 ms
+     no device at all                          go on rendering, to nowhere, at the real rate, and look
+                                               for a device again each second</code></pre>
+
+<p>The renderer writes straight into the device's buffer, with no copy in between. The block's first frame plays once
+the frames ahead of it - the <em>padding</em> - have played, so the output reports it as heard padding / rate after it
+was asked for.</p>
+
+<details class="src-fold" data-src="src/platform/windows.zig" data-decl="fn fillStreamRoom("><summary><code>fillStreamRoom</code></summary><pre><code class="zig">/// Fills `room_frames` frames of the stream's buffer: borrows them (`GetBuffer`), has the renderer write the block
+/// into them, and gives them back (`ReleaseBuffer`). False when the stream refuses. `padding_frames` are already in
+/// the buffer, waiting to play: the new frames reach the device after them, which is what the renderer is told
+/// (`AudioRenderTiming`). Render thread only.
+fn fillStreamRoom(
+    render_client: *win32.IAudioRenderClient,
+    room_frames: u32,
+    padding_frames: u32,
+) bool {
+    var stream_bytes: ?[*]u8 = null;
+    if (render_client.vtable.GetBuffer(render_client, room_frames, &amp;stream_bytes) &lt; 0) {
+        return false;
+    }
+    const channel_count: usize = audio_output.format.channels;
+    const stream_floats: [*]f32 = @ptrCast(@alignCast(stream_bytes.?));
+    const stream_samples: []f32 = stream_floats[0 .. room_frames * channel_count];
+    // The renderer writes straight into the device's buffer: the device's room is the block. Its first frame plays
+    // once the `padding_frames` before it have played: `padding / rate` after now.
+    const render_callback: AudioRenderCallback = audio_output.render_callback orelse return false;
+    const asked_at_ms: f64 = native_os.monotonicMilliseconds();
+    const sample_rate: f64 = float64(audio_output.format.sample_rate);
+    const padding_ms: f64 = float64(padding_frames) * 1000.0 / sample_rate;
+    const timing: AudioRenderTiming = .{
+        .asked_at_ms = asked_at_ms,
+        .first_frame_out_ms = asked_at_ms + padding_ms,
+    };
+    render_callback.render(render_callback.context, stream_samples, timing);
+    return render_client.vtable.ReleaseBuffer(render_client, room_frames, 0) &gt;= 0;
+}</code></pre></details>
+
+<p>The output opens WASAPI's low-latency stream where the device takes the engine's format - 48 kHz, 32-bit float,
+which the low-latency stream does not convert - at the shortest period the device allows, and the standard stream
+otherwise (the backends tutorial compares the two, 14.1). At each period the audio engine reads one period from the
+buffer and signals; the render thread then has a whole period to write the next before the engine's next read, which
+is its slack against a dropout however full the buffer is. Sound kept beyond that only delays each new block, so the
+low-latency stream is kept one period and 2 ms full - the margin in case the engine reads a little early:</p>
+
+<pre class="sketch"><code>   time (ms)          0          10          20          30
+   engine reads       |-- P --|  |-- P --|   |-- P --|       one period each, then the signal
+   thread writes          P          P           P           right after each signal: the buffer back to P + 2 ms
+   queued at a block      about 2 ms - where a buffer kept full would hold its size less a period</code></pre>
+
+<p>When the default device changes - headphones plugged in - Windows calls the engine's listener on a thread of its
+own. The listener only marks the change and wakes the render thread, which reopens its stream on the new device. With
+no device at all, the render thread still renders blocks at the rate a device would, so that voices move on and
+end.</p>
+
+<h3 id="headless">6.3 A run with no speaker</h3>
+
+<p>A headless run has no device: its output plays on the run's own clock. At each drawn frame, before the app's
+update, it renders the frames the clock has passed since the last - counted from the start each time, so that no
+fraction of a frame is lost:</p>
+
+<pre class="sketch"><code>   frames due = floor(elapsed ms x 48 000 / 1000)        elapsed since the output started
+
+   drawn frame times at 60 Hz:  16.667  33.333  50.000  ...  1000.000 ms
+   frames due:                    800    1 600   2 400   ...    48 000           exactly, after 60 frames
+
+   added up frame by frame instead, each 16.667 ms would be 800.016 frames, and the fractions would
+   be lost, or gathered one frame at a time</code></pre>
+
+<details class="src-fold" data-src="src/platform/headless.zig" data-decl="pub fn playAudioUntil("><summary><code>playAudioUntil</code></summary><pre><code class="zig">/// Plays the output up to `frame_ms` on the run's clock. The frames due since the start are
+/// `floor(elapsed ms x frames a second / 1000)` - counted from the start each time, not added up frame by frame, so
+/// that no fraction of a frame is lost between frames: 60 frames of 1000/60 ms each play exactly 48 000 frames at
+/// 48 kHz. Those not yet played are rendered now, in place where they are kept, by the renderer the output was
+/// started with. Called by the run's frame driver, once a frame.
+pub fn playAudioUntil(frame_ms: f64) void {
+    audio_output.clock_ms = frame_ms;
+    const output_format: AudioFormat = audio_output.format orelse return;
+    const render_callback: AudioRenderCallback = audio_output.render_callback orelse return;
+    const started_at_ms: f64 = audio_output.started_at_ms orelse {
+        // The first frame since the output started: it starts playing now, so nothing is due yet.
+        audio_output.started_at_ms = frame_ms;
+        return;
+    };
+    const elapsed_since_start_ms: f64 = @max(frame_ms - started_at_ms, 0);
+    const frames_per_second: f64 = @floatFromInt(output_format.sample_rate);
+    const frames_due_since_start: u64 = @floor(elapsed_since_start_ms * frames_per_second / 1000.0);
+    if (frames_due_since_start &lt;= audio_output.played_frame_count) {
+        return;
+    }
+    const channel_count: usize = output_format.channels;
+    const frames_to_play_now: usize = @intCast(frames_due_since_start - audio_output.played_frame_count);
+    const sample_count_now: usize = frames_to_play_now * channel_count;
+    const first_new_sample: usize = audio_output.played_samples.items.len;
+    audio_output.played_samples.appendNTimes(host.heap, 0, sample_count_now) catch {
+        console.log(.err, "headless audio: out of memory keeping what played");
+        return;
+    };
+    // The frames rendered are those that came due since the last frame: the first of them was out when the run's
+    // clock passed it, a little before now.
+    const played_until_now_ms: f64 = float64(audio_output.played_frame_count) * 1000.0 / frames_per_second;
+    const timing: AudioRenderTiming = .{
+        .asked_at_ms = frame_ms,
+        .first_frame_out_ms = started_at_ms + played_until_now_ms,
+    };
+    const new_samples: []f32 = audio_output.played_samples.items[first_new_sample..];
+    render_callback.render(render_callback.context, new_samples, timing);
+    audio_output.played_frame_count = frames_due_since_start;
+    trimPlayedSamples(audio_kept_most_frames, audio_kept_slack_frames, channel_count);
+}</code></pre></details>
+
+<p>Every frame played is kept, so a script can save the sound: <code>.{ .capture_audio_to = "run.wav" }</code>
+writes what has played, the last two minutes at most, as a WAV file of 32-bit floats. The sound depends only on the
+run's frames, so the same script always writes the same file, and a test can measure it - a tone's frequency from its
+spectrum, its level from its loudest sample.</p>
+
+<h3 id="browser">6.4 The browser</h3>
+
+<p>A browser plays sound on an audio thread of its own, where a page may run a small program, an <em>audio
+worklet</em>, called for each block of 128 frames. A page's WebAssembly runs on the main thread, and can share its
+memory with another thread only when the page is served with particular security headers, which a page opened from a
+file does not have.</p>
+
+<p>So the engine runs the renderer in <em>a second instance of the app's own module</em>, inside the worklet. The
+worklet's program (<code>src/audio_worklet.zig</code>, compiled to JavaScript like the page's bridge) receives the
+app's compiled module, instantiates it again, and calls the renderer's entry points in that instance. Both instances
+run the same code, so every type has the same layout in both; but each has its own memory, and everything between them
+travels by message:</p>
+
+<pre class="sketch"><code>   main thread: the app's instance                      audio thread: the worklet, the app's second instance
+     each drawn frame:
+       the frame's commands, as their bytes  -- message -->   copied into its memory, queued for the next block
+       samples being registered              -- message -->   copied into its memory, registered by their id
+       notes sent at the frame               -- message -->   queued for the next block
+                                                              every 128 frames: render, copy out to the browser
+       notices, read into the mixer          &lt;-- message --   the renderer's notices, as bytes
+       the panel's numbers                   &lt;-- message --   each second: blocks, loudest sample, timing</code></pre>
+
+<p>A command holds no address, so its bytes mean the same command in either instance. A generator is named by a
+function's address, but in WebAssembly that address is the function's index in the module's table, the same in every
+instance - so a generator played on the main side runs in the worklet unchanged. Samples are copied across when they
+are registered, under the same id (5.3).</p>
+
+<p>A stream cannot be read across the two memories either, so the mixer forwards it. Each drawn frame it sends the
+frames written since the last, and the worklet writes them into a ring of its own, which its voice reads. The app's
+ring keeps every frame until the worklet reports it read, about every 11 ms, so the room the app sees means what it
+means natively:</p>
+
+<pre class="sketch"><code>   the game's ring    | sent, not yet read there | written, not yet sent |    room
+                      |                          |
+   each frame:        |                          +-- sent to the worklet, kept here
+   every 11 ms:       +-- the worklet reports frames read: their room returns here
+
+   the worklet's ring | received, not yet read |  -> its voice</code></pre>
+
+<p>The analyser (2.7) needs the renderer's last frames, which are in the worklet's memory. Each read sends a request
+through the worklet's port, and the worklet answers with its last 2048 frames; the read analyses the frames of the
+previous answer, one drawn frame old. One request is outstanding at a time, and none is sent while no analyser
+reads.</p>
+
+<p>The worklet starts so that nothing slow happens while sound is due. A browser compiles each WebAssembly function
+the first time it is called, and again, optimised, once it has been called often; either can take a millisecond or
+more, longer than a block's deadline. So before reporting ready, the renderer plays a voice of every kind it knows, at
+volume zero, in a scratch copy of itself, for 64 blocks:</p>
+
+<details class="src-fold" data-src="src/audio_worklet.zig" data-decl="fn onModuleLinked("><summary><code>onModuleLinked</code></summary><pre><code class="zig">/// Called by the browser once the app's module is linked: `instance_handle` is the worklet's own instance of it. Starts
+/// the renderer host in it, warms the host up - every function a block calls run once, so that the browser compiles
+/// them here rather than in a block that is heard (`RendererHost.warmUp`) - then listens on the port and tells the
+/// main thread it is ready. The first block rendered comes after all of it.
+fn onModuleLinked(instance_handle: Handle) void {
+    // Kept for the life of the processor: never freed.
+    program_state.instance_exports = property(instance_handle, "exports");
+    program_state.instance_memory = property(program_state.instance_exports, "memory");
+    const has_started: bool = callExport(worklet_abi.start, &amp;.{}) == 1;
+    if (!has_started) {
+        postStatus(message.failed_kind);
+        return;
+    }
+    // A warm-up that ran out of memory leaves the renderer as it was: it plays, only without the warm-up.
+    _ = callExport(worklet_abi.warm_up, &amp;.{});
+    program_state.command_buffer_address = callExport(worklet_abi.command_buffer, &amp;.{});
+    program_state.notices_buffer_address = callExport(worklet_abi.notices_buffer, &amp;.{});
+    const message_handler: Handle = js_func(&amp;handleMessage);
+    defer js_free(message_handler);
+    setProperty(program_state.processor_port, "onmessage", message_handler);
+    program_state.is_ready = true;
+    postStatus(message.ready_kind);
+}</code></pre></details>
+
+<details class="src-fold" data-src="src/sound.zig" data-decl="pub fn warmUp("><summary><code>RendererHost.warmUp</code></summary><pre><code class="zig">/// Runs every function a block calls, once the renderer has started and before the first sound needs it, so
+/// that none is compiled inside a block that must be heard.
+///
+/// Why it is needed. A browser does not compile a WebAssembly function to fast machine code when the module
+/// loads. It compiles each function the first time it is called, with a quick compiler, and compiles it again
+/// with the optimising one once the function has been called often (V8 calls this tiering up). Either compile
+/// can take a millisecond or more, and the block that makes the first call waits for it: a block has 2.7 ms
+/// in all, so the first sound, or the first sound of a new kind, can arrive late - a gap heard as a click.
+///
+/// What it does. It runs the renderer's paths in a scratch host of its own, made here and freed at the end,
+/// so that this host - its voices, its queues, its notices - is left exactly as it was: the functions are what
+/// is compiled, not the data, so the scratch host warms them for this one. Into the scratch host it plays, at
+/// volume 0, a voice of each kind the renderer knows by itself:
+///
+///     a generator                                  the generator path, gains, the mix
+///     samples, mono, at 24 000 Hz, at pitch 1.5    reading between samples (resampling), looping
+///     samples, stereo, at the mixer's rate         reading two channels
+///
+/// renders `warm_up_block_count` blocks of 128 frames - enough calls for the browser to tier the hot functions
+/// up here rather than in a block that is heard - then releases the stereo samples while their voice plays
+/// (the copy of a released voice's tail, and its fade) and stops the other two (the fade of a stopped voice),
+/// renders until all three have ended, and takes the notices. The instrument's functions are the app's, and
+/// are warmed when the instrument is set (`Renderer.warmInstrument`).
+pub fn warmUp(renderer_host: *const RendererHost) Allocator.Error!void {
+    const allocator: Allocator = renderer_host.allocator.?;
+    const scratch_host: *RendererHost = try allocator.create(RendererHost);
+    defer allocator.destroy(scratch_host);
+    scratch_host.* = .{};
+    try scratch_host.start(allocator);
+    defer scratch_host.stop();
+    // The samples: silent, so that nothing rendered here could be heard even if it were played.
+    const mono_frame_count: usize = 1_024;
+    const stereo_frame_count: usize = 1_024;
+    const mono_samples_id: SamplesId = 0;
+    const stereo_samples_id: SamplesId = 1;
+    const mono_room: []f32 = try scratch_host.allocateUploadedSamples(mono_samples_id, mono_frame_count);
+    @memset(mono_room, 0);
+    scratch_host.registerUploadedSamples(mono_samples_id);
+    const stereo_sample_count: usize = stereo_frame_count * channel_count;
+    const stereo_room: []f32 = try scratch_host.allocateUploadedSamples(stereo_samples_id, stereo_sample_count);
+    @memset(stereo_room, 0);
+    scratch_host.registerUploadedSamples(stereo_samples_id);
+    // The three voices, in the first three slots, at volume 0.
+    const generator_voice: Voice = .ofSlot(0, 0);
+    const mono_voice: Voice = .ofSlot(1, 0);
+    const stereo_voice: Voice = .ofSlot(2, 0);
+    const generator_play: VoiceToStart = .{
+        .voice = generator_voice,
+        .source = .{ .generator = .{ .generate = &amp;generateWarmUpSilence, .channels = channel_count } },
+        .options = .{ .volume = 0 },
+    };
+    const mono_play: VoiceToStart = .{
+        .voice = mono_voice,
+        .source = .{ .samples = .{
+            .samples_id = mono_samples_id,
+            .channels = 1,
+            .sample_rate = 24_000,
+            .is_looping = true,
+        } },
+        .options = .{ .volume = 0, .pitch = 1.5 },
+    };
+    const stereo_play: VoiceToStart = .{
+        .voice = stereo_voice,
+        .source = .{ .samples = .{
+            .samples_id = stereo_samples_id,
+            .channels = channel_count,
+            .sample_rate = sample_rate,
+            .is_looping = true,
+        } },
+        .options = .{ .volume = 0 },
+    };
+    const scratch_commands: *RendererCommandQueue = &amp;scratch_host.renderer_queues.commands;
+    const plays: [3]RendererCommand = .{
+        .{ .play = generator_play },
+        .{ .play = mono_play },
+        .{ .play = stereo_play },
+    };
+    for (plays) |play_command| {
+        const is_queued: bool = scratch_commands.push(play_command);
+        assert(is_queued, @src());
+    }
+    const block_frame_count: usize = 128;
+    for (0..warm_up_block_count) |_| {
+        _ = scratch_host.render(block_frame_count);
+    }
+    // The ways a voice ends: its samples released under it, and a stop - each a fade of `fade_out_frames`.
+    const endings: [3]RendererCommand = .{
+        .{ .release_samples = stereo_samples_id },
+        .{ .stop = generator_voice },
+        .{ .stop = mono_voice },
+    };
+    for (endings) |ending_command| {
+        const is_queued: bool = scratch_commands.push(ending_command);
+        assert(is_queued, @src());
+    }
+    const fade_block_count: usize = fade_out_frames / block_frame_count + 2;
+    for (0..fade_block_count) |_| {
+        _ = scratch_host.render(block_frame_count);
+    }
+    var scratch_notices: [8]RendererNotice = undefined;
+    _ = scratch_host.takeNotices(&amp;scratch_notices);
+    for (&amp;scratch_host.renderer.voice_slots) |*voice_slot| {
+        assert(!voice_slot.is_playing, @src());
+    }
+}</code></pre></details>
+
+<p>Each block, the worklet's program calls the renderer and copies the two channels into the browser's output arrays,
+through views of the instance's memory made once and kept, so that a steady block creates nothing for the audio
+thread's garbage collector to find:</p>
+
+<details class="src-fold" data-src="src/audio_worklet.zig" data-decl="fn processBlock("><summary><code>processBlock</code></summary><pre><code class="zig">/// The processor's `process`, called by the browser for each block of 128 frames: renders the block in the app's
+/// instance, copies each channel to the output - one `set` for each, from a view of the instance's memory - and sends
+/// the renderer's notices to the main thread. `outputs_handle` is the processor's outputs: an array of outputs, each
+/// an array of channels, each a `Float32Array` of the block's samples. Returns `true`: keep calling. It must be the
+/// boolean - c2js gives a Zig `bool` back as one - and not a number: the specification converts the result with
+/// `ToBoolean`, but Chrome keeps a processor with no inputs alive only while it returns exactly `true` (its
+/// `IsTrue()`), and a 1 there plays a single block, then silence, with no error.
+fn processBlock(
+    inputs_handle: Handle,
+    outputs_handle: Handle,
+    parameters_handle: Handle,
+) bool {
+    _ = inputs_handle;
+    _ = parameters_handle;
+    const keep_calling: bool = true;
+    // Not linked yet: the output stays as the browser hands it, silent.
+    if (!program_state.is_ready) {
+        return keep_calling;
+    }
+    // The gap since the last block's start: the browser asks for blocks in bursts, a device period apart, so the
+    // usual longest gap is about a period; one much longer means the thread was not run in time.
+    const block_start_ms: f64 = clockMilliseconds();
+    const has_last_block: bool = program_state.last_block_start_ms != 0;
+    if (has_last_block) {
+        const gap_ms: f64 = block_start_ms - program_state.last_block_start_ms;
+        program_state.longest_gap_ms = @max(program_state.longest_gap_ms, gap_ms);
+    }
+    program_state.last_block_start_ms = block_start_ms;
+    const first_output: Handle = js_get_index(outputs_handle, 0);
+    defer js_free(first_output);
+    const output_channel_count: u32 = js_len(first_output);
+    if (output_channel_count == 0) {
+        return keep_calling;
+    }
+    const left_channel: Handle = js_get_index(first_output, 0);
+    defer js_free(left_channel);
+    const frame_count: f64 = @floatFromInt(js_len(left_channel));
+    // The block's time on the page's clock, from the frame it begins at on the context's timeline
+    // (`worklet_abi.time_block`): the renderer measures the sounds it starts by it.
+    const global_scope: Handle = js_global();
+    const block_frame_value: Handle = property(global_scope, "currentFrame");
+    defer js_free(block_frame_value);
+    _ = callExport(worklet_abi.time_block, &amp;.{finiteOrZero(js_to_num(block_frame_value))});
+    // The block, rendered: the left channel's samples, then the right channel's (`worklet_abi.render`). A throw from
+    // the instance is caught and sent to the page, and the processor plays silence from then on.
+    const rendered_address: f64 = renderCaught(frame_count) orelse return keep_calling;
+    keepViewsFresh(rendered_address, frame_count);
+    js_call1v(left_channel, "set", "set".len, program_state.left_view);
+    // A second channel, when the output has one: the right samples follow the left.
+    if (output_channel_count &gt;= 2) {
+        const right_channel: Handle = js_get_index(first_output, 1);
+        defer js_free(right_channel);
+        js_call1v(right_channel, "set", "set".len, program_state.right_view);
+    }
+    sendNotices();
+    const block_ms: f64 = clockMilliseconds() - block_start_ms;
+    program_state.longest_block_ms = @max(program_state.longest_block_ms, block_ms);
+    program_state.block_ms_sum += block_ms;
+    program_state.blocks_since_report += 1;
+    program_state.blocks_rendered += 1;
+    const is_first_block: bool = program_state.blocks_rendered == 1;
+    const is_report_due: bool = is_first_block or @mod(program_state.blocks_rendered, blocks_per_report) == 0;
+    if (is_report_due) {
+        postStats();
+    }
+    return keep_calling;
+}</code></pre></details>
+
+<p>The program loads from a Blob URL or, on a page whose origin is opaque - a file opened from disk, a sandboxed frame
+- from a <code>data:</code> URL. If neither loads, the page plays through a <em>script processor</em>, an older
+interface whose callback runs on the main thread, 2048 frames at a time, the app's own renderer pulled there as in a
+headless run:</p>
+
+<pre class="sketch"><code>   load the program from a Blob URL  --fails-->  from a data: URL  --fails-->  script processor
+        |                                              |                       (the main thread pulls)
+        +------------------->  audio worklet  &lt;--------+
+                               (the browser's audio thread; the app's second instance)</code></pre>
+
+<p>On an iPhone, Safari plays web audio in the "ambient" session, which the phone's silent mode mutes. Before making
+its audio context the page asks for the media playback session (<code>navigator.audioSession.type =
+"playback"</code>, Safari 16.4 and later), which plays through silent mode as a video does. The panel
+<code>z.audio_device.showDiagnostics</code> shows which path plays and how it is doing (chapter 8).</p>
+
+<h2 id="instruments">7. Instruments</h2>
+
+<p>An instrument plays notes. It runs on the renderer's side, so a note starts in the renderer's next block with
+nothing in between - no drawn frame, no name from the app's side. Each note is a voice playing a generator whose state
+belongs to the note - frequency, phase, level - and four functions make and read that state:</p>
+
+<pre class="sketch"><code>   key down     start_note(state, key, velocity)    the note's state made: its frequency, its level
+   each block   generate(state, frames, first)      the note's frames, as any generator's
+   key up       release_note(state)                 its level turns to its release
+   each block   has_fallen_silent(state)            true once the release has died away: the slot is freed</code></pre>
+
+<details class="src-fold" data-src="src/sound.zig" data-decl="pub const Instrument = struct"><summary><code>Instrument</code></summary><pre><code class="zig">/// An instrument: what plays a note while its key is held, and after. It runs on the renderer's side, in the
+/// instrument's slots (`first_instrument_slot`), so that a key's note starts at the next block the output asks
+/// for - not at the app's next frame, which may be a whole frame and its drawing away. Each note is a voice
+/// playing a generator, `generate`, whose state - the note's own, `generator_state_capacity` bytes - the other
+/// three functions fill and read:
+///
+///     key down    start_note(state, key, velocity)   the note's state made: its frequency, its envelope
+///     each block  generate(state, frames, first)     the note's frames, as any generator's (`Generator`)
+///     key up      release_note(state)                its envelope turns to its release
+///     each block  has_fallen_silent(state)           true once the release has died away: the slot is freed
+///
+/// The functions are function pointers, and so the same functions in the browser's worklet instance as in the
+/// app's (`Generator` explains why). A note's frames are mono: both samples of a frame alike, placed at the centre.
+pub const Instrument = struct {
+    generate: *const fn (state: *anyopaque, frames: []f32, first_frame: u64) void,
+    start_note: *const fn (state: *anyopaque, key: u8, velocity: f32) void,
+    release_note: *const fn (state: *anyopaque) void,
+    has_fallen_silent: *const fn (state: *anyopaque) bool,
+    /// Whether a note starts at its own moment within its block (`Renderer.startNote`) rather than at the block's
+    /// first frame. A note requested a little after the block before was asked for starts that much into its
+    /// block - 0.5 ms later, 24 frames in - so that notes requested a few milliseconds apart sound as far apart,
+    /// whatever moments the blocks are asked for at. The price is a constant delay of up to one block more. Off
+    /// by default: a note starts in the next block.
+    places_notes_by_time: bool = false,
+};</code></pre></details>
+
+<p>A new instrument is these four functions and a state of at most 64 bytes. Like a generator's, the functions are
+plain function pointers, the same in the browser's second instance (6.4), so an app's own instrument plays in the
+worklet unchanged.</p>
+
+<h3 id="keys">7.1 Keys and frequencies</h3>
+
+<p>Keys are numbered as in MIDI: 60 is middle C and 69 the A above it, tuned to 440 Hz. An octave doubles the
+frequency and has twelve semitones, so each semitone multiplies the frequency by the twelfth root of two, about
+1.0595:</p>
+
+<pre class="sketch"><code>   frequency(key) = 440 x 2^((key - 69) / 12)
+
+   key 69  A4    440 x 2^0          = 440.00 Hz
+   key 72  C5    440 x 2^(3/12)     = 523.25 Hz
+   key 60  C4    440 x 2^(-9/12)    = 261.63 Hz
+   key 57  A3    440 x 2^(-12/12)   = 220.00 Hz     an octave below key 69: half the frequency</code></pre>
+
+<p>A note's <em>velocity</em>, from 0 to 1, is how hard its key went down. The engine's instruments use it as the
+note's level: a note at velocity 0.5 peaks at 0.5, or at 0.354 on each side at the centre (4.2).</p>
+
+<h3 id="notequeues">7.2 Notes on their way to the renderer</h3>
+
+<p>Notes travel in two queues: one for the app's thread (<code>sendNote</code>) and one for a single other thread
+(<code>sendNoteFromInputThread</code>), since a queue without a lock takes items from one thread only (5.2). The
+renderer empties both at the start of each block, after the commands and before it mixes:</p>
+
+<pre class="sketch"><code>   main thread      sendNote                 ---> notes               \
+                                                                       ---> renderer, each block:
+   input thread     sendNoteFromInputThread  ---> input_thread_notes  /      the commands, then both
+                                                                               note queues, then the mix</code></pre>
+
+<details class="src-fold" data-src="src/sound.zig" data-decl="fn applyNotes("><summary><code>applyNotes</code></summary><pre><code class="zig">/// Applies every key event waiting, from both note queues - each in the order its keys moved. Without an
+/// instrument they are dropped.
+fn applyNotes(renderer: *Renderer, renderer_queues: *RendererQueues) void {
+    renderer.applyNoteQueue(renderer_queues, &amp;renderer_queues.notes);
+    renderer.applyNoteQueue(renderer_queues, &amp;renderer_queues.input_thread_notes);
+}</code></pre></details>
+
+<p>A voice the app plays is named by the app's side before the renderer starts it (chapter 3). A note cannot wait for
+that, since its sender may be a thread that knows nothing of those names. So the instrument has slots of its own, the
+last 16 of the renderer's 64, where the renderer starts a note without asking anyone. A note's slot is never named,
+and no notice is sent when a note ends:</p>
+
+<pre class="sketch"><code>   slot   0 ............................................ 47 | 48 ............ 63
+          voices the main side plays and names (Mixer.play)  | the instrument's notes</code></pre>
+
+<p>A key struck again while its note is still held first releases that note, so a key holds at most one note at a
+time, and a trill does not pile up held voices.</p>
+
+<p>A note starts at its block's first frame, so notes requested at different moments between two blocks start
+together - each up to a block period from where it was asked, 2.7 ms in a browser, 10 ms on Windows' standard stream.
+An instrument can place its notes by their time instead (<code>Instrument.places_notes_by_time</code>): a note
+requested a little after the block before was asked for starts that much into its own block, so the time between
+notes is kept, at the cost of up to one block more delay for each. The option is off by default.</p>
+
+<pre class="sketch"><code>   the block before asked for      0 ms
+   note a requested                0.5 ms             note b requested  1.5 ms
+   the next block (128 frames)     |....................a........................................b........|
+                                    frame 0             24 (0.5 ms)                              72 (1.5 ms)</code></pre>
+
+<h3 id="sine">7.3 The sine instrument</h3>
+
+<p>The simplest instrument is a sine: struck at the key's velocity, held at that level while the key is down, then
+fading by half every 50 ms. A fall by the same fraction in each equal stretch of time is an <em>exponential
+decay</em> - the way a plucked string dies away - and per frame it is one multiplication by a constant:</p>
+
+<pre class="sketch"><code>   halving every 2 400 frames (50 ms)     factor per frame = 2^(-1/2400) = 0.999711
+
+   from velocity 0.5 to 0.0001 (-80 dB, where the note counts as silent and its slot is freed):
+     0.5 / 0.0001 = 5 000 = 2^12.3          12.3 halvings x 50 ms = 614 ms of release</code></pre>
+
+<p>The sine's <em>phase</em> - how far into its cycle the note is, in turns - is kept in the note's state, moved on by
+a fixed step each frame and wrapped back below one turn. Computed from the frame's number instead, it would lose
+precision as the number grows: after 20 seconds at 440 Hz the phase is 8 800 turns, where a 32-bit float resolves only
+2<sup>-10</sup> of a turn, an error that puts noise 50 dB below every long note. Kept below one turn, in 64 bits, the
+phase stays exact:</p>
+
+<pre class="sketch"><code>   each frame:   sample = level x sin(phase)        phase in [0, 1) turns
+                 phase  = phase + step               step = frequency / 48 000 = 0.0091667 at 440 Hz
+                 phase  = phase - floor(phase)       back below one turn
+                 level  = level x factor             1 while the key is held; 0.999711 after</code></pre>
+
+<details class="src-fold" data-src="src/sound.zig" data-decl="fn generateSineNote("><summary><code>generateSineNote</code></summary><pre><code class="zig">/// The sine at the note's phase, which carries over from block to block in the state, so that the note is
+/// continuous across blocks; each frame's sample is the sine times the level, then the phase moves by its step,
+/// wrapped below one turn, and the level by its factor. The frame number is not needed: the state knows where the
+/// note is.
+fn generateSineNote(state: *anyopaque, frames: []f32, first_frame: u64) void {
+    _ = first_frame;
+    const note: *SineNoteState = @ptrCast(@alignCast(state));
+    const frame_count: usize = frames.len / channel_count;
+    for (0..frame_count) |frame_offset| {
+        const phase_turns: f32 = @floatCast(note.phase_turns);
+        const value: f32 = note.level * sinTurns(phase_turns);
+        frames[frame_offset * channel_count] = value;
+        frames[frame_offset * channel_count + 1] = value;
+        const next_phase_turns: f64 = note.phase_turns + note.phase_step_turns;
+        note.phase_turns = next_phase_turns - @floor(next_phase_turns);
+        note.level *= note.level_factor_per_frame;
+    }
+}</code></pre></details>
+
+<h3 id="stealing">7.4 A seventeenth note</h3>
+
+<p>When all 16 of the instrument's slots are sounding, a new key must take one of them. The choice follows JUCE's
+synthesizer, where the longest-sounding note is the one that has made the most frames:</p>
+
+<pre class="sketch"><code>   1. the longest-sounding note of the same key       its own earlier sound
+   2. else the longest-sounding released note         one no finger holds any more
+   3. else the longest-sounding held note other       a chord keeps its bass and its top
+      than the lowest and the highest held
+   4. else the highest held note; the lowest last</code></pre>
+
+<p>The note that gives up its slot cannot simply stop: cut off between two samples, it would click. A stopped voice
+fades over 5 ms in its own slot (4.4), but this slot is needed now. So before the slot is reused, the note's next 240
+frames are generated, ramped from its full level down to zero, and kept aside; the next blocks add them in before
+mixing. The fade begins at exactly the frame the note would have played next:</p>
+
+<pre class="sketch"><code>   frame n of the fade (F = 240):    kept[n] = generated[n] x gain x (1 - (n + 1) / F)
+
+   n = 0     x 0.996        n = 119   x 0.500        n = 239   x 0.000</code></pre>
+
+<details class="src-fold" data-src="src/sound.zig" data-decl="fn keepFadeOfStolenNote("><summary><code>keepFadeOfStolenNote</code></summary><pre><code class="zig">/// Keeps the fade of a note about to lose its slot. A note cut off between two samples would jump to zero,
+/// heard as a click; a stopped voice avoids it by fading in its own slot (`stopVoice`), but a stolen note's
+/// slot is needed now. So its next `fade_out_frames` frames are generated here, at the gains its last block
+/// ended with, ramped from full to zero - frame `n` of `F` scaled by `1 - (n + 1) / F` - and added into the
+/// tail that the next blocks mix in (`addStolenNoteTail`). The note's generator continues exactly where its
+/// last block stopped, so the fade begins at the very frame the note would have played next.
+fn keepFadeOfStolenNote(renderer: *Renderer, voice_slot: *VoiceSlot) void {
+    const tail_sample_count: usize = renderer.stolen_note_tail.len;
+    const voice_samples: []f32 = renderer.voice_scratch_samples[0..tail_sample_count];
+    _ = readVoiceSource(voice_slot, voice_samples);
+    const gains: StereoGains = voice_slot.last_block_gains;
+    const fade_frame_count: f32 = float(fade_out_frames);
+    for (0..fade_out_frames) |frame_index| {
+        const remaining_fraction: f32 = 1 - float(frame_index + 1) / fade_frame_count;
+        const left_index: usize = frame_index * channel_count;
+        const right_index: usize = left_index + 1;
+        renderer.stolen_note_tail[left_index] += voice_samples[left_index] * gains.left * remaining_fraction;
+        renderer.stolen_note_tail[right_index] += voice_samples[right_index] * gains.right * remaining_fraction;
+    }
+    renderer.stolen_tail_frames_left = fade_out_frames;
+}</code></pre></details>
+
+<h3 id="shepard">7.5 The Shepard instrument</h3>
+
+<p>A <em>Shepard tone</em> has a pitch class - C, C sharp, D, and so on - but no height. Each note is its pitch class
+sounding in every octave at once: sines at f, 2f, 4f, ... across the audible range, all under one fixed bell, a
+Gaussian curve in log-frequency centred at 400 Hz and one octave wide, which sets each partial's amplitude. A scale
+played up through the twelve pitch classes neither rises nor falls; played round and round, it seems to rise for
+ever.</p>
+
+<pre class="sketch"><code>     amplitude
+       |                    _.-~~~-._
+       |                _.-'    |    '-._              the bell, over octaves from its centre
+       |       ___..--''   |    |    |   ''--..___
+       +---------+----+----+----+----+----+----+-----  octaves from 400 Hz
+                -3   -2   -1    0    1    2    3
+          C's partials:  |    |    |    |    |    |    one an octave
+          D's:             |    |    |    |    |    |  the same, a whole tone up</code></pre>
+
+<p>Every note's partials sit under the same bell at the same spacing, shifted only by the note's place in the octave.
+As a result every pitch class has the same height and the same loudness, to a precision far beyond hearing.</p>
+
+<p><em>The same height.</em> A note's spectrum, weighted by amplitude, is centred at the bell's centre in
+log-frequency for every pitch class. Sampling a Gaussian at evenly spaced points from a moving offset moves the
+samples' mean by only about 4 pi sigma<sup>2</sup> exp(-2 pi<sup>2</sup> sigma<sup>2</sup>) of the spacing, by
+Poisson's summation formula. For a width sigma of one octave that is 3 x 10<sup>-8</sup> octaves, against a cent - the
+smallest step a trained ear hears - of 1/1200 of an octave.</p>
+
+<p><em>The same loudness.</em> The partials' frequencies differ, so their powers add: a note's power is the sum of its
+partials' squared amplitudes - the squared bell, sampled at the same points - which is again the same for every
+offset, to a few parts in 100 000.</p>
+
+<p>Both properties need the bell's tails on both sides, so a note's partials reach five octaves either side of the
+centre, where the bell has fallen below four millionths of its peak: ten partials, from 12.5-25 Hz up to 6.4-12.8 kHz.
+The amplitudes are computed at compile time for each of the twelve pitch classes, scaled so that a note's partials sum
+to at most 1:</p>
+
+<details class="src-fold" data-src="src/sound.zig" data-decl="fn shepardPitchClasses("><summary><code>shepardPitchClasses</code></summary><pre><code class="zig">fn shepardPitchClasses() [12]ShepardPitchClass {
+    var pitch_classes: [12]ShepardPitchClass = undefined;
+    // The bell's area, sampled at unit spacing: the sum of all its samples, whatever their offset - the scale that
+    // makes the partials' amplitudes sum to 1.
+    const bell_area: f64 = shepard_bell_width_octaves * sqrt(@as(f64, 2 * pi));
+    for (&amp;pitch_classes, 0..) |*pitch_class, semitones_above_c| {
+        // The pitch class in middle C's octave - key 60 and up - as `frequencyOfKey` gives it, and how many
+        // octaves that is from the bell's centre.
+        const semitones_from_a440: f64 = float64(semitones_above_c) + 60 - 69;
+        const key_frequency: f64 = 440 * exp2(semitones_from_a440 / 12);
+        const octaves_from_centre: f64 = log2(key_frequency / shepard_bell_centre_hz);
+        // The same pitch class whole octaves down, to the reach's lower end: the lowest partial, between 5 and 4
+        // octaves below the centre.
+        const octaves_above_reach_start: f64 = octaves_from_centre + shepard_reach_octaves;
+        const lowest_octaves_from_centre: f64 =
+            octaves_above_reach_start - floor(octaves_above_reach_start) - shepard_reach_octaves;
+        const lowest_frequency: f64 = shepard_bell_centre_hz * exp2(lowest_octaves_from_centre);
+        pitch_class.lowest_phase_step_turns = lowest_frequency / float64(sample_rate);
+        for (&amp;pitch_class.partial_amplitudes, 0..) |*partial_amplitude, partial_index| {
+            const partial_octaves_from_centre: f64 =
+                lowest_octaves_from_centre + float64(partial_index);
+            const standard_deviations: f64 = partial_octaves_from_centre / shepard_bell_width_octaves;
+            const bell_height: f64 = exp(-0.5 * standard_deviations * standard_deviations);
+            partial_amplitude.* = @floatCast(bell_height / bell_area);
+        }
+    }
+    return pitch_classes;
+}</code></pre></details>
+
+<p>Each frame needs the sines of ten angles, each twice the one below. Instead of ten calls to the sine, the generator
+computes the lowest partial's sine and cosine and doubles the angle nine times: sin 2a = 2 sin a cos a,
+cos 2a = cos<sup>2</sup> a - sin<sup>2</sup> a. That is two trigonometric calls a frame instead of ten, which matters
+for a chord of three notes at 48 000 frames a second. Each doubling also doubles the angle's rounding error, so the
+highest partial's is 512 times the lowest's: about 3 x 10<sup>-5</sup> of a turn, on a partial whose amplitude is four
+millionths.</p>
+
+<details class="src-fold" data-src="src/sound.zig" data-decl="fn generateShepardNote("><summary><code>generateShepardNote</code></summary><pre><code class="zig">/// Each frame: the partials summed, times the level; then the phase, the attack and the release move on.
+///
+/// The partials from one sine and one cosine. Partial `k` is at `2^k` times the lowest partial's angle, so each is
+/// the one below it, doubled: `sin 2a = 2 sin a cos a` and `cos 2a = cos^2 a - sin^2 a`. Starting from the lowest
+/// partial's sine and cosine, nine doublings give the other nine - two trigonometric functions a frame instead of
+/// ten, which matters for a chord: three notes of ten partials, 48 000 frames a second. Each doubling doubles the
+/// rounding error of the angle, so the highest partial's is 512 times the lowest's: 512 times f32's 6e-8 turns is
+/// 3e-5 turns, and that partial's amplitude is four millionths - far below hearing either way.
+fn generateShepardNote(state: *anyopaque, frames: []f32, first_frame: u64) void {
+    _ = first_frame;
+    const note: *ShepardNoteState = @ptrCast(@alignCast(state));
+    const partial_amplitudes: *const [shepard_partial_count]f32 =
+        &amp;shepard_pitch_classes[note.pitch_class].partial_amplitudes;
+    const frame_count: usize = frames.len / channel_count;
+    for (0..frame_count) |frame_offset| {
+        const lowest_phase_turns: f32 = @floatCast(note.phase_turns);
+        var partial_sine: f32 = sinTurns(lowest_phase_turns);
+        var partial_cosine: f32 = cosTurns(lowest_phase_turns);
+        var partials_sum: f32 = 0;
+        for (partial_amplitudes) |partial_amplitude| {
+            partials_sum += partial_amplitude * partial_sine;
+            const octave_up_sine: f32 = 2 * partial_sine * partial_cosine;
+            const octave_up_cosine: f32 = partial_cosine * partial_cosine - partial_sine * partial_sine;
+            partial_sine = octave_up_sine;
+            partial_cosine = octave_up_cosine;
+        }
+        const value: f32 = note.level * partials_sum;
+        frames[frame_offset * channel_count] = value;
+        frames[frame_offset * channel_count + 1] = value;
+        const next_phase_turns: f64 = note.phase_turns + note.phase_step_turns;
+        note.phase_turns = next_phase_turns - @floor(next_phase_turns);
+        note.level = @min(note.level + note.attack_step_per_frame, note.velocity);
+        note.level *= note.level_factor_per_frame;
+    }
+}</code></pre></details>
+
+<p>A Shepard note rises from silence over 2 ms (96 frames) rather than starting at its level, since thirty partials
+of a chord starting together would click. Its release is the sine instrument's. The <code>audio_scale_star</code>
+examples play the scale with it: with every note at the same height, a chord sounds the same wherever its notes
+fall.</p>
+
+<h2 id="latency">8. Timing</h2>
+
+<p><em>Latency</em> is the time from asking for a sound to hearing it. For a game's effects a few tens of milliseconds
+go unnoticed; for an instrument, a delay past about ten milliseconds is heard as the instrument lagging behind the
+hand. This chapter takes the delay apart, shows how the engine measures it, and covers what interrupts the sound.</p>
+
+<h3 id="terms">8.1 From a key to the ear</h3>
+
+<p>A key's sound passes four stages after the key goes down:</p>
+
+<pre class="sketch"><code>   t1  the key reaches code that acts on it      the frame loop: up to one drawn frame, F
+   t2  the request waits for the next block      the renderer: up to one block period, P
+   t3  the block waits behind the sound          the output: what is already queued in the device
+       queued ahead of it
+   t4  the driver, a converter, the speaker      the system and the hardware: D
+
+   latency = t1 + t2 + t3 + t4</code></pre>
+
+<p>The first is the frame's. An app reads its input once a drawn frame, in its update, so a key pressed just after a
+frame has read its input waits for the next one - up to a whole drawn frame:</p>
+
+<pre class="sketch"><code>   time (ms)     0          3                              16.7       17.7
+   frame loop    | messages | update, draw, present ...    | messages | update: the note is sent
+   key down                 ^ waits in the window's queue ..........^ read
+   audio blocks  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  ^ the note starts in the next block</code></pre>
+
+<p>An app takes that wait out with an <code>on_input</code> function in its spec. It is called with each press and
+release as it arrives, once the input has recorded it, and a sound it starts leaves at once - the mixer's exchange
+with the renderer runs after the call:</p>
+
+<pre class="sketch"><code>   fn onInput(f: *z.Frame, s: *State, event: z.InputEvent) void {
+       switch (event) {
+           .key_down => |down| startNoteOfKey(f, s, down.key),
+           .key_up => |up| endNoteOfKey(f, s, up.key),
+           else => {},
+       }
+   }
+
+   pub const app: z.AppSpec(State) = .{ .update = update, .on_input = onInput, ... };</code></pre>
+
+<p>Its frame draws nothing and carries the last frame's time; the input's queries (<code>getMousePosition</code>,
+<code>isKeyDown</code>) already include the event. In a browser the bridge calls it from the event's own handler, so
+a note reaches the worklet within the event. On Windows the frame loop waits for the next frame's image before the
+frame, not inside it, and handles the window's messages as they arrive meanwhile, so it is called then, between
+frames, and each press is stamped with the moment it arrived. In a headless run, whose scripted input is delivered at
+the start of each frame, it is called there, before the update. An app showing the start screen (2.1) receives its presses once
+the screen is done. The <code>audio_keyboard</code> example plays its keys this way, and the two-hand scale star its
+fingers: it reads every finger again on each press and release, as it does each frame, so a chord a finger comes down
+on starts within the event.</p>
+
+<p>The terms on each platform, at 60 drawn frames a second:</p>
+
+<table>
+<tr><th>term</th><th>Windows, low-latency stream</th><th>Windows, standard stream</th><th>a browser</th></tr>
+<tr><td>t1, the frame's wait</td><td>0 to 16.7 ms</td><td>0 to 16.7 ms</td><td>0 to 16.7 ms</td></tr>
+<tr><td>t2, the next block</td><td>0 to 2.7 ms</td><td>0 to 10 ms</td><td>a message, then 0 to 2.7 ms</td></tr>
+<tr><td>t3, queued ahead</td><td>the device's buffer less its room</td><td>about 10 ms</td><td>the browser's own
+buffer: its base latency</td></tr>
+<tr><td>t4, past the engine</td><td>the system's reported latency</td><td>the same</td><td>the browser's output
+latency</td></tr>
+</table>
+
+<p>Two of the terms belong to the engine: the frame's wait - 8.3 ms on average, 16.7 at worst, none in a browser for
+an app with <code>on_input</code> - and the block period, as short as the platform allows.</p>
+
+<h3 id="readout">8.2 Measuring it</h3>
+
+<p>The renderer measures every voice and note it starts. A request is stamped with the time it is made, on the
+output's clock; the renderer notes when the block that starts it was asked for, and the output says when that block's
+first frame goes out (6.1). With the press's own time, these split the delay into the terms the engine can see:</p>
+
+<pre class="sketch"><code>   pressed        requested        applied (block asked for)    first frame out        heard
+      |-- frame (t1) --|-- wait (t2) --|------- queued (t3) -------|----- past (t4) -----|
+
+              frame    wait  queued    past   total  (ms)
+   note         8.3     0.9    10.0    24.0    43.2            one line per start, the newest first</code></pre>
+
+<p>The press's time comes with its input event - in a browser the event's <code>timeStamp</code>, on the same clock as
+the requests - and the input keeps it: <code>z.getKeyPressTime</code> for a key, <code>z.getLastPressTime</code> for
+the latest press of anything. An app passes it with a note (<code>NoteEvent.pressed_at_ms</code>) or a sound
+(<code>PlayOptions.pressed_at_ms</code>); without it the <code>frame</code> column shows a dash. <code>past</code> is
+what the platform reports beyond the output: WASAPI's stream latency on Windows, the audio context's base and output
+latencies in a browser, nothing in a headless run.</p>
+
+<p>On Windows, with <code>audio_keyboard</code>'s keys played through <code>on_input</code> and a device whose driver
+allows no period shorter than its default 10 ms, the lines read:</p>
+
+<pre class="sketch"><code>   output: WASAPI, low-latency stream: period 10.0 ms (shortest 10.0, default 10.0), buffer 22.0 ms, kept 12.0 ms
+            frame    wait   queued    past   total  (ms)
+   note       0.0     7.0      2.0     0.0     9.0
+   note       0.0     2.8      2.0     0.0     4.8
+   note       0.0     8.6      2.0     0.0    10.6
+
+   frame    0: the key reaches the app as it arrives (on_input, the frame's wait before the frame - 8.1)
+   wait     0 to 10: the request waits for the next period's block, wherever in the period it falls
+   queued   2: the stream is kept one period and 2 ms full, the period being the render thread's slack (6.2)</code></pre>
+
+<p>The <code>wait</code> term is all that is left, and the device sets it: a request waits for the next block, up to one
+period. A device whose driver allows shorter periods shortens it with them.</p>
+
+<details class="src-fold" data-src="src/sound.zig" data-decl="pub fn formatLatencyLine("><summary><code>formatLatencyLine</code></summary><pre><code class="zig">/// One measured start as a line of the latency readout, under `latency_readout_header`:
+///
+///            frame    wait  queued    past   total  (ms)
+///     note      8.3     0.9    10.0    43.4    62.6
+///
+/// `frame` is the wait from the press to the request, `t1` - the frame's wait before the app asked - when the
+/// start carries its press's time (`NoteEvent.pressed_at_ms`, `PlayOptions.pressed_at_ms`), a dash when it
+/// does not; `wait` the wait for the renderer, `t2` (requested to applied); `queued` the sound ahead of it in
+/// the output's queue, `t3` (applied to its first frame out); `past` what lies past the queue as the platform
+/// reports it now (`outputLatencyMilliseconds`, `t4` - on a page the browser's `baseLatency` and
+/// `outputLatency`); `total` their sum - the whole lag, from the press when it is known, but whatever the
+/// platform cannot report. A headless run renders after the fact, so its `queued` reads negative, by up to a
+/// frame.
+pub fn formatLatencyLine(
+    latency_sample: LatencySample,
+    past_output_ms: f64,
+    line_buffer: []u8,
+) []const u8 {
+    const wait_ms: f64 = latency_sample.applied_at_ms - latency_sample.requested_at_ms;
+    const queued_ms: f64 = latency_sample.first_frame_out_ms - latency_sample.applied_at_ms;
+    const is_press_known: bool = latency_sample.pressed_at_ms &gt; 0;
+    if (!is_press_known) {
+        const total_ms: f64 = wait_ms + queued_ms + past_output_ms;
+        return bufPrint(line_buffer, "{t:&lt;5}      -  {d:&gt;6.1}  {d:&gt;6.1}  {d:&gt;6.1}  {d:&gt;6.1}", .{
+            latency_sample.kind,
+            wait_ms,
+            queued_ms,
+            past_output_ms,
+            total_ms,
+        }) catch line_buffer[0..0];
+    }
+    const frame_ms: f64 = latency_sample.requested_at_ms - latency_sample.pressed_at_ms;
+    const total_ms: f64 = frame_ms + wait_ms + queued_ms + past_output_ms;
+    return bufPrint(line_buffer, "{t:&lt;5} {d:&gt;6.1}  {d:&gt;6.1}  {d:&gt;6.1}  {d:&gt;6.1}  {d:&gt;6.1}", .{
+        latency_sample.kind,
+        frame_ms,
+        wait_ms,
+        queued_ms,
+        past_output_ms,
+        total_ms,
+    }) catch line_buffer[0..0];
+}</code></pre></details>
+
+<p>The <code>audio_mixer</code> and <code>audio_keyboard</code> examples show the lines on screen.</p>
+
+<p>In a browser the renderer runs in the worklet, which knows its blocks only by the audio context's timeline - the
+frame a block begins at, <code>currentFrame</code> - while requests are stamped on the page's clock,
+<code>performance.now()</code>. The page ties the two four times a second. <code>getOutputTimestamp</code> says when
+a moment of the timeline is heard on the page's clock; less the browser's base and output latencies, that is when the
+moment was rendered. The page sends that pair to the worklet, and the worklet times each block by it - the block's
+frame, moved on from the pair's moment - measures its starts, and sends the measurements back with its notices. A
+note's message carries its request and press times across, so a note is measured from the same moments as natively.
+The worklet hands each block to the browser as it is made, so on this path <code>queued</code> is 0 and the browser's
+buffering is all in <code>past</code>:</p>
+
+<pre class="sketch"><code>   the page's clock        9 000            9 004       9 010                 heard: 9 010 + base + output
+   the context's time      2 000                        2 010 (frame 96 480)
+                           |__ the tie ___|             |__ a block, rendered at 9 010 on the page's clock
+
+   a note requested at 9 004 ms starts in that block:   wait 6.0 ms, queued 0, past = base + output latency</code></pre>
+
+<h3 id="dropouts">8.3 Dropouts</h3>
+
+<p>A <em>dropout</em> is a block that was not ready in time (1.3). It has three causes:</p>
+
+<table>
+<tr><th>cause</th><th>what the engine does</th></tr>
+<tr><td>the block's own work takes too long</td><td>keeps it small and bounded: no lock and no allocation on the
+audio thread (5.2, 5.3), subnormal numbers flushed (4.6), and in a browser every function the block calls compiled
+before the first sound (6.4), and no array or view made by a steady block</td></tr>
+<tr><td>the thread that makes blocks is not run in time</td><td>on Windows, asks the system to schedule it as "Pro
+Audio" work, ahead of ordinary threads; in a browser the worklet's thread is the browser's to schedule, and the page's
+own drawing competes with it on a phone</td></tr>
+<tr><td>the buffer between the block maker and the device is too small for the scheduling's jitter</td><td>a
+trade-off rather than a fix: a larger buffer rides out longer delays and adds its length to every sound's
+latency</td></tr>
+</table>
+
+<p>A browser offers a precise measure, <code>getOutputTimestamp</code>, which pairs a point of the audio context's
+timeline - the frames rendered - with the time the speaker plays it. While blocks arrive in time the two advance
+together and their difference stays constant. A late block is replaced by silence: the speaker's time moves on, the
+timeline does not, and the difference grows by exactly the silence played:</p>
+
+<pre class="sketch"><code>   the offset, speaker's time - 1000 x context time, read every 250 ms:
+
+       4012.3   4012.3   4012.4   4021.6   4021.6        a step of 9.2 ms: 9.2 ms of silence, one dropout
+
+   dropouts: 3 in 63 s, 21 ms of silence, the last 2.4 s ago</code></pre>
+
+<details class="src-fold" data-src="src/page_audio.zig" data-decl="fn readOutputContinuity("><summary><code>readOutputContinuity</code></summary><pre><code class="zig">fn readOutputContinuity() void {
+    const continuity: *OutputContinuity = &amp;page_audio.output_continuity;
+    if (!isContextRunning()) {
+        continuity.has_reading = false;
+        return;
+    }
+    const read_timestamp: Handle = property(page_audio.context, "getOutputTimestamp");
+    defer js_free(read_timestamp);
+    if (js_truthy(read_timestamp) == 0) {
+        return;
+    }
+    const output_timestamp: Handle = call0(page_audio.context, "getOutputTimestamp");
+    defer js_free(output_timestamp);
+    const context_time_ms: f64 = 1000 * finiteOrZero(numberProperty(output_timestamp, "contextTime"));
+    const speaker_time_ms: f64 = finiteOrZero(numberProperty(output_timestamp, "performanceTime"));
+    const has_output_played: bool = context_time_ms &gt; 0 and speaker_time_ms &gt; 0;
+    if (!has_output_played) {
+        return;
+    }
+    const offset_ms: f64 = speaker_time_ms - context_time_ms;
+    tieWorkletClock(context_time_ms, speaker_time_ms);
+    if (continuity.has_reading) {
+        // The top, sunk for the time since the last reading; a rise above it by the threshold is silence played.
+        const seconds_since_last_reading: f64 = (speaker_time_ms - continuity.last_reading_ms) / 1000;
+        const top_sinking_ms: f64 = offset_top_sink_ms_per_s * seconds_since_last_reading;
+        const sunk_top_ms: f64 = continuity.offset_top_ms - top_sinking_ms;
+        const rise_above_top_ms: f64 = offset_ms - sunk_top_ms;
+        if (rise_above_top_ms &gt;= dropout_threshold_ms) {
+            continuity.dropout_count += 1;
+            continuity.silence_ms += rise_above_top_ms;
+            continuity.last_dropout_ms = speaker_time_ms;
+        }
+        continuity.offset_top_ms = @max(sunk_top_ms, offset_ms);
+        const fall_ms: f64 = continuity.last_offset_ms - offset_ms;
+        continuity.largest_fall_ms = @max(continuity.largest_fall_ms, fall_ms);
+    } else {
+        // The first reading since the context started to run: the counting starts afresh.
+        continuity.* = .{
+            .first_reading_ms = speaker_time_ms,
+            .first_offset_ms = offset_ms,
+            .offset_top_ms = offset_ms,
+        };
+    }
+    continuity.has_reading = true;
+    continuity.last_offset_ms = offset_ms;
+    continuity.last_reading_ms = speaker_time_ms;
+}</code></pre></details>
+
+<p>The device's clock and the page's drift apart by parts per million, which moves the difference by hundredths of a
+millisecond between two readings, far below the 2 ms step counted as a dropout. The diagnostics panel also shows the
+worklet's own timing each second: the longest a block took, and the longest gap between two blocks' starts. A long
+block points at the first cause; short blocks with a long gap at the second.</p>
+
+<h3 id="clicks">8.4 Clicks</h3>
+
+<p>A dropout is sound missing; a <em>click</em> is sound present but wrong - a sudden jump in the waveform, heard as a
+tick, and many of them as static. Clicks need no dropout: a voice cut off mid-cycle, a note started without an attack,
+a block that does not carry on where the last one ended. The renderer watches for them in what it mixes.</p>
+
+<p>The measure is the second difference of the samples, x[n] - 2 x[n-1] + x[n-2]: how much the change from one sample
+to the next itself changed. For a sine of amplitude a and frequency f it is at most a (2 pi f / rate)<sup>2</sup> -
+small, and smaller for lower tones: at 48 000 Hz, a 400 Hz sine of amplitude 0.4 reaches 0.0011. A step of height h
+makes it h at the step:</p>
+
+<pre class="sketch"><code>   samples        0    0    0    0.1  0.1  0.1
+   change              0    0    0.1  0    0
+   second diff              0    0.1  -0.1 0        a step of 0.1: 0.1 at the step, -0.1 as the slope settles</code></pre>
+
+<p>A sample counts as a click when its second difference passes 0.02 - which no smooth sound of the instruments
+reaches, and any step that size does - and also stands out from the sound's recent curvature, at more than eight times
+the RMS of the last few milliseconds' second differences, so that a dense smooth chord does not count. Each channel's
+last two samples carry over between blocks, so a jump between two blocks counts like one within a block. The panel
+shows the count and the largest jump. A count that stays at 0 while static is heard means the renderer's sound is
+clean, and the static is made after it, by the device or the speaker. Samples that would pass full scale before the
+limiter (4.5) are counted apart.</p>
+
+<h2 id="vorbis">9. Reading Ogg Vorbis</h2>
+
+<p>Ogg Vorbis is the compressed format the engine reads music in (<code>codecs.audio.vorbis</code>). Like every
+transform codec, it stores a signal as the spectra of overlapping blocks of samples: each block's frequencies, shaped
+coarsely by a smooth curve, the <em>floor</em>, with the detail on top, the <em>residue</em>. Decoding runs this in
+reverse: the floor and the residue multiplied into a spectrum, the spectrum turned back into samples, and the blocks
+overlapped into a continuous signal.</p>
+
+<h3 id="oggpages">9.1 Pages and packets</h3>
+
+<p>The file is a sequence of Ogg <em>pages</em>, each a header - "OggS", the stream it belongs to, its sequence
+number, a checksum - and up to 255 segments of up to 255 bytes. A <em>packet</em> is a run of segments ending with one
+shorter than 255, so packets may span pages. Vorbis sits inside: its first three packets are its headers, every later
+one a sound packet, one block of audio. The reader checks each page's checksum and gathers its packets; a damaged page
+is skipped, and a packet that ran across it is dropped.</p>
+
+<h3 id="vorbisheaders">9.2 The three headers</h3>
+
+<p>The <em>identification</em> header gives the channels, the sample rate and the two block sizes, a short one for
+sharp attacks and a long one for steady sound - 256 and 2048 samples in most files. The <em>comment</em> header holds
+the tags. The <em>setup</em> header holds everything a sound packet is decoded with: the codebooks; the floors; the
+residues; the mappings, which give each channel its floor and residue and say which channels are coupled; and the
+modes, whose number begins each sound packet and gives its block size and mapping.</p>
+
+<h3 id="packetbits">9.3 A sound packet's bits</h3>
+
+<p>Vorbis packs its fields from the low bit of each byte upward, a field running on into the next byte's low bits. A
+sound packet is read through a 64-bit accumulator: the bits not yet read wait in it, the next in its lowest bit, and it
+is topped up a byte at a time, each byte placed above the bits already there. A field of up to 32 bits is then the
+accumulator's low bits, taken with a mask and shifted away:</p>
+
+<pre class="sketch"><code>   bytes        0xb1          0x03
+   bits         1 0 0 0 1 1 0 1   1 1 0 0 0 0 0 0      each byte's lowest bit first
+   fields       1 | 0 0 0 | 1 1 0 1 1 1 | ...          read 1, then 3, then 6 bits
+   values       1     0       0b111011 = 59</code></pre>
+
+<p>A read past the packet's end gives zeros, and the packet ends there: what it has not yet given is silence.</p>
+
+<h3 id="codewords">9.4 Codewords</h3>
+
+<p>Most of a sound packet is codewords: entries of a codebook, written with a prefix code, so that no codeword begins
+another. The setup header gives only each entry's codeword length; the codewords follow from the lengths, each entry
+taking the lowest codeword of its length still free. The specification's example, eight entries:</p>
+
+<pre class="sketch"><code>   lengths    2     4     4     4     4     2    3     3
+   codewords  00    0100  0101  0110  0111  10   110   111
+
+                       root
+                  0 /        \ 1
+                  .            .
+               0 / \ 1      0 / \ 1
+              [0]   .     [5]    .
+                  0/ \1        0 / \ 1
+                  .   .        [6]  [7]
+                 / \ / \
+               [1][2][3][4]</code></pre>
+
+<p>Read a bit at a time from the root, a codeword leads to its entry's leaf. Walking the tree for every codeword would
+be slow, so each codebook gets two tables, as in stb_vorbis. A codeword is written first bit first, so the packet's
+next bits, read as a number, are the codeword reversed: entry 6, 110, reads as 011. The fast table is indexed by the
+next 10 bits read so: for a codeword of L bits, every index whose lowest L bits are the reversed codeword holds its
+entry and length - 2<sup>10 - L</sup> indices - and one lookup finds it. Longer codewords are kept in a list sorted by
+codeword, searched by halving.</p>
+
+<h3 id="floor1">9.5 The floor</h3>
+
+<p>The floor is the spectrum's rough shape: a line through a few points, their positions fixed in the setup header,
+their heights read from each packet. The heights are corrections to a prediction. Each point after the two ends is
+predicted on the straight line between its neighbours already known, and its value moves it from there: 0 leaves it on
+the line, an even value moves it up by half the value, an odd one down by half rounded up:</p>
+
+<pre class="sketch"><code>   points at x = 0, 16, 8, heights read 40, 20, 3
+
+   height 40 *
+              \
+               \  predicted at x = 8:  40 - 20 * 8 / 16 = 30
+                \
+           28    *   the value 3, odd: down by 2
+                    \
+              20       *
+              x: 0     8     16</code></pre>
+
+<p>The curve is drawn between the points in whole-number steps, as Bresenham draws a line: the slope's whole part
+added at each step, its remainder kept as a running error that adds one more step each time it reaches the run. From
+5 down to 1 over 7 positions:</p>
+
+<pre class="sketch"><code>   whole slope -4 / 7 = 0, remainder 4 of 7
+   x       2  3  4  5  6  7  8
+   error   0  4  1  5  2  6  3      (+4 each step, less 7 when it reaches 7)
+   height  5  5  4  4  3  3  2</code></pre>
+
+<p>Each height is a step of a decibel table - 256 steps of 35/64 dB, from -139.45 dB to 0 dB - turned into an
+amplitude as 10<sup>(step - 255) x 35/64 / 20</sup>.</p>
+
+<h3 id="vorbiswindows">9.6 Windows</h3>
+
+<p>Each block's samples are weighted by a window before the next block is added over its second half. The window
+rises over the overlap with the block before and falls over the overlap with the one after, each slope as long as half
+the smaller of the two blocks:</p>
+
+<pre class="sketch"><code>   w(i) = sin(pi/2 * sin^2(pi/2 * (i + 1/2) / L))      for i from 0 to L - 1</code></pre>
+
+<p>A slope and its mirror are <em>power complementary</em>: with s the inner sin<sup>2</sup>, the mirror's is 1 - s,
+and sin<sup>2</sup>(pi/2 s) + sin<sup>2</sup>(pi/2 (1 - s)) = sin<sup>2</sup> + cos<sup>2</sup> = 1. The encoder
+windowed each block and the decoder windows it again, so across an overlap the two blocks carry the signal weighted by
+w<sup>2</sup> and by its mirror's square, which add to one: the blocks join without a seam.</p>
+
+<h3 id="residue">9.7 The residue</h3>
+
+<p>The residue is the spectrum's detail over the floor, as vectors of codebook values added together. Its range is
+cut into partitions of a fixed size, 32 values in most files, and each partition has a <em>classification</em> - how
+much detail it carries - which chooses its books. One codeword of the classbook gives the classifications of several
+partitions at once, as the digits of a number: with 10 classifications and a classbook of dimension 2, the entry 47
+says the first partition is of class 4 and the second of class 7.</p>
+
+<p>The values come in up to eight passes. Each pass adds to each partition the vectors of the book its class has for
+that pass, if any: a quiet partition might use only the first, coarse pass, a busy one every pass, each finer than the
+last. The three residue types lay the values out differently:</p>
+
+<pre class="sketch"><code>   type 0   a partition's values spread across it: the first vector at places 0, 4, 8, ...
+            the second at 1, 5, 9, ...                       (a partition of 16, vectors of 4)
+   type 1   in a row: the first vector at 0, 1, 2, 3, the second at 4, 5, 6, 7, ...
+   type 2   the channels interleaved into one vector - left 0, right 0, left 1, right 1, ... -
+            read as type 1, then dealt back out to the channels</code></pre>
+
+<p>Type 2 lets a partition span the channels, so that when they are alike one codeword codes them all; libvorbis uses
+it for coupled channels and type 1 for a channel of its own.</p>
+
+<h3 id="coupling">9.8 Coupling</h3>
+
+<p>The two channels of a stereo file are usually close, so they are coded as a <em>magnitude</em> - the larger of the
+two - and an <em>angle</em> - their difference, which is small. The decoder turns them back into the two channels by
+the signs of the two:</p>
+
+<pre class="sketch"><code>   magnitude m   angle a   first channel   second channel
+   m &gt; 0         a &gt; 0     m               m - a
+   m &gt; 0         a &lt;= 0    m + a           m
+   m &lt;= 0        a &gt; 0     m               m + a
+   m &lt;= 0        a &lt;= 0    m - a           m
+
+   m = 0.5, a = 0.25:    0.5 and 0.25          the second a quarter quieter
+   m = 0.5, a = -0.25:   0.25 and 0.5          the first a quarter quieter</code></pre>
+
+<details class="src-fold" data-src="src/codecs.zig" data-decl="fn uncouple("><summary><code>uncouple</code></summary><pre><code class="zig">/// Undoes a coupling step for each place of a pair's two vectors (the specification's 9.2): the
+/// magnitude `m` and the angle `a` back into two channels - the angle the second channel's difference
+/// from the first, its sign the side the magnitude's sign leans to.
+fn uncouple(magnitudes: []f32, angles: []f32) void {
+    for (magnitudes, angles) |*magnitude, *angle| {
+        const m: f32 = magnitude.*;
+        const a: f32 = angle.*;
+        if (m &gt; 0) {
+            if (a &gt; 0) {
+                angle.* = m - a;
+            } else {
+                angle.* = m;
+                magnitude.* = m + a;
+            }
+        } else {
+            if (a &gt; 0) {
+                angle.* = m + a;
+            } else {
+                angle.* = m;
+                magnitude.* = m - a;
+            }
+        }
+    }
+}</code></pre></details>
+
+<p>A file may couple more than two channels, step by step; the decoder undoes the steps in reverse order.</p>
+
+<h3 id="vorbissamples">9.9 From spectrum to samples</h3>
+
+<p>Each channel's spectrum is the residue multiplied by the floor's curve; a channel whose floor is unused in a packet
+is silent there. The inverse MDCT turns the spectrum - half a block of coefficients - into a block of samples (the
+zimrnum tutorial, 13.4). The block is windowed, and its rising part added onto the falling part of the block before.
+A long block next to a short one keeps its window at 1 for most of its length and falls over the short slope only,
+centred a quarter of the long block from its end:</p>
+
+<pre class="sketch"><code>   long block, 2048 samples, a short block after it
+   1 |  ____________________________
+     | /                            |\
+   0 |/                             | \______
+     0          1024           1472  1600   2048
+                               3/4 n - 64 to 3/4 n + 64</code></pre>
+
+<p>A packet gives the frames from the centre of the block before to its own centre: two long blocks give 512 + 512 =
+1024 frames, a long block after a short one 64 + 512 = 576. The first packet gives none, having no block before it to
+overlap. The stream's last page says how many frames the stream holds - its granule position - and the last packet's
+frames past it, padding to a whole block, are dropped.</p>
+
+<h3 id="vorbisseek">9.10 Seeking</h3>
+
+<p>Each page carries a granule position: the number of frames the stream has given by the end of the last packet
+completed on it. When the decoder is made it lists the pages that complete a packet, with their offsets in the file
+and their granules. A seek to frame F finds by halving the last such page ending at or before F, L, and starts
+decoding two such pages earlier, at R:</p>
+
+<pre class="sketch"><code>   pages that complete a packet:   ...   R            S            L        F    ...
+   decoding                              |-- dropped: positions unknown --|
+                                                      ^ S's last packet: its granule fixes every position after it
+   frames given                                                                 |--> from F on</code></pre>
+
+<p>Two pages back is what makes the position certain. Landing on a page, the reader skips the packet continued into
+it from the page before, whose start is missing, and the first packet it decodes only primes the overlap (9.9).
+Starting at L could lose the frames just after L's granule, in the packet that ends there but began on S. Starting at
+S, the packet whose granule gives the first position, S's last, could be the one skipped. Starting at R, S's last
+packet is always decoded whole: from its granule on, every frame's position is known, the frames before it are
+dropped, and decoding steps on to the packet holding F. A seek decodes a few thousand frames wherever it lands.</p>
+
+<details class="src-fold" data-src="src/codecs.zig" data-decl="pub fn seekToFrame("><summary><code>seekToFrame</code></summary><pre><code class="zig">/// Moves the stream to `frame`: the next frames read are the stream's from that one on; past the stream's
+/// end, none. The pages that end a packet are halved over (`page_marks`) for L, the last ending at or
+/// before the frame, and decoding starts two pages of that kind before it, at R, with S between. The
+/// reader, landing on a page, passes over the packet continued into it, and the first packet it decodes
+/// only primes the overlap. Starting at L itself could lose the frames just after L's granule, the packet
+/// ending there begun on S. Starting at S would decode it, but S's own last packet - the one whose granule
+/// gives the first position - could be the packet passed over, and then no position would be known before
+/// L's packet, too late to trim the stream's last packet if L ends the stream. Starting at R, S's last
+/// packet began on R or after and is decoded whole: its granule, at or before the frame, gives every
+/// position after it. The frames decoded before it are dropped; then decoding steps on to the packet
+/// holding the frame, and starts at it. A frame too near the start for R starts from the stream's start,
+/// its positions known from 0. Some three pages are decoded: a seek costs a few thousand frames' decoding
+/// wherever it lands.
+pub fn seekToFrame(decoder: *Decoder, frame: u64) Allocator.Error!void {
+    const marks: []const PageMark = decoder.page_marks;
+    // How many pages end at or before the frame: L is the last of them, S and R the two before.
+    var below: usize = 0;
+    var above: usize = marks.len;
+    while (below &lt; above) {
+        const middle: usize = below + (above - below) / 2;
+        if (marks[middle].granule &lt;= frame) {
+            below = middle + 1;
+        } else {
+            above = middle;
+        }
+    }
+    decoder.rewind();
+    const is_from_start: bool = below &lt; 3;
+    if (!is_from_start) {
+        decoder.reader.seekToPage(marks[below - 3].offset);
+    }
+    // Where the frames given so far end, once known: from the stream's start, at once.
+    var known_end: ?u64 = if (is_from_start) 0 else null;
+    while (try decoder.reader.next()) |packet| {
+        decoder.decodePacket(packet.bytes);
+        var given: u64 = decoder.pending_end - decoder.pending_start;
+        var pending_first: ?u64 = null;
+        if (packet.granule_position) |granule| {
+            // The stream's last packet: trimmed to its granule, the frames past it padding.
+            if (packet.is_last) {
+                if (known_end) |end| {
+                    decoder.frames_given = end + given;
+                    decoder.trimToGranule(granule);
+                    given = decoder.pending_end - decoder.pending_start;
+                }
+            }
+            pending_first = granule - @min(given, granule);
+            known_end = granule;
+        } else if (known_end) |end| {
+            pending_first = end;
+            known_end = end + given;
+        }
+        if (pending_first) |first| {
+            const pending_last: u64 = first + given;
+            if (frame &lt; pending_last) {
+                const frames_skipped: u64 = if (frame &gt; first) frame - first else 0;
+                decoder.pending_start += @intCast(frames_skipped);
+                decoder.frames_given = pending_last;
+                return;
+            }
+        }
+        // Before the frame, or before any position is known: dropped.
+        decoder.pending_start = decoder.pending_end;
+    }
+    // Past the stream's end: nothing left to read.
+    decoder.pending_start = decoder.pending_end;
+    decoder.frames_given = known_end orelse 0;
+}</code></pre></details>
+
+</body>
+</html>

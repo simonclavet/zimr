@@ -21,7 +21,9 @@
 //! zig-out/bin instead: `zig-out/bin/zbuild check`.
 //! It passes the build's output through as it comes - whole lines, each stream's, so neither splits the other's -
 //! and announces each finding the moment the build prints it, on a line of its own beginning `zbuild: found:`: a
-//! compile error, or a lint finding. A finding of a lint rule still in progress (`[rule, work in progress]`), which
+//! compile error, or a lint finding. A file the linter's autofix rewrote is announced too, `zbuild: fixed: <file>:
+//! <rule> x<count>`, as a notice rather than a finding - the build goes on to check it - so that whoever edits that
+//! file next reads it again first. A finding of a lint rule still in progress (`[rule, work in progress]`), which
 //! never fails a run, is announced as `zbuild: work in progress:` and changes nothing else. When the build fails it
 //! ENDS with only the roots - so
 //! the answer is the last thing on screen. Both streams come through pipes, which cannot be written positionally, so
@@ -51,6 +53,8 @@ const eql = std.mem.eql;
 const lastIndexOfScalar = std.mem.lastIndexOfScalar;
 const indexOfPos = std.mem.indexOfPos;
 const startsWith = std.mem.startsWith;
+const expect = std.testing.expect;
+const expectEqualStrings = std.testing.expectEqualStrings;
 
 const max_blocks: usize = 8; // cap surfaced error blocks (avoid a wall of dups)
 const max_block_lines: usize = 12; // cap snippet/note lines per block (trim ref traces)
@@ -63,6 +67,15 @@ fn contains(haystack: []const u8, needle: []const u8) bool {
 
 fn trimmed(s: []const u8) []const u8 {
     return trim(u8, s, " \t\r\n");
+}
+
+/// What the linter's autofix says of a file it rewrote (`zimrlint: fixed <path>: <rule> x<count>, ...`): the text
+/// after the prefix, or null for any other line.
+fn fixedFileReport(line: []const u8) ?[]const u8 {
+    const prefix: []const u8 = "zimrlint: fixed ";
+    const start: usize = indexOf(u8, line, prefix) orelse return null;
+    const report_start: usize = start + prefix.len;
+    return trimmed(line[report_start..]);
 }
 
 const Kind = enum {
@@ -475,6 +488,11 @@ pub fn main(init: std.process.Init) !u8 {
                     finding_count += 1;
                     const announcement: []const u8 = try allocPrint(arena, "zbuild: found: {s}\n", .{trimmed(line)});
                     try stdout.writeStreamingAll(io, announcement);
+                } else if (fixedFileReport(line)) |fixed_report| {
+                    // A file the linter's autofix rewrote: announced, never a finding - the build goes on to format
+                    // and check it - so that whoever edits the file next reads it again first.
+                    const announcement: []const u8 = try allocPrint(arena, "zbuild: fixed: {s}\n", .{fixed_report});
+                    try stdout.writeStreamingAll(io, announcement);
                 } else if (classify(line) == .work_in_progress) {
                     const announcement: []const u8 = try allocPrint(
                         arena,
@@ -649,4 +667,14 @@ test "a lint line of a rule in progress is announced apart: neither a finding no
     defer out.deinit(testing.allocator);
     try testing.expect(contains(out.items, "[line-length]"));
     try testing.expect(!contains(out.items, "house-rule"));
+}
+
+test "fixedFileReport: the linter's line for a file it fixed, and no other line" {
+    const fixed_line: []const u8 = "zimrlint: fixed ./tools/x.zig: fn-args-multiline x1, no-qualified-std x2";
+    try expectEqualStrings(
+        "./tools/x.zig: fn-args-multiline x1, no-qualified-std x2",
+        fixedFileReport(fixed_line).?,
+    );
+    try expect(fixedFileReport("zimrlint: 1 left in ./tools/x.zig for a person") == null);
+    try expect(fixedFileReport("./tools/x.zig:3:1: [line-length] 129 cols, max 120 (rule 10)") == null);
 }

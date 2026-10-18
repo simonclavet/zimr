@@ -26,6 +26,8 @@ const float = zm.float;
 const floori = zm.floori;
 const normalize = zm.normalize;
 const mulMat = zm.mulMat;
+const splat = zm.splat;
+const splat3 = zm.splat3;
 const expect = std.testing.expect;
 
 // ---------------------------------------------------------------------------
@@ -149,7 +151,7 @@ const LitFs = struct {
         // Project into light clip space, remap to [0,1], flip v (RTT top-left).
         const inv_w: f32 = 1.0 / io.frag_lpos[3];
         var proj: Vec3 = .{ io.frag_lpos[0] * inv_w, io.frag_lpos[1] * inv_w, io.frag_lpos[2] * inv_w };
-        proj = proj * @as(Vec3, @splat(0.5)) + @as(Vec3, @splat(0.5));
+        proj = proj * splat3(0.5) + splat3(0.5);
         proj[1] = 1.0 - proj[1];
 
         const closest: f32 = io.shadow.sampleRed(proj[0], proj[1]);
@@ -201,7 +203,7 @@ test "cpu two-pass shadow map: occluder casts a visible ground shadow" {
     // ---- Light view-projection (orthographic, directional). ----
     const center: Vec = .{ 0, 0.5, 0, 1 };
     const l4: Vec = .{ light_dir[0], light_dir[1], light_dir[2], 0 };
-    const light_eye: Vec = center + l4 * @as(Vec, @splat(8.0));
+    const light_eye: Vec = center + l4 * splat(8.0);
     const light_view: Mat = zm.lookAtRh(light_eye, center, .{ 0, 0, 1, 0 });
     const light_proj: Mat = zm.orthographicRh(6.0, 6.0, 0.1, 20.0);
     const light_vp: Mat = mulMat(light_proj, light_view);

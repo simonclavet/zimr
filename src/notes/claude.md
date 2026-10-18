@@ -500,7 +500,8 @@ when Simon names it.
   platform implements decided in `platform_api.md`. Phase C, Windows complete, is under way, and its step C5 is
   sound: the mixer's two sides, outputs that pull, and the browser's audio worklet. Where C5 stands and its next
   steps are in the plan's "C5 from here"; the order of the work after C5 is its section 9. The backends tutorial
-  (`src/notes/tutorials/backends-tutorial.html`) is written alongside it.
+  (`src/notes/tutorials/backends-tutorial.html`) is written alongside it, and the SOUND TUTORIAL
+  (`src/notes/tutorials/sound_tutorial.html`, Simon, Oct 12) is kept in sync with every sound change, in the same turn.
 
 - `vulkan_port_plan_v2.md` - **The Vulkan port's journal (Oct 5-7); its road ahead moved to `platforms_plan.md` on
   Oct 7.** zimr on Windows through Vulkan,
@@ -613,6 +614,15 @@ fixes whole or not at all (`writeFileWhole`: an unnamed file beside the target, 
 compiler's cache moves each result into place the same way. A finding of a rule still work in progress prints as
 `[rule, work in progress]`; zbuild announces it as `zbuild: work in progress:`, and it neither stops the build nor
 fails it. No enabled rule is in progress today: in zimr a lint finding is a compile error.
+
+**Autofix and editing (Oct 17).** Every gated build runs the linter's `--fix` over the sources before checking, so a
+build may rewrite files: an alias for a `std.` call, a decl literal, parameters one per line, an unused declaration
+removed. Each rewritten file is announced, `zbuild: fixed: <file>: <rule> x<count>` (a notice, never a finding), and is
+written once, already laid out by `zig fmt`'s own renderer - nothing that stops a build can leave a fix unformatted.
+What the fixer cannot fix it only counts (`zimrlint: N left in <file>`); the check after it lists it. So: after any
+build, RE-READ a file announced as fixed before an exact-text edit of it (`grep -n`/`sed -n` of the region); after
+writing a file, run `zbuild fix` (or any build) at once and read the result once, rather than letting a later build
+rewrite it between two edits; and write in the house style from the start - most fixes are style slips.
 
 `zbuild --complete <step> [args]` (first argument only) runs the build to its end instead. Use it for:
 
@@ -1089,10 +1099,11 @@ The steps, **one tool call each**:
    (first run may also time out while the smoke wasm builds — same retry rule).
    Green includes the per-frame call profile AND the ClobberScan.
 4. **Gate**: `timeout 250 $ZIG build check -Dautofix=false -j1` → green =
-   `✓ NO REGRESSIONS` + `✓ wgpu_smoke PASSED`.
-5. **If shaders were added or changed**: `timeout 250 $ZIG build corpus-refresh -j1`
-   — merge-preserving; the output reports `N live + M carried`, and the count
-   must never need to shrink.
+   `✓ WGSL corpus: no regressions` + `✓ wgpu_smoke PASSED`.
+5. **If a shader's interface or spv2wgsl's output changed on purpose** (the corpus says
+   which, and says so): `timeout 250 $ZIG build corpus-refresh -j1`, then commit
+   `tests/fixtures/wgsl_corpus.txt`. A new shader, an edited shader body or a new Zig is a
+   `note:`, never a failure; refreshing pins it.
 
 ### A GREEN SMOKE RUN IS NO EVIDENCE THAT A HOST NAMESPACE EXISTS
 
@@ -1214,9 +1225,8 @@ small, and it turns the paragraph above into a property. Not built yet.
 
 ★ **The c2js CASE CORPUS is already skipped from linting** (`build.zig`, the
 `firstSegmentIs(entry.path, "c2js_cases")` branch): 102 files of deliberately-varied Zig
-that exist to exercise the transpiler, not to follow house style. Note that
-`webtests/transpiler_corpus.zig` is a DIFFERENT thing despite the name — it is zimr's own
-harness that runs that corpus, so its lint findings are real and it stays linted.
+that exist to exercise the transpiler, not to follow house style. (The SHADER corpus is a
+different thing: `tools/wgsl_corpus.zig`, spv2wgsl's regression gate, linted like any tool.)
 
 ### zimrmath canonical names — the @compileError TEACHING ALIAS (the mechanism)
 
@@ -2831,14 +2841,15 @@ tainted one is `array<atomic<u32>>`, and the body map dedups `kbuf_pos_block` ac
 bindings while atomic and plain never collide. That is exactly what `storageArrayType` exists to
 emit, and one `grep -A3 '^struct .*_block'` confirms all three properties at once.
 
-★★★ **A FRESH SANDBOX MAKES THE CORPUS VACUOUS, AND A BUMP GUARANTEES IT.** `check` prints
-`✓ ENTIRE CORPUS TRANSPILES CLEANLY` and `✓ NO REGRESSIONS` while also printing
-`⚠ 190 fixture entries have no matching live input` — ALL 190. Fixtures are keyed by INPUT hash
-and a new compiler changes every `.spv` byte, so the regression half of `check` compares nothing
-on the first run after any bump. **Do not run `corpus-refresh` to clear that warning**: re-pinning
-to the new output is precisely how a real output change would get recorded as the baseline. The
-transpile-clean half is still live and still worth reading; the regression half is not evidence
-here, and the device is.
+★★★ **A FRESH SANDBOX MADE THE CORPUS VACUOUS, AND A BUMP GUARANTEED IT** (fixed Oct 18, below).
+`check` printed `✓ NO REGRESSIONS` beside `⚠ 190 fixture entries have no matching live input` -
+ALL 190: fixtures were keyed by INPUT hash, and a new compiler changes every `.spv` byte, so the
+regression half compared nothing on the first run after any bump. ★ **The corpus now keys every
+shader by its source path** (`tools/wgsl_corpus.zig`) and pins its INTERFACE - entry point, inputs,
+outputs, bindings, structs spelled out - which does not depend on the compiler, so it is compared
+right after a bump, exactly when 2307 moved bindings. Only the byte-exact WGSL is per-SPIR-V (up to
+three per shader, so two machines both keep theirs), and new SPIR-V is a `note:`, never a pass that
+compared nothing: `check` fails if not one shader was compared.
 
 ★ `fluid_gpu` smoke: **init 4372 calls, ~151.0/frame — identical to 1980 to the call**, and
 `wgpu_bringup` 202 init / ~28.0 per frame. A matching call profile across a compiler change is
@@ -3428,17 +3439,13 @@ column holds the translation, which was the assumption that produced the wrong a
   that when touching `spv2wgsl.zig`. If a NEW host test ever recurses that deep,
   prefer a `std.Thread.spawn(.{ .stack_size = ... })` wrapper over reinstating the
   global ulimit footgun.
-- **A `corpus` run on a FRESH sandbox is HALF vacuous, and it still says
-  `✓ NO REGRESSIONS`.** The step scans `.zig-cache` for `.spv`, so it only ever sees
-  the shaders the examples you happened to build pulled in — 54 of them after
-  hello_world + launcher, against 190 pinned fixtures. Every fixture then reports
-  "no matching live shader", and the regression half of the gate compares nothing.
-  The REAL signal in that run is the other half: `transpiled cleanly (zero
-  unresolved): 54 / clean rate 100.0%`. Read that number, not the checkmark.
-  **A compiler bump changes every SPIR-V md5, so `corpus-refresh` after one looks
-  tempting and is a trap** on a thin cache: it would re-pin only the shaders that
-  sandbox built, blessing their current output as the reference. Refresh only after
-  a full `all-examples` build, on a box with the disk for it.
+- **The corpus is every graphics shader the build compiles, not the cache** (Oct 18).
+  `zig build corpus` (and `check`) builds them all first - about 85, so a cold sandbox
+  pays for the example shaders too - and holds each to `tests/fixtures/wgsl_corpus.txt`
+  by source path. On a sandbox whose Zig differs from the last refresh's, every shader
+  prints as `compiled to SPIR-V the fixture has no WGSL for`: that is a note, the
+  interfaces were still compared, and `corpus-refresh` there pins this compiler's WGSL
+  beside the other machine's. A refresh never needs a full `all-examples` build any more.
 - **Cold setup**: the zip does NOT carry the toolchain (`tools/zig-x86_64-*` is
   excluded by the zip recipe), so on a FRESH sandbox there is no compiler at all —
   Simon uploads the Zig tarball and it goes in as:
@@ -3541,13 +3548,17 @@ recursive, minus path-prefix carve-outs and a `deletion_skip` full-path list
   bug-catching, and runs only when named by `--enable=<tag>`: untyped-local, anon-return,
   branch-braces, decl-order, fn-args-multiline, module-var, no-qualified-zm,
   reserved-math-names, prefer-std-alias, ascii-comments (`zimrlint --list-rules` marks them).
-  zimr enables ALL of them for itself except decl-order - `zimr_lint_rules` in build.zig -
+  zimr enables ALL of them for itself, decl-order included - `zimr_lint_rules` in build.zig -
   so nothing changed for this tree. The list exists for apps built on zimr: build.zig's
   `LintRule` / `addLint` let a project pick the ones it agrees with. Every other rule is
   always on and cannot be turned off. A `lint:off` naming a tag that is not a rule is itself
   an error (`unknown-lint-tag`).
-- `decl-order` (declare-before-use for file-scope `fn`/`const`/`var`) is the one opt-in
-  rule zimr does NOT enable: `zig build lint -- --enable=decl-order`. The sweep once got it
+- ★ **`decl-order` IS ENFORCED NOW** (`.decl_order` is in `zimr_lint_rules`; found Oct 18,
+  when a new tool written callers-first failed with 29 findings). Write file-scope
+  declarations dependency-first: helpers above their callers, `main` last, tests after.
+  The history below is from when it was the one opt-in rule zimr did not enable.
+- `decl-order` (declare-before-use for file-scope `fn`/`const`/`var`) was the one opt-in
+  rule zimr did NOT enable: `zig build lint -- --enable=decl-order`. The sweep once got it
   to 50 hits, all in ui.zig - **but on Sep 26 it measured 1101 again** (zimrnum 108, robot
   93, zimrphysics2d_demo/scenes 91, ui 51, ...): nothing gated it, and the per-file lint
   stamps did not record which rules were enabled, so every `--decl-order` run since the

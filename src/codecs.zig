@@ -30,12 +30,18 @@ const splitScalar = std.mem.splitScalar;
 const trim = std.mem.trim;
 const swap = std.mem.swap;
 const writeInt = std.mem.writeInt;
+const readInt = std.mem.readInt;
 const sortSlice = std.mem.sort;
 const parseInt = std.fmt.parseInt;
 const parseFloat = std.fmt.parseFloat;
 const builtin = @import("builtin");
 const platform = @import("platform.zig");
 const zm = @import("zm");
+/// zimrnum, for the inverse MDCT Vorbis decodes its blocks with (`audio.vorbis.Decoder`).
+const zn = @import("zn");
+const assertf = zm.assertf;
+const assertUnreachable = zm.assertUnreachable;
+const panicf = zm.panicf;
 const float64 = zm.float64;
 const Vec = zm.Vec;
 const ceilPowerOfTwo = zm.ceilPowerOfTwo;
@@ -51,6 +57,7 @@ const sqrt = zm.sqrt;
 const subChecked = zm.subChecked;
 const vec = zm.vec;
 const Quat = zm.Quat;
+const splat = zm.splat;
 
 /// The render-side types (`Mesh`, `Color`, ...) the loaders hand back.
 /// Re-exported so out-of-module consumers (e.g. the `mesh_bake` build
@@ -378,7 +385,7 @@ pub const png = struct {
             6 => { // RGBA -> RGBA (memcpy)
                 @memcpy(rgba, raw[0 .. n * 4]);
             },
-            else => unreachable, // already validated
+            else => assertUnreachable(@src(), "png: colour type {d}, which validation refuses", .{color_type}),
         }
     }
 
@@ -659,8 +666,8 @@ pub const png = struct {
         defer allocator.free(png_bytes);
 
         // Check IHDR width/height fields (offsets 16-23 from start of file)
-        const w = std.mem.readInt(u32, png_bytes[16..20], .big);
-        const h = std.mem.readInt(u32, png_bytes[20..24], .big);
+        const w = readInt(u32, png_bytes[16..20], .big);
+        const h = readInt(u32, png_bytes[20..24], .big);
         try std.testing.expectEqual(@as(u32, 7), w);
         try std.testing.expectEqual(@as(u32, 3), h);
         // bit depth at 24, color type at 25
@@ -3105,8 +3112,6 @@ pub const jpeg = struct {
 pub const truetype = struct {
     const native_endian = builtin.cpu.arch.endian();
 
-    const readInt = std.mem.readInt;
-    const assert = zm.assert;
     const normalize3 = zm.normalize3;
     const clamp = zm.clamp;
     const acosRad = zm.acosRad;
@@ -3248,6 +3253,11 @@ pub const truetype = struct {
 
         const head: u32 = table_offsets[@backingInt(TableId.head)];
         const index_to_loc_format = readInt(u16, bytes[head + 50 ..][0..2], .big);
+        // The `loca` table's offsets are 16-bit halves (0) or 32-bit bytes (1); any other value is a damaged font,
+        // refused here so that reading a glyph's offset can rely on it.
+        if (index_to_loc_format > 1) {
+            return error.InvalidLocaFormat;
+        }
 
         return .{
             .table_offsets = table_offsets,
@@ -3466,8 +3476,8 @@ pub const truetype = struct {
         const vertices: []Vertex = try glyphShape(tt, gpa, glyph);
         defer gpa.free(vertices);
 
-        assert(scale_x != 0, @src());
-        assert(scale_y != 0, @src());
+        assertf(scale_x != 0, @src(), "truetype: a glyph scaled to zero width", .{});
+        assertf(scale_y != 0, @src(), "truetype: a glyph scaled to zero height", .{});
 
         const box: BitmapBox = glyphBitmapBoxSubpixel(tt, glyph, scale_x, scale_y, shift_x, shift_y);
 
@@ -3580,7 +3590,7 @@ pub const truetype = struct {
     ) i16 {
         const bytes: []const u8 = tt.ttf_bytes;
         const gpos: u32 = tt.table_offsets[@backingInt(TableId.GPOS)];
-        assert(gpos > 0, @src());
+        assertf(gpos > 0, @src(), "truetype: GPOS kerning asked of a font without the table", .{});
 
         if (readInt(u16, bytes[gpos + 0 ..][0..2], .big) != 1) {
             return 0;
@@ -3705,7 +3715,7 @@ pub const truetype = struct {
     ) i16 {
         const bytes: []const u8 = tt.ttf_bytes;
         const kern: u32 = tt.table_offsets[@backingInt(TableId.kern)];
-        assert(kern > 0, @src());
+        assertf(kern > 0, @src(), "truetype: kern-table kerning asked of a font without the table", .{});
         // we only look at the first table. it must be 'horizontal' and format 0.
         if (readInt(u16, bytes[kern + 2 ..][0..2], .big) < 1) // number of tables, need at least 1
         {
@@ -4019,8 +4029,13 @@ pub const truetype = struct {
         const bytes: []const u8 = tt.ttf_bytes;
         const glyph_index: usize = @backingInt(glyph);
 
-        assert(glyph_index < tt.glyphs_len, @src());
-        assert(tt.index_to_loc_format < 2, @src());
+        // A glyph index from the font's own cmap can name a glyph past its end, in a damaged font.
+        if (glyph_index >= tt.glyphs_len) {
+            return error.GlyphNotFound;
+        }
+        assertf(tt.index_to_loc_format < 2, @src(), "truetype: loca format {d}, refused by load", .{
+            tt.index_to_loc_format,
+        });
 
         const glyf: u32 = tt.table_offsets[@backingInt(TableId.glyf)];
         const loca: u32 = tt.table_offsets[@backingInt(TableId.loca)];
@@ -4415,8 +4430,8 @@ pub const truetype = struct {
     }
 
     fn sizedTrapezoidArea(height: f32, top_width: f32, bottom_width: f32) f32 {
-        assert(top_width >= 0, @src());
-        assert(bottom_width >= 0, @src());
+        assertf(top_width >= 0, @src(), "truetype: a trapezoid {d} wide at its top", .{top_width});
+        assertf(bottom_width >= 0, @src(), "truetype: a trapezoid {d} wide at its bottom", .{bottom_width});
         return (top_width + bottom_width) / 2.0 * height;
     }
 
@@ -4481,7 +4496,7 @@ pub const truetype = struct {
             while (step.*) |z| {
                 if (z.ey <= scan_y_top) {
                     step.* = z.next; // delete from list
-                    assert(z.direction != 0, @src());
+                    assertf(z.direction != 0, @src(), "truetype: an active edge with no direction", .{});
                     z.direction = 0;
                     arena.destroy(z);
                 } else {
@@ -4498,7 +4513,12 @@ pub const truetype = struct {
                     }
                     // If we get really unlucky a tiny bit of an edge can be
                     // out of bounds.
-                    assert(z.ey >= scan_y_top, @src());
+                    assertf(
+                        z.ey >= scan_y_top,
+                        @src(),
+                        "truetype: an active edge ending at {d}, above its scanline's top {d}",
+                        .{ z.ey, scan_y_top },
+                    );
 
                     // Insert at front.
                     z.next = active;
@@ -4606,7 +4626,12 @@ pub const truetype = struct {
             // brute force every pixel
 
             // compute intersection points with top & bottom
-            assert(e.ey >= y_top, @src());
+            assertf(
+                e.ey >= y_top,
+                @src(),
+                "truetype: an edge ending at {d}, above the row's top {d}",
+                .{ e.ey, y_top },
+            );
 
             if (e.fdx == 0) {
                 const x0 = e.fx;
@@ -4623,8 +4648,18 @@ pub const truetype = struct {
                 var dx: f32 = e.fdx;
                 var xb: f32 = x0 + dx;
                 var dy: f32 = e.fdy;
-                assert(e.sy <= y_bottom, @src());
-                assert(e.ey >= y_top, @src());
+                assertf(
+                    e.sy <= y_bottom,
+                    @src(),
+                    "truetype: an edge starting at {d}, below the row's bottom {d}",
+                    .{ e.sy, y_bottom },
+                );
+                assertf(
+                    e.ey >= y_top,
+                    @src(),
+                    "truetype: an edge ending at {d}, above the row's top {d}",
+                    .{ e.ey, y_top },
+                );
 
                 // Compute endpoints of line segment clipped to this scanline (if the
                 // line segment starts on this scanline. x0 is the intersection of the
@@ -4654,7 +4689,7 @@ pub const truetype = struct {
                         // simple case, only spans one pixel
                         const x: u32 = @trunc(x_top);
                         const height: f32 = (sy1 - sy0) * e.direction;
-                        assert(x < len, @src());
+                        assertf(x < len, @src(), "truetype: coverage written at {d}, past the row's {d}", .{ x, len });
                         scanline[x] += positionTrapezoidArea(
                             height,
                             x_top,
@@ -4675,8 +4710,8 @@ pub const truetype = struct {
                             dy = -dy;
                             swap(f32, &x0, &xb);
                         }
-                        assert(dy >= 0, @src());
-                        assert(dx >= 0, @src());
+                        assertf(dy >= 0, @src(), "truetype: an edge stepping {d} down a row", .{dy});
+                        assertf(dx >= 0, @src(), "truetype: an edge stepping {d} across a row", .{dx});
 
                         const x1: u32 = @trunc(x_top);
                         const x2: u32 = @trunc(x_bottom);
@@ -4744,8 +4779,13 @@ pub const truetype = struct {
                             area += step;
                         }
                         // accumulated error from area += step unless we round step down
-                        assert(@abs(area) <= 1.01, @src());
-                        assert(sy1 > y_final - 0.01, @src());
+                        assertf(@abs(area) <= 1.01, @src(), "truetype: a pixel's coverage {d}, past one", .{area});
+                        assertf(
+                            sy1 > y_final - 0.01,
+                            @src(),
+                            "truetype: an edge piece ending at {d}, short of {d}",
+                            .{ sy1, y_final },
+                        );
 
                         // area covered in the last pixel is the rectangle from all the pixels to the left,
                         // plus the trapezoid filled by the line segment in this pixel all the way to the right edge
@@ -4841,8 +4881,8 @@ pub const truetype = struct {
         if (y0 == y1) {
             return;
         }
-        assert(y0 < y1, @src());
-        assert(e.sy <= e.ey, @src());
+        assertf(y0 < y1, @src(), "truetype: a clipped edge from {d} to {d}, not downward", .{ y0, y1 });
+        assertf(e.sy <= e.ey, @src(), "truetype: an edge from {d} up to {d}", .{ e.sy, e.ey });
         if (y0 > e.ey) {
             return;
         }
@@ -4861,16 +4901,21 @@ pub const truetype = struct {
         const xf: f32 = float(x);
 
         if (x0 == xf) {
-            assert(x1 <= xf + 1, @src());
+            assertf(x1 <= xf + 1, @src(), "truetype: a clipped edge reaching {d}, past its pixel at {d}", .{ x1, xf });
         } else if (x0 == xf + 1) {
-            assert(x1 >= xf, @src());
+            assertf(x1 >= xf, @src(), "truetype: a clipped edge reaching {d}, before its pixel at {d}", .{ x1, xf });
         } else if (x0 <= xf) {
-            assert(x1 <= xf, @src());
+            assertf(x1 <= xf, @src(), "truetype: a clipped edge reaching {d}, into its pixel at {d}", .{ x1, xf });
         } else if (x0 >= xf + 1) {
-            assert(x1 >= xf + 1, @src());
+            assertf(
+                x1 >= xf + 1,
+                @src(),
+                "truetype: a clipped edge reaching {d}, short of the next pixel after {d}",
+                .{ x1, xf },
+            );
         } else {
-            assert(x1 >= xf, @src());
-            assert(x1 <= xf + 1, @src());
+            assertf(x1 >= xf, @src(), "truetype: a clipped edge reaching {d}, before its pixel at {d}", .{ x1, xf });
+            assertf(x1 <= xf + 1, @src(), "truetype: a clipped edge reaching {d}, past its pixel at {d}", .{ x1, xf });
         }
 
         if (x0 <= xf and x1 <= xf) {
@@ -4878,10 +4923,15 @@ pub const truetype = struct {
         } else if (x0 >= xf + 1 and x1 >= xf + 1) {
             // Do nothing.
         } else {
-            assert(x0 >= xf, @src());
-            assert(x0 <= xf + 1, @src());
-            assert(x1 >= xf, @src());
-            assert(x1 <= xf + 1, @src());
+            assertf(x0 >= xf, @src(), "truetype: a clipped edge starting at {d}, before its pixel at {d}", .{ x0, xf });
+            assertf(
+                x0 <= xf + 1,
+                @src(),
+                "truetype: a clipped edge starting at {d}, past its pixel at {d}",
+                .{ x0, xf },
+            );
+            assertf(x1 >= xf, @src(), "truetype: a clipped edge reaching {d}, before its pixel at {d}", .{ x1, xf });
+            assertf(x1 <= xf + 1, @src(), "truetype: a clipped edge reaching {d}, past its pixel at {d}", .{ x1, xf });
             // coverage = 1 - average x position
             scanline[x] += e.direction * (y1 - y0) * (1 - ((x0 - xf) + (x1 - xf)) / 2);
         }
@@ -5086,12 +5136,15 @@ pub const truetype = struct {
             return .{ .data = data, .size = size, .cursor = 0 };
         }
 
+        /// Moves on `o` bytes - an offset from the font's data, so saturating rather than wrapping, and clamped to
+        /// the buffer's end by `seek`.
         pub fn skip(b: *Buf, o: u32) void {
-            b.seek(b.cursor + o);
+            b.seek(b.cursor +| o);
         }
 
+        /// Moves to `o` - clamped to the buffer's end: an offset past it comes from a damaged font, and reads as the
+        /// end, where every read gives 0.
         pub fn seek(b: *Buf, o: u32) void {
-            assert(o <= b.size, @src());
             b.cursor = if (o > b.size) b.size else o;
         }
 
@@ -5118,9 +5171,13 @@ pub const truetype = struct {
             return b.get(4);
         }
 
+        /// The next `n` bytes, 1 to 4, as a big-endian number. `n` is a CFF index's offset size, read from the font:
+        /// any other size is a damaged font, and reads as 0, moving nothing.
         pub fn get(b: *Buf, n: u32) u32 {
             var v: u32 = 0;
-            assert(n >= 1 and n <= 4, @src());
+            if (n < 1 or n > 4) {
+                return 0;
+            }
             for (0..n) |_| {
                 v = (v << 8) | b.get8();
             }
@@ -5131,11 +5188,15 @@ pub const truetype = struct {
             const start: u32 = b.cursor;
             const count: u16 = b.get16();
             if (count != 0) {
+                // The offset size and the offsets are the font's: a size outside 1 to 4 is damage, and the index
+                // empty; the last offset, 1-based, is wrapped from 0 as stb_truetype's unsigned arithmetic does, and
+                // the skip clamped to the buffer's end.
                 const offsize: u8 = b.get8();
-                assert(offsize >= 1 and offsize <= 4, @src());
-                b.skip(offsize * count);
-
-                b.skip(b.get(offsize) - 1);
+                if (offsize < 1 or offsize > 4) {
+                    return .empty;
+                }
+                b.skip(@as(u32, offsize) * count);
+                b.skip(b.get(offsize) -% 1);
             }
             return b.range(start, b.cursor - start);
         }
@@ -5146,13 +5207,17 @@ pub const truetype = struct {
             const count: u16 = b.get16();
             const offsize: u8 = b.get8();
             const i: u32 = @backingInt(glyph);
-            assert(i < count, @src());
-            assert(offsize >= 1 and offsize <= 4, @src());
+            // The index and its sizes are the font's: an entry past its count, or an offset size outside 1 to 4, is
+            // damage, and the entry empty; offsets out of order give an empty range, not a wrapped one.
+            if (i >= count or offsize < 1 or offsize > 4) {
+                return .empty;
+            }
             b.skip(i * offsize);
 
             const start: u32 = b.get(offsize);
             const end: u32 = b.get(offsize);
-            return b.range(2 + (count + 1) * offsize + start, end - start);
+            const offsets_end: u32 = 2 + (@as(u32, count) + 1) * offsize;
+            return b.range(offsets_end +| start, end -| start);
         }
 
         pub fn cffIndexCount(b: *Buf) u16 {
@@ -5224,7 +5289,7 @@ pub const truetype = struct {
 
         fn cffSkipOperand(b: *Buf) void {
             const b0: u8 = b.peek8();
-            assert(b0 >= 28, @src());
+            assertf(b0 >= 28, @src(), "truetype: an operand byte {d}, below 28 - an operator", .{b0});
             if (b0 == 30) {
                 b.skip(1);
                 while (b.cursor < b.size) {
@@ -5272,6 +5337,29 @@ pub const truetype = struct {
             return idx.cffIndexGet(@fromBackingInt(@intCast(n)));
         }
     };
+
+    test "truetype: a damaged CFF index - its offset size, an entry past its count - reads as empty" {
+        // Two entries, offset size 7: no CFF index has one, and the whole index reads as empty.
+        const bad_size = [_]u8{ 0x00, 0x02, 0x07, 1, 2, 3 };
+        var bad_size_buffer: Buf = .init(&bad_size, bad_size.len);
+        try std.testing.expectEqual(@as(u32, 0), bad_size_buffer.cffGetIndex().size);
+        // Two entries of one byte each, offsets 1, 2, 3 of size 1: the first entry is "a"; entry 5, past the count,
+        // is empty rather than a read past the index.
+        const index_bytes = [_]u8{ 0x00, 0x02, 0x01, 1, 2, 3, 'a', 'b' };
+        const index: Buf = .init(&index_bytes, index_bytes.len);
+        const first_entry: Buf = index.cffIndexGet(@fromBackingInt(@intCast(0)));
+        try std.testing.expectEqual(@as(u32, 1), first_entry.size);
+        try std.testing.expectEqual(@as(u8, 'a'), first_entry.data[first_entry.cursor]);
+        try std.testing.expectEqual(@as(u32, 0), index.cffIndexGet(@fromBackingInt(@intCast(5))).size);
+        // Offsets out of order - the second before the first - give an empty entry, not a wrapped length.
+        const backwards_bytes = [_]u8{ 0x00, 0x01, 0x01, 3, 1, 'a', 'b' };
+        const backwards: Buf = .init(&backwards_bytes, backwards_bytes.len);
+        try std.testing.expectEqual(@as(u32, 0), backwards.cffIndexGet(@fromBackingInt(@intCast(0))).size);
+        // An offset size of 0, read: 0, and the cursor where it was.
+        var reader: Buf = .init(&index_bytes, index_bytes.len);
+        try std.testing.expectEqual(@as(u32, 0), reader.get(0));
+        try std.testing.expectEqual(@as(u32, 0), reader.cursor);
+    }
 
     pub const CharstringCtx = struct {
         first_x: f32,
@@ -5446,7 +5534,12 @@ pub const truetype = struct {
         // mode=verts to assign vertices
         var out_ctx = CharstringCtx.init(.{ .mode = .verts }, vertices.ptr);
         try runCharstring(&tt.cff_data, glyph, &out_ctx);
-        assert(out_ctx.num_vertices == count_ctx.num_vertices, @src());
+        assertf(
+            out_ctx.num_vertices == count_ctx.num_vertices,
+            @src(),
+            "truetype: a charstring run twice gave {d}, then {d} vertices",
+            .{ count_ctx.num_vertices, out_ctx.num_vertices },
+        );
         // std.log.debug(
         //     "glyphShapeT2() first {d:.1},{d:.1} xy ... num_vertices {}",
         //     .{ /* first_x, first_y, x, y, min_x/y, max_x/y, num_vertices */ },
@@ -6374,7 +6467,7 @@ pub const code_point = struct {
                 };
             }
         }
-        assert(st == rune_accept, @src());
+        assertf(st == rune_accept, @src(), "utf8: the decoder left in state {d} after a whole rune", .{st});
         return .{
             .code = @intCast(rune),
             .len = 4,
@@ -6745,7 +6838,6 @@ pub const code_point = struct {
     const testing = std.testing;
     const expect = testing.expect;
     const expectEqual = testing.expectEqual;
-    const assert = zm.assert;
     const normalize3 = zm.normalize3;
     const clamp = zm.clamp;
     const acosRad = zm.acosRad;
@@ -7665,6 +7757,304 @@ pub const audio = struct {
             return Format.detect(bytes) == .ogg;
         }
 
+        // ---- Pages and packets ----
+        //
+        // An Ogg stream is cut into pages (RFC 3533), each with a header that finds it, checks it and says where it
+        // stands, and a body of segments. The codec's packets - for Vorbis, its three headers and then one packet for
+        // each block of sound - are laid into the segments: cut into segments of 255 bytes and a last shorter one, a
+        // length under 255 ending the packet. A packet a multiple of 255 long ends with a segment of 0. A page whose
+        // last segment is 255 long leaves its packet unfinished: it goes on in the next page, which says so in its
+        // flags. So a page may hold many packets, the end of one and the start of another, or the middle of a long one.
+        //
+        //     offset  bytes  field
+        //     0       4      capture pattern: "OggS"
+        //     4       1      version: 0
+        //     5       1      flags: 1 its first packet goes on from the page before, 2 the stream's first page,
+        //                    4 its last
+        //     6       8      granule position: for Vorbis, the stream's sample count at the end of the last packet
+        //                    that ends on this page; all ones where none ends on it
+        //     14      4      serial number: its logical stream, of those a file may weave together
+        //     18      4      sequence number: the page's place in its stream
+        //     22      4      CRC-32 of the whole page, this field read as zero
+        //     26      1      segment count, n
+        //     27      n      segment table: each segment's length, 0 to 255
+        //     27 + n  ...    the segments, one after another
+
+        /// A page of an Ogg stream, read in place (`readPage`): its slices point into the bytes it was read from.
+        pub const Page = struct {
+            /// Whether its first segments finish a packet begun on the page before.
+            is_continued_packet: bool,
+            /// Whether it is its stream's first page, or its last.
+            is_first_page: bool,
+            is_last_page: bool,
+            /// The granule position at the end of the last packet ending on this page; null where none ends on it.
+            granule_position: ?u64,
+            serial_number: u32,
+            sequence_number: u32,
+            /// Each segment's length, in order.
+            segment_lengths: []const u8,
+            /// The segments, one after another.
+            body: []const u8,
+            /// The page's whole length: its header, its segment table and its body.
+            byte_count: usize,
+        };
+
+        pub const PageError = error{
+            /// The bytes do not begin with "OggS".
+            NoCapturePattern,
+            /// A version of the page format other than 0.
+            UnsupportedVersion,
+            /// The bytes end before the page does.
+            Truncated,
+            /// The page's checksum is not that of its bytes: they were damaged.
+            ChecksumMismatch,
+        };
+
+        /// A page header's bytes before its segment table.
+        const page_header_byte_count: usize = 27;
+
+        /// The checksum Ogg gives each page: a CRC-32 of polynomial 0x04c11db7, its bits taken most significant first,
+        /// begun from zero and given as it ends - none of the catalogue's CRC-32s, which begin from all ones or reflect
+        /// their bits.
+        const PageCrc = std.hash.crc.Generic(u32, .{
+            .polynomial = 0x04c11db7,
+            .initial = 0,
+            .reflect_input = false,
+            .reflect_output = false,
+            .xor_output = 0,
+        });
+
+        /// The checksum of `page_bytes`, a whole page, its own checksum field read as zero - taken in three runs, the
+        /// zeros in the middle, rather than over a copy.
+        fn pageChecksum(page_bytes: []const u8) u32 {
+            var crc: PageCrc = .init();
+            crc.update(page_bytes[0..22]);
+            crc.update(&[4]u8{ 0, 0, 0, 0 });
+            crc.update(page_bytes[26..]);
+            return crc.final();
+        }
+
+        /// Reads the page at the start of `bytes`, checked against its checksum.
+        pub fn readPage(bytes: []const u8) PageError!Page {
+            if (bytes.len < page_header_byte_count) {
+                return error.Truncated;
+            }
+            if (!eql(u8, bytes[0..4], "OggS")) {
+                return error.NoCapturePattern;
+            }
+            if (bytes[4] != 0) {
+                return error.UnsupportedVersion;
+            }
+            const segment_count: usize = bytes[26];
+            const segment_table_end: usize = page_header_byte_count + segment_count;
+            if (bytes.len < segment_table_end) {
+                return error.Truncated;
+            }
+            const segment_lengths: []const u8 = bytes[page_header_byte_count..segment_table_end];
+            var body_byte_count: usize = 0;
+            for (segment_lengths) |segment_length| {
+                body_byte_count += segment_length;
+            }
+            const page_end: usize = segment_table_end + body_byte_count;
+            if (bytes.len < page_end) {
+                return error.Truncated;
+            }
+            const stored_checksum: u32 = readInt(u32, bytes[22..26], .little);
+            if (pageChecksum(bytes[0..page_end]) != stored_checksum) {
+                return error.ChecksumMismatch;
+            }
+            const flags: u8 = bytes[5];
+            const granule_bits: u64 = readInt(u64, bytes[6..14], .little);
+            return .{
+                .is_continued_packet = flags & 1 != 0,
+                .is_first_page = flags & 2 != 0,
+                .is_last_page = flags & 4 != 0,
+                .granule_position = if (granule_bits == maxInt(u64)) null else granule_bits,
+                .serial_number = readInt(u32, bytes[14..18], .little),
+                .sequence_number = readInt(u32, bytes[18..22], .little),
+                .segment_lengths = segment_lengths,
+                .body = bytes[segment_table_end..page_end],
+                .byte_count = page_end,
+            };
+        }
+
+        /// A packet of a logical stream, as `PacketReader.next` gives it.
+        pub const Packet = struct {
+            /// Its bytes: within the file where it lies in one page; gathered by the reader where it spans pages -
+            /// valid until the reader's next call.
+            bytes: []const u8,
+            /// Its page's granule position where it is the last packet ending on that page; null otherwise. For
+            /// Vorbis: the stream's sample count at this packet's end.
+            granule_position: ?u64,
+            /// Whether it ends its stream: the last packet ending on the stream's last page.
+            is_last: bool,
+        };
+
+        /// Reads the packets of one logical stream - the first in the file - from a whole Ogg file in memory, in order.
+        /// A packet within one page is given in place; one spanning pages is gathered into a buffer the reader owns,
+        /// as large as the largest such packet. Pages of other streams woven in, or chained after, are passed over. A
+        /// damaged page - its checksum wrong - or bytes that are no page are skipped and counted, the reader looking
+        /// for the next "OggS"; a packet whose pieces were lost with them is dropped, as is one begun before the reader
+        /// was moved (`seekToPage`).
+        pub const PacketReader = struct {
+            allocator: Allocator,
+            bytes: []const u8,
+            /// Where the next page begins.
+            next_page_offset: usize = 0,
+            /// The page being read: its segments read up to `segment_index`, its body up to `body_offset`; where the
+            /// packet being read began in it; and its last segment ending a packet, which the page's granule position
+            /// is for - null where none ends on it.
+            page: ?Page = null,
+            segment_index: usize = 0,
+            body_offset: usize = 0,
+            packet_start_offset: usize = 0,
+            last_packet_end_segment: ?usize = null,
+            /// The stream read: the first page's serial number, once read; and the sequence number its next page should
+            /// have - a page missing between two, lost or cut, shows as a gap.
+            serial_number: ?u32 = null,
+            next_sequence_number: ?u32 = null,
+            /// A packet spanning pages: its pieces so far, and whether one is being gathered.
+            gathered: ArrayListUnmanaged(u8) = .empty,
+            is_gathering: bool = false,
+            /// Whether the page being read begins with the rest of a packet this reader did not see begin - after a
+            /// move, or a lost page: those segments are passed over.
+            is_skipping_continuation: bool = false,
+            /// Pages skipped for damage, and runs of bytes that were no page.
+            skipped_page_count: usize = 0,
+
+            pub fn init(allocator: Allocator, bytes: []const u8) PacketReader {
+                return .{ .allocator = allocator, .bytes = bytes };
+            }
+
+            pub fn deinit(reader: *PacketReader) void {
+                reader.gathered.deinit(reader.allocator);
+            }
+
+            /// Moves the reader to the page beginning at `page_offset` - the stream's first page of sound, to loop; a
+            /// page a seek found - dropping any packet half read. The packet that page's first segments finish, begun
+            /// before it, is passed over.
+            pub fn seekToPage(reader: *PacketReader, page_offset: usize) void {
+                reader.next_page_offset = page_offset;
+                reader.page = null;
+                reader.next_sequence_number = null;
+                reader.dropGatheredPacket();
+            }
+
+            /// Drops the packet being gathered across pages: a page of it was lost, or the reader moved. The page after
+            /// begins with its rest, which is then passed over (`readNextPage`).
+            fn dropGatheredPacket(reader: *PacketReader) void {
+                reader.gathered.clearRetainingCapacity();
+                reader.is_gathering = false;
+            }
+
+            /// The next packet of the stream; null at its end - the end of its last page, or of the file.
+            pub fn next(reader: *PacketReader) Allocator.Error!?Packet {
+                while (true) {
+                    if (reader.page == null and !reader.readNextPage()) {
+                        return null;
+                    }
+                    const page: Page = reader.page.?;
+                    while (reader.segment_index < page.segment_lengths.len) {
+                        const segment_index: usize = reader.segment_index;
+                        const segment_length: usize = page.segment_lengths[segment_index];
+                        reader.segment_index += 1;
+                        reader.body_offset += segment_length;
+                        if (segment_length == 255) {
+                            continue;
+                        }
+                        // A packet ends with this segment.
+                        const piece: []const u8 = page.body[reader.packet_start_offset..reader.body_offset];
+                        reader.packet_start_offset = reader.body_offset;
+                        if (reader.is_skipping_continuation) {
+                            reader.is_skipping_continuation = false;
+                            continue;
+                        }
+                        const is_last_ending: bool = reader.last_packet_end_segment == segment_index;
+                        const packet_bytes: []const u8 = if (reader.is_gathering) gathered: {
+                            try reader.gathered.appendSlice(reader.allocator, piece);
+                            reader.is_gathering = false;
+                            break :gathered reader.gathered.items;
+                        } else piece;
+                        return .{
+                            .bytes = packet_bytes,
+                            .granule_position = if (is_last_ending) page.granule_position else null,
+                            .is_last = is_last_ending and page.is_last_page,
+                        };
+                    }
+                    // The page's segments are read. One of 255 at its end leaves a packet to finish on the next page:
+                    // its piece is gathered - unless it is the rest of one this reader is passing over.
+                    const unfinished_piece: []const u8 = page.body[reader.packet_start_offset..reader.body_offset];
+                    if (unfinished_piece.len > 0 and !reader.is_skipping_continuation) {
+                        if (!reader.is_gathering) {
+                            reader.gathered.clearRetainingCapacity();
+                            reader.is_gathering = true;
+                        }
+                        try reader.gathered.appendSlice(reader.allocator, unfinished_piece);
+                    }
+                    reader.page = null;
+                }
+            }
+
+            /// Reads the stream's next page into `page`, passing over pages of other streams and skipping damaged
+            /// ones; false at the end of the file. A packet being gathered goes on only into the next page of its
+            /// stream, which says it continues one: where a page between was lost - skipped for damage, or missing
+            /// from the sequence - the packet's pieces are dropped, and the rest of it passed over.
+            fn readNextPage(reader: *PacketReader) bool {
+                while (reader.next_page_offset < reader.bytes.len) {
+                    const remaining_bytes: []const u8 = reader.bytes[reader.next_page_offset..];
+                    const page: Page = readPage(remaining_bytes) catch |page_error| switch (page_error) {
+                        error.Truncated => return false,
+                        error.NoCapturePattern, error.UnsupportedVersion, error.ChecksumMismatch => {
+                            reader.skipped_page_count += 1;
+                            reader.dropGatheredPacket();
+                            reader.skipToNextCapturePattern();
+                            continue;
+                        },
+                    };
+                    reader.next_page_offset += page.byte_count;
+                    const serial_number: u32 = reader.serial_number orelse page.serial_number;
+                    if (page.serial_number != serial_number) {
+                        continue;
+                    }
+                    reader.serial_number = serial_number;
+                    const expected_sequence_number: u32 = reader.next_sequence_number orelse page.sequence_number;
+                    const is_page_missing_before: bool = page.sequence_number != expected_sequence_number;
+                    reader.next_sequence_number = page.sequence_number +% 1;
+                    if (reader.is_gathering and (is_page_missing_before or !page.is_continued_packet)) {
+                        reader.dropGatheredPacket();
+                    }
+                    reader.is_skipping_continuation = page.is_continued_packet and !reader.is_gathering;
+                    reader.page = page;
+                    reader.segment_index = 0;
+                    reader.body_offset = 0;
+                    reader.packet_start_offset = 0;
+                    reader.last_packet_end_segment = lastPacketEndSegment(page.segment_lengths);
+                    return true;
+                }
+                return false;
+            }
+
+            /// Moves `next_page_offset` to the next "OggS" past it - the next page's start, where damage left the
+            /// reader in the middle of bytes - or to the file's end.
+            fn skipToNextCapturePattern(reader: *PacketReader) void {
+                const search_start: usize = reader.next_page_offset + 1;
+                reader.next_page_offset = indexOfPos(u8, reader.bytes, search_start, "OggS") orelse reader.bytes.len;
+            }
+        };
+
+        /// The index of the last segment shorter than 255 - the last ending a packet - in a page's segment table;
+        /// null where every segment is 255 long.
+        fn lastPacketEndSegment(segment_lengths: []const u8) ?usize {
+            var segment_index: usize = segment_lengths.len;
+            while (segment_index > 0) {
+                segment_index -= 1;
+                if (segment_lengths[segment_index] < 255) {
+                    return segment_index;
+                }
+            }
+            return null;
+        }
+
         // ---- Tests
         pub const sample_ogg: []const u8 = @embedFile("./assets/sample.ogg");
 
@@ -7698,21 +8088,2682 @@ pub const audio = struct {
             try std_mod.testing.expect(!looksLikeOgg("RIFF\x00\x00\x00\x00WAVE"));
             try std_mod.testing.expect(!looksLikeOgg(""));
         }
+
+        test "pages: every page of the sample reads, its checksum right, and they cover the file" {
+            var page_offset: usize = 0;
+            var page_count: usize = 0;
+            var last_page: ?Page = null;
+            while (page_offset < sample_ogg.len) {
+                const page: Page = try readPage(sample_ogg[page_offset..]);
+                try std_mod.testing.expectEqual(@as(u32, @intCast(page_count)), page.sequence_number);
+                page_offset += page.byte_count;
+                page_count += 1;
+                last_page = page;
+            }
+            try std_mod.testing.expectEqual(sample_ogg.len, page_offset);
+            try std_mod.testing.expectEqual(@as(usize, 97), page_count);
+            try std_mod.testing.expect(last_page.?.is_last_page);
+            try std_mod.testing.expectEqual(@as(?u64, 4_236_528), last_page.?.granule_position);
+        }
+
+        test "packets: the sample's three headers, then its sound, to its last sample" {
+            var reader: PacketReader = .init(testing_allocator, sample_ogg);
+            defer reader.deinit();
+            // The identification, comment and setup headers: types 1, 3 and 5, each followed by "vorbis".
+            const header_types = [3]u8{ 1, 3, 5 };
+            for (header_types) |header_type| {
+                const header: Packet = (try reader.next()).?;
+                try std_mod.testing.expectEqual(header_type, header.bytes[0]);
+                try std_mod.testing.expectEqualStrings("vorbis", header.bytes[1..7]);
+            }
+            // Every packet after: sound - its first bit 0 - none empty; the granule positions rising to the stream's
+            // length, given with the last packet.
+            var sound_packet_count: usize = 0;
+            var last_granule_position: u64 = 0;
+            var has_ended: bool = false;
+            while (try reader.next()) |packet| {
+                try std_mod.testing.expect(!has_ended);
+                try std_mod.testing.expect(packet.bytes.len > 0);
+                try std_mod.testing.expectEqual(@as(u8, 0), packet.bytes[0] & 1);
+                if (packet.granule_position) |granule_position| {
+                    try std_mod.testing.expect(granule_position >= last_granule_position);
+                    last_granule_position = granule_position;
+                }
+                has_ended = packet.is_last;
+                sound_packet_count += 1;
+            }
+            try std_mod.testing.expect(has_ended);
+            try std_mod.testing.expectEqual(@as(u64, 4_236_528), last_granule_position);
+            try std_mod.testing.expectEqual(@as(usize, 0), reader.skipped_page_count);
+            // A block of 256 or 2048 samples a packet, a half of each heard: between 4 236 528 / 1024 and / 128.
+            try std_mod.testing.expect(sound_packet_count > 4_236_528 / 1024 and sound_packet_count < 4_236_528 / 128);
+        }
+
+        /// Writes a page for the tests below: its header, `segment_lengths` and `body`, its checksum computed.
+        fn writeTestPage(
+            output: []u8,
+            flags: u8,
+            granule_position: u64,
+            sequence_number: u32,
+            segment_lengths: []const u8,
+            body: []const u8,
+        ) []const u8 {
+            const header: []u8 = output[0..page_header_byte_count];
+            @memcpy(header[0..4], "OggS");
+            header[4] = 0;
+            header[5] = flags;
+            writeInt(u64, header[6..14], granule_position, .little);
+            writeInt(u32, header[14..18], 7, .little);
+            writeInt(u32, header[18..22], sequence_number, .little);
+            writeInt(u32, header[22..26], 0, .little);
+            header[26] = @intCast(segment_lengths.len);
+            const table_end: usize = page_header_byte_count + segment_lengths.len;
+            @memcpy(output[page_header_byte_count..table_end], segment_lengths);
+            @memcpy(output[table_end..][0..body.len], body);
+            const page_bytes: []u8 = output[0 .. table_end + body.len];
+            writeInt(u32, page_bytes[22..26], pageChecksum(page_bytes), .little);
+            return page_bytes;
+        }
+
+        test "packets: one of 255 bytes ends with a segment of 0; one across two pages is gathered" {
+            // Page 0: a packet of 255 bytes (segments 255, 0), then the first 255 bytes of a 300-byte packet.
+            // Page 1: the rest of it, 45 bytes, then a packet of 3 - the stream's last page.
+            var body_bytes: [600]u8 = undefined;
+            for (&body_bytes, 0..) |*body_byte, byte_index| {
+                body_byte.* = @truncate(byte_index);
+            }
+            var file_bytes: [1200]u8 = undefined;
+            const first_page: []const u8 = writeTestPage(
+                file_bytes[0..],
+                2,
+                maxInt(u64),
+                0,
+                &.{ 255, 0, 255 },
+                body_bytes[0..510],
+            );
+            const second_body: []const u8 = body_bytes[510..558];
+            const second_page: []const u8 = writeTestPage(
+                file_bytes[first_page.len..],
+                1 | 4,
+                1000,
+                1,
+                &.{ 45, 3 },
+                second_body,
+            );
+            const stream_bytes: []const u8 = file_bytes[0 .. first_page.len + second_page.len];
+            var reader: PacketReader = .init(testing_allocator, stream_bytes);
+            defer reader.deinit();
+            const exact_packet: Packet = (try reader.next()).?;
+            try std_mod.testing.expectEqualSlices(u8, body_bytes[0..255], exact_packet.bytes);
+            try std_mod.testing.expectEqual(@as(?u64, null), exact_packet.granule_position);
+            const spanning_packet: Packet = (try reader.next()).?;
+            try std_mod.testing.expectEqualSlices(u8, body_bytes[255..555], spanning_packet.bytes);
+            try std_mod.testing.expect(!spanning_packet.is_last);
+            const last_packet: Packet = (try reader.next()).?;
+            try std_mod.testing.expectEqualSlices(u8, body_bytes[555..558], last_packet.bytes);
+            try std_mod.testing.expectEqual(@as(?u64, 1000), last_packet.granule_position);
+            try std_mod.testing.expect(last_packet.is_last);
+            try std_mod.testing.expectEqual(@as(?Packet, null), try reader.next());
+        }
+
+        test "packets: a packet across a lost page is dropped whole - damaged or missing - and the next read" {
+            // Page 0: packet A (10 bytes), then packet B begins (255). Page 1: B's middle (255). Page 2: B's end
+            // (20), then packet C (5). B loses its middle - the page damaged, or missing from the sequence - and must
+            // not come out with a hole in it.
+            var body_bytes: [600]u8 = undefined;
+            for (&body_bytes, 0..) |*body_byte, byte_index| {
+                body_byte.* = @truncate(byte_index *% 7);
+            }
+            var file_bytes: [1400]u8 = undefined;
+            const page_0: []const u8 = writeTestPage(
+                file_bytes[0..],
+                2,
+                maxInt(u64),
+                0,
+                &.{ 10, 255 },
+                body_bytes[0..265],
+            );
+            const page_1_start: usize = page_0.len;
+            const page_1: []const u8 = writeTestPage(
+                file_bytes[page_1_start..],
+                1,
+                maxInt(u64),
+                1,
+                &.{255},
+                body_bytes[265..520],
+            );
+            const page_2_start: usize = page_1_start + page_1.len;
+            const page_2_body: []const u8 = body_bytes[520..545];
+            const page_2: []const u8 = writeTestPage(
+                file_bytes[page_2_start..],
+                1 | 4,
+                77,
+                2,
+                &.{ 20, 5 },
+                page_2_body,
+            );
+            const stream_end: usize = page_2_start + page_2.len;
+            // Damaged: a byte of page 1's body changed.
+            var damaged_bytes: [1400]u8 = file_bytes;
+            damaged_bytes[page_1_start + 40] ^= 0x55;
+            // Missing: page 1 left out, page 2 straight after page 0.
+            var missing_bytes: [1400]u8 = undefined;
+            @memcpy(missing_bytes[0..page_0.len], page_0);
+            @memcpy(missing_bytes[page_0.len..][0..page_2.len], page_2);
+            const streams = [2][]const u8{ damaged_bytes[0..stream_end], missing_bytes[0 .. page_0.len + page_2.len] };
+            for (streams) |stream_bytes| {
+                var reader: PacketReader = .init(testing_allocator, stream_bytes);
+                defer reader.deinit();
+                const packet_a: Packet = (try reader.next()).?;
+                try std_mod.testing.expectEqualSlices(u8, body_bytes[0..10], packet_a.bytes);
+                const packet_c: Packet = (try reader.next()).?;
+                try std_mod.testing.expectEqualSlices(u8, body_bytes[540..545], packet_c.bytes);
+                try std_mod.testing.expect(packet_c.is_last);
+                try std_mod.testing.expectEqual(@as(?Packet, null), try reader.next());
+            }
+        }
+
+        test "packets: a damaged page is skipped and counted, its packets lost, the stream read on" {
+            // The sample's first three pages, a byte of the second's body changed.
+            var page_offsets: [4]usize = undefined;
+            page_offsets[0] = 0;
+            for (1..4) |page_index| {
+                const page: Page = try readPage(sample_ogg[page_offsets[page_index - 1]..]);
+                page_offsets[page_index] = page_offsets[page_index - 1] + page.byte_count;
+            }
+            const damaged: []u8 = try testing_allocator.dupe(u8, sample_ogg[0..page_offsets[3]]);
+            defer testing_allocator.free(damaged);
+            damaged[page_offsets[2] - 10] ^= 0xff;
+            try std_mod.testing.expectError(error.ChecksumMismatch, readPage(damaged[page_offsets[1]..]));
+            var reader: PacketReader = .init(testing_allocator, damaged);
+            defer reader.deinit();
+            var packets: [64]Packet = undefined;
+            var packet_count: usize = 0;
+            while (try reader.next()) |packet| {
+                packets[packet_count] = packet;
+                packet_count += 1;
+            }
+            try std_mod.testing.expectEqual(@as(usize, 1), reader.skipped_page_count);
+            // The first page's packet - the identification header - then the packets that end on the third page,
+            // less the one the damaged page began, whose rest the third page holds: passed over.
+            const third_page: Page = try readPage(sample_ogg[page_offsets[2]..]);
+            var third_page_ending_count: usize = 0;
+            for (third_page.segment_lengths) |segment_length| {
+                third_page_ending_count += @intFromBool(segment_length < 255);
+            }
+            const passed_over_count: usize = @intFromBool(third_page.is_continued_packet);
+            try std_mod.testing.expectEqual(1 + third_page_ending_count - passed_over_count, packet_count);
+            try std_mod.testing.expectEqual(@as(u8, 1), packets[0].bytes[0]);
+        }
+    };
+
+    /// Vorbis I (xiph.org's specification): a codec of overlapping blocks, each described by a floor - the spectrum's
+    /// rough curve - and a residue - the detail over it - both read with codebooks the stream defines in its own
+    /// headers. A stream begins with three header packets (`readHeaders`): the identification - channels, rate,
+    /// block sizes; the comment - the encoder's name and tags; and the setup - every codebook, floor, residue,
+    /// mapping and mode the sound packets after it use. This part reads the headers; decoding the sound packets
+    /// follows them.
+    pub const vorbis = struct {
+        pub const SetupError = error{
+            /// A packet where a header should be is not one: its type byte and "vorbis" are missing.
+            NotVorbis,
+            /// A version of Vorbis other than I.
+            UnsupportedVersion,
+            /// A value the specification does not allow: no channels, block sizes out of order, an index past its
+            /// table, a codebook whose codewords cannot all be given, a field that must be zero not zero.
+            InvalidHeader,
+            /// A floor of type 0: the line-spectral floor of Vorbis's first encoders, which none has made since
+            /// libvorbis 1.0. Its streams are refused rather than decoded wrong.
+            UnsupportedFloor0,
+            /// A header read past its packet's end.
+            HeaderTruncated,
+            /// The stream ends before its three headers.
+            MissingHeader,
+        } || Allocator.Error;
+
+        // ---- Bits ----
+
+        /// Reads one packet's bits, least significant first - Vorbis packs its fields from the low bit of each byte
+        /// up, a field running on into the next byte's low bits. A read past the packet's end gives zeros for the
+        /// missing bits, and the reader remembers it (`is_past_end`): a header so read is truncated; a sound packet
+        /// ends there, by the specification, the rest of it silence.
+        const BitReader = struct {
+            bytes: []const u8,
+            bit_position: usize = 0,
+            is_past_end: bool = false,
+
+            /// The next `bit_count` bits - 32 at most - as an integer, the first read in its lowest bit.
+            fn read(reader: *BitReader, bit_count: u6) u32 {
+                assertf(bit_count <= 32, @src(), "vorbis: a read of {d} bits, past 32", .{bit_count});
+                var value: u32 = 0;
+                var bits_read: u6 = 0;
+                while (bits_read < bit_count) {
+                    const byte_index: usize = reader.bit_position / 8;
+                    if (byte_index >= reader.bytes.len) {
+                        reader.is_past_end = true;
+                        reader.bit_position += bit_count - bits_read;
+                        return value;
+                    }
+                    const bit_in_byte: u3 = @intCast(reader.bit_position % 8);
+                    const bits_left_in_byte: u6 = 8 - @as(u6, bit_in_byte);
+                    const bits_taken: u6 = @min(bits_left_in_byte, bit_count - bits_read);
+                    const byte_bits: u32 = reader.bytes[byte_index] >> bit_in_byte;
+                    const mask: u32 = (@as(u32, 1) << @intCast(bits_taken)) - 1;
+                    value |= (byte_bits & mask) << @intCast(bits_read);
+                    bits_read += bits_taken;
+                    reader.bit_position += bits_taken;
+                }
+                return value;
+            }
+
+            fn readFlag(reader: *BitReader) bool {
+                return reader.read(1) == 1;
+            }
+        };
+
+        // ---- Vorbis's arithmetic ----
+
+        /// The bits needed to write `value` - the position of its highest set bit, plus one; 0 for 0. The
+        /// specification's `ilog`: a field holding an index below `n` is `bitLength(n - 1)` bits wide.
+        fn bitLength(value: u32) u6 {
+            return @intCast(32 - @clz(value));
+        }
+
+        /// A number in Vorbis's own float format, as a codebook's minimum and step are written: a 21-bit mantissa,
+        /// a 10-bit exponent biased by 788 - the 768 of a fixed point plus the mantissa's 20 bits - and a sign bit
+        /// at the top: `(-1)^sign * mantissa * 2^(exponent - 788)`. Computed in doubles, which hold the whole
+        /// range, then narrowed.
+        fn unpackFloat(bits: u32) f32 {
+            const mantissa: u32 = bits & 0x1f_ffff;
+            const is_negative: bool = bits & 0x8000_0000 != 0;
+            const exponent: i32 = @intCast((bits & 0x7fe0_0000) >> 21);
+            // 2 to the power `exponent - 788`, -788 to 235: within a double's normal range, so built from its bits -
+            // the power plus the double's bias, 1023, in its exponent field, a mantissa of 0 - exact, and with no
+            // call to a library's `exp2`, which a page's WebAssembly has none of.
+            const biased_exponent: u64 = @intCast(exponent - 788 + 1023);
+            const power_of_two: f64 = @bitCast(biased_exponent << 52);
+            const magnitude: f64 = float64(mantissa) * power_of_two;
+            const value: f64 = if (is_negative) -magnitude else magnitude;
+            return @floatCast(value);
+        }
+
+        /// The values along each side of a type 1 lookup's lattice: the greatest `r` with `r^dimensions` at most
+        /// `entry_count`, so that every entry is a point of an `r`-sided grid of `dimensions` dimensions. Found by
+        /// halving, in integers that saturate - exact, where a logarithm's estimate needs correcting.
+        fn lookup1Values(entry_count: u32, dimensions: u16) u32 {
+            var lowest: u32 = 1;
+            var highest: u32 = entry_count;
+            while (lowest < highest) {
+                const middle: u32 = lowest + (highest - lowest + 1) / 2;
+                if (saturatingPower(middle, dimensions) <= entry_count) {
+                    lowest = middle;
+                } else {
+                    highest = middle - 1;
+                }
+            }
+            return lowest;
+        }
+
+        /// `base^exponent`, held at `maxInt(u64)` once it passes it.
+        fn saturatingPower(base: u32, exponent: u16) u64 {
+            var power: u64 = 1;
+            for (0..exponent) |_| {
+                const product: u64, const overflow_bit: u1 = @mulWithOverflow(power, base);
+                if (overflow_bit != 0) {
+                    return maxInt(u64);
+                }
+                power = product;
+            }
+            return power;
+        }
+
+        // ---- The identification and comment headers ----
+
+        /// What the identification header says.
+        pub const Identification = struct {
+            channels: u8,
+            sample_rate: u32,
+            /// The two block sizes, in samples: powers of two from 64 to 8192, the short one no larger than the long.
+            /// A mode says which a sound packet uses (`Mode.is_long_block`).
+            short_block_size: u16,
+            long_block_size: u16,
+        };
+
+        /// Reads a header's type byte and "vorbis", which every header begins with.
+        fn readHeaderStart(packet: []const u8, header_type: u8) SetupError!BitReader {
+            if (packet.len < 7 or packet[0] != header_type or !eql(u8, packet[1..7], "vorbis")) {
+                return error.NotVorbis;
+            }
+            return .{ .bytes = packet, .bit_position = 7 * 8 };
+        }
+
+        /// The identification header: the first packet, type 1, 30 bytes.
+        ///
+        ///     bits  field
+        ///     32    Vorbis version: 0
+        ///     8     channels: at least 1
+        ///     32    sample rate: not 0
+        ///     32    three bitrates - most, nominal, least - which a decoder need not read
+        ///     4     the short block size's power of two, 6 to 13
+        ///     4     the long one's, no smaller
+        ///     1     framing bit: 1
+        pub fn readIdentification(packet: []const u8) SetupError!Identification {
+            var reader: BitReader = try readHeaderStart(packet, 1);
+            if (reader.read(32) != 0) {
+                return error.UnsupportedVersion;
+            }
+            const channels: u32 = reader.read(8);
+            const sample_rate: u32 = reader.read(32);
+            _ = reader.read(32);
+            _ = reader.read(32);
+            _ = reader.read(32);
+            const short_power: u32 = reader.read(4);
+            const long_power: u32 = reader.read(4);
+            const is_framed: bool = reader.readFlag();
+            if (reader.is_past_end) {
+                return error.HeaderTruncated;
+            }
+            const is_short_valid: bool = short_power >= 6 and short_power <= 13;
+            const is_long_valid: bool = long_power >= 6 and long_power <= 13 and long_power >= short_power;
+            if (channels == 0 or sample_rate == 0 or !is_short_valid or !is_long_valid or !is_framed) {
+                return error.InvalidHeader;
+            }
+            return .{
+                .channels = @intCast(channels),
+                .sample_rate = sample_rate,
+                .short_block_size = @as(u16, 1) << @intCast(short_power),
+                .long_block_size = @as(u16, 1) << @intCast(long_power),
+            };
+        }
+
+        /// The comment header: the second packet, type 3 - the encoder's name and the stream's tags, each a length of
+        /// 32 bits and that many bytes of UTF-8, `NAME=value` by convention. Copied into `arena`: a packet's bytes
+        /// last only until the reader's next call.
+        fn readComment(
+            arena: Allocator,
+            packet: []const u8,
+            vendor: *[]const u8,
+            comments: *[]const []const u8,
+        ) SetupError!void {
+            var reader: BitReader = try readHeaderStart(packet, 3);
+            vendor.* = try readCommentString(arena, &reader);
+            const comment_count: u32 = reader.read(32);
+            // Each comment takes four bytes at least: a count past the packet's bytes is damage, not a list.
+            if (comment_count > packet.len / 4) {
+                return error.InvalidHeader;
+            }
+            const comment_list: [][]const u8 = try arena.alloc([]const u8, comment_count);
+            for (comment_list) |*comment| {
+                comment.* = try readCommentString(arena, &reader);
+            }
+            if (!reader.readFlag() or reader.is_past_end) {
+                return error.HeaderTruncated;
+            }
+            comments.* = comment_list;
+        }
+
+        /// A string of the comment header: its length, then its bytes, copied.
+        fn readCommentString(arena: Allocator, reader: *BitReader) SetupError![]const u8 {
+            const byte_count: u32 = reader.read(32);
+            const start: usize = reader.bit_position / 8;
+            if (reader.is_past_end or byte_count > reader.bytes.len - start) {
+                return error.HeaderTruncated;
+            }
+            reader.bit_position += @as(usize, byte_count) * 8;
+            return arena.dupe(u8, reader.bytes[start..][0..byte_count]);
+        }
+
+        // ---- Codebooks ----
+
+        /// A codebook of the setup header: a prefix code - a codeword for each entry used - and, for a codebook with
+        /// a lookup, a vector of `dimensions` values for each entry, which a residue's partitions are built of. A
+        /// floor reads its values as entry numbers, and needs no vectors.
+        pub const Codebook = struct {
+            dimensions: u16,
+            entry_count: u32,
+            /// Each entry's codeword length in bits, 1 to 32; 0 for an entry the code does not use.
+            codeword_lengths: []const u8,
+            /// Each entry's codeword (`assignCodewords`): its `length` bits, the first bit read the most significant.
+            codewords: []const u32,
+            /// For a codebook with a lookup: `entry_count * dimensions` values, each entry's vector together; empty
+            /// for a codebook without.
+            vectors: []const f32,
+        };
+
+        /// A codebook's entries this decoder accepts, and its vectors' values: 2^20 and 2^22, where the
+        /// specification allows 2^24 entries and encoders write 2^16 at most - a header asking more is damaged, and
+        /// refused before its tables are made.
+        const most_codebook_entries: u32 = 1 << 20;
+        const most_codebook_vector_values: u64 = 1 << 22;
+
+        /// Gives each used entry its codeword, as the specification assigns them: in entry order, each takes the
+        /// lowest free codeword of its length - the leftmost free branch of the code's tree at that depth - so that
+        /// no codeword begins another, and the code is read by walking the tree a bit at a time from its root.
+        ///
+        /// A depth of the tree has at most one free node at any moment, the next to give out there; `free_nodes`
+        /// holds it, as its codeword's bits from the top of a 32-bit value, 0 for none. An entry of length `L`
+        /// takes the free node at depth `L`, or - none there - the deepest free node above it, of which it takes the
+        /// leftmost descendant at depth `L`, freeing that descendant's right-hand siblings, one at each depth
+        /// between. The first entry takes the all-zero codeword of its length, which frees one node at each depth
+        /// down to it. An entry that finds no free node has no room in the tree: the lengths over-fill it.
+        ///
+        ///     lengths  2 4 4 4 4 2 3 3     (the specification's own example)
+        ///     codes    00 0100 0101 0110 0111 10 110 111
+        fn assignCodewords(lengths: []const u8, codewords: []u32) SetupError!void {
+            assertf(
+                codewords.len == lengths.len,
+                @src(),
+                "vorbis: {d} codewords for {d} lengths",
+                .{ codewords.len, lengths.len },
+            );
+            @memset(codewords, 0);
+            var free_nodes: [33]u32 = @splat(0);
+            const first_entry: usize = for (lengths, 0..) |codeword_length, entry_index| {
+                if (codeword_length != 0) {
+                    break entry_index;
+                }
+            } else return;
+            const first_length: u6 = @intCast(lengths[first_entry]);
+            for (1..@as(usize, first_length) + 1) |depth| {
+                free_nodes[depth] = @as(u32, 1) << @intCast(32 - depth);
+            }
+            for (lengths[first_entry + 1 ..], first_entry + 1..) |codeword_length, entry_index| {
+                if (codeword_length == 0) {
+                    continue;
+                }
+                var depth: usize = codeword_length;
+                while (depth > 0 and free_nodes[depth] == 0) {
+                    depth -= 1;
+                }
+                if (depth == 0) {
+                    return error.InvalidHeader;
+                }
+                const taken_node: u32 = free_nodes[depth];
+                free_nodes[depth] = 0;
+                codewords[entry_index] = taken_node >> @intCast(32 - @as(usize, codeword_length));
+                // Taken from a shallower node: its right-hand children at each depth down to `length` are free.
+                var free_depth: usize = codeword_length;
+                while (free_depth > depth) : (free_depth -= 1) {
+                    free_nodes[free_depth] = taken_node + (@as(u32, 1) << @intCast(32 - free_depth));
+                }
+            }
+        }
+
+        /// Reads a codebook (section 3.2.1).
+        ///
+        ///     bits  field
+        ///     24    sync: 0x564342, "BCV"
+        ///     16    dimensions
+        ///     24    entries
+        ///     1     ordered: lengths given as runs, each a length one longer than the last
+        ///             5     the first length, less 1
+        ///             ...   for each run: how many entries have this length, in bitLength(entries left) bits
+        ///           else:
+        ///             1     sparse: each entry with a flag first, unused where it is 0
+        ///             ...   each entry's length less 1, in 5 bits
+        ///     4     lookup type: 0 none; 1 a lattice of values each dimension shares; 2 every value written
+        ///             32    minimum, in Vorbis's float format
+        ///             32    step
+        ///             4     each multiplicand's bits, less 1
+        ///             1     whether a vector's values are cumulative, each the sum of those before it
+        ///             ...   the multiplicands: `lookup1Values` of them for type 1, entries * dimensions for 2
+        fn readCodebook(arena: Allocator, reader: *BitReader) SetupError!Codebook {
+            if (reader.read(24) != 0x564342) {
+                return error.InvalidHeader;
+            }
+            const dimensions: u32 = reader.read(16);
+            const entry_count: u32 = reader.read(24);
+            if (entry_count > most_codebook_entries or (dimensions == 0 and entry_count != 0)) {
+                return error.InvalidHeader;
+            }
+            const lengths: []u8 = try arena.alloc(u8, entry_count);
+            if (reader.readFlag()) {
+                var codeword_length: u32 = reader.read(5) + 1;
+                var entry_index: u32 = 0;
+                while (entry_index < entry_count) : (codeword_length += 1) {
+                    const run_length: u32 = reader.read(bitLength(entry_count - entry_index));
+                    if (codeword_length > 32 or run_length > entry_count - entry_index or reader.is_past_end) {
+                        return error.InvalidHeader;
+                    }
+                    @memset(lengths[entry_index..][0..run_length], @intCast(codeword_length));
+                    entry_index += run_length;
+                }
+            } else {
+                const is_sparse: bool = reader.readFlag();
+                for (lengths) |*codeword_length| {
+                    const is_used: bool = !is_sparse or reader.readFlag();
+                    codeword_length.* = if (is_used) @intCast(reader.read(5) + 1) else 0;
+                }
+            }
+            const codewords: []u32 = try arena.alloc(u32, entry_count);
+            try assignCodewords(lengths, codewords);
+            const lookup_type: u32 = reader.read(4);
+            const vectors: []const f32 = switch (lookup_type) {
+                0 => &.{},
+                1, 2 => try readCodebookVectors(arena, reader, lookup_type, entry_count, @intCast(dimensions)),
+                else => return error.InvalidHeader,
+            };
+            if (reader.is_past_end) {
+                return error.HeaderTruncated;
+            }
+            return .{
+                .dimensions = @intCast(dimensions),
+                .entry_count = entry_count,
+                .codeword_lengths = lengths,
+                .codewords = codewords,
+                .vectors = vectors,
+            };
+        }
+
+        /// A codebook's lookup, unpacked into each entry's vector. Each value is `multiplicand * step + minimum`,
+        /// plus - where the values are cumulative - the value before it in the vector. Type 2 writes each entry's
+        /// multiplicands; type 1 writes `r` of them for a lattice that every dimension indexes: entry `e`'s value
+        /// in dimension `d` is multiplicand `(e / r^d) % r` - the entry number's digit `d`, written in base `r`.
+        fn readCodebookVectors(
+            arena: Allocator,
+            reader: *BitReader,
+            lookup_type: u32,
+            entry_count: u32,
+            dimensions: u16,
+        ) SetupError![]const f32 {
+            const minimum: f32 = unpackFloat(reader.read(32));
+            const step: f32 = unpackFloat(reader.read(32));
+            const multiplicand_bits: u6 = @intCast(reader.read(4) + 1);
+            const is_cumulative: bool = reader.readFlag();
+            const value_count: u64 = @as(u64, entry_count) * dimensions;
+            if (value_count > most_codebook_vector_values) {
+                return error.InvalidHeader;
+            }
+            const multiplicand_count: u32 = if (lookup_type == 1)
+                lookup1Values(entry_count, dimensions)
+            else
+                @intCast(value_count);
+            const multiplicands: []u32 = try arena.alloc(u32, multiplicand_count);
+            for (multiplicands) |*multiplicand| {
+                multiplicand.* = reader.read(multiplicand_bits);
+            }
+            const vectors: []f32 = try arena.alloc(f32, @intCast(value_count));
+            for (0..entry_count) |entry_index| {
+                var previous_value: f32 = 0;
+                var lattice_divisor: u64 = 1;
+                for (0..dimensions) |dimension| {
+                    const multiplicand_index: u64 = if (lookup_type == 1)
+                        (entry_index / lattice_divisor) % multiplicand_count
+                    else
+                        entry_index * dimensions + dimension;
+                    const multiplicand: f32 = float(multiplicands[@intCast(multiplicand_index)]);
+                    const value: f32 = multiplicand * step + minimum + previous_value;
+                    vectors[entry_index * dimensions + dimension] = value;
+                    if (is_cumulative) {
+                        previous_value = value;
+                    }
+                    lattice_divisor *= multiplicand_count;
+                }
+            }
+            return vectors;
+        }
+
+        // ---- Floors, residues, mappings, modes ----
+
+        /// A floor of type 1: the spectrum's rough curve as a line through points, their X positions fixed here and
+        /// their heights read from each sound packet, a few from each partition of points by its class's books.
+        pub const Floor = struct {
+            /// Each partition's class.
+            partition_classes: []const u8,
+            classes: []const FloorClass,
+            /// How coarse the points' heights are, 1 to 4: each unit of height is `multiplier` steps of the 256-step
+            /// decibel table a floor is read through, so heights run over 256, 128, 86 or 64 values.
+            multiplier: u8,
+            /// The points' X positions, as the stream lists them: 0, then `2^range_bits` - the floor's end - then
+            /// each partition's. Unique.
+            x_list: []const u16,
+            /// The points in order of X: their indices in `x_list`.
+            sorted_order: []const u8,
+            /// For each point from the third on, its neighbours among the points listed before it: the nearest below
+            /// and the nearest above in X - the two its height is predicted between.
+            low_neighbors: []const u8,
+            high_neighbors: []const u8,
+        };
+
+        /// A class of a floor's partitions: how many points each partition of it holds, and the books those
+        /// points' heights are read with - one book per subclass, chosen for each point by bits of the masterbook's
+        /// entry.
+        pub const FloorClass = struct {
+            dimensions: u8,
+            subclass_bits: u8,
+            masterbook: ?u8,
+            subclass_books: [8]?u8,
+        };
+
+        /// A residue: the detail over the floor, as vectors of codebook values. The range `begin` to `end` of the
+        /// spectrum - of every channel's, laid one after another or interleaved as the type says - is cut into
+        /// partitions of `partition_size`; each partition has a classification, read by `classbook`, and the
+        /// classification's book for each of up to 8 passes, which add up.
+        pub const Residue = struct {
+            /// 0: each channel's vector its own, a partition's values spread across it; 1: each channel's own, a
+            /// partition's values in a row; 2: the channels interleaved into one vector, read as type 1.
+            residue_type: u8,
+            begin: u32,
+            end: u32,
+            partition_size: u32,
+            classifications: u8,
+            classbook: u8,
+            /// For each classification, its book in each pass; null where it has none.
+            books: []const [8]?u8,
+        };
+
+        /// A pair of channels coded together, one as the magnitude, the other as the angle - for stereo, how alike
+        /// they are.
+        pub const CouplingStep = struct {
+            magnitude_channel: u8,
+            angle_channel: u8,
+        };
+
+        /// A submap: the floor and the residue its channels are decoded with.
+        pub const Submap = struct {
+            floor: u8,
+            residue: u8,
+        };
+
+        /// A mapping: how a sound packet's channels are coded - coupled in steps, and each channel's submap.
+        pub const Mapping = struct {
+            coupling_steps: []const CouplingStep,
+            channel_submaps: []const u8,
+            submaps: []const Submap,
+        };
+
+        /// A mode: a sound packet's first field says which, and the mode says its block size and mapping.
+        pub const Mode = struct {
+            is_long_block: bool,
+            mapping: u8,
+        };
+
+        /// What the setup header defines.
+        pub const Setup = struct {
+            codebooks: []const Codebook,
+            floors: []const Floor,
+            residues: []const Residue,
+            mappings: []const Mapping,
+            modes: []const Mode,
+        };
+
+        /// The 8-bit index of a book, which must name one of the setup's codebooks.
+        fn readBookIndex(reader: *BitReader, codebook_count: usize) SetupError!u8 {
+            const book: u32 = reader.read(8);
+            if (book >= codebook_count) {
+                return error.InvalidHeader;
+            }
+            return @intCast(book);
+        }
+
+        /// Reads a floor of type 1 (section 7.2.2), and orders its points.
+        fn readFloor(
+            arena: Allocator,
+            reader: *BitReader,
+            codebook_count: usize,
+        ) SetupError!Floor {
+            const partition_count: u32 = reader.read(5);
+            const partition_classes: []u8 = try arena.alloc(u8, partition_count);
+            var class_count: usize = 0;
+            for (partition_classes) |*partition_class| {
+                partition_class.* = @intCast(reader.read(4));
+                class_count = @max(class_count, @as(usize, partition_class.*) + 1);
+            }
+            const classes: []FloorClass = try arena.alloc(FloorClass, class_count);
+            for (classes) |*class| {
+                class.dimensions = @intCast(reader.read(3) + 1);
+                class.subclass_bits = @intCast(reader.read(2));
+                class.masterbook = if (class.subclass_bits != 0) try readBookIndex(reader, codebook_count) else null;
+                class.subclass_books = @splat(null);
+                const subclass_count: usize = @as(usize, 1) << @intCast(class.subclass_bits);
+                for (class.subclass_books[0..subclass_count]) |*subclass_book| {
+                    const book_plus_one: u32 = reader.read(8);
+                    if (book_plus_one > codebook_count) {
+                        return error.InvalidHeader;
+                    }
+                    subclass_book.* = if (book_plus_one == 0) null else @intCast(book_plus_one - 1);
+                }
+            }
+            const multiplier: u8 = @intCast(reader.read(2) + 1);
+            const range_bits: u6 = @intCast(reader.read(4));
+            var point_count: usize = 2;
+            for (partition_classes) |partition_class| {
+                point_count += classes[partition_class].dimensions;
+            }
+            // 65 points at most, as the specification bounds a floor: two ends and 63 between.
+            if (point_count > 65) {
+                return error.InvalidHeader;
+            }
+            const x_list: []u16 = try arena.alloc(u16, point_count);
+            x_list[0] = 0;
+            x_list[1] = @intCast(@as(u32, 1) << @intCast(range_bits));
+            var point_index: usize = 2;
+            for (partition_classes) |partition_class| {
+                for (0..classes[partition_class].dimensions) |_| {
+                    x_list[point_index] = @intCast(reader.read(range_bits));
+                    point_index += 1;
+                }
+            }
+            const sorted_order: []u8 = try arena.alloc(u8, point_count);
+            for (sorted_order, 0..) |*order, index| {
+                order.* = @intCast(index);
+            }
+            sortSlice(u8, sorted_order, x_list, struct {
+                fn isBefore(points: []const u16, first: u8, second: u8) bool {
+                    return points[first] < points[second];
+                }
+            }.isBefore);
+            for (sorted_order[1..], sorted_order[0 .. point_count - 1]) |later, earlier| {
+                if (x_list[later] == x_list[earlier]) {
+                    return error.InvalidHeader;
+                }
+            }
+            // Each point's neighbours among those before it: the nearest below in X, and the nearest above.
+            const low_neighbors: []u8 = try arena.alloc(u8, point_count);
+            const high_neighbors: []u8 = try arena.alloc(u8, point_count);
+            @memset(low_neighbors[0..@min(point_count, 2)], 0);
+            @memset(high_neighbors[0..@min(point_count, 2)], 0);
+            for (2..point_count) |point| {
+                var low: usize = 0;
+                var high: usize = 1;
+                for (0..point) |earlier| {
+                    const earlier_x: u16 = x_list[earlier];
+                    if (earlier_x < x_list[point] and earlier_x > x_list[low]) {
+                        low = earlier;
+                    }
+                    if (earlier_x > x_list[point] and earlier_x < x_list[high]) {
+                        high = earlier;
+                    }
+                }
+                low_neighbors[point] = @intCast(low);
+                high_neighbors[point] = @intCast(high);
+            }
+            return .{
+                .partition_classes = partition_classes,
+                .classes = classes,
+                .multiplier = multiplier,
+                .x_list = x_list,
+                .sorted_order = sorted_order,
+                .low_neighbors = low_neighbors,
+                .high_neighbors = high_neighbors,
+            };
+        }
+
+        /// Reads a residue (section 8.6.1): its range, partitions and classifications, and each classification's
+        /// books - a cascade of 8 bits saying in which passes it has one. A book a residue reads vectors with must
+        /// have them: a lookup.
+        fn readResidue(
+            arena: Allocator,
+            reader: *BitReader,
+            residue_type: u8,
+            codebooks: []const Codebook,
+        ) SetupError!Residue {
+            const begin: u32 = reader.read(24);
+            const end: u32 = reader.read(24);
+            const partition_size: u32 = reader.read(24) + 1;
+            const classifications: u32 = reader.read(6) + 1;
+            const classbook: u8 = try readBookIndex(reader, codebooks.len);
+            if (end < begin) {
+                return error.InvalidHeader;
+            }
+            var cascades: [64]u8 = undefined;
+            for (cascades[0..classifications]) |*cascade| {
+                const low_bits: u32 = reader.read(3);
+                const high_bits: u32 = if (reader.readFlag()) reader.read(5) else 0;
+                cascade.* = @intCast(high_bits * 8 + low_bits);
+            }
+            const books: [][8]?u8 = try arena.alloc([8]?u8, classifications);
+            for (books, cascades[0..classifications]) |*classification_books, cascade| {
+                for (classification_books, 0..) |*pass_book, pass| {
+                    const has_book: bool = (cascade >> @intCast(pass)) & 1 != 0;
+                    pass_book.* = if (has_book) try readBookIndex(reader, codebooks.len) else null;
+                    if (pass_book.*) |book| {
+                        if (codebooks[book].vectors.len == 0) {
+                            return error.InvalidHeader;
+                        }
+                    }
+                }
+            }
+            return .{
+                .residue_type = residue_type,
+                .begin = begin,
+                .end = end,
+                .partition_size = partition_size,
+                .classifications = @intCast(classifications),
+                .classbook = classbook,
+                .books = books,
+            };
+        }
+
+        /// Reads a mapping of type 0 (section 4.2.4): its submaps, its coupling steps, each channel's submap, and
+        /// each submap's floor and residue.
+        fn readMapping(
+            arena: Allocator,
+            reader: *BitReader,
+            channels: u8,
+            floor_count: usize,
+            residue_count: usize,
+        ) SetupError!Mapping {
+            if (reader.read(16) != 0) {
+                return error.InvalidHeader;
+            }
+            const submap_count: u32 = if (reader.readFlag()) reader.read(4) + 1 else 1;
+            const coupling_step_count: u32 = if (reader.readFlag()) reader.read(8) + 1 else 0;
+            const coupling_steps: []CouplingStep = try arena.alloc(CouplingStep, coupling_step_count);
+            const channel_bits: u6 = bitLength(@as(u32, channels) - 1);
+            for (coupling_steps) |*coupling_step| {
+                const magnitude_channel: u32 = reader.read(channel_bits);
+                const angle_channel: u32 = reader.read(channel_bits);
+                const is_pair: bool = magnitude_channel != angle_channel;
+                if (!is_pair or magnitude_channel >= channels or angle_channel >= channels) {
+                    return error.InvalidHeader;
+                }
+                coupling_step.* = .{
+                    .magnitude_channel = @intCast(magnitude_channel),
+                    .angle_channel = @intCast(angle_channel),
+                };
+            }
+            if (reader.read(2) != 0) {
+                return error.InvalidHeader;
+            }
+            const channel_submaps: []u8 = try arena.alloc(u8, channels);
+            for (channel_submaps) |*channel_submap| {
+                const submap: u32 = if (submap_count > 1) reader.read(4) else 0;
+                if (submap >= submap_count) {
+                    return error.InvalidHeader;
+                }
+                channel_submap.* = @intCast(submap);
+            }
+            const submaps: []Submap = try arena.alloc(Submap, submap_count);
+            for (submaps) |*submap| {
+                _ = reader.read(8);
+                const floor_index: u32 = reader.read(8);
+                const residue_index: u32 = reader.read(8);
+                if (floor_index >= floor_count or residue_index >= residue_count) {
+                    return error.InvalidHeader;
+                }
+                submap.* = .{ .floor = @intCast(floor_index), .residue = @intCast(residue_index) };
+            }
+            return .{ .coupling_steps = coupling_steps, .channel_submaps = channel_submaps, .submaps = submaps };
+        }
+
+        /// The setup header: the third packet, type 5 - everything the sound packets are decoded with, in order:
+        /// codebooks, time-domain transforms (placeholders, each 0), floors, residues, mappings, modes, and a
+        /// framing bit.
+        fn readSetup(
+            arena: Allocator,
+            packet: []const u8,
+            identification: Identification,
+        ) SetupError!Setup {
+            var reader: BitReader = try readHeaderStart(packet, 5);
+            const codebooks: []Codebook = try arena.alloc(Codebook, reader.read(8) + 1);
+            for (codebooks) |*codebook| {
+                codebook.* = try readCodebook(arena, &reader);
+            }
+            const transform_count: u32 = reader.read(6) + 1;
+            for (0..transform_count) |_| {
+                if (reader.read(16) != 0) {
+                    return error.InvalidHeader;
+                }
+            }
+            const floors: []Floor = try arena.alloc(Floor, reader.read(6) + 1);
+            for (floors) |*floor| {
+                switch (reader.read(16)) {
+                    0 => return error.UnsupportedFloor0,
+                    1 => floor.* = try readFloor(arena, &reader, codebooks.len),
+                    else => return error.InvalidHeader,
+                }
+            }
+            const residues: []Residue = try arena.alloc(Residue, reader.read(6) + 1);
+            for (residues) |*residue| {
+                const residue_type: u32 = reader.read(16);
+                if (residue_type > 2) {
+                    return error.InvalidHeader;
+                }
+                residue.* = try readResidue(arena, &reader, @intCast(residue_type), codebooks);
+            }
+            const mappings: []Mapping = try arena.alloc(Mapping, reader.read(6) + 1);
+            for (mappings) |*mapping| {
+                mapping.* = try readMapping(arena, &reader, identification.channels, floors.len, residues.len);
+            }
+            const modes: []Mode = try arena.alloc(Mode, reader.read(6) + 1);
+            for (modes) |*mode| {
+                const is_long_block: bool = reader.readFlag();
+                const window_type: u32 = reader.read(16);
+                const transform_type: u32 = reader.read(16);
+                const mapping: u32 = reader.read(8);
+                if (window_type != 0 or transform_type != 0 or mapping >= mappings.len) {
+                    return error.InvalidHeader;
+                }
+                mode.* = .{ .is_long_block = is_long_block, .mapping = @intCast(mapping) };
+            }
+            if (!reader.readFlag() or reader.is_past_end) {
+                return error.HeaderTruncated;
+            }
+            return .{
+                .codebooks = codebooks,
+                .floors = floors,
+                .residues = residues,
+                .mappings = mappings,
+                .modes = modes,
+            };
+        }
+
+        /// A stream's three headers, read (`readHeaders`): all held in one arena, freed together.
+        pub const Headers = struct {
+            arena: ArenaAllocator,
+            identification: Identification,
+            vendor: []const u8,
+            comments: []const []const u8,
+            setup: Setup,
+
+            pub fn deinit(headers: *Headers) void {
+                headers.arena.deinit();
+            }
+        };
+
+        /// Reads a stream's three headers from its first three packets.
+        pub fn readHeaders(allocator: Allocator, reader: *ogg.PacketReader) SetupError!Headers {
+            var arena: ArenaAllocator = .init(allocator);
+            errdefer arena.deinit();
+            const arena_allocator: Allocator = arena.allocator();
+            const identification_packet: ogg.Packet = try reader.next() orelse return error.MissingHeader;
+            const identification: Identification = try readIdentification(identification_packet.bytes);
+            const comment_packet: ogg.Packet = try reader.next() orelse return error.MissingHeader;
+            var vendor: []const u8 = &.{};
+            var comments: []const []const u8 = &.{};
+            try readComment(arena_allocator, comment_packet.bytes, &vendor, &comments);
+            const setup_packet: ogg.Packet = try reader.next() orelse return error.MissingHeader;
+            const setup: Setup = try readSetup(arena_allocator, setup_packet.bytes, identification);
+            return .{
+                .arena = arena,
+                .identification = identification,
+                .vendor = vendor,
+                .comments = comments,
+                .setup = setup,
+            };
+        }
+
+        // ---- Sound packets: bits ----
+
+        /// Reads a sound packet's bits, least significant first as `BitReader` does, through a 64-bit accumulator: the
+        /// bits not yet read wait in it, the next in its lowest bit, topped up a byte at a time to more than 56 - so
+        /// that a read of up to 32 bits, or a look at the next 32, takes one top-up at most. The headers' reader takes
+        /// its fields a run of bits at a time, as fine for headers read once as it would be slow for sound packets,
+        /// whose fields are read some hundred thousand times a second of music.
+        ///
+        /// Past the packet's end the bits are zeros. A read that runs past it marks the reader (`is_past_end`): the
+        /// specification ends the packet there, everything it has not yet given silence.
+        const PacketBits = struct {
+            bytes: []const u8,
+            /// The next byte to move into the accumulator.
+            next_byte: usize = 0,
+            /// The bits not yet read, the next in the lowest bit.
+            accumulator: u64 = 0,
+            /// How many of the accumulator's bits are the packet's: 0 to 64.
+            bit_count: u7 = 0,
+            /// Whether a read has run past the packet's end.
+            is_past_end: bool = false,
+
+            /// Tops the accumulator up a byte at a time, while it holds 56 bits or fewer and the packet has bytes
+            /// left: each byte goes in above the bits already there.
+            fn refill(bits: *PacketBits) void {
+                while (bits.bit_count <= 56 and bits.next_byte < bits.bytes.len) {
+                    const byte: u64 = bits.bytes[bits.next_byte];
+                    bits.accumulator |= byte << @intCast(bits.bit_count);
+                    bits.next_byte += 1;
+                    bits.bit_count += 8;
+                }
+            }
+
+            /// The next `count` bits, 0 to 32, as a number whose lowest bit is the first - not consumed. Zeros past
+            /// the packet's end.
+            fn peek(bits: *PacketBits, count: u6) u32 {
+                bits.refill();
+                const mask: u64 = (@as(u64, 1) << count) - 1;
+                return @intCast(bits.accumulator & mask);
+            }
+
+            /// Consumes `count` bits, 0 to 32. Past the packet's end, the reader is marked and left empty.
+            fn skip(bits: *PacketBits, count: u6) void {
+                if (count > bits.bit_count) {
+                    bits.refill();
+                }
+                if (count > bits.bit_count) {
+                    bits.is_past_end = true;
+                    bits.accumulator = 0;
+                    bits.bit_count = 0;
+                    return;
+                }
+                bits.accumulator >>= count;
+                bits.bit_count -= count;
+            }
+
+            /// Reads `count` bits, 0 to 32 (`peek`, then `skip`).
+            fn read(bits: *PacketBits, count: u6) u32 {
+                const value: u32 = bits.peek(count);
+                bits.skip(count);
+                return value;
+            }
+        };
+
+        // ---- Sound packets: codewords ----
+
+        /// How many bits a codebook decoder's fast table looks at: 10, a table of 1024. Codewords of 10 bits or fewer
+        /// are decoded by a single lookup - in the codebooks encoders write, nearly every codeword a packet holds.
+        const fast_codeword_bits: u6 = 10;
+
+        /// A codeword longer than the fast table's bits, as its decoder looks it up (`CodebookDecoder.long_codes`).
+        const LongCode = struct {
+            /// The codeword moved to the top of 32 bits, its first bit highest: so placed, codewords sort as the
+            /// code's tree orders its leaves, left to right.
+            key: u32,
+            /// Its entry.
+            entry: u32,
+            /// Its length in bits, 11 to 32.
+            length: u8,
+        };
+
+        /// How a codebook's codewords are read from a sound packet. A codeword is written first bit first, each bit
+        /// into the lowest bit of the packet not yet used, so the packet's next `L` bits, read as a number whose lowest
+        /// bit is the first (`PacketBits.peek`), are the `L`-bit codeword reversed. stb_vorbis's scheme:
+        ///
+        ///     the fast table   indexed by the next 10 bits so read: for a codeword of 10 bits or fewer, every
+        ///                      index whose lowest `L` bits are the codeword reversed holds its entry and length, so
+        ///                      whatever follows the codeword, the lookup finds it
+        ///     the long codes   the codewords longer than 10 bits, by key (`LongCode`): the next 32 bits reversed -
+        ///                      the first highest - lie at or past exactly one codeword's key and before the next's,
+        ///                      the code being a prefix code; found by halving, it is the codeword if its bits are
+        ///                      the next bits, else no codeword is
+        ///     a single entry   a codebook of one used entry gives it, reading its length's bits whatever they are,
+        ///                      as stb_vorbis does
+        const CodebookDecoder = struct {
+            /// By the next 10 bits: the entry of the codeword they begin with, if it is 10 bits or shorter.
+            fast_entries: []u32,
+            /// By the next 10 bits: that codeword's length; 0 where the bits begin a longer codeword, or none.
+            fast_lengths: []u8,
+            /// The codewords longer than 10 bits, sorted by key.
+            long_codes: []const LongCode,
+            /// A codebook's only used entry, and its codeword's length; null for a codebook of more.
+            single_entry: ?u32,
+            single_length: u8,
+
+            /// The decoder for `codebook`: its fast table filled, its long codes listed and sorted - in
+            /// `allocator`, freed with it.
+            fn init(allocator: Allocator, codebook: *const Codebook) Allocator.Error!CodebookDecoder {
+                const table_size: usize = @as(usize, 1) << fast_codeword_bits;
+                const fast_entries: []u32 = try allocator.alloc(u32, table_size);
+                const fast_lengths: []u8 = try allocator.alloc(u8, table_size);
+                @memset(fast_entries, 0);
+                @memset(fast_lengths, 0);
+                var used_count: usize = 0;
+                var long_count: usize = 0;
+                var last_used_entry: u32 = 0;
+                for (codebook.codeword_lengths, 0..) |length, entry| {
+                    if (length == 0) {
+                        continue;
+                    }
+                    used_count += 1;
+                    last_used_entry = @intCast(entry);
+                    if (length > fast_codeword_bits) {
+                        long_count += 1;
+                    }
+                }
+                const long_codes: []LongCode = try allocator.alloc(LongCode, long_count);
+                var long_index: usize = 0;
+                for (codebook.codeword_lengths, codebook.codewords, 0..) |length, codeword, entry| {
+                    if (length == 0) {
+                        continue;
+                    }
+                    if (length > fast_codeword_bits) {
+                        const key: u32 = codeword << @intCast(32 - @as(u32, length));
+                        long_codes[long_index] = .{ .key = key, .entry = @intCast(entry), .length = length };
+                        long_index += 1;
+                        continue;
+                    }
+                    // Every index whose lowest `length` bits are the codeword reversed: the reversed codeword, then
+                    // each value of the bits above it.
+                    const reversed: u32 = @bitReverse(codeword) >> @intCast(32 - @as(u32, length));
+                    var index: usize = reversed;
+                    while (index < table_size) : (index += @as(usize, 1) << @intCast(length)) {
+                        fast_entries[index] = @intCast(entry);
+                        fast_lengths[index] = length;
+                    }
+                }
+                sortSlice(LongCode, long_codes, {}, isLongCodeBefore);
+                const is_single: bool = used_count == 1;
+                return .{
+                    .fast_entries = fast_entries,
+                    .fast_lengths = fast_lengths,
+                    .long_codes = long_codes,
+                    .single_entry = if (is_single) last_used_entry else null,
+                    .single_length = if (is_single) codebook.codeword_lengths[last_used_entry] else 0,
+                };
+            }
+
+            /// Whether `first`'s key sorts before `second`'s.
+            fn isLongCodeBefore(_: void, first: LongCode, second: LongCode) bool {
+                return first.key < second.key;
+            }
+
+            /// Reads one codeword from `bits`: its entry, or null where the bits begin no codeword - which only a
+            /// damaged packet holds, and which ends it.
+            fn decode(decoder: *const CodebookDecoder, bits: *PacketBits) ?u32 {
+                if (decoder.single_entry) |entry| {
+                    bits.skip(@intCast(decoder.single_length));
+                    return entry;
+                }
+                const index: u32 = bits.peek(fast_codeword_bits);
+                const fast_length: u8 = decoder.fast_lengths[index];
+                if (fast_length != 0) {
+                    bits.skip(@intCast(fast_length));
+                    return decoder.fast_entries[index];
+                }
+                // The next 32 bits, the first highest; the last code at or below them by key.
+                const next_bits: u32 = @bitReverse(bits.peek(32));
+                var below: usize = 0;
+                var above: usize = decoder.long_codes.len;
+                while (below < above) {
+                    const middle: usize = below + (above - below) / 2;
+                    if (decoder.long_codes[middle].key <= next_bits) {
+                        below = middle + 1;
+                    } else {
+                        above = middle;
+                    }
+                }
+                if (below == 0) {
+                    return null;
+                }
+                const code: LongCode = decoder.long_codes[below - 1];
+                const differing_bits: u32 = (next_bits ^ code.key) >> @intCast(32 - @as(u32, code.length));
+                if (differing_bits != 0) {
+                    return null;
+                }
+                bits.skip(@intCast(code.length));
+                return code.entry;
+            }
+        };
+
+        // ---- Sound packets: floor 1 ----
+
+        /// The heights a floor 1's points span, by its multiplier (`Floor.multiplier`) - 256, 128, 86 or 64 - each
+        /// unit of height `multiplier` steps of the decibel table: the four cover the table's 256 steps, the last
+        /// three to within a step or two.
+        const floor1_height_ranges = [4]u16{ 256, 128, 86, 64 };
+
+        /// The most points a floor 1 has: the specification's limit, 65.
+        const floor1_most_points: usize = 65;
+
+        /// The decibel table a floor 1's curve is read through: 256 steps of 35/64 dB - 0.547 dB - from -139.45 dB,
+        /// step 0, to 0 dB, step 255, as amplitudes: `10^((i - 255) * 35 / 64 / 20)`. The specification prints the
+        /// table as numbers; these are the same to all eight of its digits - 1.0649863e-07 for step 0, 0.9389798 for
+        /// step 254, 1 for step 255.
+        const floor1_inverse_db: [256]f32 = blk: {
+            @setEvalBranchQuota(10_000);
+            var table: [256]f32 = undefined;
+            for (&table, 0..) |*amplitude, step| {
+                const decibels: f64 = (float64(step) - 255) * 35.0 / 64.0;
+                amplitude.* = @floatCast(@exp(decibels / 20.0 * @log(10.0)));
+            }
+            break :blk table;
+        };
+
+        /// Reads a channel's floor 1 from a sound packet into `heights`, a value for each point in the order of the
+        /// floor's list (`Floor.x_list`) - the specification's 7.2.3. A first bit of 0: the floor is unused, the
+        /// channel silent in this packet. Else the two end points' heights, `bitLength(range - 1)` bits each; then each
+        /// partition's points, by its class: the masterbook's entry, if the class has subclasses, chooses each point's
+        /// book a few bits at a time, lowest first, and the book's entry is the point's value - 0 for a point whose
+        /// subclass has no book. False for an unused floor, and for one the packet ends inside or a codeword fails in:
+        /// that channel is silent.
+        fn readFloor1(
+            floor: *const Floor,
+            decoders: []const CodebookDecoder,
+            bits: *PacketBits,
+            heights: []i32,
+        ) bool {
+            if (bits.read(1) == 0) {
+                return false;
+            }
+            const height_range: u16 = floor1_height_ranges[floor.multiplier - 1];
+            const height_bits: u6 = bitLength(height_range - 1);
+            heights[0] = @intCast(bits.read(height_bits));
+            heights[1] = @intCast(bits.read(height_bits));
+            var point: usize = 2;
+            for (floor.partition_classes) |class_index| {
+                const class: FloorClass = floor.classes[class_index];
+                const subclass_mask: u32 = (@as(u32, 1) << @intCast(class.subclass_bits)) - 1;
+                var subclass_choices: u32 = 0;
+                if (class.subclass_bits > 0) {
+                    if (class.masterbook) |masterbook| {
+                        subclass_choices = decoders[masterbook].decode(bits) orelse return false;
+                    }
+                }
+                for (0..class.dimensions) |_| {
+                    const book: ?u8 = class.subclass_books[subclass_choices & subclass_mask];
+                    subclass_choices >>= @intCast(class.subclass_bits);
+                    heights[point] = if (book) |book_index|
+                        @intCast(decoders[book_index].decode(bits) orelse return false)
+                    else
+                        0;
+                    point += 1;
+                }
+            }
+            return !bits.is_past_end;
+        }
+
+        /// The height at `x` on the straight line from `(x0, y0)` to `(x1, y1)`, by whole numbers - the
+        /// specification's `render_point`: the rise times the distance from `x0`, over the run, truncated, added to
+        /// `y0` with the line's sign.
+        fn floor1PredictedHeight(
+            x0: i32,
+            y0: i32,
+            x1: i32,
+            y1: i32,
+            x: i32,
+        ) i32 {
+            const rise: i32 = y1 - y0;
+            const run: i32 = x1 - x0;
+            const offset: i32 = @divTrunc(@as(i32, @intCast(@abs(rise))) * (x - x0), run);
+            return if (rise < 0) y0 - offset else y0 + offset;
+        }
+
+        /// The points' heights as the floor's curve passes through them - the specification's 7.2.4, step 1 - and
+        /// which of them it is drawn through. The two end points are as read. Each point after them is predicted on
+        /// the line between its two neighbours (`Floor.low_neighbors`, `high_neighbors`, `floor1PredictedHeight`), and
+        /// its value read moves it from there: 0 leaves it on the line, and the curve passes it by, drawn straight
+        /// between its neighbours; any other value is folded into an offset either side of the prediction - an even
+        /// value up, half of it, an odd one down, half of it rounded up - while it fits the room below and above the
+        /// prediction within the range; past that room, the value counts from the side with more room. A point moved
+        /// makes it and its two neighbours points the curve is drawn through.
+        fn floor1FinalHeights(
+            floor: *const Floor,
+            heights: []const i32,
+            final_heights: []i32,
+            is_drawn: []bool,
+        ) void {
+            const height_range: i32 = floor1_height_ranges[floor.multiplier - 1];
+            final_heights[0] = heights[0];
+            final_heights[1] = heights[1];
+            is_drawn[0] = true;
+            is_drawn[1] = true;
+            for (2..floor.x_list.len) |point| {
+                const low: usize = floor.low_neighbors[point];
+                const high: usize = floor.high_neighbors[point];
+                const predicted: i32 = floor1PredictedHeight(
+                    floor.x_list[low],
+                    final_heights[low],
+                    floor.x_list[high],
+                    final_heights[high],
+                    floor.x_list[point],
+                );
+                const value: i32 = heights[point];
+                if (value == 0) {
+                    final_heights[point] = predicted;
+                    is_drawn[point] = false;
+                    continue;
+                }
+                is_drawn[low] = true;
+                is_drawn[high] = true;
+                is_drawn[point] = true;
+                const room_above: i32 = height_range - predicted;
+                const room_below: i32 = predicted;
+                const room: i32 = 2 * @min(room_above, room_below);
+                if (value >= room) {
+                    final_heights[point] = if (room_above > room_below)
+                        value - room_below + predicted
+                    else
+                        predicted - value + room_above - 1;
+                } else if (@mod(value, 2) == 1) {
+                    final_heights[point] = predicted - @divTrunc(value + 1, 2);
+                } else {
+                    final_heights[point] = predicted + @divTrunc(value, 2);
+                }
+            }
+        }
+
+        /// Draws the specification's integer line - its `render_line` - from `(x0, y0)` up to `x1`, not including it,
+        /// into `curve`, each height through the decibel table (`floor1_inverse_db`): the line's whole slope, `base`,
+        /// is added at each step, and the remainder, kept as a running error, adds one more step - toward the line's
+        /// end height - each time it reaches the run. Positions past the curve's end are not drawn.
+        fn drawFloor1Line(
+            x0: i32,
+            y0: i32,
+            x1: i32,
+            y1: i32,
+            curve: []f32,
+        ) void {
+            const rise: i32 = y1 - y0;
+            const run: i32 = x1 - x0;
+            const base: i32 = @divTrunc(rise, run);
+            const step_with_error: i32 = if (rise < 0) base - 1 else base + 1;
+            const remainder: i32 = @as(i32, @intCast(@abs(rise))) - @as(i32, @intCast(@abs(base))) * run;
+            const curve_end: i32 = @intCast(curve.len);
+            var height: i32 = y0;
+            var error_sum: i32 = 0;
+            var x: i32 = x0;
+            while (x < x1 and x < curve_end) : (x += 1) {
+                if (x > x0) {
+                    error_sum += remainder;
+                    if (error_sum >= run) {
+                        error_sum -= run;
+                        height += step_with_error;
+                    } else {
+                        height += base;
+                    }
+                }
+                curve[@intCast(x)] = floor1_inverse_db[@intCast(std_mod.math.clamp(height, 0, 255))];
+            }
+        }
+
+        /// Draws a floor 1's curve over `curve` - half a block's values - from its points' final heights
+        /// (`floor1FinalHeights`), the specification's 7.2.4, step 2: from point to point in order of X, through
+        /// the points drawn and past the others, each height times the multiplier; then on, level, from the last
+        /// point to the curve's end.
+        fn drawFloor1Curve(
+            floor: *const Floor,
+            final_heights: []const i32,
+            is_drawn: []const bool,
+            curve: []f32,
+        ) void {
+            const multiplier: i32 = floor.multiplier;
+            var low_x: i32 = 0;
+            var low_y: i32 = final_heights[floor.sorted_order[0]] * multiplier;
+            var high_x: i32 = 0;
+            var high_y: i32 = low_y;
+            for (floor.sorted_order[1..]) |point| {
+                if (!is_drawn[point]) {
+                    continue;
+                }
+                high_x = floor.x_list[point];
+                high_y = final_heights[point] * multiplier;
+                drawFloor1Line(low_x, low_y, high_x, high_y, curve);
+                low_x = high_x;
+                low_y = high_y;
+            }
+            const curve_end: i32 = @intCast(curve.len);
+            if (high_x < curve_end) {
+                drawFloor1Line(high_x, high_y, curve_end, high_y, curve);
+            }
+        }
+
+        // ---- Sound packets: windows ----
+
+        /// Fills `slope` with a window's rising slope of its length `L` - the specification's 4.3.1:
+        /// `w(i) = sin(pi / 2 * sin^2(pi / 2 * (i + 1/2) / L))`, from near 0 up to near 1. A block's window rises
+        /// over the overlap with the block before it and falls over the overlap with the one after, each slope as
+        /// long as half the smaller of the two blocks. The slope and its mirror are power complementary,
+        /// `w(i)^2 + w(L - 1 - i)^2 = 1`: with `s` the inner `sin^2`, the mirror's is `1 - s`, and
+        /// `sin(pi/2 s)^2 + sin(pi/2 (1 - s))^2 = sin^2 + cos^2` - so two overlapping blocks, each windowed twice,
+        /// in the encoder and here, add up to the signal.
+        fn fillWindowSlope(slope: []f32) void {
+            const slope_length: f64 = @floatFromInt(slope.len);
+            for (slope, 0..) |*value, index| {
+                const inner_sine: f64 = @sin(std_mod.math.pi / 2.0 * (float64(index) + 0.5) / slope_length);
+                value.* = @floatCast(@sin(std_mod.math.pi / 2.0 * inner_sine * inner_sine));
+            }
+        }
+
+        // ---- Sound packets: residues ----
+
+        /// How a residue's partition lays its values into its vector: type 0 spreads a partition's values across it,
+        /// each codebook vector's values a stride apart; types 1 and 2 lay them in a row.
+        const PartitionLayout = enum { spread, row };
+
+        // ---- Sound packets: the decoder ----
+
+        /// The errors decoding can meet: the headers', and running out of memory. A damaged sound packet is not one -
+        /// it is decoded as far as it goes, the rest silence - nor is a damaged page, which the reader skips.
+        pub const DecodeError = SetupError;
+
+        /// A Vorbis stream decoded from a whole file in memory, packet by packet, into frames of interleaved 32-bit
+        /// floats at the stream's own rate (`readFrames`). Everything a packet needs is allocated once, at the start,
+        /// sized for the long block (`init`), so that nothing is allocated while it decodes.
+        ///
+        /// A sound packet is one block - the short or the long block size, as its mode says - and holds, for each
+        /// channel, half a block's spectrum: a floor, the spectrum's rough shape as a line through a few points, and a
+        /// residue, the detail, as codebook vectors. The decoder multiplies them, turns the spectrum into a block of
+        /// samples by the inverse MDCT, windows it, and adds its first part to the last part of the block before:
+        /// the two overlapping halves, each windowed twice - in the encoder and here - and power complementary
+        /// (`fillWindowSlope`), sum to the signal. The frames a packet gives run from where its window starts to rise
+        /// to where it starts to fall: from the previous block's centre to its own. The first packet gives none, its
+        /// first half having no block before it.
+        pub const Decoder = struct {
+            headers: Headers,
+            reader: ogg.PacketReader,
+            /// Each codebook's decoder (`CodebookDecoder`), the setup's codebooks' order.
+            codebook_decoders: []CodebookDecoder,
+            /// Each channel's spectrum, half a long block; and each channel's block of samples, a long block.
+            spectra: [][]f32,
+            blocks: [][]f32,
+            /// Each channel's last block's falling part, saved to overlap with the next block's rising part; its
+            /// length, and whether there is one - none before the first packet.
+            previous_right: [][]f32,
+            previous_right_length: usize,
+            has_previous: bool,
+            /// The window's two slopes: the short block's, half its size, and the long block's.
+            short_slope: []f32,
+            long_slope: []f32,
+            /// The inverse MDCT's scratch: a quarter of a long block, as complex numbers.
+            imdct_scratch: []zn.ComplexNumber(f32),
+            /// The floor's points read, their final heights, which are drawn, and whether each channel's floor is
+            /// used - kept from the floor's reading to its drawing, after the residue.
+            floor_heights: [][floor1_most_points]i32,
+            floor_final_heights: [][floor1_most_points]i32,
+            floor_is_drawn: [][floor1_most_points]bool,
+            floor_is_used: []bool,
+            /// A channel's floor curve, drawn: half a long block.
+            floor_curve: []f32,
+            /// The residues' working room: each vector's partitions' classifications; a type 2 residue's
+            /// interleaved vector; and a submap's channels gathered - their spectra and whether each is skipped.
+            partition_classes: [][]u8,
+            interleaved: []f32,
+            submap_spectra: [][]f32,
+            submap_skipped: []bool,
+            /// The frames the last packet gave, not yet read: in each channel's block, from `pending_start` to
+            /// `pending_end`.
+            pending_start: usize,
+            pending_end: usize,
+            /// The frames the packets have given so far, read or pending: the stream's position at the last packet's
+            /// end, which the last packet's granule position trims (`trimToGranule`).
+            frames_given: u64,
+            /// Where the stream's first page of sound begins, in the file: the page after the three headers - Vorbis
+            /// begins its first sound packet on a page of its own - where `rewind` takes the reader back to.
+            first_sound_page_offset: usize,
+            /// The stream's pages of sound that end a packet, in order: where each begins in the file and its granule
+            /// position, the frame count at the end of the last packet ending on it - what `seekToFrame` halves over.
+            page_marks: []const PageMark,
+
+            /// A page a seek can start from (`page_marks`).
+            pub const PageMark = struct {
+                /// Where the page begins in the file.
+                offset: usize,
+                /// The frame count at the end of the last packet ending on it.
+                granule: u64,
+            };
+
+            /// Lists the stream's pages of sound that end a packet, from `first_offset` to the file's end
+            /// (`page_marks`): each page read whole, its checksum checked; a page of another stream passed over; a
+            /// damaged page, or bytes that are no page, passed over to the next "OggS", as the reader does.
+            fn markPages(
+                arena: Allocator,
+                bytes: []const u8,
+                first_offset: usize,
+                serial_number: ?u32,
+            ) Allocator.Error![]const PageMark {
+                var marks: ArrayListUnmanaged(PageMark) = .empty;
+                var offset: usize = first_offset;
+                while (offset < bytes.len) {
+                    const page: ogg.Page = ogg.readPage(bytes[offset..]) catch {
+                        const next_capture: usize = indexOfPos(u8, bytes, offset + 1, "OggS") orelse break;
+                        offset = next_capture;
+                        continue;
+                    };
+                    const is_own_stream: bool = serial_number == null or page.serial_number == serial_number.?;
+                    if (is_own_stream) {
+                        if (page.granule_position) |granule| {
+                            try marks.append(arena, .{ .offset = offset, .granule = granule });
+                        }
+                    }
+                    offset += page.byte_count;
+                }
+                return marks.items;
+            }
+
+            /// The decoder for the stream in `bytes`: its headers read (`readHeaders`), and everything a packet needs
+            /// allocated in the headers' arena, freed with them (`deinit`).
+            pub fn init(allocator: Allocator, bytes: []const u8) DecodeError!Decoder {
+                var reader: ogg.PacketReader = .init(allocator, bytes);
+                errdefer reader.deinit();
+                var headers: Headers = try readHeaders(allocator, &reader);
+                errdefer headers.deinit();
+                const arena: Allocator = headers.arena.allocator();
+                const identification: Identification = headers.identification;
+                const channel_count: usize = identification.channels;
+                const long_size: usize = identification.long_block_size;
+                const half_long: usize = long_size / 2;
+                const setup: Setup = headers.setup;
+                const codebook_decoders: []CodebookDecoder = try arena.alloc(CodebookDecoder, setup.codebooks.len);
+                for (codebook_decoders, setup.codebooks) |*codebook_decoder, *codebook| {
+                    codebook_decoder.* = try CodebookDecoder.init(arena, codebook);
+                }
+                // The most partitions a residue holds, its classifications' room: every residue's range in its
+                // largest vector - a type 2's, all the channels interleaved - and a classword's worth over.
+                var most_partitions: usize = 0;
+                for (setup.residues) |residue| {
+                    const vector_size: usize = if (residue.residue_type == 2) channel_count * half_long else half_long;
+                    const begin: usize = @min(residue.begin, vector_size);
+                    const end: usize = @min(residue.end, vector_size);
+                    const classwords: usize = setup.codebooks[residue.classbook].dimensions;
+                    most_partitions = @max(most_partitions, (end - begin) / residue.partition_size + classwords);
+                }
+                const short_slope: []f32 = try arena.alloc(f32, identification.short_block_size / 2);
+                const long_slope: []f32 = try arena.alloc(f32, half_long);
+                fillWindowSlope(short_slope);
+                fillWindowSlope(long_slope);
+                // Every allocation made before `headers` is copied out below: the arena the allocator works in is
+                // `headers`' own, and a copy taken earlier would not hold the blocks allocated after it.
+                const spectra: [][]f32 = try allocateChannels(f32, arena, channel_count, half_long);
+                const blocks: [][]f32 = try allocateChannels(f32, arena, channel_count, long_size);
+                const previous_right: [][]f32 = try allocateChannels(f32, arena, channel_count, half_long);
+                const imdct_scratch: []zn.ComplexNumber(f32) = try arena.alloc(zn.ComplexNumber(f32), long_size / 4);
+                const floor_heights: [][floor1_most_points]i32 =
+                    try arena.alloc([floor1_most_points]i32, channel_count);
+                const floor_final_heights: [][floor1_most_points]i32 =
+                    try arena.alloc([floor1_most_points]i32, channel_count);
+                const floor_is_drawn: [][floor1_most_points]bool =
+                    try arena.alloc([floor1_most_points]bool, channel_count);
+                const floor_is_used: []bool = try arena.alloc(bool, channel_count);
+                const floor_curve: []f32 = try arena.alloc(f32, half_long);
+                const partition_classes: [][]u8 = try allocateChannels(u8, arena, channel_count, most_partitions);
+                const interleaved: []f32 = try arena.alloc(f32, channel_count * half_long);
+                const submap_spectra: [][]f32 = try arena.alloc([]f32, channel_count);
+                const submap_skipped: []bool = try arena.alloc(bool, channel_count);
+                return .{
+                    .headers = headers,
+                    .reader = reader,
+                    .codebook_decoders = codebook_decoders,
+                    .spectra = spectra,
+                    .blocks = blocks,
+                    .previous_right = previous_right,
+                    .previous_right_length = 0,
+                    .has_previous = false,
+                    .short_slope = short_slope,
+                    .long_slope = long_slope,
+                    .imdct_scratch = imdct_scratch,
+                    .floor_heights = floor_heights,
+                    .floor_final_heights = floor_final_heights,
+                    .floor_is_drawn = floor_is_drawn,
+                    .floor_is_used = floor_is_used,
+                    .floor_curve = floor_curve,
+                    .partition_classes = partition_classes,
+                    .interleaved = interleaved,
+                    .submap_spectra = submap_spectra,
+                    .submap_skipped = submap_skipped,
+                    .pending_start = 0,
+                    .pending_end = 0,
+                    .frames_given = 0,
+                    .first_sound_page_offset = reader.next_page_offset,
+                    .page_marks = try markPages(arena, bytes, reader.next_page_offset, reader.serial_number),
+                };
+            }
+
+            /// Moves the stream to `frame`: the next frames read are the stream's from that one on; past the stream's
+            /// end, none. The pages that end a packet are halved over (`page_marks`) for L, the last ending at or
+            /// before the frame, and decoding starts two pages of that kind before it, at R, with S between. The
+            /// reader, landing on a page, passes over the packet continued into it, and the first packet it decodes
+            /// only primes the overlap. Starting at L itself could lose the frames just after L's granule, the packet
+            /// ending there begun on S. Starting at S would decode it, but S's own last packet - the one whose granule
+            /// gives the first position - could be the packet passed over, and then no position would be known before
+            /// L's packet, too late to trim the stream's last packet if L ends the stream. Starting at R, S's last
+            /// packet began on R or after and is decoded whole: its granule, at or before the frame, gives every
+            /// position after it. The frames decoded before it are dropped; then decoding steps on to the packet
+            /// holding the frame, and starts at it. A frame too near the start for R starts from the stream's start,
+            /// its positions known from 0. Some three pages are decoded: a seek costs a few thousand frames' decoding
+            /// wherever it lands.
+            pub fn seekToFrame(decoder: *Decoder, frame: u64) Allocator.Error!void {
+                const marks: []const PageMark = decoder.page_marks;
+                // How many pages end at or before the frame: L is the last of them, S and R the two before.
+                var below: usize = 0;
+                var above: usize = marks.len;
+                while (below < above) {
+                    const middle: usize = below + (above - below) / 2;
+                    if (marks[middle].granule <= frame) {
+                        below = middle + 1;
+                    } else {
+                        above = middle;
+                    }
+                }
+                decoder.rewind();
+                const is_from_start: bool = below < 3;
+                if (!is_from_start) {
+                    decoder.reader.seekToPage(marks[below - 3].offset);
+                }
+                // Where the frames given so far end, once known: from the stream's start, at once.
+                var known_end: ?u64 = if (is_from_start) 0 else null;
+                while (try decoder.reader.next()) |packet| {
+                    decoder.decodePacket(packet.bytes);
+                    var given: u64 = decoder.pending_end - decoder.pending_start;
+                    var pending_first: ?u64 = null;
+                    if (packet.granule_position) |granule| {
+                        // The stream's last packet: trimmed to its granule, the frames past it padding.
+                        if (packet.is_last) {
+                            if (known_end) |end| {
+                                decoder.frames_given = end + given;
+                                decoder.trimToGranule(granule);
+                                given = decoder.pending_end - decoder.pending_start;
+                            }
+                        }
+                        pending_first = granule - @min(given, granule);
+                        known_end = granule;
+                    } else if (known_end) |end| {
+                        pending_first = end;
+                        known_end = end + given;
+                    }
+                    if (pending_first) |first| {
+                        const pending_last: u64 = first + given;
+                        if (frame < pending_last) {
+                            const frames_skipped: u64 = if (frame > first) frame - first else 0;
+                            decoder.pending_start += @intCast(frames_skipped);
+                            decoder.frames_given = pending_last;
+                            return;
+                        }
+                    }
+                    // Before the frame, or before any position is known: dropped.
+                    decoder.pending_start = decoder.pending_end;
+                }
+                // Past the stream's end: nothing left to read.
+                decoder.pending_start = decoder.pending_end;
+                decoder.frames_given = known_end orelse 0;
+            }
+
+            /// Starts the stream over, to loop it: the reader back at the first page of sound, the last block's
+            /// overlap forgotten - the first packet again giving no frames, having no block before it - and the
+            /// frames not yet read dropped. Decoding from there gives the same frames as the first time.
+            pub fn rewind(decoder: *Decoder) void {
+                decoder.reader.seekToPage(decoder.first_sound_page_offset);
+                decoder.has_previous = false;
+                decoder.previous_right_length = 0;
+                decoder.pending_start = 0;
+                decoder.pending_end = 0;
+                decoder.frames_given = 0;
+            }
+
+            /// Frees the decoder: its headers' arena, which holds everything it allocated, and its reader.
+            pub fn deinit(decoder: *Decoder) void {
+                decoder.headers.deinit();
+                decoder.reader.deinit();
+            }
+
+            /// `channel_count` slices of `length` values each, zeroed.
+            fn allocateChannels(
+                comptime T: type,
+                arena: Allocator,
+                channel_count: usize,
+                length: usize,
+            ) Allocator.Error![][]T {
+                const channels: [][]T = try arena.alloc([]T, channel_count);
+                for (channels) |*channel| {
+                    channel.* = try arena.alloc(T, length);
+                    @memset(channel.*, 0);
+                }
+                return channels;
+            }
+
+            /// The stream's channel count.
+            pub fn channelCount(decoder: *const Decoder) usize {
+                return decoder.headers.identification.channels;
+            }
+
+            /// The stream's sample rate, in frames a second.
+            pub fn sampleRate(decoder: *const Decoder) u32 {
+                return decoder.headers.identification.sample_rate;
+            }
+
+            /// Fills `out` with interleaved frames - each channel's sample of a frame in turn - as many as it holds
+            /// or the stream has left: the last packet's frames not yet read first, then packet after packet. The
+            /// frames written; 0 once the stream is done.
+            pub fn readFrames(decoder: *Decoder, out: []f32) Allocator.Error!usize {
+                const channel_count: usize = decoder.channelCount();
+                const frame_room: usize = out.len / channel_count;
+                var frames_written: usize = 0;
+                while (frames_written < frame_room) {
+                    if (decoder.pending_start == decoder.pending_end) {
+                        const packet: ogg.Packet = try decoder.reader.next() orelse break;
+                        decoder.decodePacket(packet.bytes);
+                        decoder.frames_given += decoder.pending_end - decoder.pending_start;
+                        if (packet.is_last) {
+                            if (packet.granule_position) |granule_position| {
+                                decoder.trimToGranule(granule_position);
+                            }
+                        }
+                        continue;
+                    }
+                    const frames_ready: usize = decoder.pending_end - decoder.pending_start;
+                    const frame_count: usize = @min(frames_ready, frame_room - frames_written);
+                    for (0..frame_count) |frame| {
+                        const out_frame: []f32 = out[(frames_written + frame) * channel_count ..][0..channel_count];
+                        for (out_frame, decoder.blocks) |*sample, block| {
+                            sample.* = block[decoder.pending_start + frame];
+                        }
+                    }
+                    decoder.pending_start += frame_count;
+                    frames_written += frame_count;
+                }
+                return frames_written;
+            }
+
+            /// Trims the last packet's frames to the stream's end: its granule position, the stream's frame count. The
+            /// encoder's last block holds whole blocks' worth of samples, the stream's end falling inside it; the
+            /// frames past it are padding.
+            fn trimToGranule(decoder: *Decoder, granule_position: u64) void {
+                if (decoder.frames_given <= granule_position) {
+                    return;
+                }
+                const pending_count: u64 = decoder.pending_end - decoder.pending_start;
+                const excess: u64 = @min(decoder.frames_given - granule_position, pending_count);
+                decoder.pending_end -= @intCast(excess);
+                decoder.frames_given -= excess;
+            }
+
+            /// Decodes one sound packet into each channel's block, and marks the frames it gives as pending
+            /// (`pending_start`, `pending_end`). A packet that is not a sound packet - its first bit 1 - or whose mode
+            /// is not one of the setup's gives no frames and is passed over; so does an empty packet, which an
+            /// encoder may write where it has nothing, leaving the last block's overlap for the next packet, as if
+            /// the empty one were not there.
+            fn decodePacket(decoder: *Decoder, bytes: []const u8) void {
+                if (bytes.len == 0) {
+                    return;
+                }
+                var bits: PacketBits = .{ .bytes = bytes };
+                if (bits.read(1) != 0) {
+                    return;
+                }
+                const setup: *const Setup = &decoder.headers.setup;
+                const identification: Identification = decoder.headers.identification;
+                const mode_index: u32 = bits.read(bitLength(@intCast(setup.modes.len - 1)));
+                if (mode_index >= setup.modes.len) {
+                    return;
+                }
+                const mode: Mode = setup.modes[mode_index];
+                const block_size: usize = if (mode.is_long_block)
+                    identification.long_block_size
+                else
+                    identification.short_block_size;
+                const half_size: usize = block_size / 2;
+                // A long block's windows toward a short block on either side are the short block's slopes; read
+                // before the floors, a long block's two flags say which neighbours are long.
+                var is_previous_long: bool = true;
+                var is_next_long: bool = true;
+                if (mode.is_long_block) {
+                    is_previous_long = bits.read(1) == 1;
+                    is_next_long = bits.read(1) == 1;
+                }
+                const window: BlockWindow = .of(
+                    block_size,
+                    identification.short_block_size,
+                    is_previous_long,
+                    is_next_long,
+                );
+                const mapping: *const Mapping = &setup.mappings[mode.mapping];
+                const channel_count: usize = decoder.channelCount();
+                // Each channel's floor: read now, drawn after the residue.
+                for (0..channel_count) |channel| {
+                    const submap: Submap = mapping.submaps[mapping.channel_submaps[channel]];
+                    const channel_floor: *const Floor = &setup.floors[submap.floor];
+                    const heights: []i32 = &decoder.floor_heights[channel];
+                    const is_used: bool = readFloor1(channel_floor, decoder.codebook_decoders, &bits, heights);
+                    decoder.floor_is_used[channel] = is_used;
+                    if (is_used) {
+                        const final_heights: []i32 = &decoder.floor_final_heights[channel];
+                        floor1FinalHeights(channel_floor, heights, final_heights, &decoder.floor_is_drawn[channel]);
+                    }
+                }
+                // A channel whose floor is unused has no residue - unless it is coupled to one whose floor is used:
+                // then both are decoded, the pair's sum and difference needing both.
+                const is_skipped: []bool = decoder.submap_skipped;
+                var channel_skipped: [256]bool = undefined;
+                for (0..channel_count) |channel| {
+                    channel_skipped[channel] = !decoder.floor_is_used[channel];
+                }
+                for (mapping.coupling_steps) |step| {
+                    if (!channel_skipped[step.magnitude_channel] or !channel_skipped[step.angle_channel]) {
+                        channel_skipped[step.magnitude_channel] = false;
+                        channel_skipped[step.angle_channel] = false;
+                    }
+                }
+                // Each submap's residue, into the spectra of the channels it holds.
+                for (decoder.spectra) |spectrum| {
+                    @memset(spectrum[0..half_size], 0);
+                }
+                for (mapping.submaps, 0..) |submap, submap_index| {
+                    var gathered_count: usize = 0;
+                    for (0..channel_count) |channel| {
+                        if (mapping.channel_submaps[channel] != submap_index) {
+                            continue;
+                        }
+                        decoder.submap_spectra[gathered_count] = decoder.spectra[channel][0..half_size];
+                        is_skipped[gathered_count] = channel_skipped[channel];
+                        gathered_count += 1;
+                    }
+                    const residue: *const Residue = &setup.residues[submap.residue];
+                    const gathered_spectra: []const []f32 = decoder.submap_spectra[0..gathered_count];
+                    decoder.decodeResidue(residue, gathered_spectra, is_skipped[0..gathered_count], half_size, &bits);
+                }
+                // Coupling undone, the last step first: each pair's magnitude and angle back into its two channels.
+                var step_index: usize = mapping.coupling_steps.len;
+                while (step_index > 0) {
+                    step_index -= 1;
+                    const step: CouplingStep = mapping.coupling_steps[step_index];
+                    uncouple(
+                        decoder.spectra[step.magnitude_channel][0..half_size],
+                        decoder.spectra[step.angle_channel][0..half_size],
+                    );
+                }
+                // The floor drawn and multiplied in - or the channel silent - then the block: the inverse MDCT, and
+                // the window.
+                for (0..channel_count) |channel| {
+                    const spectrum: []f32 = decoder.spectra[channel][0..half_size];
+                    if (decoder.floor_is_used[channel]) {
+                        const submap: Submap = mapping.submaps[mapping.channel_submaps[channel]];
+                        const channel_floor: *const Floor = &setup.floors[submap.floor];
+                        const curve: []f32 = decoder.floor_curve[0..half_size];
+                        const final_heights: []const i32 = &decoder.floor_final_heights[channel];
+                        drawFloor1Curve(channel_floor, final_heights, &decoder.floor_is_drawn[channel], curve);
+                        for (spectrum, curve) |*value, floor_value| {
+                            value.* *= floor_value;
+                        }
+                    } else {
+                        @memset(spectrum, 0);
+                    }
+                    const block: []f32 = decoder.blocks[channel][0..block_size];
+                    // Its sizes hold by construction - a block, half as many coefficients, a quarter as much scratch.
+                    zn.imdct(f32, block, spectrum, decoder.imdct_scratch[0 .. half_size / 2]) catch |imdct_error| {
+                        assertUnreachable(@src(), "the inverse MDCT refused a block of {d}: {s}", .{
+                            block_size,
+                            @errorName(imdct_error),
+                        });
+                    };
+                    decoder.applyWindow(block, window);
+                }
+                decoder.overlapAndKeep(window);
+            }
+
+            /// Adds one partition's values to `vector` from `offset`, `size` of them, read with `book`: codebook
+            /// vectors one after another until the partition is full - laid in a row, or, spread, the first vector's
+            /// values at the partition's start and every `size / dimensions` places after, the second's one place on,
+            /// and so on (the specification's 8.6.2 and 8.6.3). False if a codeword fails, which ends the packet.
+            fn decodePartition(
+                decoder: *const Decoder,
+                book: u8,
+                layout: PartitionLayout,
+                vector: []f32,
+                offset: usize,
+                size: usize,
+                bits: *PacketBits,
+            ) bool {
+                const codebook: *const Codebook = &decoder.headers.setup.codebooks[book];
+                const book_decoder: *const CodebookDecoder = &decoder.codebook_decoders[book];
+                const dimensions: usize = codebook.dimensions;
+                if (codebook.vectors.len == 0 or dimensions == 0) {
+                    return false;
+                }
+                switch (layout) {
+                    .spread => {
+                        const stride: usize = size / dimensions;
+                        for (0..stride) |vector_index| {
+                            const entry: u32 = book_decoder.decode(bits) orelse return false;
+                            const values: []const f32 = codebook.vectors[entry * dimensions ..][0..dimensions];
+                            for (values, 0..) |value, value_index| {
+                                vector[offset + vector_index + value_index * stride] += value;
+                            }
+                        }
+                    },
+                    .row => {
+                        var place: usize = 0;
+                        while (place < size) {
+                            const entry: u32 = book_decoder.decode(bits) orelse return false;
+                            const values: []const f32 = codebook.vectors[entry * dimensions ..][0..dimensions];
+                            for (values) |value| {
+                                if (place >= size) {
+                                    break;
+                                }
+                                vector[offset + place] += value;
+                                place += 1;
+                            }
+                        }
+                    },
+                }
+                return !bits.is_past_end;
+            }
+
+            /// Decodes a residue into `vectors`, one for each channel the submap holds, except those `skipped` (the
+            /// specification's 8.6.2): the range `begin` to `end` of each vector - within its `vector_size` - in
+            /// partitions of `partition_size`. Eight passes over the partitions: the first reads each partition's
+            /// classification, a few at a time - one codeword of the classbook holds `dimensions` of them, as the
+            /// digits of a number in base `classifications`, the first partition's the most significant - and every
+            /// pass adds, to each partition, the values of the classification's book for that pass, if it has one.
+            /// Where the packet ends, the residue stops: what it holds so far stands, the rest is silence.
+            fn decodeResidueVectors(
+                decoder: *Decoder,
+                residue: *const Residue,
+                layout: PartitionLayout,
+                vectors: []const []f32,
+                skipped: []const bool,
+                vector_size: usize,
+                bits: *PacketBits,
+            ) void {
+                const begin: usize = @min(residue.begin, vector_size);
+                const end: usize = @min(residue.end, vector_size);
+                const partition_size: usize = residue.partition_size;
+                const partition_count: usize = (end - begin) / partition_size;
+                if (partition_count == 0) {
+                    return;
+                }
+                const classbook: *const CodebookDecoder = &decoder.codebook_decoders[residue.classbook];
+                const classwords: usize = decoder.headers.setup.codebooks[residue.classbook].dimensions;
+                for (0..8) |pass| {
+                    var partition: usize = 0;
+                    while (partition < partition_count) {
+                        if (pass == 0) {
+                            for (vectors, 0..) |_, vector_index| {
+                                if (skipped[vector_index]) {
+                                    continue;
+                                }
+                                var classword: u32 = classbook.decode(bits) orelse return;
+                                const vector_classes: []u8 = decoder.partition_classes[vector_index];
+                                var digit: usize = classwords;
+                                while (digit > 0) {
+                                    digit -= 1;
+                                    vector_classes[partition + digit] = @intCast(classword % residue.classifications);
+                                    classword /= residue.classifications;
+                                }
+                            }
+                        }
+                        var classword_index: usize = 0;
+                        while (classword_index < classwords and partition < partition_count) : (classword_index += 1) {
+                            for (vectors, 0..) |vector, vector_index| {
+                                if (skipped[vector_index]) {
+                                    continue;
+                                }
+                                const class: u8 = decoder.partition_classes[vector_index][partition];
+                                const book: u8 = residue.books[class][pass] orelse continue;
+                                const offset: usize = begin + partition * partition_size;
+                                const is_read: bool =
+                                    decoder.decodePartition(book, layout, vector, offset, partition_size, bits);
+                                if (!is_read) {
+                                    return;
+                                }
+                            }
+                            partition += 1;
+                        }
+                    }
+                }
+            }
+
+            /// Decodes a submap's residue into its channels' spectra: type 0 spread and type 1 in rows, each channel
+            /// its own vector; type 2 the channels interleaved into one vector, the first channel's first value, the
+            /// second's, and so on, decoded in rows unless every channel is skipped, then dealt back out.
+            fn decodeResidue(
+                decoder: *Decoder,
+                residue: *const Residue,
+                spectra: []const []f32,
+                skipped: []const bool,
+                half_size: usize,
+                bits: *PacketBits,
+            ) void {
+                switch (residue.residue_type) {
+                    0 => decoder.decodeResidueVectors(residue, .spread, spectra, skipped, half_size, bits),
+                    1 => decoder.decodeResidueVectors(residue, .row, spectra, skipped, half_size, bits),
+                    else => {
+                        const is_any_decoded: bool = for (skipped) |is_skipped| {
+                            if (!is_skipped) {
+                                break true;
+                            }
+                        } else false;
+                        if (!is_any_decoded) {
+                            return;
+                        }
+                        const channel_count: usize = spectra.len;
+                        const interleaved: []f32 = decoder.interleaved[0 .. channel_count * half_size];
+                        @memset(interleaved, 0);
+                        const one_vector = [1][]f32{interleaved};
+                        const none_skipped = [1]bool{false};
+                        const vector_size: usize = channel_count * half_size;
+                        decoder.decodeResidueVectors(residue, .row, &one_vector, &none_skipped, vector_size, bits);
+                        for (0..half_size) |place| {
+                            for (spectra, 0..) |spectrum, channel| {
+                                spectrum[place] = interleaved[place * channel_count + channel];
+                            }
+                        }
+                    },
+                }
+            }
+
+            /// Undoes a coupling step for each place of a pair's two vectors (the specification's 9.2): the
+            /// magnitude `m` and the angle `a` back into two channels - the angle the second channel's difference
+            /// from the first, its sign the side the magnitude's sign leans to.
+            fn uncouple(magnitudes: []f32, angles: []f32) void {
+                for (magnitudes, angles) |*magnitude, *angle| {
+                    const m: f32 = magnitude.*;
+                    const a: f32 = angle.*;
+                    if (m > 0) {
+                        if (a > 0) {
+                            angle.* = m - a;
+                        } else {
+                            angle.* = m;
+                            magnitude.* = m + a;
+                        }
+                    } else {
+                        if (a > 0) {
+                            angle.* = m + a;
+                        } else {
+                            angle.* = m;
+                            magnitude.* = m - a;
+                        }
+                    }
+                }
+            }
+
+            /// Multiplies `block` by its window (`BlockWindow`): 0 before the rising slope, the slope, 1 on the flat
+            /// between, the falling slope - the rising one reversed - then 0.
+            fn applyWindow(
+                decoder: *const Decoder,
+                block: []f32,
+                window: BlockWindow,
+            ) void {
+                const rising: []const f32 = decoder.slopeOfLength(window.left_length);
+                const falling: []const f32 = decoder.slopeOfLength(window.right_length);
+                @memset(block[0..window.left_start], 0);
+                for (block[window.left_start..window.left_end], rising) |*sample, weight| {
+                    sample.* *= weight;
+                }
+                for (block[window.right_start..window.right_end], 0..) |*sample, index| {
+                    sample.* *= falling[falling.len - 1 - index];
+                }
+                @memset(block[window.right_end..], 0);
+            }
+
+            /// The window slope of `length`: the short block's or the long block's.
+            fn slopeOfLength(decoder: *const Decoder, length: usize) []const f32 {
+                return if (length == decoder.short_slope.len) decoder.short_slope else decoder.long_slope;
+            }
+
+            /// Overlaps the block just decoded with the last one's falling part, marks the frames between as
+            /// pending, and keeps this block's falling part for the next. The first packet gives no frames.
+            fn overlapAndKeep(decoder: *Decoder, window: BlockWindow) void {
+                if (decoder.has_previous) {
+                    const overlap_length: usize = @min(decoder.previous_right_length, window.left_length);
+                    for (decoder.blocks, decoder.previous_right) |block, previous| {
+                        for (block[window.left_start..][0..overlap_length], previous[0..overlap_length]) |*a, b| {
+                            a.* += b;
+                        }
+                    }
+                    decoder.pending_start = window.left_start;
+                    decoder.pending_end = window.right_start;
+                } else {
+                    decoder.pending_start = 0;
+                    decoder.pending_end = 0;
+                }
+                for (decoder.blocks, decoder.previous_right) |block, previous| {
+                    @memcpy(previous[0..window.right_length], block[window.right_start..window.right_end]);
+                }
+                decoder.previous_right_length = window.right_length;
+                decoder.has_previous = true;
+            }
+        };
+
+        /// Where a block's window rises and falls (the specification's 4.3.1): a block of `n` samples rises over its
+        /// overlap with the block before and falls over its overlap with the one after, each slope as long as half
+        /// the smaller block. Toward a block as long as itself, a slope fills half the block, from the start to the
+        /// middle or from the middle to the end; a long block's slope toward a short one is the short block's slope,
+        /// centred a quarter of the long block in from its end, the window flat at 1 between and 0 outside.
+        ///
+        ///     a long block between long ones        a short block before it
+        ///
+        ///          ______                             ________
+        ///         /      \                          /        \
+        ///        /        \                    ____/          \
+        ///       0   n/2    n                    0  n/4         n
+        ///
+        ///     rising over its first half and     rising over a short slope centred at n/4, flat at 1 from
+        ///     falling over its second            there to its falling slope
+        const BlockWindow = struct {
+            left_start: usize,
+            left_end: usize,
+            left_length: usize,
+            right_start: usize,
+            right_end: usize,
+            right_length: usize,
+
+            /// The window of a block of `block_size`, the stream's short block `short_size`, its neighbours long or
+            /// not - only a long block's are read; a short block's are taken as long, its slopes then its own half.
+            fn of(
+                block_size: usize,
+                short_size: usize,
+                is_previous_long: bool,
+                is_next_long: bool,
+            ) BlockWindow {
+                const is_long_block: bool = block_size != short_size;
+                const quarter: usize = block_size / 4;
+                const short_quarter: usize = short_size / 4;
+                var window: BlockWindow = undefined;
+                if (is_long_block and !is_previous_long) {
+                    window.left_start = quarter - short_quarter;
+                    window.left_end = quarter + short_quarter;
+                    window.left_length = short_size / 2;
+                } else {
+                    window.left_start = 0;
+                    window.left_end = block_size / 2;
+                    window.left_length = block_size / 2;
+                }
+                if (is_long_block and !is_next_long) {
+                    window.right_start = 3 * quarter - short_quarter;
+                    window.right_end = 3 * quarter + short_quarter;
+                    window.right_length = short_size / 2;
+                } else {
+                    window.right_start = block_size / 2;
+                    window.right_end = block_size;
+                    window.right_length = block_size / 2;
+                }
+                return window;
+            }
+        };
+
+        // ---- Tests ----
+
+        test "vorbis: bits are read from each byte's low bit up, and zeros past the end" {
+            var reader: BitReader = .{ .bytes = &.{ 0xb1, 0x03 } };
+            try std_mod.testing.expectEqual(@as(u32, 1), reader.read(1));
+            try std_mod.testing.expectEqual(@as(u32, 0), reader.read(3));
+            // The rest of 0xb1, 1011, then the next byte's two low bits, 11: 0b11_1011.
+            try std_mod.testing.expectEqual(@as(u32, 0b11_1011), reader.read(6));
+            try std_mod.testing.expect(!reader.is_past_end);
+            try std_mod.testing.expectEqual(@as(u32, 0), reader.read(16));
+            try std_mod.testing.expect(reader.is_past_end);
+        }
+
+        test "vorbis: its float format, the lattice's side, the bits an index needs" {
+            // 1.0: a mantissa of 2^20 and an exponent of 768, 2^20 * 2^(768 - 788).
+            try std_mod.testing.expectEqual(@as(f32, 1.0), unpackFloat(0x60100000));
+            try std_mod.testing.expectEqual(@as(f32, -1.0), unpackFloat(0xe0100000));
+            try std_mod.testing.expectEqual(@as(f32, 0.5), unpackFloat((767 << 21) | 0x100000));
+            try std_mod.testing.expectEqual(@as(u32, 3), lookup1Values(81, 4));
+            try std_mod.testing.expectEqual(@as(u32, 3), lookup1Values(82, 4));
+            try std_mod.testing.expectEqual(@as(u32, 2), lookup1Values(80, 4));
+            try std_mod.testing.expectEqual(@as(u32, 625), lookup1Values(625, 1));
+            try std_mod.testing.expectEqual(@as(u32, 25), lookup1Values(625, 2));
+            try std_mod.testing.expectEqual(@as(u6, 0), bitLength(0));
+            try std_mod.testing.expectEqual(@as(u6, 1), bitLength(1));
+            try std_mod.testing.expectEqual(@as(u6, 3), bitLength(7));
+            try std_mod.testing.expectEqual(@as(u6, 4), bitLength(8));
+        }
+
+        test "vorbis: codewords given as the specification's example gives them, and a tree over-filled refused" {
+            const lengths = [8]u8{ 2, 4, 4, 4, 4, 2, 3, 3 };
+            var codewords: [8]u32 = undefined;
+            try assignCodewords(&lengths, &codewords);
+            const expected = [8]u32{ 0b00, 0b0100, 0b0101, 0b0110, 0b0111, 0b10, 0b110, 0b111 };
+            try std_mod.testing.expectEqualSlices(u32, &expected, &codewords);
+            // Unused entries take no codeword, and leave the others' as they were.
+            const sparse_lengths = [5]u8{ 0, 1, 0, 2, 2 };
+            var sparse_codewords: [5]u32 = undefined;
+            try assignCodewords(&sparse_lengths, &sparse_codewords);
+            try std_mod.testing.expectEqualSlices(u32, &.{ 0, 0b0, 0, 0b10, 0b11 }, &sparse_codewords);
+            // Three codewords of one bit cannot be: the tree has two.
+            var over_codewords: [3]u32 = undefined;
+            try std_mod.testing.expectError(error.InvalidHeader, assignCodewords(&.{ 1, 1, 1 }, &over_codewords));
+        }
+
+        /// Writes bits least significant first, as a packet holds them: the tests' encoder.
+        const TestBitWriter = struct {
+            bytes: []u8,
+            bit_position: usize = 0,
+
+            /// Writes `value`'s lowest `count` bits, the lowest first.
+            fn write(writer: *TestBitWriter, value: u32, count: u6) void {
+                for (0..count) |bit_index| {
+                    const bit: u8 = @intCast((value >> @intCast(bit_index)) & 1);
+                    writer.bytes[writer.bit_position / 8] |= bit << @intCast(writer.bit_position % 8);
+                    writer.bit_position += 1;
+                }
+            }
+        };
+
+        test "vorbis: sound packet bits through the accumulator, across bytes, zeros and the mark past the end" {
+            var bits: PacketBits = .{ .bytes = &.{ 0xb1, 0x03, 0xff } };
+            try std_mod.testing.expectEqual(@as(u32, 1), bits.read(1));
+            try std_mod.testing.expectEqual(@as(u32, 0), bits.read(3));
+            // The rest of 0xb1, 1011, then the next byte's two low bits, 11: 0b11_1011.
+            try std_mod.testing.expectEqual(@as(u32, 0b11_1011), bits.read(6));
+            // A look ahead leaves the bits: the next 6 of 0x03, 000000, and 0xff's lowest 4 - twice.
+            try std_mod.testing.expectEqual(@as(u32, 0b1111_000000), bits.peek(10));
+            try std_mod.testing.expectEqual(@as(u32, 0b1111_000000), bits.read(10));
+            try std_mod.testing.expect(!bits.is_past_end);
+            // Four bits left: 32 asked for are those and zeros, and the reader is marked.
+            try std_mod.testing.expectEqual(@as(u32, 0b1111), bits.peek(32));
+            _ = bits.read(32);
+            try std_mod.testing.expect(bits.is_past_end);
+            try std_mod.testing.expectEqual(@as(u32, 0), bits.read(8));
+        }
+
+        test "vorbis: every codebook of the sample decodes each of its codewords back to its entry" {
+            var reader: ogg.PacketReader = .init(testing_allocator, ogg.sample_ogg);
+            defer reader.deinit();
+            var headers: Headers = try readHeaders(testing_allocator, &reader);
+            defer headers.deinit();
+            var arena: ArenaAllocator = .init(testing_allocator);
+            defer arena.deinit();
+            const arena_allocator: Allocator = arena.allocator();
+            var long_codeword_count: usize = 0;
+            for (headers.setup.codebooks) |*codebook| {
+                const decoder: CodebookDecoder = try .init(arena_allocator, codebook);
+                long_codeword_count += decoder.long_codes.len;
+                // Every used entry's codeword, one after another, first bit first - as an encoder writes them.
+                var bit_count: usize = 0;
+                for (codebook.codeword_lengths) |length| {
+                    bit_count += length;
+                }
+                const bytes: []u8 = try arena_allocator.alloc(u8, bit_count / 8 + 1);
+                @memset(bytes, 0);
+                var writer: TestBitWriter = .{ .bytes = bytes };
+                for (codebook.codeword_lengths, codebook.codewords) |length, codeword| {
+                    if (length == 0) {
+                        continue;
+                    }
+                    const reversed: u32 = @bitReverse(codeword) >> @intCast(32 - @as(u32, length));
+                    writer.write(reversed, @intCast(length));
+                }
+                var bits: PacketBits = .{ .bytes = bytes };
+                for (codebook.codeword_lengths, 0..) |length, entry| {
+                    if (length == 0) {
+                        continue;
+                    }
+                    const decoded: u32 = decoder.decode(&bits) orelse return error.TestUnexpectedResult;
+                    try std_mod.testing.expectEqual(@as(u32, @intCast(entry)), decoded);
+                }
+                try std_mod.testing.expect(!bits.is_past_end);
+            }
+            // The sample's books hold codewords past the fast table's 10 bits: the long path is tried too.
+            try std_mod.testing.expect(long_codeword_count > 0);
+        }
+
+        test "vorbis: floor 1's points predicted and moved, and its integer lines drawn, as worked by hand" {
+            var curve: [12]f32 = @splat(-1);
+            // From 5 down to 1 over 7: no whole step, 4 of 7 to carry - the height drops at 4, 6 and 8.
+            drawFloor1Line(2, 5, 9, 1, &curve);
+            const falling_steps = [7]u8{ 5, 5, 4, 4, 3, 3, 2 };
+            for (falling_steps, curve[2..9]) |step, amplitude| {
+                try std_mod.testing.expectEqual(floor1_inverse_db[step], amplitude);
+            }
+            try std_mod.testing.expectEqual(@as(f32, -1), curve[9]);
+            // From 10 down to 2 over 4: two whole steps down each time, nothing to carry.
+            drawFloor1Line(0, 10, 4, 2, &curve);
+            for ([4]u8{ 10, 8, 6, 4 }, curve[0..4]) |step, amplitude| {
+                try std_mod.testing.expectEqual(floor1_inverse_db[step], amplitude);
+            }
+            // From 0 up to 3 over 5: 3 of 5 to carry - up at 2 and 4.
+            drawFloor1Line(0, 0, 5, 3, &curve);
+            for ([5]u8{ 0, 0, 1, 1, 2 }, curve[0..5]) |step, amplitude| {
+                try std_mod.testing.expectEqual(floor1_inverse_db[step], amplitude);
+            }
+            // A line past the curve's end stops at it.
+            drawFloor1Line(0, 7, 40, 7, &curve);
+            try std_mod.testing.expectEqual(floor1_inverse_db[7], curve[11]);
+            // Three points, X 0, 16 and 8: the third predicted between (0, 40) and (16, 20) - 40 less 20 * 8 / 16.
+            const three_point_floor: Floor = .{
+                .partition_classes = &.{},
+                .classes = &.{},
+                .multiplier = 1,
+                .x_list = &.{ 0, 16, 8 },
+                .sorted_order = &.{ 0, 2, 1 },
+                .low_neighbors = &.{ 0, 0, 0 },
+                .high_neighbors = &.{ 0, 0, 1 },
+            };
+            var final_heights: [3]i32 = undefined;
+            var is_drawn: [3]bool = undefined;
+            // Read as 0: on the line, at 30, and passed by.
+            floor1FinalHeights(&three_point_floor, &.{ 40, 20, 0 }, &final_heights, &is_drawn);
+            try std_mod.testing.expectEqualSlices(i32, &.{ 40, 20, 30 }, &final_heights);
+            try std_mod.testing.expectEqualSlices(bool, &.{ true, true, false }, &is_drawn);
+            // Odd, 3: down two, rounded up from a half; even, 4: up two; both drawn through.
+            floor1FinalHeights(&three_point_floor, &.{ 40, 20, 3 }, &final_heights, &is_drawn);
+            try std_mod.testing.expectEqual(@as(i32, 28), final_heights[2]);
+            try std_mod.testing.expectEqualSlices(bool, &.{ true, true, true }, &is_drawn);
+            floor1FinalHeights(&three_point_floor, &.{ 40, 20, 4 }, &final_heights, &is_drawn);
+            try std_mod.testing.expectEqual(@as(i32, 32), final_heights[2]);
+            // 70, past the room of twice the 30 below: counted up from the room below, 70 - 30 + 30.
+            floor1FinalHeights(&three_point_floor, &.{ 40, 20, 70 }, &final_heights, &is_drawn);
+            try std_mod.testing.expectEqual(@as(i32, 70), final_heights[2]);
+            // The curve through the three: 40 down to 28 by 8, then 28 down to 20 by 16, level to the end.
+            floor1FinalHeights(&three_point_floor, &.{ 40, 20, 3 }, &final_heights, &is_drawn);
+            var floor_curve: [20]f32 = undefined;
+            drawFloor1Curve(&three_point_floor, &final_heights, &is_drawn, &floor_curve);
+            try std_mod.testing.expectEqual(floor1_inverse_db[40], floor_curve[0]);
+            try std_mod.testing.expectEqual(floor1_inverse_db[28], floor_curve[8]);
+            try std_mod.testing.expectEqual(floor1_inverse_db[20], floor_curve[16]);
+            try std_mod.testing.expectEqual(floor1_inverse_db[20], floor_curve[19]);
+        }
+
+        test "vorbis: the sample decoded whole - its frames, every sample finite and within range" {
+            var decoder: Decoder = try .init(testing_allocator, ogg.sample_ogg);
+            defer decoder.deinit();
+            try std_mod.testing.expectEqual(@as(usize, 2), decoder.channelCount());
+            var frames: [4096 * 2]f32 = undefined;
+            var frame_count: usize = 0;
+            var peak: f32 = 0;
+            while (true) {
+                const frames_read: usize = try decoder.readFrames(&frames);
+                if (frames_read == 0) {
+                    break;
+                }
+                for (frames[0 .. frames_read * 2]) |sample| {
+                    try std_mod.testing.expect(std_mod.math.isFinite(sample));
+                    peak = @max(peak, @abs(sample));
+                }
+                frame_count += frames_read;
+            }
+            // stb_vorbis's count: the last packet trimmed to the stream's final granule position.
+            try std_mod.testing.expectEqual(@as(usize, 4_236_528), frame_count);
+            try std_mod.testing.expect(peak > 0.1 and peak < 2);
+        }
+
+        test "vorbis: the decibel table from -139.45 dB to 0, and each window's slopes power complementary" {
+            try std_mod.testing.expectApproxEqRel(@as(f32, 1.0649863e-07), floor1_inverse_db[0], 1e-6);
+            try std_mod.testing.expectApproxEqRel(@as(f32, 0.9389798), floor1_inverse_db[254], 1e-6);
+            try std_mod.testing.expectEqual(@as(f32, 1), floor1_inverse_db[255]);
+            var reader: ogg.PacketReader = .init(testing_allocator, ogg.sample_ogg);
+            defer reader.deinit();
+            var headers: Headers = try readHeaders(testing_allocator, &reader);
+            defer headers.deinit();
+            const identification: Identification = headers.identification;
+            const block_sizes = [2]u16{ identification.short_block_size, identification.long_block_size };
+            for (block_sizes) |block_size| {
+                const slope: []f32 = try testing_allocator.alloc(f32, block_size / 2);
+                defer testing_allocator.free(slope);
+                fillWindowSlope(slope);
+                for (slope, 0..) |value, index| {
+                    const mirror: f32 = slope[slope.len - 1 - index];
+                    try std_mod.testing.expectApproxEqAbs(@as(f32, 1), value * value + mirror * mirror, 1e-6);
+                }
+                try std_mod.testing.expect(slope[0] < 0.01);
+                try std_mod.testing.expect(slope[slope.len - 1] > 0.99);
+            }
+        }
+
+        /// A stream's frames summed up, to tell two decodings apart without keeping them: their count, the sum of
+        /// their samples' squares, and every sample's bits mixed in by turns - two decodings agreeing in all three
+        /// gave the same samples.
+        const FramesDigest = struct {
+            frame_count: usize = 0,
+            power: f64 = 0,
+            bits_mixed: u64 = 0,
+
+            /// Adds `samples`, `channel_count` to a frame.
+            fn add(
+                digest: *FramesDigest,
+                samples: []const f32,
+                channel_count: usize,
+            ) void {
+                for (samples) |sample| {
+                    digest.power += @as(f64, sample) * sample;
+                    digest.bits_mixed = std_mod.math.rotl(u64, digest.bits_mixed, 5) ^ @as(u32, @bitCast(sample));
+                }
+                digest.frame_count += samples.len / channel_count;
+            }
+
+            /// Reads `decoder` to its end into the digest.
+            fn readToEnd(digest: *FramesDigest, decoder: *Decoder) !void {
+                var frames: [1024 * 2]f32 = undefined;
+                while (true) {
+                    const frames_read: usize = try decoder.readFrames(&frames);
+                    if (frames_read == 0) {
+                        return;
+                    }
+                    digest.add(frames[0 .. frames_read * 2], 2);
+                }
+            }
+        };
+
+        test "vorbis: rewound mid-stream, the sample decodes again to the very same frames" {
+            var whole: FramesDigest = .{};
+            var fresh: Decoder = try .init(testing_allocator, ogg.sample_ogg);
+            defer fresh.deinit();
+            try whole.readToEnd(&fresh);
+            var decoder: Decoder = try .init(testing_allocator, ogg.sample_ogg);
+            defer decoder.deinit();
+            var frames: [1024 * 2]f32 = undefined;
+            for (0..100) |_| {
+                _ = try decoder.readFrames(&frames);
+            }
+            decoder.rewind();
+            var again: FramesDigest = .{};
+            try again.readToEnd(&decoder);
+            try std_mod.testing.expectEqual(whole.frame_count, again.frame_count);
+            try std_mod.testing.expectEqual(whole.power, again.power);
+            try std_mod.testing.expectEqual(whole.bits_mixed, again.bits_mixed);
+            // And a second time from the very end.
+            decoder.rewind();
+            var third: FramesDigest = .{};
+            try third.readToEnd(&decoder);
+            try std_mod.testing.expectEqual(whole.bits_mixed, third.bits_mixed);
+        }
+
+        test "vorbis: the first packet gives no frames, an empty one none and changes nothing, a short one decodes" {
+            // Two decoders over the sample, one fed each packet as it is, the other the same packets with the edges
+            // put in: an empty packet between two, and one packet cut in half.
+            var plain: Decoder = try .init(testing_allocator, ogg.sample_ogg);
+            defer plain.deinit();
+            var edged: Decoder = try .init(testing_allocator, ogg.sample_ogg);
+            defer edged.deinit();
+            var packet_index: usize = 0;
+            var cut_packet_frames: usize = 0;
+            while (try plain.reader.next()) |packet| : (packet_index += 1) {
+                const edged_packet: ogg.Packet = (try edged.reader.next()).?;
+                plain.decodePacket(packet.bytes);
+                if (packet_index == 0) {
+                    // The first sound packet: no block before it to overlap, no frames.
+                    try std_mod.testing.expectEqual(plain.pending_start, plain.pending_end);
+                }
+                if (packet_index == 10) {
+                    // An empty packet first: no frames, and the overlap kept for the real one after it.
+                    edged.decodePacket(&.{});
+                    try std_mod.testing.expectEqual(edged.pending_start, edged.pending_end);
+                }
+                if (packet_index == 20) {
+                    // Cut in half, through its residue: decoded as far as it goes, as many frames, all finite.
+                    edged.decodePacket(edged_packet.bytes[0 .. edged_packet.bytes.len / 2]);
+                    cut_packet_frames = edged.pending_end - edged.pending_start;
+                    try std_mod.testing.expectEqual(plain.pending_end - plain.pending_start, cut_packet_frames);
+                    for (edged.blocks) |block| {
+                        for (block[edged.pending_start..edged.pending_end]) |sample| {
+                            try std_mod.testing.expect(std_mod.math.isFinite(sample));
+                        }
+                    }
+                } else {
+                    edged.decodePacket(edged_packet.bytes);
+                }
+                // Before the cut, the empty packet changing nothing: the two give the same frames.
+                if (packet_index < 20) {
+                    for (plain.blocks, edged.blocks) |plain_block, edged_block| {
+                        const plain_frames: []const f32 = plain_block[plain.pending_start..plain.pending_end];
+                        const edged_frames: []const f32 = edged_block[edged.pending_start..edged.pending_end];
+                        try std_mod.testing.expectEqualSlices(f32, plain_frames, edged_frames);
+                    }
+                }
+                plain.pending_start = plain.pending_end;
+                edged.pending_start = edged.pending_end;
+                if (packet_index == 40) {
+                    break;
+                }
+            }
+            try std_mod.testing.expect(cut_packet_frames > 0);
+        }
+
+        test "vorbis: a damaged page in the middle is skipped and counted, the decoding going on to the end" {
+            // The sample, a byte near the end of its 40th page changed: its checksum fails.
+            var page_offsets: [42]usize = undefined;
+            page_offsets[0] = 0;
+            for (1..page_offsets.len) |page_index| {
+                const page: ogg.Page = try ogg.readPage(ogg.sample_ogg[page_offsets[page_index - 1]..]);
+                page_offsets[page_index] = page_offsets[page_index - 1] + page.byte_count;
+            }
+            const damaged: []u8 = try testing_allocator.dupe(u8, ogg.sample_ogg);
+            defer testing_allocator.free(damaged);
+            damaged[page_offsets[41] - 10] ^= 0xff;
+            var decoder: Decoder = try .init(testing_allocator, damaged);
+            defer decoder.deinit();
+            var digest: FramesDigest = .{};
+            var frames: [1024 * 2]f32 = undefined;
+            while (true) {
+                const frames_read: usize = try decoder.readFrames(&frames);
+                if (frames_read == 0) {
+                    break;
+                }
+                for (frames[0 .. frames_read * 2]) |sample| {
+                    try std_mod.testing.expect(std_mod.math.isFinite(sample));
+                }
+                digest.add(frames[0 .. frames_read * 2], 2);
+            }
+            try std_mod.testing.expectEqual(@as(usize, 1), decoder.reader.skipped_page_count);
+            // The page's packets lost - a page holds a second or so - and everything after it decoded.
+            try std_mod.testing.expect(digest.frame_count < 4_236_528);
+            try std_mod.testing.expect(digest.frame_count > 4_236_528 - 4 * 44_100);
+        }
+
+        test "vorbis: a seek by pages lands on the very frame, as reading from the start and dropping does" {
+            // The whole stream read straight through: what every seek must give, bit for bit.
+            var straight: Decoder = try .init(testing_allocator, ogg.sample_ogg);
+            defer straight.deinit();
+            const stream_frames: usize = 4_236_528;
+            const all_samples: []f32 = try testing_allocator.alloc(f32, stream_frames * 2);
+            defer testing_allocator.free(all_samples);
+            var frame_count: usize = 0;
+            while (true) {
+                const frames_read: usize = try straight.readFrames(all_samples[frame_count * 2 ..]);
+                if (frames_read == 0) {
+                    break;
+                }
+                frame_count += frames_read;
+            }
+            try std_mod.testing.expectEqual(stream_frames, frame_count);
+            var decoder: Decoder = try .init(testing_allocator, ogg.sample_ogg);
+            defer decoder.deinit();
+            try std_mod.testing.expect(decoder.page_marks.len > 10);
+            const targets = [_]u64{
+                0,
+                1,
+                1_000,
+                30 * 44_100 + 7,
+                61 * 44_100 + 12_345,
+                stream_frames - 5_000,
+                stream_frames - 1,
+            };
+            var frames: [4096 * 2]f32 = undefined;
+            for (targets) |target| {
+                try decoder.seekToFrame(target);
+                const wanted: usize = @intCast(@min(4096, stream_frames - target));
+                var gathered: usize = 0;
+                while (gathered < wanted) {
+                    const frames_read: usize = try decoder.readFrames(frames[gathered * 2 .. wanted * 2]);
+                    if (frames_read == 0) {
+                        break;
+                    }
+                    gathered += frames_read;
+                }
+                try std_mod.testing.expectEqual(wanted, gathered);
+                const first_sample: usize = @intCast(target * 2);
+                const expected: []const f32 = all_samples[first_sample..][0 .. wanted * 2];
+                try std_mod.testing.expectEqualSlices(f32, expected, frames[0 .. wanted * 2]);
+            }
+            // At the end and past it: nothing to read.
+            try decoder.seekToFrame(stream_frames);
+            try std_mod.testing.expectEqual(@as(usize, 0), try decoder.readFrames(&frames));
+            try decoder.seekToFrame(stream_frames + 10_000);
+            try std_mod.testing.expectEqual(@as(usize, 0), try decoder.readFrames(&frames));
+            // From a seek on to the end: the rest of the stream, its end still trimmed to the final granule.
+            try decoder.seekToFrame(stream_frames - 100_000);
+            var rest_count: usize = 0;
+            while (true) {
+                const frames_read: usize = try decoder.readFrames(&frames);
+                if (frames_read == 0) {
+                    break;
+                }
+                rest_count += frames_read;
+            }
+            try std_mod.testing.expectEqual(@as(usize, 100_000), rest_count);
+        }
+
+        test "vorbis: the sample's headers - its format, tags, codebooks, floors, residues, mappings and modes" {
+            var reader: ogg.PacketReader = .init(testing_allocator, ogg.sample_ogg);
+            defer reader.deinit();
+            var headers: Headers = try readHeaders(testing_allocator, &reader);
+            defer headers.deinit();
+            const identification: Identification = headers.identification;
+            try std_mod.testing.expectEqual(@as(u8, 2), identification.channels);
+            try std_mod.testing.expectEqual(@as(u32, 44100), identification.sample_rate);
+            try std_mod.testing.expectEqual(@as(u16, 256), identification.short_block_size);
+            try std_mod.testing.expectEqual(@as(u16, 2048), identification.long_block_size);
+            try std_mod.testing.expectEqualStrings("Lavf58.29.100", headers.vendor);
+            try std_mod.testing.expectEqual(@as(usize, 1), headers.comments.len);
+            try std_mod.testing.expectEqualStrings("ENCODER=Lavc58.54.100 libvorbis", headers.comments[0]);
+            // As stb_vorbis reads them.
+            const setup: Setup = headers.setup;
+            try std_mod.testing.expectEqual(@as(usize, 44), setup.codebooks.len);
+            var lookup_count: usize = 0;
+            var most_entries: u32 = 0;
+            var most_dimensions: u16 = 0;
+            for (setup.codebooks) |codebook| {
+                lookup_count += @intFromBool(codebook.vectors.len > 0);
+                most_entries = @max(most_entries, codebook.entry_count);
+                most_dimensions = @max(most_dimensions, codebook.dimensions);
+                // Every code fills its tree: the used entries' 2^-length sum to one - or a single entry is used.
+                var used_count: usize = 0;
+                var kraft_sum: u64 = 0;
+                for (codebook.codeword_lengths) |codeword_length| {
+                    if (codeword_length != 0) {
+                        used_count += 1;
+                        kraft_sum += @as(u64, 1) << @intCast(32 - @as(u32, codeword_length));
+                    }
+                }
+                try std_mod.testing.expect(used_count == 1 or kraft_sum == @as(u64, 1) << 32);
+            }
+            try std_mod.testing.expectEqual(@as(usize, 15), lookup_count);
+            try std_mod.testing.expectEqual(@as(u32, 625), most_entries);
+            try std_mod.testing.expectEqual(@as(u16, 4), most_dimensions);
+            try std_mod.testing.expectEqual(@as(usize, 2), setup.floors.len);
+            try std_mod.testing.expectEqual(@as(usize, 19), setup.floors[0].x_list.len);
+            try std_mod.testing.expectEqual(@as(usize, 29), setup.floors[1].x_list.len);
+            try std_mod.testing.expectEqual(@as(u8, 2), setup.floors[1].multiplier);
+            try std_mod.testing.expectEqual(@as(usize, 2), setup.residues.len);
+            const long_residue: Residue = setup.residues[1];
+            try std_mod.testing.expectEqual(@as(u8, 2), long_residue.residue_type);
+            try std_mod.testing.expectEqual(@as(u32, 2048), long_residue.end);
+            try std_mod.testing.expectEqual(@as(u32, 32), long_residue.partition_size);
+            try std_mod.testing.expectEqual(@as(u8, 10), long_residue.classifications);
+            try std_mod.testing.expectEqual(@as(u8, 43), long_residue.classbook);
+            try std_mod.testing.expectEqual(@as(usize, 2), setup.mappings.len);
+            for (setup.mappings, 0..) |mapping, mapping_index| {
+                try std_mod.testing.expectEqual(@as(usize, 1), mapping.coupling_steps.len);
+                try std_mod.testing.expectEqual(@as(u8, 0), mapping.coupling_steps[0].magnitude_channel);
+                try std_mod.testing.expectEqual(@as(u8, 1), mapping.coupling_steps[0].angle_channel);
+                try std_mod.testing.expectEqual(@as(u8, @intCast(mapping_index)), mapping.submaps[0].floor);
+                try std_mod.testing.expectEqual(@as(u8, @intCast(mapping_index)), mapping.submaps[0].residue);
+            }
+            try std_mod.testing.expectEqual(@as(usize, 2), setup.modes.len);
+            try std_mod.testing.expect(!setup.modes[0].is_long_block and setup.modes[1].is_long_block);
+            try std_mod.testing.expectEqual(@as(u8, 1), setup.modes[1].mapping);
+        }
+
+        test "vorbis: a floor's points ordered, each with its neighbours among those before it" {
+            var reader: ogg.PacketReader = .init(testing_allocator, ogg.sample_ogg);
+            defer reader.deinit();
+            var headers: Headers = try readHeaders(testing_allocator, &reader);
+            defer headers.deinit();
+            for (headers.setup.floors) |floor| {
+                const x_list: []const u16 = floor.x_list;
+                for (floor.sorted_order[1..], floor.sorted_order[0 .. x_list.len - 1]) |later, earlier| {
+                    try std_mod.testing.expect(x_list[earlier] < x_list[later]);
+                }
+                for (2..x_list.len) |point| {
+                    const low_x: u16 = x_list[floor.low_neighbors[point]];
+                    const high_x: u16 = x_list[floor.high_neighbors[point]];
+                    try std_mod.testing.expect(low_x < x_list[point] and x_list[point] < high_x);
+                    // No point listed before lies between a neighbour and the point.
+                    for (0..point) |earlier| {
+                        const earlier_x: u16 = x_list[earlier];
+                        try std_mod.testing.expect(!(earlier_x > low_x and earlier_x < x_list[point]));
+                        try std_mod.testing.expect(!(earlier_x < high_x and earlier_x > x_list[point]));
+                    }
+                }
+            }
+        }
     };
 
     // ---- Step 7: end-to-end + Wave adapters
-    /// End-to-end pipeline: decode any supported format, convert to
-    /// interleaved-stereo `f32`, resample to `target_rate`.  Returns
-    /// the resampled f32 buffer; caller frees via `gpa.free`.
-    /// This is the path used by `loadAudioBuffer` when
-    /// loading a sound: decode -> canonical f32 stereo -> upload to
-    /// AudioContext at the device sample rate.
-    /// `target_rate` is typically `web.audio.getSampleRate(ctx_id)`
-    /// - the AudioContext's native rate (so Web Audio doesn't need
-    /// to do its own resample).  Passing 0 yields an empty result.
-    /// Returns `error.OggRequiresAsyncDecode` if the bytes sniff as
-    /// OGG - those need the Web Audio async decode path, not this
-    /// sync pipeline.
+    /// A whole file decoded, made interleaved stereo `f32`, and resampled to `target_rate` - typically the mixer's.
+    /// Returns the resampled buffer, which the caller frees with `gpa.free`; passing a rate of 0 yields an empty one.
+    /// An OGG file is refused with `error.OggRequiresAsyncDecode`, a name from the time a browser decoded it: this
+    /// whole-file path decodes no Vorbis, which music decodes as it plays (`vorbis.Decoder`).
     pub fn toCanonical(
         gpa: std_mod.mem.Allocator,
         reader: *std_mod.Io.Reader,
@@ -7795,7 +10846,7 @@ pub const audio = struct {
                             _: std_mod.mem.Alignment,
                             _: usize,
                         ) ?[*]u8 {
-                            unreachable;
+                            panicf(@src(), "wav: a wave borrowing its samples asked to allocate - it owns none", .{});
                         }
                     }).x,
                     .resize = (struct {
@@ -7806,7 +10857,11 @@ pub const audio = struct {
                             _: usize,
                             _: usize,
                         ) bool {
-                            unreachable;
+                            panicf(
+                                @src(),
+                                "wav: a wave borrowing its samples asked to resize them - it owns none",
+                                .{},
+                            );
                         }
                     }).x,
                     .remap = (struct {
@@ -7817,7 +10872,7 @@ pub const audio = struct {
                             _: usize,
                             _: usize,
                         ) ?[*]u8 {
-                            unreachable;
+                            panicf(@src(), "wav: a wave borrowing its samples asked to remap them - it owns none", .{});
                         }
                     }).x,
                     .free = (struct {
@@ -7827,7 +10882,7 @@ pub const audio = struct {
                             _: std_mod.mem.Alignment,
                             _: usize,
                         ) void {
-                            unreachable;
+                            assertUnreachable(@src(), "wav: a wave borrowing its samples asked to free them", .{});
                         }
                     }).x,
                 },
@@ -7972,6 +11027,7 @@ pub const audio = struct {
     comptime {
         _ = wav;
         _ = ogg;
+        _ = vorbis;
     }
 };
 
@@ -9655,7 +12711,7 @@ pub const stl = struct {
         if (bytes.len < 84) {
             return false;
         }
-        const count: u32 = std.mem.readInt(u32, bytes[80..84], .little);
+        const count: u32 = readInt(u32, bytes[80..84], .little);
         // Guard the multiply before trusting a length read out of the file.
         if (count > (bytes.len - 84) / 50 + 1) {
             return false;
@@ -9672,7 +12728,7 @@ pub const stl = struct {
     }
 
     fn parseBinary(gpa: Allocator, bytes: []const u8) Error!Mesh {
-        const count: usize = std.mem.readInt(u32, bytes[80..84], .little);
+        const count: usize = readInt(u32, bytes[80..84], .little);
         var positions: []f32 = try gpa.alloc(f32, count * 9);
         errdefer gpa.free(positions);
         var normals: []f32 = try gpa.alloc(f32, count * 3);
@@ -9695,7 +12751,7 @@ pub const stl = struct {
     }
 
     fn readF32Le(bytes: []const u8, offset: usize) f32 {
-        return @bitCast(std.mem.readInt(u32, bytes[offset..][0..4], .little));
+        return @bitCast(readInt(u32, bytes[offset..][0..4], .little));
     }
 
     fn parseAscii(gpa: Allocator, bytes: []const u8) Error!Mesh {
@@ -11167,7 +14223,7 @@ pub const fbx = struct {
         if (bytes.len < magic.len + 4) {
             return Error.Truncated;
         }
-        const version: u32 = std.mem.readInt(u32, bytes[magic.len..][0..4], .little);
+        const version: u32 = readInt(u32, bytes[magic.len..][0..4], .little);
         if (version < min_version) {
             return Error.UnsupportedVersion;
         }
@@ -11203,7 +14259,7 @@ pub const fbx = struct {
         var p: Parser = .{
             .src = bytes,
             .pos = magic.len + 4,
-            .version = std.mem.readInt(u32, bytes[magic.len..][0..4], .little),
+            .version = readInt(u32, bytes[magic.len..][0..4], .little),
             .arena = arena.allocator(),
             .scratch = gpa,
             .window = window,
@@ -11259,12 +14315,12 @@ pub const fbx = struct {
 
         fn u32_(self: *Parser) Error!u32 {
             const b: []const u8 = try self.take(4);
-            return std.mem.readInt(u32, b[0..4], .little);
+            return readInt(u32, b[0..4], .little);
         }
 
         fn u64_(self: *Parser) Error!u64 {
             const b: []const u8 = try self.take(8);
-            return std.mem.readInt(u64, b[0..8], .little);
+            return readInt(u64, b[0..8], .little);
         }
 
         /// * The header widens at version 7500: three 64-bit fields instead of three 32-bit ones,
@@ -11373,12 +14429,12 @@ pub const fbx = struct {
         fn parseValue(self: *Parser) Error!Value {
             const code: u8 = try self.u8_();
             return switch (code) {
-                'Y' => .{ .i16_ = std.mem.readInt(i16, (try self.take(2))[0..2], .little) },
+                'Y' => .{ .i16_ = readInt(i16, (try self.take(2))[0..2], .little) },
                 'C' => .{ .bool_ = (try self.u8_()) != 0 },
-                'I' => .{ .i32_ = std.mem.readInt(i32, (try self.take(4))[0..4], .little) },
+                'I' => .{ .i32_ = readInt(i32, (try self.take(4))[0..4], .little) },
                 'F' => .{ .f32_ = @bitCast(try self.u32_()) },
                 'D' => .{ .f64_ = @bitCast(try self.u64_()) },
-                'L' => .{ .i64_ = std.mem.readInt(i64, (try self.take(8))[0..8], .little) },
+                'L' => .{ .i64_ = readInt(i64, (try self.take(8))[0..8], .little) },
                 'S' => .{ .string = try self.take(try self.u32_()) },
                 'R' => .{ .raw = try self.take(try self.u32_()) },
                 'f' => .{ .f32_array = try self.parseArray(f32) },
@@ -14024,7 +17080,6 @@ pub const bvh = struct {
     // Retargeting, skeleton to skeleton (retarget_plan.md section 13f)
     // =========================================================================
 
-    const assert = zm.assert;
     const normalize3 = zm.normalize3;
     const clamp = zm.clamp;
     const acosRad = zm.acosRad;
@@ -14200,7 +17255,7 @@ pub const bvh = struct {
                 continue;
             }
 
-            const unit_direction: Vec = direction / @as(Vec, @splat(bone_length));
+            const unit_direction: Vec = direction / splat(bone_length);
             out_rest_orientations[joint] = shortestArcFromY(unit_direction);
         }
     }
@@ -14313,7 +17368,12 @@ pub const bvh = struct {
 
             // Parents must precede children: this loop reads the parent's ALREADY RESOLVED
             // global rotation while computing the child's.
-            assert(parent_joint < @as(i32, @intCast(target_joint)), @src());
+            assertf(
+                parent_joint < @as(i32, @intCast(target_joint)),
+                @src(),
+                "retarget: joint {d}'s parent {d} does not precede it",
+                .{ target_joint, parent_joint },
+            );
 
             const joint_is_root: bool = parent_joint < 0;
             const parent_global_rotation: Quat = if (joint_is_root)
@@ -14374,7 +17434,7 @@ pub const bvh = struct {
         const height_ratio: f32 = target_hip_height / source_hip_height;
         // * Y scales like X and Z: the root's HEIGHT above the floor is as much a function of
         // leg length as its horizontal travel is.
-        return source_root_position * @as(Vec, @splat(height_ratio));
+        return source_root_position * splat(height_ratio);
     }
 
     pub fn fromFbxWithMap(
@@ -14914,7 +17974,7 @@ fn bvh_findJoint(d: bvh.Data, name: []const u8) usize {
             return i;
         }
     }
-    unreachable;
+    panicf(@src(), "bvh: no joint named {s}", .{name});
 }
 
 test "bvh: dance1 - 6 channels on every joint, ZYX order" {

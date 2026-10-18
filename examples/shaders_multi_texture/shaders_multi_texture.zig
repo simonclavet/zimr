@@ -39,6 +39,7 @@ const fx = z.effect_shaders;
 const MaskUbo = @FieldType(fx.mask_fs.Io, "u");
 
 const Color = zm.Color;
+const splat2 = zm.splat2;
 const c = Color;
 const Vec2 = zm.Vec2;
 const float = zm.float;
@@ -189,7 +190,7 @@ fn drawSceneA(f: *z.Frame, s: *State, dt: f32) void {
     const w: f32 = float(s.rt_a.width);
     const h: f32 = float(s.rt_a.height);
     for (&s.discs) |*d| {
-        d.pos += d.vel * @as(Vec2, @splat(dt));
+        d.pos += d.vel * splat2(dt);
         if (d.pos[0] < d.radius or d.pos[0] > w - d.radius) {
             d.vel[0] = -d.vel[0];
             d.pos[0] = clamp(d.pos[0], d.radius, w - d.radius);

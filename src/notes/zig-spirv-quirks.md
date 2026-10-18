@@ -187,6 +187,45 @@ Zig 0.17+ ships with cleaner SPIR-V, check whether `OpFUnord*` still
 appears.  If so, this is fine to keep; if not, remove the enum
 entries.
 
+## Quirk 5: a constant element index takes its base's pointer type
+
+### What Zig does
+
+An element of an array in the `StorageBuffer` storage class, indexed by a value known at compile time, is reached by
+an access chain whose RESULT TYPE is its base's: a pointer to the whole array instead of a pointer to the element.
+With an index known only at run time, the type is right. From one kernel (`b_data[c.id] = 1.0` and `b_data[0] = 1.0`,
+everything else equal), disassembled:
+
+    run-time index
+      %322 = OpInBoundsAccessChain %_ptr_StorageBuffer__arr_f32_u32_1024 %kbuf_data %fe
+      %325 = OpInBoundsAccessChain %_ptr_StorageBuffer_f32 %322 %301
+    constant index
+      %300 = OpInBoundsAccessChain %_ptr_StorageBuffer__arr_f32_u32_1024 %kbuf_data %fe
+      %308 = OpInBoundsAccessChain %_ptr_StorageBuffer__arr_f32_u32_1024 %300 %fe
+
+Any constant fails the same way (0 and 3 checked), on a write, on a read, through a many-item pointer
+(`[*]addrspace(.storage_buffer) f32`) and through a pointer taken to the element (`&b_data[0]`). An element of a local
+array (the `Function` storage class) indexed by a constant is right. Toolchain 0.17.0-dev.2307.
+
+### Why it's a problem
+
+The module is invalid SPIR-V - `spirv-val --target-env vulkan1.3`: "OpInBoundsAccessChain result type (OpTypeArray)
+does not match the type that results from indexing into the base <id> (OpTypeFloat)". A WGSL translator never reads
+that result type, so pages run. A Vulkan driver compiles what the module says: lavapipe refuses the pipeline with
+VK_ERROR_UNKNOWN (-13), as it did for `zn_train`'s `loss_value` and `zn_mlp`'s `mse_value` (`b_loss[0]`, `b_loss[1]`),
+which stopped every native GPU training page at start-up.
+
+### Status: fixed in the compiler, workaround removed
+
+`derivePtr`'s `.elem` case passed `derived.parent.elem_ty`, the parent's pointee, to `ptrElemPtr`; master passes the
+step's own `derivation.elem_ty`. Confirmed with 0.18.0-dev.253+16d31ceed: the eight reproductions validate as
+emitted. zimr moved to that compiler and removed `spv_vulkan.legalize`'s sixth adjustment (each access chain's result
+type restated from its base and indices) and, with it, the fifth (unused Block-less structs dropped), which master
+also no longer needs: the two vertex shaders that had them (`points_vs`, `fluid_discs_vs`) now declare one struct
+around their runtime array, decorated Block. A struct holding a runtime array without Block is still refused, as
+Vulkan rejects it whoever emitted it. `vk-host-test`'s `constant` check (a kernel writing elements by constant
+indices, read back) and `pipelines` check guard against a return of the defect.
+
 ## What's NOT a quirk: Zig's SPIR-V is actually good
 
 After studying the output extensively, these are the things Zig gets

@@ -10,6 +10,7 @@ const zm = @import("zm");
 const Vec = zm.Vec;
 const dot = zm.dot;
 const clamp01 = zm.clamp01;
+const splat = zm.splat;
 const shader_externs = @import("shapes_filter_fs_externs");
 
 pub const Io = shader_externs.IoT(@import("shapes_filter_fs_io.zig").Ubo);
@@ -43,7 +44,7 @@ pub fn shaderMain(io_in: Io) Out {
     // both sides on most hardware, and mixing lets the example fade the effect in and out
     // instead of snapping it.
     const amount: f32 = clamp01(io_in.u.params[0]);
-    const mixed: Vec = base_color + (grey_color - base_color) * @as(Vec, @splat(amount));
+    const mixed: Vec = base_color + (grey_color - base_color) * splat(amount);
 
     out.out_color = .{ mixed[0], mixed[1], mixed[2], base_color[3] };
     return out;

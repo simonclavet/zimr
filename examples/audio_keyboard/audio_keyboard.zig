@@ -13,6 +13,7 @@
 //! moves them off the frame path. In a page, the browser keeps the sound silent until the first click or key press.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const indexOfScalar = std.mem.indexOfScalar;
 const z = @import("zimr");
 const zm = @import("zm");
 const Color = zm.Color;
@@ -68,6 +69,9 @@ const State = struct {
     held_by_keyboard: [note_count]bool,
     /// The note the pointer holds down, while it does.
     held_by_pointer: ?usize,
+    /// Whether presses and releases arrive through `onInput` (`AppSpec.on_input`): set at its first call. Until then
+    /// - and in a launcher that does not call it - each frame reads the computer keyboard instead.
+    is_input_from_events: bool,
     notes_started: u32,
 };
 
@@ -77,6 +81,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .font = font,
         .held_by_keyboard = @splat(false),
         .held_by_pointer = null,
+        .is_input_from_events = false,
         .notes_started = 0,
     };
     z.audio_device.init(f.audio_device);
@@ -90,9 +95,22 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 /// Sends a note's key going down or up to the instrument.
-fn sendNote(f: *z.Frame, s: *State, note_index: usize, is_down: bool) void {
+fn sendNote(
+    f: *z.Frame,
+    s: *State,
+    note_index: usize,
+    is_down: bool,
+    pressed_at_ms: f64,
+) void {
     const key: u8 = lowest_key + @as(u8, @intCast(note_index));
-    const is_sent: bool = f.mixer.sendNote(.{ .key = key, .is_down = is_down, .velocity = 0.5 });
+    // The press's own time, when there is one, so that the readout measures the note's lag from the press.
+    const note: z.mixer.NoteEvent = .{
+        .key = key,
+        .is_down = is_down,
+        .velocity = 0.5,
+        .pressed_at_ms = pressed_at_ms,
+    };
+    const is_sent: bool = f.mixer.sendNote(note);
     if (is_sent and is_down) {
         s.notes_started += 1;
     }
@@ -145,16 +163,16 @@ fn noteUnderPointer(layout: Layout, pointer: Vec2) ?usize {
     return null;
 }
 
-/// The computer keyboard: a key pressed this frame starts its note; a key held until now and no longer down
-/// releases it.
+/// The computer keyboard, read each frame while presses do not arrive as events (`is_input_from_events`): a key
+/// pressed this frame starts its note; a key held until now and no longer down releases it.
 fn readComputerKeyboard(f: *z.Frame, s: *State) void {
     for (note_keys, 0..) |note_key, note_index| {
         if (z.isKeyPressed(f.input, note_key)) {
             s.held_by_keyboard[note_index] = true;
-            sendNote(f, s, note_index, true);
+            sendNote(f, s, note_index, true, z.getKeyPressTime(f.input, note_key));
         } else if (s.held_by_keyboard[note_index] and !z.isKeyDown(f.input, note_key)) {
             s.held_by_keyboard[note_index] = false;
-            sendNote(f, s, note_index, false);
+            sendNote(f, s, note_index, false, 0);
         }
     }
 }
@@ -169,12 +187,47 @@ fn readPointer(f: *z.Frame, s: *State, layout: Layout) void {
         return;
     }
     if (s.held_by_pointer) |released_note| {
-        sendNote(f, s, released_note, false);
+        sendNote(f, s, released_note, false, 0);
     }
     if (note_now) |started_note| {
-        sendNote(f, s, started_note, true);
+        // A note started by the press itself carries its time; one a finger slides onto has no press behind it.
+        const is_new_press: bool = z.isMouseButtonPressed(f.input, .left);
+        const pressed_at_ms: f64 = if (is_new_press) z.getLastPressTime(f.input) else 0;
+        sendNote(f, s, started_note, true, pressed_at_ms);
     }
     s.held_by_pointer = note_now;
+}
+
+/// The note `key` plays, or null for a key that plays none.
+fn noteOfKey(key: z.KeyboardKey) ?usize {
+    return indexOfScalar(z.KeyboardKey, &note_keys, key);
+}
+
+/// A press or release, the moment it arrives (`AppSpec.on_input`): a note key's press starts its note and its release
+/// ends it, and the pointer's press or release does the same for the key under it - the sound asked for now, not at
+/// the next frame. The pointer gliding onto another key while held is read each frame (`readPointer`).
+fn onInput(f: *z.Frame, s: *State, event: z.InputEvent) void {
+    s.is_input_from_events = true;
+    switch (event) {
+        .key_down => |down| {
+            const note_index: usize = noteOfKey(down.key) orelse return;
+            if (down.repeat or s.held_by_keyboard[note_index]) {
+                return;
+            }
+            s.held_by_keyboard[note_index] = true;
+            sendNote(f, s, note_index, true, z.getKeyPressTime(f.input, down.key));
+        },
+        .key_up => |up| {
+            const note_index: usize = noteOfKey(up.key) orelse return;
+            if (!s.held_by_keyboard[note_index]) {
+                return;
+            }
+            s.held_by_keyboard[note_index] = false;
+            sendNote(f, s, note_index, false, 0);
+        },
+        .mouse_button_down, .mouse_button_up, .touch_begin, .touch_end => readPointer(f, s, .ofWindow(f)),
+        else => {},
+    }
 }
 
 fn drawKey(f: *z.Frame, s: *State, layout: Layout, note_index: usize) void {
@@ -235,8 +288,14 @@ fn draw(f: *z.Frame, s: *State, layout: Layout) void {
 }
 
 fn update(f: *z.Frame, s: *State) void {
+    // A black screen with a start button, until it is pressed and the audio runs (`z.showAudioStartScreen`).
+    if (z.showAudioStartScreen(f, &s.font)) {
+        return;
+    }
     const layout: Layout = .ofWindow(f);
-    readComputerKeyboard(f, s);
+    if (!s.is_input_from_events) {
+        readComputerKeyboard(f, s);
+    }
     readPointer(f, s, layout);
     draw(f, s, layout);
 }
@@ -254,4 +313,5 @@ pub const app: z.AppSpec(State) = .{
     .memory = .managed,
     .deinit = deinit,
     .update = update,
+    .on_input = onInput,
 };

@@ -1,9 +1,10 @@
-//! music_streaming - port of the GL `music_streaming`: stream an embedded
-//! OGG (~2.3 MB, 96 s stereo Vorbis) on the wgpu audio bridge. `music.loadFromMemory`
-//! kicks off the browser's async `decodeAudioData` (the `js_audio_decode_ogg_bytes`
-//! path implemented this turn); `isReady` flips true a few frames later. Tap PLAY
-//! to play/stop the looping track; tap the bar to seek. A progress bar tracks
-//! the playhead. No per-frame pump - the decoded buffer loops in Web Audio.
+//! music_streaming - an embedded Ogg Vorbis song (2.3 MB, 96 s, stereo at 44 100 Hz) played through the engine's
+//! mixer, the same way natively, headless and on a page. `music.loadFromMemory` reads the file's headers and nothing
+//! more, so the song is ready at once; once playing, `music.update`, called every frame, decodes it half a stream's
+//! ring at a time as the stream asks for frames, the engine's own Vorbis decoder feeding a stream that a mixer voice
+//! plays, converting 44 100 Hz to the mixer's rate. The song loops without a seam: at its end the decoder starts over
+//! and writes on into the same ring. Tap PLAY to play or stop it; tap the bar to seek; the bar follows what has been
+//! heard - the frames written less those still waiting in the ring.
 const std = @import("std");
 const allocPrint = std.fmt.allocPrint;
 const Allocator = std.mem.Allocator;
@@ -36,7 +37,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     z.audio_device.init(f.audio_device);
     var audio: z.AudioState = .{};
-    // Kicks off async decodeAudioData; isReady is false until it resolves.
+    // Reads the song's headers: ready at once, decoded as it plays.
     const m: z.Music = try z.music.loadFromMemory(&audio.music, f.audio_device, &audio.waves, gpa, ".ogg", sample_ogg);
     z.music.setLooping(&audio.music, m, true);
     z.music.setVolume(&audio.music, m, 0.5);
@@ -55,11 +56,18 @@ const btn_y: f32 = 430;
 const btn_h: f32 = 110;
 
 fn update(f: *z.Frame, s: *State) void {
+    // A black screen with a start button, until it is pressed and the audio runs (`z.showAudioStartScreen`).
+    if (z.showAudioStartScreen(f, &s.font)) {
+        return;
+    }
     _ = s.scratch.reset(.retain_capacity);
     const w: f32 = f.window.widthf();
     const bar_w: f32 = w - bar_x * 2;
     const btn_x: f32 = 40;
     const btn_w: f32 = w - 80;
+
+    // The music's pump: decodes into its stream while the stream asks for frames.
+    z.music.update(&s.audio.music, s.track);
 
     const mp: Vec2 = z.getMousePosition(f.input);
     const click: bool = z.isMouseButtonPressed(f.input, .left);
@@ -91,13 +99,14 @@ fn update(f: *z.Frame, s: *State) void {
     }
 
     z.clearViewport(f, .{ .r = 24, .g = 26, .b = 32, .a = 255 });
-    f.gl.text(.{ 16, 16 }, "streaming OGG", .{ .size = 26, .color = c.white, .font = &s.font });
-    f.gl.text(.{ 16, 50 }, "tap PLAY - tap the bar to seek", .{ .size = 14, .color = c.slate_400, .font = &s.font });
+    // Under the caption, which the top left keeps for every example.
+    f.gl.text(.{ 16, 40 }, "streaming OGG", .{ .size = 26, .color = c.white, .font = &s.font });
+    f.gl.text(.{ 16, 74 }, "tap PLAY - tap the bar to seek", .{ .size = 14, .color = c.slate_400, .font = &s.font });
 
     if (!ready) {
         f.gl.text(
             .{ bar_x, 180 },
-            "decoding... (decodeAudioData)",
+            "no audio device",
             .{ .size = 18, .color = c.amber_400, .font = &s.font },
         );
     } else {
@@ -135,7 +144,7 @@ fn update(f: *z.Frame, s: *State) void {
         .{ .size = 32, .color = c.white, .font = &s.font },
     );
 
-    common.caption(f.gl, s.font, "music.loadFromMemory -> async decodeAudioData -> looping playback");
+    common.caption(f.gl, s.font, "Vorbis decoded as it plays, onto the mixer");
     z.endDrawing(f.gl);
 }
 

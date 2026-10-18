@@ -80,6 +80,7 @@ const Vec2 = zm.Vec2;
 // The migration history (Phase -1 of `math_unification.md`) is
 // documented at the math.zig declaration.
 const Vec2i = zm.Vec2i;
+const splat2 = zm.splat2;
 
 /// Convert an integer pixel-coord vector to its float Vec2.  Useful
 /// when feeding integer pixel coords into float math (viewport
@@ -1262,9 +1263,9 @@ test "Vec2 constructors + arithmetic" {
     try expectEqual(Vec2{ 4, 6 }, a + b);
     try expectEqual(Vec2{ 2, 2 }, a - b);
     try expectEqual(Vec2{ 3, 8 }, a * b);
-    try expectEqual(Vec2{ 6, 8 }, a * @as(Vec2, @splat(2)));
+    try expectEqual(Vec2{ 6, 8 }, a * splat2(2));
     try expectEqual(Vec2{ -3, -4 }, -a);
-    try expectEqual(Vec2{ 0, 0 }, @as(Vec2, @splat(0)));
+    try expectEqual(Vec2{ 0, 0 }, splat2(0));
 }
 
 test "Vec2 dot + length" {
@@ -1280,7 +1281,7 @@ test "Vec2 dot + length" {
 test "Vec2 normalize unit length" {
     const v: Vec2 = .{ 3, 4 };
     const len: f32 = @sqrt(@reduce(.Add, v * v));
-    const n: Vec2 = v / @as(Vec2, @splat(len));
+    const n: Vec2 = v / splat2(len);
     try expectApproxEqAbs(@as(f32, 1), @sqrt(@reduce(.Add, n * n)), eps);
     try expectApproxEqAbs(@as(f32, 0.6), n[0], eps);
     try expectApproxEqAbs(@as(f32, 0.8), n[1], eps);
@@ -1595,7 +1596,7 @@ test "Vec constructors + arithmetic + dot" {
     try expectEqual(f32x4(-1, -2, -3, -4), -a);
     // dot = 1*5 + 2*6 + 3*7 + 4*8 = 5+12+21+32 = 70
     try expectApproxEqAbs(@as(f32, 70), dot4(a, b), eps);
-    try expectEqual(@as(Vec, @splat(0)), vec_zero);
+    try expectEqual(splat(0), vec_zero);
 }
 
 // ===========================================================================

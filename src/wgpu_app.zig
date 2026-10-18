@@ -51,6 +51,7 @@ const readInt = std.mem.readInt;
 const zeroes = std.mem.zeroes;
 const Io = std.Io;
 const host = @import("host.zig");
+const native_os = @import("native_os.zig");
 const native_loop = @import("native_loop.zig");
 const platform = @import("platform.zig");
 const console = @import("platform/console.zig");
@@ -112,6 +113,7 @@ pub const colorFromHSV = types.colorFromHSV;
 // namespace pulls no GL/WebGL surface into the wasm.
 const input = @import("runtime.zig").input;
 const FrameTimeFilter = @import("runtime.zig").core.FrameTimeFilter;
+const FramePacer = @import("runtime.zig").core.FramePacer;
 
 const GpuFrame = gpu.GpuFrame;
 const Backend = gpu_iface.WgpuBackend;
@@ -168,6 +170,10 @@ pub const FramePhase = enum { idle, frame_2d, mode_3d };
 
 pub const Config = struct {
     window: WindowConfig = .{},
+    /// The most frames a second the app draws in a browser: 60, whatever the display's rate - a 120 Hz phone's
+    /// browser asks for twice as many, each one the app's whole update and drawing (`FramePacer`). Null draws every
+    /// frame the display asks for. Natively and headless, frames come at the window's or the script's pace.
+    max_frames_per_second: ?f32 = 60,
     /// Seed for `Frame.random`. Set it for a reproducible run; leave it null to
     /// get a fresh seed each launch - from the host's crypto entropy in a real
     /// browser, or a fixed constant on native/headless so tests stay stable.
@@ -301,6 +307,13 @@ pub const Frame = struct {
 /// `update` export). Mirrors `AppBridge.update_fn`.
 const UpdateThunk = *const fn (frame: *Frame, state: ?*anyopaque) void;
 
+/// An input event as an app's `on_input` receives it (`AppSpec.on_input`): the platform contract's. Its positions are
+/// the platform's raw ones; the input's queries give them in the app's logical pixels.
+pub const InputEvent = contract.Event;
+
+/// Type-erased input thunk (`setInputHandler`, called by `dispatchInput`).
+const InputThunk = *const fn (frame: *Frame, state: ?*anyopaque, event: InputEvent) void;
+
 /// See `AppSpec.memory` for the full policy. In short: examples use `.managed`
 /// (free everything, leak-checked); `.arena` is the opt-out for external apps.
 pub const MemoryMode = enum(u8) { arena, managed };
@@ -330,6 +343,13 @@ pub fn AppSpec(comptime StateT: type) type {
         deinit: fn (Allocator, *StateT) void,
         /// Draw one frame into the handed Frame's viewport. No begin/clear/end.
         update: fn (*Frame, *StateT) void,
+        /// Called as each press or release arrives - a key, a mouse button, a touch - between frames, once the input
+        /// has recorded it, so that the usual queries (`isKeyDown`, `getMousePosition`) already include it. The app's
+        /// state and the mixer are its to use; it draws nothing - its frame opens no pass, and its time is the last
+        /// frame's. A sound it starts leaves at once - the mixer's frame exchange runs after the call - rather than
+        /// waiting for the next frame's update to read the input. Optional: an app without it reads its input in
+        /// `update`.
+        on_input: ?fn (*Frame, *StateT, InputEvent) void = null,
         /// MIGRATION FLAG (temporary): when false (default) the runner wraps
         /// `update` in `beginDrawing`/`endDrawing` (opens the screen pass BEFORE
         /// update). When true, the example owns its own `beginDrawing`/
@@ -554,6 +574,10 @@ pub const App = struct {
 
     state: ?*anyopaque = null,
     update_fn: ?UpdateThunk = null,
+    /// The app's `on_input`, when it has one (`setInputHandler`).
+    input_fn: ?InputThunk = null,
+    /// The last ticked frame's time, in seconds since the first: the time an `on_input` call's frame carries.
+    last_elapsed_s: f32 = 0,
     /// The first frame's time, on the frame driver's clock (`update`): elapsed time counts from it.
     first_frame_ms: ?f64 = null,
     /// How a script's run went (`native_loop.script`), once it has - headless, or in a window; `finishNative` reads
@@ -724,6 +748,26 @@ pub const App = struct {
         profiler.probeResolution();
     }
 
+    /// Registers the app's `AppSpec.on_input`, which `receiveEvent` then calls for each press and release
+    /// (`dispatchInput`): the runner's, once `run` has made the app.
+    pub fn setInputHandler(
+        self: *App,
+        comptime State: type,
+        comptime handler: fn (*Frame, *State, InputEvent) void,
+    ) void {
+        const Thunk = struct {
+            fn dispatch(
+                frame: *Frame,
+                opaque_state: ?*anyopaque,
+                event: InputEvent,
+            ) void {
+                const s: *State = @ptrCast(@alignCast(opaque_state.?));
+                handler(frame, s, event);
+            }
+        };
+        self.input_fn = Thunk.dispatch;
+    }
+
     /// Build a fresh Frame for the current tick: refresh the live window dims
     /// and stamp the time state - from `frame_ms`, the frame's time on the frame
     /// driver's clock (`update`), or null for the frame an app initializes with,
@@ -742,6 +786,9 @@ pub const App = struct {
             self.first_frame_ms = first_frame_ms;
             break :elapsed @floatCast((time_ms - first_frame_ms) / 1000.0);
         } else 0;
+        if (frame_ms != null) {
+            self.last_elapsed_s = elapsed_s;
+        }
         // The audio device starts and stops the engine's mixer (`audio_device.init`), its blocks from the engine's
         // allocator.
         self.audio_device.engine_mixer = &self.mixer;
@@ -4584,6 +4631,98 @@ pub fn measureTextEx(
     return text2d.measureWithFont(0, font, text, size, spacing);
 }
 
+/// The audio start screen's button (`showAudioStartScreen`): its size in logical pixels, and its word's.
+const audio_start_button_size: Vec2 = .{ 180, 64 };
+const audio_start_label_size: f32 = 28;
+
+/// Whether this run skips the audio start screen: a native run whose environment sets `ZIMR_SKIP_START_SCREEN` -
+/// the gallery's screenshots (`zig build gallery-shots`), which capture the app itself. Never on a page, where the
+/// start screen's press is what lets the page make sound.
+fn isStartScreenSkipped() bool {
+    if (comptime host.kind == .web) {
+        return false;
+    }
+    var setting_buffer: [8]u8 = undefined;
+    return native_os.environmentVariable("ZIMR_SKIP_START_SCREEN", &setting_buffer) != null;
+}
+
+/// Whether the platform's audio output has settled - playing, or never going to - as the platform says
+/// (`isAudioOutputSettled`, on a page); a platform that does not say runs its output from `audio_device.init`.
+fn isAudioOutputSettled() bool {
+    if (@hasDecl(platform.current, "isAudioOutputSettled")) {
+        return platform.current.isAudioOutputSettled();
+    }
+    return true;
+}
+
+/// A black screen with one button in its middle, "start", for an app that plays sound - shown until the person presses
+/// the button and the platform's audio output runs. An app calls it first in its update; while it returns true, the
+/// app draws and plays nothing else.
+///
+/// The press is the gesture a browser waits for before it lets a page make sound, so the page's audio starts with it.
+/// After the press the screen stays until the output has settled (`isAudioOutputSettled`) - on a page, the audio
+/// worklet linked and warmed up - so that the app's first sound does not fall into the output's start. Natively the
+/// output runs from `audio_device.init`, and the press alone ends the screen. The button is drawn in the UI's dark
+/// style (`ui.Style.dark_default`): its plain colour, lighter under the pointer, its pressed colour while held and once
+/// pressed; its word in `font`, any of the app's.
+pub fn showAudioStartScreen(f: *Frame, font: *const Font) bool {
+    const device: *sound.audio_device.AudioDeviceState = f.audio_device;
+    if (device.is_start_screen_done) {
+        return false;
+    }
+    // A run told to skip it - the gallery's screenshots, `ZIMR_SKIP_START_SCREEN` - goes straight to the app.
+    if (isStartScreenSkipped()) {
+        device.is_start_screen_done = true;
+        return false;
+    }
+    if (device.is_start_pressed and isAudioOutputSettled()) {
+        device.is_start_screen_done = true;
+        return false;
+    }
+    device.is_start_screen_shown = true;
+    const width: f32 = f.window.widthf();
+    const height: f32 = f.window.heightf();
+    const black: Color = .{ .r = 0, .g = 0, .b = 0, .a = 255 };
+    f.gl.rect(.{ .x = 0, .y = 0, .width = width, .height = height }, .{ .color = black });
+    const button: types.Rectangle = .{
+        .x = 0.5 * (width - audio_start_button_size[0]),
+        .y = 0.5 * (height - audio_start_button_size[1]),
+        .width = audio_start_button_size[0],
+        .height = audio_start_button_size[1],
+    };
+    const pointer: Vec2 = input.getMousePosition(f.input);
+    const is_over: bool = button.contains(pointer);
+    const is_held: bool = is_over and input.isMouseButtonDown(f.input, .left);
+    const style: ui.Style = ui.Style.dark_default;
+    const is_pressed_look: bool = device.is_start_pressed or is_held;
+    const fill: Color = if (is_pressed_look)
+        style.button_active
+    else if (is_over)
+        style.button_hovered
+    else
+        style.button;
+    f.gl.rect(button, .{ .color = fill });
+    const label: []const u8 = "start";
+    const label_extent: Vec2 = measureText(font.*, label, audio_start_label_size);
+    const label_position: Vec2 = .{
+        button.x + 0.5 * (button.width - label_extent[0]),
+        button.y + 0.5 * (button.height - label_extent[1]),
+    };
+    f.gl.text(label_position, label, .{ .size = audio_start_label_size, .color = style.text, .font = font });
+    // A press counts only begun on the button and ended on it, as a UI button's does: a drag that ends on it is none.
+    if (is_over and input.isMouseButtonPressed(f.input, .left)) {
+        device.is_start_armed = true;
+    }
+    if (input.isMouseButtonReleased(f.input, .left)) {
+        const is_press_on_button: bool = is_over and device.is_start_armed;
+        if (is_press_on_button) {
+            device.is_start_pressed = true;
+        }
+        device.is_start_armed = false;
+    }
+    return true;
+}
+
 // ---- scissor / clip (N5g) ----
 // Restrict drawing to a rectangle (in logical coords - same space as
 // drawRectangle etc.). Flushes the batch first (the scissor is a pass-state
@@ -5073,10 +5212,47 @@ pub fn drawFullscreenShader(
 
 // `@import("root").zimr_app` - a single bridge pointer, not mutable app state.
 // (Audited the same way: it's a bridge handle, not user data.)
+/// RGBA pixels shrunk from `source_size` to `shrunk_size`, each shrunk pixel the mean of the source pixels it covers: a
+/// box `source / shrunk` pixels across and down, its bounds rounded to whole pixels, at least one. An average, not a
+/// pick of one pixel in each box, so that fine lines and text thin out evenly rather than flicker away. Allocated
+/// with `gpa`; the caller frees it.
+fn shrinkPixels(
+    gpa: Allocator,
+    source: []const u8,
+    source_size: [2]u32,
+    shrunk_size: [2]u32,
+) Allocator.Error![]u8 {
+    const shrunk: []u8 = try gpa.alloc(u8, @as(usize, shrunk_size[0]) * shrunk_size[1] * 4);
+    for (0..shrunk_size[1]) |shrunk_y| {
+        const top: usize = shrunk_y * source_size[1] / shrunk_size[1];
+        const bottom: usize = @max(top + 1, (shrunk_y + 1) * source_size[1] / shrunk_size[1]);
+        for (0..shrunk_size[0]) |shrunk_x| {
+            const left: usize = shrunk_x * source_size[0] / shrunk_size[0];
+            const right: usize = @max(left + 1, (shrunk_x + 1) * source_size[0] / shrunk_size[0]);
+            var channel_sums: [4]u32 = @splat(0);
+            for (top..bottom) |source_y| {
+                const row_start: usize = source_y * source_size[0] * 4;
+                for (left..right) |source_x| {
+                    const pixel_start: usize = row_start + source_x * 4;
+                    for (&channel_sums, 0..) |*sum, channel| {
+                        sum.* += source[pixel_start + channel];
+                    }
+                }
+            }
+            const covered_count: u32 = @intCast((bottom - top) * (right - left));
+            const shrunk_start: usize = (shrunk_y * shrunk_size[0] + shrunk_x) * 4;
+            for (channel_sums, 0..) |sum, channel| {
+                shrunk[shrunk_start + channel] = @intCast(sum / covered_count);
+            }
+        }
+    }
+    return shrunk;
+}
+
 /// Saves the frame a script's run last drew as a PNG file at `path` (`native_loop.script.CaptureFunction`): the frame
 /// read back - from the headless screen, or the window's last presented frame - encoded, and written with the run's
 /// `io`, its directory made when missing. Returns whether it could; why it could not is in the log.
-fn saveFrame(io: Io, path: []const u8) bool {
+fn saveFrame(io: Io, path: []const u8, thumbnail_width: u32) bool {
     const screen_size: [2]u32 = native_loop.script.lastFrameSize();
     const width: u32 = screen_size[0];
     const height: u32 = screen_size[1];
@@ -5089,7 +5265,20 @@ fn saveFrame(io: Io, path: []const u8) bool {
         native_log.err("reading the frame back failed", .{});
         return false;
     }
-    const png_bytes: []u8 = codecs.png.encode(host.heap, pixels, width, height) catch |err| {
+    // A thumbnail: the frame shrunk to its width, when that is less than the frame's (`shrinkPixels`).
+    const is_shrunk: bool = thumbnail_width > 0 and thumbnail_width < width;
+    const saved_width: u32 = if (is_shrunk) thumbnail_width else width;
+    const proportional_height: u64 = @as(u64, height) * thumbnail_width / width;
+    const saved_height: u32 = if (is_shrunk) @max(1, @as(u32, @intCast(proportional_height))) else height;
+    const saved_pixels: []u8 = if (is_shrunk)
+        shrinkPixels(host.heap, pixels, .{ width, height }, .{ saved_width, saved_height }) catch {
+            native_log.err("no memory to shrink the frame into", .{});
+            return false;
+        }
+    else
+        pixels;
+    defer if (is_shrunk) host.heap.free(saved_pixels);
+    const png_bytes: []u8 = codecs.png.encode(host.heap, saved_pixels, saved_width, saved_height) catch |err| {
         native_log.err("encoding the frame as PNG failed: {s}", .{@errorName(err)});
         return false;
     };
@@ -5111,6 +5300,8 @@ fn saveFrame(io: Io, path: []const u8) bool {
 var prev_frame_ms: f64 = 0;
 // lint:off module-var: the frame clock's filter, carried from frame to frame by the frame driver
 var frame_time_filter: FrameTimeFilter = .{};
+// lint:off module-var: the beat a browser's frames are drawn on, carried from frame to frame by the frame driver
+var frame_pacer: FramePacer = .{};
 
 /// Reads every gamepad slot from the platform into the input state, before the app's update: what the app's gamepad
 /// queries answer this frame (`input.setGamepad`).
@@ -5127,6 +5318,15 @@ fn readGamepads(app: *App) void {
 pub export fn update(frame_ms: f64) void {
     const app: *App = active_app orelse return;
     const thunk: UpdateThunk = app.update_fn orelse return;
+    // In a browser, the display's frames beyond the app's highest rate are let pass undrawn: the canvas keeps the
+    // frame drawn last (`Config.max_frames_per_second`). The time between frames is measured from the last one drawn.
+    if (comptime host.is_browser) {
+        if (app.config.max_frames_per_second) |frames_per_second| {
+            if (!frame_pacer.shouldRun(frame_ms, frames_per_second)) {
+                return;
+            }
+        }
+    }
 
     // Close the previous frame / open this one, then wrap the whole tick.
     profiler.frameMark();
@@ -5229,8 +5429,18 @@ pub fn inputPushMotion(ax: f32, ay: f32, az: f32, screen_angle: f32) callconv(.c
     receiveEvent(.{ .motion = .{ .ax = ax, .ay = ay, .az = az, .screen_angle = screen_angle } });
 }
 
-pub fn inputPushMouseButtonDown(dom_button: i32) callconv(.c) void {
-    receiveEvent(.{ .mouse_button_down = webButton(dom_button) orelse return });
+/// An event's time as the bridge passes it - `Event.timeStamp`, on `performance.now()`'s clock - or 0 when it is not
+/// a time: a caller passing no time at all gives the export a NaN, which fails both comparisons, as infinity fails the
+/// second.
+fn eventTimeOrZero(time_ms: f64) f64 {
+    const is_time: bool = time_ms > 0 and time_ms < 1e300;
+    return if (is_time) time_ms else 0;
+}
+
+pub fn inputPushMouseButtonDown(dom_button: i32, time_ms: f64) callconv(.c) void {
+    var button: contract.MouseButton = webButton(dom_button) orelse return;
+    button.time_ms = eventTimeOrZero(time_ms);
+    receiveEvent(.{ .mouse_button_down = button });
 }
 
 pub fn inputPushMouseButtonUp(dom_button: i32) callconv(.c) void {
@@ -5241,17 +5451,25 @@ pub fn inputPushMouseWheel(dx: f32, dy: f32) callconv(.c) void {
     receiveEvent(.{ .mouse_wheel = .{ .dx = dx, .dy = dy, .modifiers = .{} } });
 }
 
-/// A key going down: the engine's number for it, whether the browser repeats it, and what it types on the current
-/// layout as the bridge reads `KeyboardEvent.key` (0 for nothing; a number that is no code point counts as nothing).
+/// A key going down: the engine's number for it, whether the browser repeats it, what it types on the current layout
+/// as the bridge reads `KeyboardEvent.key` (0 for nothing; a number that is no code point counts as nothing), and the
+/// event's time (`eventTimeOrZero`).
 pub fn inputPushKeyDown(
     key: i32,
     repeat: i32,
     label: i32,
+    time_ms: f64,
 ) callconv(.c) void {
     const known_key: contract.KeyboardKey = std.enums.fromInt(contract.KeyboardKey, key) orelse return;
     const is_code_point: bool = label > 0 and label <= 0x10ffff;
     const key_label: u21 = if (is_code_point) @intCast(label) else 0;
-    receiveEvent(.{ .key_down = .{ .key = known_key, .repeat = repeat != 0, .label = key_label, .modifiers = .{} } });
+    receiveEvent(.{ .key_down = .{
+        .key = known_key,
+        .repeat = repeat != 0,
+        .label = key_label,
+        .modifiers = .{},
+        .time_ms = eventTimeOrZero(time_ms),
+    } });
 }
 
 pub fn inputPushKeyUp(key: i32) callconv(.c) void {
@@ -5329,8 +5547,9 @@ pub fn inputPushTouchDown(
     id: i32,
     x: f32,
     y: f32,
+    time_ms: f64,
 ) callconv(.c) void {
-    receiveEvent(.{ .touch_begin = .{ .id = @bitCast(id), .x = x, .y = y } });
+    receiveEvent(.{ .touch_begin = .{ .id = @bitCast(id), .x = x, .y = y, .time_ms = eventTimeOrZero(time_ms) } });
 }
 
 pub fn inputPushTouchMove(
@@ -5386,6 +5605,31 @@ comptime {
     contract.requirePlatform(platform.current);
 }
 
+/// Calls the app's `on_input` with a press or a release (`AppSpec.on_input`), once the input has recorded it: with a
+/// frame that opens no pass, at the last frame's time; then the mixer's frame exchange (`Mixer.mixFrame`), so that a
+/// sound the call started leaves now - forwarded to the worklet on a page, already queued for the audio thread
+/// natively - not at the next frame.
+fn dispatchInput(event: contract.Event) void {
+    const is_press_or_release: bool = switch (event) {
+        .key_down, .key_up, .mouse_button_down, .mouse_button_up, .touch_begin, .touch_end => true,
+        else => false,
+    };
+    if (!is_press_or_release) {
+        return;
+    }
+    const app: *App = active_app orelse return;
+    const handler: InputThunk = app.input_fn orelse return;
+    // An app showing the start screen has its input once the screen is done: the press on its button is the screen's.
+    const device: *const sound.audio_device.AudioDeviceState = &app.audio_device;
+    if (device.is_start_screen_shown and !device.is_start_screen_done) {
+        return;
+    }
+    var input_frame: Frame = app.makeFrame(null);
+    input_frame.time.time = app.last_elapsed_s;
+    handler(&input_frame, app.state, event);
+    app.mixer.mixFrame();
+}
+
 /// The engine's one place for events: every platform hands each event here, in order, before the frame that sees it
 /// (`platform/contract.zig`). Each lands in the running app's input state, which the frame reads. Positions arrive in
 /// logical (CSS) pixels and are mapped into the app's own space (`cssToLogical`, which its scaling mode decides); a
@@ -5399,6 +5643,9 @@ fn receiveEvent(event: contract.Event) void {
     switch (event) {
         .key_down => |down| {
             input.setKeyLabel(state, @backingInt(down.key), down.label);
+            if (!down.repeat) {
+                input.pushPressTime(state, @backingInt(down.key), down.time_ms);
+            }
             input.pushKeyDown(state, @backingInt(down.key), @intFromBool(down.repeat));
         },
         .key_up => |up| input.pushKeyUp(state, @backingInt(up.key)),
@@ -5415,6 +5662,7 @@ fn receiveEvent(event: contract.Event) void {
             input.pushMouseMovement(state, movement[0], movement[1]);
         },
         .mouse_button_down => |button| {
+            input.pushPressTime(state, null, button.time_ms);
             input.pushMouseButtonDown(state, dom_input.mouseButtonFromDomButton(@backingInt(button.button)));
         },
         .mouse_button_up => |button| {
@@ -5427,6 +5675,7 @@ fn receiveEvent(event: contract.Event) void {
         .mouse_enter => input.pushPointerPresence(state, true),
         .mouse_leave => input.pushPointerPresence(state, false),
         .touch_begin => |touch| {
+            input.pushPressTime(state, null, touch.time_ms);
             const position: [2]f32 = cssToLogical(app, touch.x, touch.y);
             input.pushTouchDown(state, @bitCast(touch.id), position[0], position[1]);
         },
@@ -5454,6 +5703,7 @@ fn receiveEvent(event: contract.Event) void {
         .gamepad_disconnected,
         => {},
     }
+    dispatchInput(event);
 }
 
 // ============================================================================
@@ -5480,6 +5730,16 @@ pub fn isKeyPressed(
     key: types.KeyboardKey,
 ) bool {
     return input.isKeyPressed(in, key);
+}
+
+/// When `key` last went down, on the platform's clock (`input.keyPressTime`); 0 when unknown.
+pub fn getKeyPressTime(in: *const input.InputState, key: types.KeyboardKey) f64 {
+    return input.keyPressTime(in, key);
+}
+
+/// When the latest press of anything happened - a key, a mouse button, a touch (`input.lastPressTime`); 0 when unknown.
+pub fn getLastPressTime(in: *const input.InputState) f64 {
+    return input.lastPressTime(in);
 }
 
 /// Pop the next queued typed character (a Unicode codepoint), or null once the

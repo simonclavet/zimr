@@ -64,6 +64,7 @@ const scaling = zm.scaling;
 const splat = zm.splat;
 const Vec2 = zm.Vec2;
 const bufPrint = std.fmt.bufPrint;
+const ArrayList = std.ArrayList;
 
 const Trainer = ppo_track.Trainer(zn_mlp);
 
@@ -71,29 +72,28 @@ const geno = z.robot_geno;
 const dance_zclip = @embedFile("dance.zclip");
 const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
 
-const bg: Color = .{ .r = 22, .g = 24, .b = 30, .a = 255 };
-const sim_col: Color = .{ .r = 120, .g = 170, .b = 225, .a = 255 };
-const ref_col: Color = .{ .r = 86, .g = 92, .b = 104, .a = 255 };
-const ground_col: Color = .{ .r = 74, .g = 80, .b = 92, .a = 255 };
+/// The page's colours: the background, the character, the reference, the floor.
+const Look = struct {
+    background: Color = .{ .r = 22, .g = 24, .b = 30, .a = 255 },
+    character: Color = .{ .r = 120, .g = 170, .b = 225, .a = 255 },
+    reference: Color = .{ .r = 86, .g = 92, .b = 104, .a = 255 },
+    floor: Color = .{ .r = 74, .g = 80, .b = 92, .a = 255 },
+};
 
-/// How many characters train at once: a phone's CPU is the bottleneck, and eight keeps a decision
-/// inside a frame while still giving PPO a varied batch.
-const envs: u32 = 8;
-/// The action scale (1.2 rad per unit) is `robot_geno.student_scale`, where the reasoning for the value lives.
-///
-/// Exploration starts small to match: PPO's Gaussian begins at log sigma -1.2 (0.3 units), so a young policy's
-/// random asks are 0.36 rad raw and 0.072 rad (4 degrees) at the joint a decision.
-const initial_log_std: f32 = -1.2;
+/// The floor's slab, as drawn: square, of some thickness, its top just below the grid - where the physics floor
+/// is, as near as the grid's lines allow without the two fighting for the same pixels.
+const Floor = struct {
+    side: f32 = 16,
+    thickness: f32 = 0.2,
+    top: f32 = -0.005,
+};
 
-/// Batches of history kept for the curve and the failure-rate window.
-const history_len: usize = 120;
-/// How many recent batches the mean time to failure is estimated over. One batch is about 17
-/// seconds of character-time; eight give enough failures to tell 10 s from 20 s.
-const window_batches: usize = 8;
-
-/// The mean times to failure the page times itself to, in seconds. The same marks for both motions:
-/// the measure does not depend on the clip's length, which is the point of it.
-const milestones = [_]f32{ 2.0, 5.0, 10.0, 20.0 };
+/// The page's autosave (`autosaveIfDue`, `resumeFromAutosave`): how often, in seconds of training, and the largest
+/// training log a resume reads back - about 70 bytes a batch, so a week of batches.
+const Autosave = struct {
+    interval_seconds: f32 = 300,
+    most_log_bytes: usize = 16 << 20,
+};
 
 /// The two motions, and what each needs.
 const Task = enum {
@@ -113,31 +113,19 @@ const Task = enum {
         };
     }
 
-    /// The learner's choices, plus Geno's task, DReCon bodies and the student's action scale - each ONE named
-    /// value from robot_geno, never spelled out here (plan T1).
-    fn options(task: Task) ppo_track.Options {
-        return .{
-            .task = geno.tracking_task,
-            .bodies = geno.drecon_bodies,
-            .action_scale = geno.student_scale,
-            .envs = envs,
-            .horizon = 64,
-            // The two tricks every learner gets: inputs scaled to unit spread, and a helping hand
-            // on the root that fades to nothing over the first few minutes.
-            .normalize = true,
-            .assist_start = 1.0,
-            .assist_batches = 300,
-            .initial_log_std = initial_log_std,
-            // Long enough for the whole clip: a cap shorter than the dance would end good episodes.
-            .max_episode_steps = 700,
-            // A get-up policy and a dance policy have identical shapes; the tag tells them apart
-            // in a weights file, so one is never silently loaded as the other.
-            .tag = switch (task) {
-                .getup, .dance => 3,
-            },
+    /// The motion's name in `robot_geno`, whose PPO recipe the page trains with.
+    fn motion(task: Task) geno.PpoMotion {
+        return switch (task) {
+            .getup => .getup,
+            .dance => .dance,
         };
     }
 
+    /// The trainer's options: PPO's recipe on Geno, its defaults - the same settings a training run's `run.zon`
+    /// starts from - with Geno's task, DReCon bodies and the motion's tag.
+    fn options(task: Task, recipe: geno.PpoRecipe) ppo_track.Options {
+        return recipe.options(task.motion());
+    }
     /// Geno has one motion baked so far: "switching" restarts the dance.
     fn other(task: Task) Task {
         _ = task;
@@ -159,6 +147,15 @@ fn pipelineEntries(comptime M: type) [M.kernels.len]z.Compute(M).KernelWgsl {
 /// never applied. Grouped here, one assignment sets them all, and a field added later cannot be
 /// forgotten.
 const Progress = struct {
+    /// Batches of history kept for the curve and the failure-rate window.
+    const history_len: usize = 120;
+    /// How many recent batches the mean time to failure is estimated over: a run log's window
+    /// (`robot_geno.RunLog.window_batches`), the same for the trainer and the lab's curves.
+    const window_batches: usize = geno.RunLog.window_batches;
+    /// The mean times to failure the page times itself to, in seconds. The same marks for both motions: the measure
+    /// does not depend on the clip's length, which is the point of it.
+    const milestones = [_]f32{ 2.0, 5.0, 10.0, 20.0 };
+
     /// Decisions collected per frame, adapted to the frame time the device achieves.
     per_frame: u32 = 1,
     last: ppo_track.Stats = .{ .decisions = 0, .steps = 0, .mean_reward = 0, .episodes = 0, .mean_episode = 0 },
@@ -175,6 +172,9 @@ const Progress = struct {
     failures: [history_len]u32 = @splat(0),
     assisted: [history_len]bool = @splat(false),
     history_count: usize = 0,
+    /// Whether this run has autosaved yet, and the training seconds at the last autosave (`autosaveIfDue`).
+    has_autosaved: bool = false,
+    autosaved_at_seconds: f32 = 0,
     /// The servo alone, measured the same way before any training: decisions left to run, then
     /// what it managed.
     servo_left: u32 = 96,
@@ -205,16 +205,18 @@ const State = struct {
     /// Exactly-zero actions for the whole fleet: the servo alone.
     zero_actions: []f32,
     progress: Progress,
+    /// The training log, one CSV line a batch (`geno.RunLog`), saved with each autosave.
+    training_log: ArrayList(u8),
+    /// PPO's recipe on Geno as the page trains it: its defaults, the settings a training run's `run.zon` starts from.
+    recipe: geno.PpoRecipe,
+    look: Look,
+    floor: Floor,
+    autosave: Autosave,
 };
 
-/// Mean time to failure, in seconds, from steps watched and failures among them - or null when
-/// nothing has failed yet, which is where a perfect tracker lives. (Null rather than infinity: it
-/// is a different kind of answer, and the panel says so in words.)
-fn meanTimeToFailure(exposure: u64, failures: u64) ?f32 {
-    if (failures == 0) {
-        return null;
-    }
-    return float(exposure) / float(failures) / 60.0;
+/// Physics steps per second of the page's Geno: what turns steps watched into seconds of character-time.
+fn physicsStepsPerSecond(model: *const rbt.Model) f32 {
+    return 1.0 / model.opt.timestep;
 }
 
 /// The recent past, as the milestones see it.
@@ -227,23 +229,114 @@ const Recent = struct {
     full: bool,
 };
 
-/// The last `window_batches` batches: their mean time to failure, and whether they count.
-fn recentWindow(p: *const Progress) Recent {
-    const count: usize = @min(p.history_count, window_batches);
+/// The last `Progress.window_batches` batches: their mean time to failure, and whether they count.
+fn recentWindow(p: *const Progress, physics_steps_per_second: f32) Recent {
+    const count: usize = @min(p.history_count, Progress.window_batches);
     var exposure: u64 = 0;
     var failures: u64 = 0;
     var unassisted: bool = true;
     for (0..count) |i| {
-        const index: usize = (p.history_count - 1 - i) % history_len;
+        const index: usize = (p.history_count - 1 - i) % Progress.history_len;
         exposure += p.exposure[index];
         failures += p.failures[index];
         unassisted = unassisted and !p.assisted[index];
     }
     return .{
-        .mttf = if (count == 0) null else meanTimeToFailure(exposure, failures),
+        .mttf = if (count == 0) null else ppo_track.secondsToFailure(exposure, failures, physics_steps_per_second),
         .unassisted = unassisted,
-        .full = count == window_batches,
+        .full = count == Progress.window_batches,
     };
+}
+
+// ---- Training unattended ----
+//
+// A night's training must survive what can happen while nobody watches: a crash, a restart, a closed window. So
+// every few minutes the page saves the newest weights and the training log as saved values (`z.saveValue`) - in
+// the browser's storage on the web, as files in the program's folder under the user's application data natively
+// (`%APPDATA%\zimr\geno_ppo` on Windows) - and at start-up it carries on from them without asking, since there may
+// be no one to ask. "Start over" discards them.
+//
+//     start-up:   autosave found, same network and motion?  -> resume from its batch   else  -> train from scratch
+//     training:   every 5 minutes of training               -> save the weights, then the log
+//     morning:    <motion>.weights  and  <motion>.log.csv   -> the newest weights, and one line per batch
+
+/// What the weights buttons and the autosave last did, shown under the buttons.
+fn setStatus(s: *State, comptime fmt: []const u8, args: anytype) void {
+    const written: []const u8 = bufPrint(&s.progress.status, fmt, args) catch s.progress.status[0..0];
+    s.progress.status_len = written.len;
+}
+
+/// The saved value's key for this motion's autosave: `<motion>.weights` or `<motion>.log.csv`.
+fn autosaveKey(task: Task, comptime suffix: []const u8, buffer: []u8) []const u8 {
+    return bufPrint(buffer, "{s}" ++ suffix, .{task.label()}) catch suffix;
+}
+
+/// Saves the newest weights, then the training log: after the first batch, then whenever
+/// `interval_seconds` of training have passed since the last time. Whether it saved.
+fn autosaveIfDue(
+    gpa: Allocator,
+    trainer: *Trainer,
+    task: Task,
+    training_log: []const u8,
+    interval_seconds: f32,
+    progress: *Progress,
+) !bool {
+    // Nothing to save before the first batch has trained.
+    if (trainer.iterations == 0) {
+        return false;
+    }
+    const seconds_since_autosave: f32 = progress.training_seconds - progress.autosaved_at_seconds;
+    const is_due: bool = !progress.has_autosaved or seconds_since_autosave >= interval_seconds;
+    // The parameters read back must be the update's whose counters are saved beside them: a later frame saves
+    // when they are not yet (`isReadbackCurrent`) - a page cannot wait for a readback, which lands between frames.
+    if (!is_due or !trainer.isReadbackCurrent()) {
+        return false;
+    }
+    const weights_bytes: []u8 = try trainer.exportWeights(gpa);
+    defer gpa.free(weights_bytes);
+    var key_buffer: [48]u8 = undefined;
+    z.saveValue(autosaveKey(task, ".weights", &key_buffer), weights_bytes);
+    z.saveValue(autosaveKey(task, ".log.csv", &key_buffer), training_log);
+    progress.has_autosaved = true;
+    progress.autosaved_at_seconds = progress.training_seconds;
+    return true;
+}
+
+/// What `resumeFromAutosave` found.
+const ResumeOutcome = union(enum) {
+    /// No autosave of this motion.
+    nothing_saved,
+    /// An autosave the trainer refused - another network's shape, another motion's tag - by the error's name.
+    refused: []const u8,
+    /// Carried on from the autosave's batch.
+    resumed,
+};
+
+/// Carries on from this motion's autosave, if there is one this network accepts: its weights - and with them its
+/// batch count, Adam's state and the normaliser's statistics - and its training log. Out of memory fails the start:
+/// a log not carried on would be overwritten, empty, at the next autosave.
+fn resumeFromAutosave(
+    gpa: Allocator,
+    trainer: *Trainer,
+    task: Task,
+    training_log: *ArrayList(u8),
+    most_log_bytes: usize,
+) Allocator.Error!ResumeOutcome {
+    var key_buffer: [48]u8 = undefined;
+    const weights_buffer: []u8 = try gpa.alloc(u8, trainer.weightsByteCount());
+    defer gpa.free(weights_buffer);
+    const saved_weights: []u8 = z.loadValue(autosaveKey(task, ".weights", &key_buffer), weights_buffer) orelse
+        return .nothing_saved;
+    trainer.importWeights(saved_weights) catch |err| {
+        return .{ .refused = @errorName(err) };
+    };
+    const log_buffer: []u8 = try gpa.alloc(u8, most_log_bytes);
+    defer gpa.free(log_buffer);
+    if (z.loadValue(autosaveKey(task, ".log.csv", &key_buffer), log_buffer)) |saved_log| {
+        training_log.clearRetainingCapacity();
+        try training_log.appendSlice(gpa, saved_log);
+    }
+    return .resumed;
 }
 
 /// Begin training on a motion from scratch: its baked clip, a fresh trainer, fresh progress.
@@ -258,13 +351,26 @@ fn startTask(s: *State, task: Task, replace: bool) !void {
     s.clip = try dance.Clip.fromBytes(s.gpa, task.clipBytes());
     // The fleet copies this list, so a local array is fine here.
     const clips = [_]*const dance.Clip{&s.clip};
-    s.trainer = try Trainer.init(s.gpa, &s.pipe, m, s.imported.names, &clips, task.options());
+    const trainer_options: ppo_track.Options = task.options(s.recipe);
+    s.trainer = try Trainer.init(s.gpa, &s.pipe, m, s.imported.names, &clips, trainer_options);
     s.progress = .{};
+    s.training_log.clearRetainingCapacity();
+    try s.training_log.appendSlice(s.gpa, geno.RunLog.header);
+}
+
+/// Discards this motion's autosave and log, and trains from scratch.
+fn startOver(s: *State) !void {
+    var key_buffer: [48]u8 = undefined;
+    z.removeValue(autosaveKey(s.task, ".weights", &key_buffer));
+    z.removeValue(autosaveKey(s.task, ".log.csv", &key_buffer));
+    try startTask(s, s.task, true);
+    setStatus(s, "started over", .{});
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.progress = .{};
     s.gpa = gpa;
+    s.training_log = .empty;
     s.font = try z.loadFont(f, gpa, roboto_mono_ttf, 16);
     s.ui_host = z.UiHost.init(gpa, s.font);
     s.cam = z.OrbitCamera.init(vec(0.0, 0.7, 0), 4.0);
@@ -281,12 +387,17 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
             joint.armature = geno.standing_armature;
         }
     }
-    var options: rbt.Options = .{ .timestep = 1.0 / 60.0, .gravity = vec(0, 0, -9.81), .max_contacts = 256 };
-    options.solver.algorithm = .newton;
-    s.imported = try rmj.build(gpa, &s.robot, options);
+    const physics_options: rbt.Options = geno.physicsOptions();
+    s.imported = try rmj.build(gpa, &s.robot, physics_options);
     const m: *rbt.Model = &s.imported.model;
     s.ghost = try rbt.Data.init(gpa, m);
-    s.zero_actions = try gpa.alloc(f32, envs * track.actionSize(m));
+    s.recipe = .{};
+    s.look = .{};
+    s.floor = .{};
+    s.autosave = .{};
+    const actions_per_character: usize = track.actionSize(m);
+    const zero_action_count: usize = s.recipe.envs * actions_per_character;
+    s.zero_actions = try gpa.alloc(f32, zero_action_count);
     @memset(s.zero_actions, 0.0);
 
     // The networks live on the GPU; the characters on the CPU.
@@ -296,6 +407,14 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // before touching the clock.
     z.profiler.freeze();
     try startTask(s, .getup, false);
+    // Carry on from the last run's autosave, if any; the servo is still measured first.
+    const most_log_bytes: usize = s.autosave.most_log_bytes;
+    const outcome: ResumeOutcome = try resumeFromAutosave(gpa, s.trainer, s.task, &s.training_log, most_log_bytes);
+    switch (outcome) {
+        .nothing_saved => {},
+        .refused => |reason| setStatus(s, "autosave refused: {s}", .{reason}),
+        .resumed => setStatus(s, "resumed from batch {d}", .{s.trainer.iterations}),
+    }
 }
 
 fn deinit(gpa: Allocator, s: *State) void {
@@ -306,6 +425,7 @@ fn deinit(gpa: Allocator, s: *State) void {
     s.clip.deinit();
     gpa.free(s.zero_actions);
     s.ghost.deinit();
+    s.training_log.deinit(gpa);
     s.imported.deinit();
     s.robot.deinit();
     s.doc.deinit();
@@ -322,11 +442,15 @@ fn deinit(gpa: Allocator, s: *State) void {
 fn measureServo(s: *State) void {
     const p: *Progress = &s.progress;
     const fleet: *track.Fleet = s.trainer.env.fleet;
+    // The servo ALONE: the root assist, which would hold up characters the servo would lose, is off while measuring.
+    const scheduled_assist: f32 = fleet.options.task.gains.assist;
+    fleet.options.task.gains.assist = 0;
+    defer fleet.options.task.gains.assist = scheduled_assist;
     const take: u32 = @min(p.servo_left, p.per_frame);
     for (0..take) |_| {
         for (0..2) |_| {
             _ = fleet.step(s.zero_actions);
-            p.servo_exposure += envs;
+            p.servo_exposure += fleet.failures.len;
             for (fleet.failures) |lost| {
                 if (lost) {
                     p.servo_failures += 1;
@@ -341,17 +465,18 @@ fn measureServo(s: *State) void {
 fn recordBatch(s: *State, stats: ppo_track.Stats) void {
     const p: *Progress = &s.progress;
     p.last = stats;
-    const index: usize = p.history_count % history_len;
+    const index: usize = p.history_count % Progress.history_len;
     p.exposure[index] = stats.exposure;
     p.failures[index] = stats.failures;
     p.assisted[index] = stats.assist > 0;
     p.history_count += 1;
-    const recent: Recent = recentWindow(p);
+    const steps_per_second: f32 = physicsStepsPerSecond(&s.imported.model);
+    const recent: Recent = recentWindow(p, steps_per_second);
     // Only whole windows of unassisted batches count: the bar is the real task. A window with no
     // failures at all has passed every milestone.
     if (recent.full and recent.unassisted) {
         const seconds: f32 = recent.mttf orelse 1.0e9;
-        for (milestones, &p.milestone_seconds) |mark, *when| {
+        for (Progress.milestones, &p.milestone_seconds) |mark, *when| {
             if (when.* == 0 and seconds >= mark) {
                 when.* = p.training_seconds;
             }
@@ -368,11 +493,6 @@ fn offerWeights(s: *State) void {
     const batches: u64 = s.trainer.iterations;
     const name: []const u8 = bufPrint(&name_buffer, "{s}_ppo_b{d}.weights", .{ s.task.label(), batches }) catch return;
     z.userfile.offerDownload(bytes, name);
-}
-
-fn setStatus(s: *State, comptime fmt: []const u8, args: anytype) void {
-    const written: []const u8 = bufPrint(&s.progress.status, fmt, args) catch s.progress.status[0..0];
-    s.progress.status_len = written.len;
 }
 
 /// Weights the user picked: carried on from if they fit this network AND this motion, refused by
@@ -404,7 +524,7 @@ fn takeUploads(s: *State) void {
 
 /// The failure rate over time, in plain ASCII - a density ramp every font has - one character a
 /// batch: taller is longer between losses, relative to the best window so far.
-fn drawCurve(u: ui.Ui, p: *const Progress) void {
+fn drawCurve(u: ui.Ui, p: *const Progress, steps_per_second: f32) void {
     const shown: usize = @min(p.history_count, 32);
     if (shown == 0) {
         return;
@@ -415,8 +535,11 @@ fn drawCurve(u: ui.Ui, p: *const Progress) void {
     for (0..shown) |i| {
         // Each character: that batch's own exposure over its failures, capped so one lucky batch
         // with no failures does not flatten the rest.
-        const index: usize = (p.history_count - shown + i) % history_len;
-        const seconds: f32 = @min(meanTimeToFailure(p.exposure[index], p.failures[index]) orelse 30.0, 30.0);
+        const index: usize = (p.history_count - shown + i) % Progress.history_len;
+        const batch_exposure: u64 = p.exposure[index];
+        const batch_failures: u32 = p.failures[index];
+        const batch_seconds: ?f32 = ppo_track.secondsToFailure(batch_exposure, batch_failures, steps_per_second);
+        const seconds: f32 = @min(batch_seconds orelse 30.0, 30.0);
         values[i] = seconds;
         top = @max(top, seconds);
     }
@@ -432,6 +555,7 @@ fn drawCurve(u: ui.Ui, p: *const Progress) void {
 /// so the camera leaves it alone.
 fn drawPanel(s: *State, f: *z.Frame) bool {
     const u: ui.Ui = s.ui_host.begin(f);
+    const steps_per_second: f32 = physicsStepsPerSecond(&s.imported.model);
     const captured: bool = u.wantCaptureMouse();
     // Compact on purpose: on a portrait phone the canvas is short, and a window that auto-expands
     // past it hides its own last lines.
@@ -451,8 +575,11 @@ fn drawPanel(s: *State, f: *z.Frame) bool {
         if (p.servo_left > 0) {
             u.text("measuring the servo alone...", .{});
         } else {
-            const recent: Recent = recentWindow(p);
-            const servo: z.Str(24) = if (meanTimeToFailure(p.servo_exposure, p.servo_failures)) |seconds|
+            const recent: Recent = recentWindow(p, steps_per_second);
+            const servo_exposure: u64 = p.servo_exposure;
+            const servo_failures: u32 = p.servo_failures;
+            const servo_seconds: ?f32 = ppo_track.secondsToFailure(servo_exposure, servo_failures, steps_per_second);
+            const servo: z.Str(24) = if (servo_seconds) |seconds|
                 .print("{d:.1}s", .{seconds})
             else
                 .print("never", .{});
@@ -470,7 +597,7 @@ fn drawPanel(s: *State, f: *z.Frame) bool {
         // Minutes of training to each milestone: the number every method in the plan is judged by.
         var marks: [64]u8 = undefined;
         var at: usize = 0;
-        for (milestones, p.milestone_seconds) |mark, when| {
+        for (Progress.milestones, p.milestone_seconds) |mark, when| {
             const piece: []const u8 = if (when > 0)
                 bufPrint(marks[at..], "{d:.0}s@{d:.1}m ", .{ mark, when / 60.0 }) catch ""
             else
@@ -500,12 +627,24 @@ fn drawPanel(s: *State, f: *z.Frame) bool {
                 p.failed = @errorName(err);
             };
         }
+        u.sameLine(.{});
+        if (u.button("start over", .{})) {
+            startOver(s) catch |err| {
+                p.failed = @errorName(err);
+            };
+        }
         if (p.status_len > 0) {
             u.text("{s}", .{p.status[0..p.status_len]});
         }
-        drawCurve(u, p);
+        drawCurve(u, p, steps_per_second);
     }
     return captured;
+}
+
+/// A point of the robot's world, where z is up, in the drawing's, where y is up: the quarter turn about x that
+/// `zm.zUpToYUp` makes, (x, y, z) to (x, z, -y).
+fn yUpOf(z_up_point: Vec) Vec {
+    return vec(z_up_point[0], z_up_point[2], -z_up_point[1]);
 }
 
 fn drawRobot(s: *State, gl: *z.WgpuGl, d: *const rbt.Data, tint: Color) void {
@@ -513,16 +652,21 @@ fn drawRobot(s: *State, gl: *z.WgpuGl, d: *const rbt.Data, tint: Color) void {
     const to_y_up: Mat = zm.zUpToYUp();
     for (0..m.ngeom) |g| {
         const body: u32 = m.geom_body[g];
+        const body_position: Vec = d.body_xpos[body];
         const body_rot: Quat = d.body_xrot[body];
-        const world_pos: Vec = d.body_xpos[body] + zm.rotate(body_rot, m.geom_pos[g]);
-        const world_rot: Mat = quatToMat(qmul(body_rot, m.geom_rot[g]));
-        const place: Mat = mulMat(
-            mulMat(to_y_up, translation(world_pos[0], world_pos[1], world_pos[2])),
-            world_rot,
-        );
+        // The geom in the world: its offset from its body, turned with the body; its rotation, after the body's.
+        const offset_in_world: Vec = zm.rotate(body_rot, m.geom_pos[g]);
+        const world_pos: Vec = body_position + offset_in_world;
+        const world_quaternion: Quat = qmul(body_rot, m.geom_rot[g]);
+        const world_rot: Mat = quatToMat(world_quaternion);
+        // The same place in the drawing, where y is up.
+        const world_translation: Mat = translation(world_pos[0], world_pos[1], world_pos[2]);
+        const translation_drawn: Mat = mulMat(to_y_up, world_translation);
+        const place: Mat = mulMat(translation_drawn, world_rot);
         switch (m.geom_shape[g]) {
             .sphere => |sph| {
-                s.transform[0] = mulMat(place, scaling(sph.radius, sph.radius, sph.radius));
+                const radius: f32 = sph.radius;
+                s.transform[0] = mulMat(place, scaling(radius, radius, radius));
                 z.drawMeshInstanced(gl, &s.sphere, &s.transform, tint);
             },
             .box => |b| {
@@ -531,15 +675,30 @@ fn drawRobot(s: *State, gl: *z.WgpuGl, d: *const rbt.Data, tint: Color) void {
                 z.drawMeshInstanced(gl, &s.cube, &s.transform, tint);
             },
             .capsule => |cap| {
-                s.transform[0] = mulMat(
-                    mulMat(place, translation(0, -cap.half_height, 0)),
-                    scaling(cap.radius, 2.0 * cap.half_height, cap.radius),
-                );
+                // The cylinder mesh rises from its base: its base moved down half the capsule's length, then the
+                // mesh stretched to the capsule's radius and whole length.
+                const capsule_length: f32 = 2.0 * cap.half_height;
+                const base_lowered: Mat = mulMat(place, translation(0, -cap.half_height, 0));
+                s.transform[0] = mulMat(base_lowered, scaling(cap.radius, capsule_length, cap.radius));
                 z.drawMeshInstanced(gl, &s.cylinder, &s.transform, tint);
             },
             else => {},
         }
     }
+}
+
+/// The floor's slab: the unit cube's center half its thickness below the top, then the cube stretched to the slab.
+fn drawFloor(
+    gl: *z.WgpuGl,
+    cube: *z.Mesh,
+    transform: *[1]Mat,
+    floor: Floor,
+    tint: Color,
+) void {
+    const center_height: f32 = floor.top - 0.5 * floor.thickness;
+    const center: Mat = mulMat(zm.zUpToYUp(), translation(0, 0, center_height));
+    transform[0] = mulMat(center, scaling(floor.side, floor.side, floor.thickness));
+    z.drawMeshInstanced(gl, cube, transform, tint);
 }
 
 fn update(f: *z.Frame, s: *State) void {
@@ -564,19 +723,45 @@ fn update(f: *z.Frame, s: *State) void {
         if (s.trainer.collect(p.per_frame)) {
             const stats: ppo_track.Stats = s.trainer.learn();
             recordBatch(s, stats);
+            const training_minutes: f32 = p.training_seconds / 60.0;
+            geno.RunLog.appendLine(s.gpa, &s.training_log, s.trainer.iterations, training_minutes, stats) catch |err| {
+                p.failed = @errorName(err);
+            };
             offerWeights(s);
+        }
+        // Checked every frame, not only as a batch ends: the update a batch dispatches is read back a frame or two
+        // later, and only then are the parameters and the counters beside them of the same moment.
+        const log_text: []const u8 = s.training_log.items;
+        const interval_seconds: f32 = s.autosave.interval_seconds;
+        const has_autosaved: bool = autosaveIfDue(
+            s.gpa,
+            s.trainer,
+            s.task,
+            log_text,
+            interval_seconds,
+            p,
+        ) catch |err| saved: {
+            p.failed = @errorName(err);
+            break :saved false;
+        };
+        if (has_autosaved) {
+            setStatus(s, "autosaved batch {d}", .{s.trainer.iterations});
         }
     }
 
     takeUploads(s);
-    z.clearViewport(f, bg);
+    z.clearViewport(f, s.look.background);
     defer s.ui_host.render(f);
     const captured: bool = drawPanel(s, f);
+    // The camera follows training character 0, whom the dance carries around the room: it orbits his root.
+    const root_body: usize = 1;
+    const shown_character: *const rbt.Data = &s.trainer.env.fleet.data[0];
+    const root_position: Vec = shown_character.body_xpos[root_body];
+    s.cam.target = yUpOf(root_position);
     const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.5, .max_distance = 10.0 });
     z.beginMode3D(gl, cam);
     z.drawGrid(gl, 20, 0.5);
-    s.transform[0] = mulMat(mulMat(zm.zUpToYUp(), translation(0, 0, -0.5)), scaling(16, 16, 0.2));
-    z.drawMeshInstanced(gl, &s.cube, &s.transform, ground_col);
+    drawFloor(gl, &s.cube, &s.transform, s.floor, s.look.floor);
 
     // The reference, where training character 0 should be; then the character itself.
     const fleet: *track.Fleet = s.trainer.env.fleet;
@@ -584,8 +769,8 @@ fn update(f: *z.Frame, s: *State) void {
     @memcpy(s.ghost.pos, s.clip.pose(frame));
     s.ghost.stage = .stale;
     rbt.kinematics(m, &s.ghost);
-    drawRobot(s, gl, &s.ghost, ref_col);
-    drawRobot(s, gl, &fleet.data[0], sim_col);
+    drawRobot(s, gl, &s.ghost, s.look.reference);
+    drawRobot(s, gl, &fleet.data[0], s.look.character);
     z.endMode3D(gl);
 }
 

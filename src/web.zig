@@ -4,7 +4,6 @@
 // Aggregates the four browser-binding modules into a single file with
 // namespaced sub-structs:
 //     web.dom    - canvas, time, frame loop, input  (extern "dom")
-//     web.audio  - Web Audio sine-wave bindings    (extern "audio")
 //     web.fetch  - async fetch handle protocol     (uses dom internally)
 // Each section's contents are unchanged from before the merge - the
 // only structural change is the `pub const X = struct { ... };` wrapper.
@@ -12,13 +11,14 @@
 // `const dom = @import("web.zig").dom`.
 
 const std = @import("std");
-const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const zm = @import("zm");
+/// Which path plays a page's sound and how far it has come, as page audio reports it (`page_audio.OutputStatus`) - the
+/// bridge's file, imported for the type alone: its exports are made only where it is the program's root.
+const AudioOutputStatus = @import("page_audio.zig").OutputStatus;
 const float64 = zm.float64;
-const clamp = zm.clamp;
 
 // ============================================================================
 // SECTION - dom (was: src/dom.zig)
@@ -221,8 +221,9 @@ pub const dom = struct {
     extern "dom" fn js_gamepad_state(slot: u32, out: [*]f32) u32;
     extern "dom" fn js_audio_output_stop() void;
     extern "dom" fn js_audio_output_show_diagnostics() void;
+    extern "dom" fn js_audio_output_set_handle_debugging(is_on: u32) void;
     extern "dom" fn js_audio_output_latency_ms() f64;
-    extern "dom" fn js_audio_output_uses_worklet() u32;
+    extern "dom" fn js_audio_output_status() u32;
     extern "dom" fn js_audio_forward_start(sample_rate: u32, channel_count: u32) u32;
     extern "dom" fn js_audio_output_start_pulled(sample_rate: u32, channel_count: u32) u32;
     extern "dom" fn js_audio_forward_command(bytes: [*]const u8, byte_count: u32) void;
@@ -231,17 +232,37 @@ pub const dom = struct {
         samples: [*]const f32,
         sample_count: u32,
     ) void;
-    extern "dom" fn js_audio_forward_note(key: u32, is_down: u32, velocity: f32) void;
+    extern "dom" fn js_audio_forward_note(
+        key: u32,
+        is_down: u32,
+        velocity: f32,
+        requested_at_ms: f64,
+        pressed_at_ms: f64,
+    ) void;
+    extern "dom" fn js_audio_forward_stream_frames(
+        stream_id: u32,
+        channels: u32,
+        sample_rate: u32,
+        frames: [*]const f32,
+        sample_count: u32,
+    ) void;
     extern "dom" fn js_audio_take_notice_bytes(
         target: [*]u8,
         capacity: u32,
         notice_byte_count: u32,
     ) u32;
     extern "dom" fn js_audio_output_note_mixer(voice_count: u32) void;
+    extern "dom" fn js_audio_ask_analysis() void;
+    extern "dom" fn js_audio_take_analysis_frames(target: [*]f32, frame_count: u32) u32;
 
     /// Shows the sound's diagnostics panel at the top of the page.
     pub fn audio_output_show_diagnostics() void {
         js_audio_output_show_diagnostics();
+    }
+
+    /// Turns the debugging of JavaScript handles on (1) or off (0), in the page and its audio worklet.
+    pub fn audio_output_set_handle_debugging(is_on: u32) void {
+        js_audio_output_set_handle_debugging(is_on);
     }
 
     /// How long a frame the output counted as played still takes to be heard, in milliseconds: the script processor's
@@ -250,11 +271,10 @@ pub const dom = struct {
         return js_audio_output_latency_ms();
     }
 
-    /// Which path plays the sound (`page_audio.pathCode`): 0 the script processor, or no output yet; the renderer
-    /// worklet, which the mixer forwards to - 2 while its processor starts, 3 running, 4 failed (its error in the
-    /// page's log), 5 with the audio context still suspended, before the first tap or key.
-    pub fn audio_output_path() u32 {
-        return js_audio_output_uses_worklet();
+    /// Which path plays the sound, and how far it has come (`page_audio.OutputStatus`), from the integer the bridge
+    /// reports - an integer the enum does not name stops a safe build at once.
+    pub fn audio_output_status() AudioOutputStatus {
+        return @fromBackingInt(@intCast(js_audio_output_status()));
     }
 
     /// Starts the output pulled on the main thread (`page_audio.startPulled`): a script processor whose
@@ -279,14 +299,40 @@ pub const dom = struct {
         js_audio_forward_samples(samples_id, samples.ptr, @intCast(samples.len));
     }
 
-    pub fn audio_forward_note(key: u32, is_down: bool, velocity: f32) void {
-        js_audio_forward_note(key, @intFromBool(is_down), velocity);
+    pub fn audio_forward_stream_frames(
+        stream_id: u32,
+        channels: u32,
+        sample_rate: u32,
+        frames: []const f32,
+    ) void {
+        js_audio_forward_stream_frames(stream_id, channels, sample_rate, frames.ptr, @intCast(frames.len));
+    }
+
+    pub fn audio_forward_note(
+        key: u32,
+        is_down: bool,
+        velocity: f32,
+        requested_at_ms: f64,
+        pressed_at_ms: f64,
+    ) void {
+        js_audio_forward_note(key, @intFromBool(is_down), velocity, requested_at_ms, pressed_at_ms);
     }
 
     /// Copies the notices the renderer worklet sent back into `target`, whole notices of `notice_byte_count` bytes
     /// only, and returns the bytes copied.
     pub fn audio_take_notice_bytes(target: []u8, notice_byte_count: u32) usize {
         return js_audio_take_notice_bytes(target.ptr, @intCast(target.len), notice_byte_count);
+    }
+
+    /// Asks the renderer worklet for its last frames mixed, for an analyser; a request already waiting is not repeated.
+    pub fn audio_ask_analysis() void {
+        js_audio_ask_analysis();
+    }
+
+    /// Copies the last `target.len` frames of the renderer worklet's last answer into `target`, oldest first, and
+    /// returns how many it copied: `target.len`, or 0 before the first answer.
+    pub fn audio_take_analysis_frames(target: []f32) usize {
+        return js_audio_take_analysis_frames(target.ptr, @intCast(target.len));
     }
 
     /// Hands the diagnostics panel the mixer's count of playing voices.
@@ -968,748 +1014,8 @@ pub const dom = struct {
     }
 };
 
-// ============================================================================
-// SECTION - audio (was: src/audio.zig; expanded for audio-plan-v3)
-// ============================================================================
-// `web.audio` exposes the Web Audio API as a per-context-handle
-// surface.  Every public fn takes a `ContextId` (a non-zero
-// `u32`); 0 is the universal "invalid / no context" sentinel
-// and every fn handles it silently (no panic, no stderr noise).
-// This file provides the JS-bridge primitives only.  Higher-level
-// types (`Wave`, `Sound`, `Music`, `AudioStream`) live in
-// `src/sound.zig` (Phase 3 onward) and build on these.
-// On host (non-wasm builds), every public fn returns a safe
-// default (zero, 48000 Hz, 1.0, etc.) and never panics.  Real
-// verification happens via the smoke harness
-// (`webtests/smoke.ts`), which mocks the JS bridge.
-
-pub const audio = struct {
-    const is_wasm: bool = builtin.target.cpu.arch.isWasm();
-
-    /// Opaque AudioContext handle.  0 means "invalid / no context".
-    /// All audio fns accept this id; passing 0 or a stale id is
-    /// silent (no panic, no stderr noise).
-    pub const ContextId = u32;
-
-    /// Opaque AudioBuffer handle.  Returned by `loadAudioBuffer`,
-    /// passed to `playBuffer` / `unloadAudioBuffer`.  0 means
-    /// "invalid / load failed".
-    pub const BufferId = u32;
-
-    /// Opaque AudioBufferSourceNode handle.  Returned by
-    /// `playBuffer`; passed to `stopBuffer` / `pauseBuffer` /
-    /// `resumeBuffer` / `isBufferPlaying`.  0 means "invalid
-    /// / not playing".
-    /// Each `playBuffer` call creates a *new* source node - Web
-    /// Audio's source nodes are one-shot.  Same buffer played twice
-    /// gives two distinct source ids.
-    pub const SourceId = u32;
-
-    /// Opaque async-decode handle.  Returned by `decodeOggBytes`;
-    /// passed to `isDecodeReady` / `takeDecodedBuffer` /
-    /// `cancelDecode`.  0 means "invalid / decode failed before it
-    /// could even start".
-    /// Lifecycle: created by decodeOggBytes; either consumed by
-    /// takeDecodedBuffer (after isDecodeReady reports 1) or
-    /// released early by cancelDecode.  Either way the id is dead
-    /// after consumption.
-    pub const DecodeId = u32;
-
-    // ---- JS bridge
-    extern "audio" fn js_audio_create_context() ContextId;
-    extern "audio" fn js_audio_close_context(ctx_id: ContextId) void;
-    extern "audio" fn js_audio_resume_context(ctx_id: ContextId) void;
-    extern "audio" fn js_audio_get_sample_rate(ctx_id: ContextId) f32;
-    extern "audio" fn js_audio_get_current_time(ctx_id: ContextId) f64;
-    extern "audio" fn js_audio_get_master_volume(ctx_id: ContextId) f32;
-    extern "audio" fn js_audio_set_master_volume(
-        ctx_id: ContextId,
-        v: f32,
-    ) void;
-
-    // Step 2 - PCM buffer upload / release.
-    extern "audio" fn js_audio_load_buffer(
-        ctx_id: ContextId,
-        sample_rate: u32,
-        channels: u32,
-        frame_count: u32,
-        data_ptr: [*]const f32,
-        data_len: u32,
-    ) BufferId;
-    extern "audio" fn js_audio_unload_buffer(
-        ctx_id: ContextId,
-        buffer_id: BufferId,
-    ) void;
-
-    // Step 3 - buffer playback (one source per call).
-    extern "audio" fn js_audio_play_buffer(
-        ctx_id: ContextId,
-        buffer_id: BufferId,
-        volume: f32,
-        pitch: f32,
-        pan: f32,
-        looping: u32,
-    ) SourceId;
-    extern "audio" fn js_audio_stop_buffer(
-        ctx_id: ContextId,
-        source_id: SourceId,
-    ) void;
-    extern "audio" fn js_audio_pause_buffer(
-        ctx_id: ContextId,
-        source_id: SourceId,
-    ) void;
-    extern "audio" fn js_audio_resume_buffer(
-        ctx_id: ContextId,
-        source_id: SourceId,
-    ) void;
-    extern "audio" fn js_audio_is_buffer_playing(
-        ctx_id: ContextId,
-        source_id: SourceId,
-    ) u32;
-
-    // Step 18 - scheduled-time playback for AudioStream gapless
-    // chaining.  `when` is in AudioContext-time seconds (compare
-    // with `getCurrentTime`).  Pass 0 for "asap" (same as
-    // playBuffer).  Returns a SourceId same as playBuffer.
-    extern "audio" fn js_audio_play_buffer_at(
-        ctx_id: ContextId,
-        buffer_id: BufferId,
-        volume: f32,
-        pitch: f32,
-        pan: f32,
-        when: f64,
-    ) SourceId;
-
-    // Step 36 - playback with a within-buffer start offset.  Used
-    // by `music.seek` to start playback at a specific time inside
-    // the buffer.  Same shape as `playBuffer` (looping included)
-    // plus `offset_seconds` mapped to source.start(0, offset).
-    extern "audio" fn js_audio_play_buffer_with_offset(
-        ctx_id: ContextId,
-        buffer_id: BufferId,
-        volume: f32,
-        pitch: f32,
-        pan: f32,
-        looping: u32,
-        offset_seconds: f64,
-    ) SourceId;
-
-    // Step 8 - async OGG decode via Web Audio's `decodeAudioData`.
-    // `decodeAudioData` is async and returns a Promise; on
-    // single-threaded JS we can't block on it.  These primitives
-    // implement a polling protocol:
-    //   1. `decodeOggBytes(ctx, data, len)` -> DecodeId, kicks off
-    //      the Promise.  Bytes are copied JS-side immediately.
-    //   2. `isDecodeReady(ctx, decode_id)` -> 0/1 (poll each frame).
-    //   3. `takeDecodedBuffer(ctx, decode_id)` -> BufferId.  Once
-    //      consumed, the decode_id is invalidated.
-    //   4. `cancelDecode(ctx, decode_id)` if the caller gives up
-    //      (e.g. Sound.unload before decode finished).
-    extern "audio" fn js_audio_decode_ogg_bytes(
-        ctx_id: ContextId,
-        data_ptr: [*]const u8,
-        data_len: u32,
-    ) DecodeId;
-    extern "audio" fn js_audio_is_decode_ready(
-        ctx_id: ContextId,
-        decode_id: DecodeId,
-    ) u32;
-    extern "audio" fn js_audio_take_decoded_buffer(
-        ctx_id: ContextId,
-        decode_id: DecodeId,
-    ) BufferId;
-    extern "audio" fn js_audio_cancel_decode(
-        ctx_id: ContextId,
-        decode_id: DecodeId,
-    ) void;
-
-    /// Opaque AnalyserNode handle. 0 means "invalid".
-    pub const AnalyserId = u32;
-
-    extern "audio" fn js_audio_create_analyser(
-        ctx_id: ContextId,
-        fft_size: u32,
-    ) AnalyserId;
-    extern "audio" fn js_audio_get_frequency_data(
-        ctx_id: ContextId,
-        analyser_id: AnalyserId,
-        out_ptr: [*]u8,
-        out_len: u32,
-    ) u32;
-    extern "audio" fn js_audio_destroy_analyser(
-        ctx_id: ContextId,
-        analyser_id: AnalyserId,
-    ) void;
-
-    // ---- v3 public API
-    /// Create a new `AudioContext` plus its master `GainNode`.  Returns
-    /// a non-zero id on success, 0 if the browser doesn't support Web
-    /// Audio (very old) or context creation failed.
-    /// AudioContexts in modern browsers start *suspended* - actual
-    /// sound won't play until `resumeContext` is called from a
-    /// user-gesture handler (click / touchend / keydown).  zimr's
-    /// higher-level Sound / Music APIs handle this transparently.
-    /// Host: returns 0 (no JS bridge, no real context).
-    pub fn createContext() ContextId {
-        if (comptime !is_wasm) {
-            return 0;
-        }
-        return js_audio_create_context();
-    }
-
-    /// Tear down a previously-created context.  Idempotent / silent on
-    /// invalid ids - safe to call even if the context is already gone.
-    /// Host: silent no-op.
-    pub fn closeContext(ctx_id: ContextId) void {
-        if (comptime !is_wasm) {
-            return;
-        }
-        js_audio_close_context(ctx_id);
-    }
-
-    /// Try to resume a suspended context.  Browsers reject the resume
-    /// unless it's called from a user-gesture handler, but the call
-    /// itself is always safe - failure is silent.
-    /// Host: silent no-op.
-    pub fn resumeContext(ctx_id: ContextId) void {
-        if (comptime !is_wasm) {
-            return;
-        }
-        js_audio_resume_context(ctx_id);
-    }
-
-    /// Get the context's audio device sample rate, in Hz.  Typical
-    /// values: 48000 on Chrome/Firefox desktop; 44100 on iOS Safari
-    /// (pinned).  Returns 0 for invalid ids.
-    /// Host: returns 48000 - a plausible default so test code doesn't
-    /// divide by zero on the resampler path.
-    pub fn getSampleRate(ctx_id: ContextId) f32 {
-        if (comptime !is_wasm) {
-            return 48000.0;
-        }
-        return js_audio_get_sample_rate(ctx_id);
-    }
-
-    /// Get the context's current time, in seconds since context
-    /// creation.  Used by AudioStream's gapless scheduling to
-    /// compute the next-buffer start time.  Returns 0 for invalid
-    /// ids.
-    /// Host: returns 0.0.
-    pub fn getCurrentTime(ctx_id: ContextId) f64 {
-        if (comptime !is_wasm) {
-            return 0.0;
-        }
-        return js_audio_get_current_time(ctx_id);
-    }
-
-    /// Get the master gain (1.0 = unity).  Returns 1.0 for invalid
-    /// ids - same value a fresh context would report.
-    /// Host: returns 1.0.
-    pub fn getMasterVolume(ctx_id: ContextId) f32 {
-        if (comptime !is_wasm) {
-            return 1.0;
-        }
-        return js_audio_get_master_volume(ctx_id);
-    }
-
-    /// Set the master gain.  Clamped to `[0, 10]` - values above 1
-    /// amplify (and risk clipping; we do not anti-clip).  Silent on
-    /// invalid ids.
-    /// Clamping happens on both sides (here AND in the JS bridge) so
-    /// host tests can verify the Zig-side clamp without a real
-    /// browser, and so a malformed JS environment can't push the gain
-    /// node out of its valid range.
-    /// Host: silent no-op.
-    pub fn setMasterVolume(
-        ctx_id: ContextId,
-        volume: f32,
-    ) void {
-        if (comptime !is_wasm) {
-            return;
-        }
-        const clamped: f32 = clamp(volume, 0.0, 10.0);
-        js_audio_set_master_volume(ctx_id, clamped);
-    }
-
-    /// Upload interleaved-stereo `f32` PCM samples to a fresh
-    /// `AudioBuffer`.  `frame_count` is the number of audio frames
-    /// (one frame = one sample per channel); `data` is `frame_count *
-    /// channels` floats.  Returns a non-zero `BufferId` on success, 0
-    /// on failure (invalid ctx, allocation failure, channel-count out
-    /// of Web Audio's [1, 32] range).
-    /// The data is *copied* JS-side into the AudioBuffer's per-channel
-    /// arrays (Web Audio uses planar storage; we deinterleave on the
-    /// boundary).  The caller is free to drop / reuse `data` after
-    /// this call returns.
-    /// Channel layout:
-    ///   - 1: mono (the one channel)
-    ///   - 2: stereo (L/R interleaved per frame)
-    ///   - >2: still planar after deinterleave; channel 0..N-1 from
-    ///     each frame's interleaved samples
-    /// Host: returns 0.
-    pub fn loadAudioBuffer(
-        ctx_id: ContextId,
-        sample_rate: u32,
-        channels: u32,
-        frame_count: u32,
-        data: []const f32,
-    ) BufferId {
-        if (comptime !is_wasm) {
-            return 0;
-        }
-        return js_audio_load_buffer(
-            ctx_id,
-            sample_rate,
-            channels,
-            frame_count,
-            data.ptr,
-            @intCast(data.len),
-        );
-    }
-
-    /// Release a previously-loaded buffer.  Idempotent / silent on
-    /// invalid ids.  After this call the JS-side AudioBuffer becomes
-    /// eligible for GC; any in-flight `AudioBufferSourceNode` playing
-    /// from this buffer keeps its own reference and continues to
-    /// completion.
-    /// Host: silent no-op.
-    pub fn unloadAudioBuffer(
-        ctx_id: ContextId,
-        buffer_id: BufferId,
-    ) void {
-        if (comptime !is_wasm) {
-            return;
-        }
-        js_audio_unload_buffer(ctx_id, buffer_id);
-    }
-
-    /// Start playing `buffer_id` through a fresh source-graph.  The
-    /// graph is `AudioBufferSourceNode -> GainNode -> StereoPannerNode
-    /// -> masterGain`, with `volume`/`pitch`/`pan` set on the per-play
-    /// nodes.  Returns a non-zero `SourceId` for use with
-    /// `stopBuffer` / `pauseBuffer` / `isBufferPlaying`, or 0 if the
-    /// buffer or context is invalid.
-    /// Parameters:
-    ///   - `volume`: linear gain in `[0, 10]`, clamped here AND
-    ///     JS-side.  Typical range is `[0, 1]` (1 = the buffer's
-    ///     recorded amplitude); values above 1 amplify and risk
-    ///     clipping.
-    ///   - `pitch`: playback-rate multiplier; 1.0 = native, 2.0 = an
-    ///     octave up + double speed, 0.5 = an octave down + half
-    ///     speed.  Clamped to `[0.0625, 16.0]` matching Web Audio's
-    ///     valid `playbackRate` range.
-    ///   - `pan`: stereo balance in `[-1, 1]`; -1 = hard left, 0 =
-    ///     center, +1 = hard right.  Clamped here.
-    ///   - `looping`: 1 = loop forever (until explicit `stopBuffer`),
-    ///     0 = play once and finish.  AudioBufferSourceNodes that
-    ///     finish naturally drop their source-id from the table on
-    ///     the JS side; subsequent `isBufferPlaying` reports false.
-    /// `playBuffer` is the per-play entrypoint.  Even the same buffer
-    /// played twice in quick succession produces TWO distinct source
-    /// ids (Web Audio's nodes are one-shot).  This is also why
-    /// raylib's `LoadSoundAlias` is degenerate on the web - every
-    /// play is implicitly an alias.
-    /// Host: returns 0.
-    pub fn playBuffer(
-        ctx_id: ContextId,
-        buffer_id: BufferId,
-        volume: f32,
-        pitch: f32,
-        pan: f32,
-        looping: bool,
-    ) SourceId {
-        if (comptime !is_wasm) {
-            return 0;
-        }
-        const v: f32 = clamp(volume, 0.0, 10.0);
-        const p: f32 = clamp(pitch, 0.0625, 16.0);
-        const pn: f32 = clamp(pan, -1.0, 1.0);
-        const lp: u32 = if (looping) 1 else 0;
-        return js_audio_play_buffer(ctx_id, buffer_id, v, p, pn, lp);
-    }
-
-    /// Stop a playing source.  Disconnects the graph and releases the
-    /// source id.  Idempotent / silent on invalid ids - including
-    /// sources that have already finished naturally.
-    /// Host: silent no-op.
-    pub fn stopBuffer(
-        ctx_id: ContextId,
-        source_id: SourceId,
-    ) void {
-        if (comptime !is_wasm) {
-            return;
-        }
-        js_audio_stop_buffer(ctx_id, source_id);
-    }
-
-    /// Pause a playing source, capturing its current offset so
-    /// `resumeBuffer` can restart at the same position.  Web Audio
-    /// has no native pause on `AudioBufferSourceNode`, so we
-    /// disconnect the source and remember `(currentTime - start_time)
-    /// * playbackRate` as the resume offset.  Loses any in-flight
-    /// `playbackRate` automation; for game audio this is fine.
-    /// Idempotent / silent on already-paused or invalid ids.
-    /// Host: silent no-op.
-    pub fn pauseBuffer(
-        ctx_id: ContextId,
-        source_id: SourceId,
-    ) void {
-        if (comptime !is_wasm) {
-            return;
-        }
-        js_audio_pause_buffer(ctx_id, source_id);
-    }
-
-    /// Resume a previously-paused source.  Builds a fresh source
-    /// node starting at the captured offset.  The resumed source
-    /// keeps the same `SourceId` from the caller's perspective
-    /// (the JS bridge swaps the underlying node atomically).
-    /// Idempotent / silent on never-paused or invalid ids.
-    /// Host: silent no-op.
-    pub fn resumeBuffer(
-        ctx_id: ContextId,
-        source_id: SourceId,
-    ) void {
-        if (comptime !is_wasm) {
-            return;
-        }
-        js_audio_resume_buffer(ctx_id, source_id);
-    }
-
-    /// Check whether a source is currently playing (not stopped, not
-    /// paused, not naturally finished).  Returns false for invalid
-    /// ids.
-    /// Host: returns false.
-    pub fn isBufferPlaying(
-        ctx_id: ContextId,
-        source_id: SourceId,
-    ) bool {
-        if (comptime !is_wasm) {
-            return false;
-        }
-        return js_audio_is_buffer_playing(ctx_id, source_id) != 0;
-    }
-
-    /// Schedule a buffer to start playing at AudioContext-time
-    /// `when` (in seconds; compare with `getCurrentTime`).  This
-    /// is the gapless-scheduling primitive for `AudioStream`.
-    /// Pass `when = 0` for "as soon as possible" (matches
-    /// `playBuffer`).  For gapless chaining: track the wall-clock
-    /// of the previous chunk's end (`getCurrentTime + duration`)
-    /// and pass that here as the next chunk's start.  The browser
-    /// schedules the next source's start sample-accurately, which
-    /// is what makes this gapless (vs scheduling at `currentTime`
-    /// which has interrupt latency).
-    /// `looping` is intentionally absent - looped streams are a
-    /// design smell on the gapless-scheduling path; use
-    /// `playBuffer` for one-off looping playback.
-    /// Returns 0 for invalid ids or scheduling failure.
-    /// Host: returns 0.
-    pub fn playBufferAt(
-        ctx_id: ContextId,
-        buffer_id: BufferId,
-        volume: f32,
-        pitch: f32,
-        pan: f32,
-        when: f64,
-    ) SourceId {
-        if (comptime !is_wasm) {
-            return 0;
-        }
-        const v: f32 = clamp(volume, 0.0, 10.0);
-        const p: f32 = clamp(pitch, 0.0625, 16.0);
-        const pn: f32 = clamp(pan, -1.0, 1.0);
-        return js_audio_play_buffer_at(ctx_id, buffer_id, v, p, pn, when);
-    }
-
-    /// Same as `playBuffer` but starts playback `offset_seconds`
-    /// into the buffer instead of from the beginning.  Used by
-    /// `music.seek` to implement seeking.  `offset_seconds` is
-    /// clamped to `[0, buffer_duration]` JS-side; passing a
-    /// negative or out-of-range offset gets clamped, not rejected.
-    /// Returns 0 for invalid ids.  Host: returns 0.
-    pub fn playBufferWithOffset(
-        ctx_id: ContextId,
-        buffer_id: BufferId,
-        volume: f32,
-        pitch: f32,
-        pan: f32,
-        looping: bool,
-        offset_seconds: f64,
-    ) SourceId {
-        if (comptime !is_wasm) {
-            return 0;
-        }
-        const v: f32 = clamp(volume, 0.0, 10.0);
-        const p: f32 = clamp(pitch, 0.0625, 16.0);
-        const pn: f32 = clamp(pan, -1.0, 1.0);
-        const lp: u32 = if (looping) 1 else 0;
-        return js_audio_play_buffer_with_offset(
-            ctx_id,
-            buffer_id,
-            v,
-            p,
-            pn,
-            lp,
-            offset_seconds,
-        );
-    }
-
-    /// Begin async-decoding OGG-encoded bytes via Web Audio's
-    /// `decodeAudioData`.  Bytes are copied JS-side; `data` is
-    /// safe to drop after this call returns.  Returns a non-zero
-    /// `DecodeId` on success; 0 if the AudioContext is gone.
-    /// The caller polls with `isDecodeReady`; once ready, it calls
-    /// `takeDecodedBuffer` to get a `BufferId` for playback.  If
-    /// the caller gives up (decode taking too long, parent Sound
-    /// unloaded), call `cancelDecode` to release the entry.
-    /// `decodeAudioData` automatically resamples to the
-    /// AudioContext's sample rate, so the returned BufferId is
-    /// already at native rate - no client-side resample needed.
-    /// Host: returns 0.
-    pub fn decodeOggBytes(
-        ctx_id: ContextId,
-        data: []const u8,
-    ) DecodeId {
-        if (comptime !is_wasm) {
-            return 0;
-        }
-        return js_audio_decode_ogg_bytes(ctx_id, data.ptr, @intCast(data.len));
-    }
-
-    /// Poll whether an async decode has completed.  Returns true
-    /// once the Promise has resolved (or rejected - check via
-    /// `takeDecodedBuffer` returning 0).  Returns false for
-    /// invalid ids and for in-flight decodes.
-    /// Host: returns false.
-    pub fn isDecodeReady(
-        ctx_id: ContextId,
-        decode_id: DecodeId,
-    ) bool {
-        if (comptime !is_wasm) {
-            return false;
-        }
-        return js_audio_is_decode_ready(ctx_id, decode_id) != 0;
-    }
-
-    /// Consume a completed decode, transferring ownership of the
-    /// resulting `AudioBuffer` to a `BufferId` usable with
-    /// `playBuffer` / `unloadAudioBuffer`.  After this call the
-    /// `decode_id` is dead - calling it again returns 0.
-    /// Returns 0 if: decode hasn't completed yet (caller polled
-    /// wrong); decode failed (rejected Promise); decode_id is
-    /// invalid.  In all error cases the JS-side state is cleaned
-    /// up.
-    /// Host: returns 0.
-    pub fn takeDecodedBuffer(
-        ctx_id: ContextId,
-        decode_id: DecodeId,
-    ) BufferId {
-        if (comptime !is_wasm) {
-            return 0;
-        }
-        return js_audio_take_decoded_buffer(ctx_id, decode_id);
-    }
-
-    /// Release an in-flight or completed decode without consuming
-    /// the BufferId.  Idempotent / silent on invalid ids.  Use this
-    /// when the caller gives up on a decode (e.g. owning Sound
-    /// unloaded before the Promise resolved).
-    /// Host: silent no-op.
-    pub fn cancelDecode(
-        ctx_id: ContextId,
-        decode_id: DecodeId,
-    ) void {
-        if (comptime !is_wasm) {
-            return;
-        }
-        js_audio_cancel_decode(ctx_id, decode_id);
-    }
-
-    /// Attach an AnalyserNode to the master bus and return its id (0 on failure).
-    ///
-    /// The analyser is a TAP: master already feeds `destination`, and connecting it
-    /// additionally to the analyser hands the same signal to the FFT without
-    /// altering what you hear. `fft_size` must be a power of two in [32, 32768];
-    /// the number of usable frequency bins is HALF of it.
-    /// Host: returns 0 (no JS bridge).
-    pub fn createAnalyser(ctx_id: ContextId, fft_size: u32) AnalyserId {
-        if (comptime !is_wasm) {
-            return 0;
-        }
-        return js_audio_create_analyser(ctx_id, fft_size);
-    }
-
-    /// Fill `out` with the current magnitude spectrum (one byte per bin, 0..255)
-    /// and return how many bins were written - which may be fewer than `out.len`
-    /// if the analyser has fewer bins. Web Audio writes STRAIGHT into the wasm
-    /// heap here, so there is no intermediate copy.
-    /// Host: writes nothing, returns 0.
-    pub fn getFrequencyData(ctx_id: ContextId, analyser_id: AnalyserId, out: []u8) u32 {
-        if (comptime !is_wasm) {
-            return 0;
-        }
-        return js_audio_get_frequency_data(ctx_id, analyser_id, out.ptr, @intCast(out.len));
-    }
-
-    /// Detach and drop an analyser.
-    pub fn destroyAnalyser(ctx_id: ContextId, analyser_id: AnalyserId) void {
-        if (comptime !is_wasm) {
-            return;
-        }
-        js_audio_destroy_analyser(ctx_id, analyser_id);
-    }
-
-    // ---- Tests
-    // Host-side sanity coverage only.  The Zig wrappers can be
-    // exercised against the `is_wasm = false` branch to verify they
-    // don't panic and return the documented safe defaults.  Real
-    // browser-side behaviour is covered by the smoke harness's
-    // mocked AudioContext.
-
-    test "createContext on host returns 0 (no JS bridge)" {
-        const id: ContextId = createContext();
-        try expectEqual(@as(ContextId, 0), id);
-    }
-
-    test "closeContext on host is silent for any id" {
-        closeContext(0);
-        closeContext(1);
-        closeContext(99999);
-    }
-
-    test "resumeContext on host is silent for any id" {
-        resumeContext(0);
-        resumeContext(1);
-        resumeContext(99999);
-    }
-
-    test "getSampleRate on host returns the safe default 48000" {
-        const sr: f32 = getSampleRate(0);
-        try expect(sr > 0.0);
-        try expectEqual(@as(f32, 48000.0), sr);
-    }
-
-    test "getCurrentTime on host returns 0.0" {
-        const t: f64 = getCurrentTime(0);
-        try expectEqual(@as(f64, 0.0), t);
-    }
-
-    test "getMasterVolume on host returns unity (1.0)" {
-        const v: f32 = getMasterVolume(0);
-        try expectEqual(@as(f32, 1.0), v);
-    }
-
-    test "setMasterVolume on host is silent for any input" {
-        // No assertions on output (host has no real gain node).
-        // The contract is that the call doesn't panic, regardless
-        // of the input - including negatives, NaN, +inf, and
-        // values past the clamp ceiling.
-        setMasterVolume(0, 0.5);
-        setMasterVolume(0, 0.0);
-        setMasterVolume(0, 1.0);
-        setMasterVolume(0, -1.0);
-        setMasterVolume(0, 100.0);
-        setMasterVolume(1, 1.5);
-        setMasterVolume(99999, 2.5);
-    }
-
-    test "loadAudioBuffer on host returns 0 for any input" {
-        const samples: []const f32 = &.{ 0.0, 0.5, -0.5, 1.0 };
-        const id1: BufferId = loadAudioBuffer(0, 48000, 2, 2, samples);
-        try expectEqual(@as(BufferId, 0), id1);
-
-        // Empty data is also fine (host).
-        const empty: []const f32 = &.{};
-        const id2: BufferId = loadAudioBuffer(1, 44100, 1, 0, empty);
-        try expectEqual(@as(BufferId, 0), id2);
-    }
-
-    test "unloadAudioBuffer on host is silent for any id" {
-        unloadAudioBuffer(0, 0);
-        unloadAudioBuffer(1, 1);
-        unloadAudioBuffer(99999, 99999);
-    }
-
-    test "playBuffer on host returns 0 for any input" {
-        const id1: SourceId = playBuffer(0, 0, 1.0, 1.0, 0.0, false);
-        try expectEqual(@as(SourceId, 0), id1);
-
-        // Edge cases: clamped inputs (extreme volume, negative pitch,
-        // hard pan) - all must return 0 without panicking.
-        const id2: SourceId = playBuffer(1, 1, -5.0, -10.0, -2.0, true);
-        try expectEqual(@as(SourceId, 0), id2);
-
-        const id3: SourceId = playBuffer(1, 1, 100.0, 100.0, 5.0, true);
-        try expectEqual(@as(SourceId, 0), id3);
-    }
-
-    test "stopBuffer / pauseBuffer / resumeBuffer on host are silent" {
-        stopBuffer(0, 0);
-        stopBuffer(1, 1);
-        pauseBuffer(0, 0);
-        pauseBuffer(1, 1);
-        resumeBuffer(0, 0);
-        resumeBuffer(1, 1);
-    }
-
-    test "isBufferPlaying on host returns false for any id" {
-        try expect(!isBufferPlaying(0, 0));
-        try expect(!isBufferPlaying(1, 1));
-        try expect(!isBufferPlaying(99999, 99999));
-    }
-
-    test "playBufferAt on host returns 0 for any input" {
-        try expectEqual(@as(SourceId, 0), playBufferAt(0, 0, 1.0, 1.0, 0.0, 0.0));
-        try expectEqual(@as(SourceId, 0), playBufferAt(1, 1, 1.0, 1.0, 0.0, 1.5));
-        // Clamped inputs must also return 0 without panicking.
-        try expectEqual(@as(SourceId, 0), playBufferAt(1, 1, -10.0, -10.0, 5.0, 0.0));
-    }
-
-    test "playBufferWithOffset on host returns 0 for any input" {
-        try expectEqual(
-            @as(SourceId, 0),
-            playBufferWithOffset(0, 0, 1.0, 1.0, 0.0, false, 0.0),
-        );
-        try expectEqual(
-            @as(SourceId, 0),
-            playBufferWithOffset(1, 1, 1.0, 1.0, 0.0, true, 5.5),
-        );
-        // Negative + huge offsets must not panic - JS side clamps.
-        try expectEqual(
-            @as(SourceId, 0),
-            playBufferWithOffset(1, 1, 1.0, 1.0, 0.0, true, -100.0),
-        );
-    }
-
-    test "decodeOggBytes on host returns 0 for any input" {
-        const bytes: []const u8 = "OggS\x00\x02";
-        try expectEqual(@as(DecodeId, 0), decodeOggBytes(0, bytes));
-        try expectEqual(@as(DecodeId, 0), decodeOggBytes(1, bytes));
-    }
-
-    test "isDecodeReady on host returns false" {
-        try expect(!isDecodeReady(0, 0));
-        try expect(!isDecodeReady(1, 1));
-    }
-
-    test "takeDecodedBuffer on host returns 0" {
-        try expectEqual(@as(BufferId, 0), takeDecodedBuffer(0, 0));
-        try expectEqual(@as(BufferId, 0), takeDecodedBuffer(1, 1));
-    }
-
-    test "cancelDecode on host is silent for any id" {
-        cancelDecode(0, 0);
-        cancelDecode(1, 1);
-        cancelDecode(99999, 99999);
-    }
-};
-
-/// Off-main-thread jobs. The transport for `src/jobs.zig`.
-///
-/// Deliberately the SAME shape as `web.audio`'s async decode
-/// (`decodeOggBytes` -> `isDecodeReady` -> `takeDecodedBuffer`): submit, poll, take.
-/// A worker pool is a new BACKEND for an idiom the engine already has, not a new idea.
+/// Off-main-thread jobs. The transport for `src/jobs.zig`: a job is submitted, polled until it is done, and its
+/// result taken.
 ///
 /// Host (and any browser where `new Worker()` throws - a sandboxed iframe does):
 /// `available()` is false, and `jobs.zig` runs the kernel INLINE instead. Nothing
@@ -2377,7 +1683,6 @@ pub const userfile = struct {
 };
 
 comptime {
-    _ = audio;
     _ = fetch;
     _ = userfile;
 }

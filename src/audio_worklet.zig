@@ -21,8 +21,9 @@
 //!
 //! How it is called. Its JavaScript is the worklet's module, whose loader then calls `start` once. `start` registers
 //! the processor: a class, which the browser constructs when the page makes an AudioWorkletNode of its name. From then
-//! on the browser calls the processor's constructor once (`initializeProcessor`), its `process` for each block
-//! (`processBlock`), and its port's message handler for each message the main thread sends (`handleMessage`).
+//! on the browser calls the processor's constructor once (`initializeProcessor`), which asks for the app's module to be
+//! linked; once it is, the processor's start (`onModuleLinked`); its `process` for each block (`processBlock`); and its
+//! port's message handler for each message the main thread sends (`handleMessage`).
 //!
 //! Handles. A JavaScript object cannot live in this program's memory, so the program holds handles: numbers naming
 //! objects in a table the c2js runtime keeps. A handle keeps its object alive until it is freed, and `process` runs
@@ -90,6 +91,15 @@ extern fn js_call3(
     second_argument: Handle,
     third_argument: Handle,
 ) Handle;
+extern fn js_call4(
+    object: Handle,
+    name_pointer: [*]const u8,
+    name_length: u32,
+    first_argument: Handle,
+    second_argument: Handle,
+    third_argument: Handle,
+    fourth_argument: Handle,
+) Handle;
 /// `object.name(...arguments)` inside a `try`: `is_ok` says whether it returned, and the handle is its result - or,
 /// when it threw, the exception.
 /// `object.name(argument)` inside a `try`, building no argument array: as `js_try_call`, for one argument.
@@ -125,12 +135,7 @@ extern fn js_call3v(
     second_argument: Handle,
     third_argument: Handle,
 ) void;
-/// `new constructor(a, b)`, `new constructor(a, b, c)`.
-extern fn js_new2(
-    constructor: Handle,
-    first_argument: Handle,
-    second_argument: Handle,
-) Handle;
+/// `new constructor(a, b, c)`.
 extern fn js_new3(
     constructor: Handle,
     first_argument: Handle,
@@ -143,6 +148,7 @@ extern fn js_str(text_pointer: [*]const u8, text_length: u32) Handle;
 extern fn js_obj() Handle;
 extern fn js_array() Handle;
 /// `array.push(value)`.
+/// Appends `value` to `array`, and returns `array`'s own handle - not a new one, never to be freed apart from it.
 extern fn js_push(array: Handle, value: Handle) Handle;
 /// The number a value holds: `+value`.
 extern fn js_to_num(value: Handle) f64;
@@ -161,6 +167,11 @@ extern fn js_func(zig_function: *const anyopaque) Handle;
 extern fn js_subclass(base_class: Handle, initialize: Handle) Handle;
 /// Frees a handle: its slot may then name another value.
 extern fn js_free(value: Handle) void;
+/// The handle table's length: reported with the stats, so that a leak in this realm - the audio thread's, which no
+/// frame of the page resets - shows on the page's panel as a length that keeps rising.
+extern fn js_table_length() u32;
+/// Turns the runtime's debugging of handles on (1) or off (0) in this realm, at the page's word (`handleMessage`).
+extern fn js_set_handle_debugging(is_on: u32) void;
 
 // ---- The program's state ----
 
@@ -186,9 +197,16 @@ const ProgramState = struct {
     /// (`postStats`). A long block is this program's work, or a collection, or a function compiled on its first call; a
     /// long gap with short blocks is the thread not being run in time.
     clock: Handle = 0,
+    /// Whether that clock is `Date`, which counts whole milliseconds: a block's time then reads 0 or 1 whatever it
+    /// took, which the page's panel says beside it.
+    is_clock_whole_milliseconds: bool = false,
     last_block_start_ms: f64 = 0,
     longest_block_ms: f64 = 0,
     longest_gap_ms: f64 = 0,
+    /// The blocks' durations added up, and their count, since the last report: their mean is the renderer's usual
+    /// cost. The clock may count whole milliseconds, so one block reads 0, 1 or 2 ms, but the mean of hundreds is fine.
+    block_ms_sum: f64 = 0,
+    blocks_since_report: f64 = 0,
     instance_exports: Handle = 0,
     instance_memory: Handle = 0,
     processor_port: Handle = 0,
@@ -208,6 +226,13 @@ fn property(object: Handle, comptime name: []const u8) Handle {
 }
 
 /// `+object[name]`.
+/// `value`, or 0 when it is no finite number - a missing property reads as NaN, which fails both comparisons, as an
+/// infinity fails one.
+fn finiteOrZero(value: f64) f64 {
+    const is_finite: bool = value > -1e300 and value < 1e300;
+    return if (is_finite) value else 0;
+}
+
 fn numberProperty(object: Handle, comptime name: []const u8) f64 {
     return js_get_num(object, name.ptr, name.len);
 }
@@ -229,7 +254,8 @@ fn isString(value: Handle, comptime text: []const u8) bool {
     return js_strict_eq(value, text_handle) == 1;
 }
 
-/// Calls the app instance's export `name` with the given numbers, and returns the number it returns.
+/// Calls the app instance's export `name` with the given numbers - four at most, as the entry points take
+/// (`worklet_abi`) - and returns the number it returns.
 fn callExport(comptime name: []const u8, arguments: []const f64) f64 {
     const instance_exports: Handle = program_state.instance_exports;
     const result: Handle = switch (arguments.len) {
@@ -262,7 +288,26 @@ fn callExport(comptime name: []const u8, arguments: []const f64) f64 {
                 third_argument,
             );
         },
-        else => unreachable,
+        4 => call4: {
+            const first_argument: Handle = js_num(arguments[0]);
+            defer js_free(first_argument);
+            const second_argument: Handle = js_num(arguments[1]);
+            defer js_free(second_argument);
+            const third_argument: Handle = js_num(arguments[2]);
+            defer js_free(third_argument);
+            const fourth_argument: Handle = js_num(arguments[3]);
+            defer js_free(fourth_argument);
+            break :call4 js_call4(
+                instance_exports,
+                name.ptr,
+                name.len,
+                first_argument,
+                second_argument,
+                third_argument,
+                fourth_argument,
+            );
+        },
+        else => @panic("an export of the worklet's instance is called with at most four numbers"),
     };
     defer js_free(result);
     return js_to_num(result);
@@ -383,13 +428,79 @@ fn acceptSamples(data: Handle) void {
     _ = callExport(worklet_abi.register_samples, &.{samples_id});
 }
 
+/// `{ kind: "stream", streamId, channels, sampleRate, frames }`: a forwarded stream's frames, copied into the
+/// instance's stream buffer and written into the stream's ring there (`worklet_abi.accept_stream_frames`). A message
+/// holds at most a ring's worth - the main side forwards no ring larger than the host's
+/// (`Mixer.freeForwardedStreamId`), and the buffer holds a host ring's worth of stereo - so one that would not fit is
+/// not taken, rather than thrown on.
+fn acceptStreamFrames(data: Handle) void {
+    const stream_id: f64 = numberProperty(data, message.stream_id_field);
+    const channels: f64 = numberProperty(data, message.channels_field);
+    const sample_rate: f64 = numberProperty(data, message.sample_rate_field);
+    const frames: Handle = property(data, message.frames_field);
+    defer js_free(frames);
+    const sample_count: f64 = numberProperty(frames, "length");
+    const buffer_samples: f64 = @floatFromInt(worklet_abi.stream_frames_buffer_samples);
+    if (sample_count > buffer_samples) {
+        return;
+    }
+    const buffer_address: f64 = callExport(worklet_abi.stream_frames_buffer, &.{});
+    const float32_constructor: Handle = program_state.float32_array_constructor;
+    const room: Handle = viewOfInstanceMemory(float32_constructor, buffer_address, sample_count);
+    defer js_free(room);
+    js_call1v(room, "set", "set".len, frames);
+    _ = callExport(worklet_abi.accept_stream_frames, &.{ stream_id, channels, sample_rate, sample_count });
+}
+
 /// `{ kind: "note", key, isDown, velocity }`: a key's event, queued for the instrument at the next block. A key's
 /// handler on the main thread posts one as the key moves, so its note waits for no frame: only for the next block.
 fn acceptNote(data: Handle) void {
     const key: f64 = numberProperty(data, message.key_field);
     const is_down: f64 = numberProperty(data, message.is_down_field);
     const velocity: f64 = numberProperty(data, message.velocity_field);
+    // The times its start is measured from, handed over first (`worklet_abi.stamp_note`); 0 for each a page left out.
+    const requested_at_ms: f64 = finiteOrZero(numberProperty(data, message.requested_at_field));
+    const pressed_at_ms: f64 = finiteOrZero(numberProperty(data, message.pressed_at_field));
+    _ = callExport(worklet_abi.stamp_note, &.{ requested_at_ms, pressed_at_ms });
     _ = callExport(worklet_abi.accept_note, &.{ key, is_down, velocity });
+}
+
+/// `{ kind: "analysis" }`: the renderer's last frames mixed, copied into the instance's analysis buffer
+/// (`worklet_abi.copy_analysis`) and sent back as `{ kind: "analysis", bytes }` - the buffer's bytes sliced out of
+/// the instance's memory and handed over to the main thread, not copied again.
+fn sendAnalysis() void {
+    const buffer_address: f64 = callExport(worklet_abi.copy_analysis, &.{});
+    const byte_count: f64 = @floatFromInt(worklet_abi.analysis_frame_count * @sizeOf(f32));
+    const memory_buffer: Handle = property(program_state.instance_memory, "buffer");
+    defer js_free(memory_buffer);
+    const first_byte_handle: Handle = js_num(buffer_address);
+    defer js_free(first_byte_handle);
+    const end_byte_handle: Handle = js_num(buffer_address + byte_count);
+    defer js_free(end_byte_handle);
+    const frame_bytes: Handle = js_call2(memory_buffer, "slice", "slice".len, first_byte_handle, end_byte_handle);
+    defer js_free(frame_bytes);
+    const answer: Handle = js_obj();
+    defer js_free(answer);
+    const kind: Handle = string(message.analysis_kind);
+    defer js_free(kind);
+    setProperty(answer, message.kind_field, kind);
+    setProperty(answer, message.bytes_field, frame_bytes);
+    const transfer_list: Handle = js_array();
+    defer js_free(transfer_list);
+    // `js_push` returns the array's own handle, not a new one: nothing to free.
+    _ = js_push(transfer_list, frame_bytes);
+    js_call2v(program_state.processor_port, "postMessage", "postMessage".len, answer, transfer_list);
+}
+
+/// `{ kind: "clock", contextMs, pageMs }`: the context's timeline tied to the page's clock, kept by the instance
+/// (`worklet_abi.tie_clocks`) for timing the blocks that follow.
+fn tieClocks(data: Handle) void {
+    const context_ms: f64 = finiteOrZero(numberProperty(data, message.context_ms_field));
+    const page_ms: f64 = finiteOrZero(numberProperty(data, message.page_ms_field));
+    if (context_ms <= 0 or page_ms <= 0) {
+        return;
+    }
+    _ = callExport(worklet_abi.tie_clocks, &.{ context_ms, page_ms });
 }
 
 /// The port's message handler: one message from the main thread, `event_handle.data`, by its kind.
@@ -404,7 +515,34 @@ fn handleMessage(event_handle: Handle) void {
         acceptSamples(data);
     } else if (isString(kind, message.note_kind)) {
         acceptNote(data);
+    } else if (isString(kind, message.stream_kind)) {
+        acceptStreamFrames(data);
+    } else if (isString(kind, message.analysis_kind)) {
+        sendAnalysis();
+    } else if (isString(kind, message.clock_kind)) {
+        tieClocks(data);
+    } else if (isString(kind, "debugHandles")) {
+        js_set_handle_debugging(@trunc(numberProperty(data, "on")));
     }
+}
+
+/// An exception that escaped one of the processor's callbacks - `process`, the port's handler - handed over by the
+/// runtime before it goes on (`__zimrOnCallbackError`): sent to the page as a failure with its stack, which the
+/// browser's own report of it, `processorerror`, does not carry.
+fn reportCallbackError(error_handle: Handle) void {
+    const failure_message: Handle = js_obj();
+    defer js_free(failure_message);
+    const kind_value: Handle = string(message.failed_kind);
+    defer js_free(kind_value);
+    const stack: Handle = property(error_handle, "stack");
+    defer js_free(stack);
+    const has_stack: bool = js_truthy(stack) == 1;
+    const global_scope: Handle = js_global();
+    const failure_text: Handle = js_call1(global_scope, "String", "String".len, if (has_stack) stack else error_handle);
+    defer js_free(failure_text);
+    setProperty(failure_message, message.kind_field, kind_value);
+    setProperty(failure_message, "message", failure_text);
+    js_call1v(program_state.processor_port, "postMessage", "postMessage".len, failure_message);
 }
 
 // ---- The processor's callbacks ----
@@ -436,8 +574,8 @@ fn sendNotices() void {
     setProperty(notices_message, message.bytes_field, notice_bytes);
     const transfer_list: Handle = js_array();
     defer js_free(transfer_list);
-    const pushed_length: Handle = js_push(transfer_list, notice_bytes);
-    js_free(pushed_length);
+    // `js_push` returns the array's own handle, not a new one: nothing to free.
+    _ = js_push(transfer_list, notice_bytes);
     js_call2v(program_state.processor_port, "postMessage", "postMessage".len, notices_message, transfer_list);
 }
 
@@ -453,9 +591,9 @@ fn clockMilliseconds() f64 {
 /// runs, then every 375 blocks of 128 frames - a second at 48 000 Hz - so that it sees it keeps running.
 const blocks_per_report: f64 = 375;
 
-/// Tells the page how many blocks the processor has rendered and the loudest sample since its last report
-/// (`{ kind: "stats", blocks, peak }`): the page's diagnostics show from it whether the renderer runs, and whether it
-/// makes any sound.
+/// Tells the page how many blocks the processor has rendered, the loudest sample and the clicks since its last report
+/// (`{ kind: "stats", blocks, peak, clicks, largestJump }`): the page's diagnostics show from it whether the renderer
+/// runs, and whether it makes any sound.
 fn postStats() void {
     const stats_message: Handle = js_obj();
     defer js_free(stats_message);
@@ -465,6 +603,13 @@ fn postStats() void {
     defer js_free(blocks_value);
     const peak_value: Handle = js_num(callExport(worklet_abi.take_peak, &.{}));
     defer js_free(peak_value);
+    // The renderer's click watch since the last report: the clicks, then the largest jump among them.
+    const clicks_value: Handle = js_num(callExport(worklet_abi.take_clicks, &.{}));
+    defer js_free(clicks_value);
+    const largest_jump_value: Handle = js_num(callExport(worklet_abi.taken_largest_jump, &.{}));
+    defer js_free(largest_jump_value);
+    const clipped_value: Handle = js_num(callExport(worklet_abi.taken_clipped_samples, &.{}));
+    defer js_free(clipped_value);
     // The worklet's own clock, `currentFrame`: the frame its blocks have reached on the context's timeline.
     const global_scope: Handle = js_global();
     const frame_value: Handle = property(global_scope, "currentFrame");
@@ -472,6 +617,9 @@ fn postStats() void {
     setProperty(stats_message, message.kind_field, kind_value);
     setProperty(stats_message, message.blocks_field, blocks_value);
     setProperty(stats_message, message.peak_field, peak_value);
+    setProperty(stats_message, message.clicks_field, clicks_value);
+    setProperty(stats_message, message.largest_jump_field, largest_jump_value);
+    setProperty(stats_message, message.clipped_field, clipped_value);
     setProperty(stats_message, "frame", frame_value);
     const longest_block_value: Handle = js_num(program_state.longest_block_ms);
     defer js_free(longest_block_value);
@@ -479,8 +627,23 @@ fn postStats() void {
     const longest_gap_value: Handle = js_num(program_state.longest_gap_ms);
     defer js_free(longest_gap_value);
     setProperty(stats_message, "longestGapMs", longest_gap_value);
+    const has_blocks: bool = program_state.blocks_since_report > 0;
+    const mean_block_ms: f64 = if (has_blocks) program_state.block_ms_sum / program_state.blocks_since_report else 0;
+    const mean_block_value: Handle = js_num(mean_block_ms);
+    defer js_free(mean_block_value);
+    setProperty(stats_message, "meanBlockMs", mean_block_value);
+    // The table's length, read with this message's handles in it: steady from report to report while nothing leaks.
+    const table_length: f64 = @floatFromInt(js_table_length());
+    const table_length_value: Handle = js_num(table_length);
+    defer js_free(table_length_value);
+    setProperty(stats_message, "handles", table_length_value);
+    const clock_kind_value: Handle = js_num(if (program_state.is_clock_whole_milliseconds) 1 else 0);
+    defer js_free(clock_kind_value);
+    setProperty(stats_message, "isClockWholeMs", clock_kind_value);
     program_state.longest_block_ms = 0;
     program_state.longest_gap_ms = 0;
+    program_state.block_ms_sum = 0;
+    program_state.blocks_since_report = 0;
     js_call1v(program_state.processor_port, "postMessage", "postMessage".len, stats_message);
 }
 
@@ -508,6 +671,21 @@ fn keepViewsFresh(rendered_address: f64, frame_count: f64) void {
     program_state.views_frame_count = frame_count;
 }
 
+/// Tells the page why the processor stopped: `{ kind: "failed", message }`, the message `reason` - an exception, or a
+/// promise's rejection - as text, since an exception object need not survive being posted.
+fn postFailure(reason: Handle) void {
+    const failure_message: Handle = js_obj();
+    defer js_free(failure_message);
+    const kind_value: Handle = string(message.failed_kind);
+    defer js_free(kind_value);
+    const global_scope: Handle = js_global();
+    const failure_text: Handle = js_call1(global_scope, "String", "String".len, reason);
+    defer js_free(failure_text);
+    setProperty(failure_message, message.kind_field, kind_value);
+    setProperty(failure_message, "message", failure_text);
+    js_call1v(program_state.processor_port, "postMessage", "postMessage".len, failure_message);
+}
+
 /// Calls the instance's render (`worklet_abi.render`) for `frame_count` frames inside a `try`: the address of the
 /// rendered block, or null when it threw - the exception then sent to the page as `{ kind: "failed", message }`, and
 /// the processor stopped (`is_ready` false), so that one failure is reported once, with its text.
@@ -528,17 +706,7 @@ fn renderCaught(frame_count: f64) ?f64 {
         return js_to_num(result);
     }
     program_state.is_ready = false;
-    const failure_message: Handle = js_obj();
-    defer js_free(failure_message);
-    const kind_value: Handle = string(message.failed_kind);
-    defer js_free(kind_value);
-    // As text: an exception object need not survive being posted.
-    const global_scope: Handle = js_global();
-    const failure_text: Handle = js_call1(global_scope, "String", "String".len, result);
-    defer js_free(failure_text);
-    setProperty(failure_message, message.kind_field, kind_value);
-    setProperty(failure_message, "message", failure_text);
-    js_call1v(program_state.processor_port, "postMessage", "postMessage".len, failure_message);
+    postFailure(result);
     return null;
 }
 
@@ -579,6 +747,12 @@ fn processBlock(
     const left_channel: Handle = js_get_index(first_output, 0);
     defer js_free(left_channel);
     const frame_count: f64 = @floatFromInt(js_len(left_channel));
+    // The block's time on the page's clock, from the frame it begins at on the context's timeline
+    // (`worklet_abi.time_block`): the renderer measures the sounds it starts by it.
+    const global_scope: Handle = js_global();
+    const block_frame_value: Handle = property(global_scope, "currentFrame");
+    defer js_free(block_frame_value);
+    _ = callExport(worklet_abi.time_block, &.{finiteOrZero(js_to_num(block_frame_value))});
     // The block, rendered: the left channel's samples, then the right channel's (`worklet_abi.render`). A throw from
     // the instance is caught and sent to the page, and the processor plays silence from then on.
     const rendered_address: f64 = renderCaught(frame_count) orelse return keep_calling;
@@ -593,6 +767,8 @@ fn processBlock(
     sendNotices();
     const block_ms: f64 = clockMilliseconds() - block_start_ms;
     program_state.longest_block_ms = @max(program_state.longest_block_ms, block_ms);
+    program_state.block_ms_sum += block_ms;
+    program_state.blocks_since_report += 1;
     program_state.blocks_rendered += 1;
     const is_first_block: bool = program_state.blocks_rendered == 1;
     const is_report_due: bool = is_first_block or @mod(program_state.blocks_rendered, blocks_per_report) == 0;
@@ -614,41 +790,21 @@ fn postStatus(comptime kind: []const u8) void {
     js_call1v(program_state.processor_port, "postMessage", "postMessage".len, status_message);
 }
 
-/// The processor's constructor, after the base class's: `this_handle` is the new processor, and `options_handle` the
-/// options the page made the node with. It links the app's module - compiled on the main thread, and passed in the
-/// options (`worklet_abi.module_option`) - with stand-in imports, starts the renderer host in the new instance, and
-/// listens on the processor's port for the main thread's messages. Until it is done the processor plays silence.
-fn initializeProcessor(this_handle: Handle, options_handle: Handle) void {
-    const global_scope: Handle = js_global();
-    const processor_options: Handle = property(options_handle, "processorOptions");
-    defer js_free(processor_options);
-    const compiled_module: Handle = property(processor_options, worklet_abi.module_option);
-    defer js_free(compiled_module);
-    const import_object: Handle = standInImportObject(compiled_module);
-    defer js_free(import_object);
-    // `new WebAssembly.Instance(module, imports)`: a constructor, so it links at once. A worklet may link a large
-    // module this way - the limit on doing it synchronously applies only to a page's main thread.
-    const web_assembly: Handle = property(global_scope, "WebAssembly");
-    defer js_free(web_assembly);
-    const instance_constructor: Handle = property(web_assembly, "Instance");
-    defer js_free(instance_constructor);
-    const instance: Handle = js_new2(instance_constructor, compiled_module, import_object);
-    defer js_free(instance);
+/// Called by the browser once the app's module is linked: `instance_handle` is the worklet's own instance of it. Starts
+/// the renderer host in it, warms the host up - every function a block calls run once, so that the browser compiles
+/// them here rather than in a block that is heard (`RendererHost.warmUp`) - then listens on the port and tells the
+/// main thread it is ready. The first block rendered comes after all of it.
+fn onModuleLinked(instance_handle: Handle) void {
     // Kept for the life of the processor: never freed.
-    program_state.instance_exports = property(instance, "exports");
+    program_state.instance_exports = property(instance_handle, "exports");
     program_state.instance_memory = property(program_state.instance_exports, "memory");
-    program_state.processor_port = property(this_handle, "port");
-    program_state.float32_array_constructor = property(global_scope, "Float32Array");
-    // The finest clock the worklet has: `performance` where the browser gives a worklet one, else `Date`.
-    const performance: Handle = property(global_scope, "performance");
-    const has_performance_clock: bool = js_truthy(performance) == 1;
-    program_state.clock = if (has_performance_clock) performance else property(global_scope, "Date");
-    program_state.uint8_array_constructor = property(global_scope, "Uint8Array");
     const has_started: bool = callExport(worklet_abi.start, &.{}) == 1;
     if (!has_started) {
         postStatus(message.failed_kind);
         return;
     }
+    // A warm-up that ran out of memory leaves the renderer as it was: it plays, only without the warm-up.
+    _ = callExport(worklet_abi.warm_up, &.{});
     program_state.command_buffer_address = callExport(worklet_abi.command_buffer, &.{});
     program_state.notices_buffer_address = callExport(worklet_abi.notices_buffer, &.{});
     const message_handler: Handle = js_func(&handleMessage);
@@ -658,6 +814,59 @@ fn initializeProcessor(this_handle: Handle, options_handle: Handle) void {
     postStatus(message.ready_kind);
 }
 
+/// Called by the browser when the app's module could not be linked: `error_handle` is the reason, sent to the page
+/// (`postFailure`). The processor plays silence from then on.
+fn onModuleLinkFailed(error_handle: Handle) void {
+    postFailure(error_handle);
+}
+
+/// The processor's constructor, after the base class's: `this_handle` is the new processor, and `options_handle` the
+/// options the page made the node with. It keeps what the callbacks need, and asks the browser to link the app's
+/// module - compiled on the main thread, and passed in the options (`worklet_abi.module_option`) - with stand-in
+/// imports.
+///
+/// The linking is asynchronous: `WebAssembly.instantiate(module, imports)` returns a promise at once, and the browser
+/// links the module off the audio path, then calls `onModuleLinked` with the instance. A constructor
+/// (`new WebAssembly.Instance`) would link inside this call - inside the audio thread's turn, delaying the blocks the
+/// browser asks for meanwhile, the first glitch heard on a slow phone. Until the instance is ready the processor plays
+/// silence (`processBlock`), and the port does not listen: a port's messages wait in its queue until its `onmessage`
+/// is set, so the commands, samples and notes the main thread sends meanwhile are all taken, in order, once it is.
+fn initializeProcessor(this_handle: Handle, options_handle: Handle) void {
+    const global_scope: Handle = js_global();
+    // Kept for the life of the processor: never freed.
+    program_state.processor_port = property(this_handle, "port");
+    program_state.float32_array_constructor = property(global_scope, "Float32Array");
+    program_state.uint8_array_constructor = property(global_scope, "Uint8Array");
+    // The finest clock the worklet has: `performance` where the browser gives a worklet one, else `Date`.
+    const performance: Handle = property(global_scope, "performance");
+    const has_performance_clock: bool = js_truthy(performance) == 1;
+    program_state.clock = if (has_performance_clock) performance else property(global_scope, "Date");
+    program_state.is_clock_whole_milliseconds = !has_performance_clock;
+    const processor_options: Handle = property(options_handle, "processorOptions");
+    defer js_free(processor_options);
+    const compiled_module: Handle = property(processor_options, worklet_abi.module_option);
+    defer js_free(compiled_module);
+    const import_object: Handle = standInImportObject(compiled_module);
+    defer js_free(import_object);
+    const web_assembly: Handle = property(global_scope, "WebAssembly");
+    defer js_free(web_assembly);
+    // Given a compiled module, `instantiate` resolves to the instance itself.
+    const instantiation: Handle = js_call2(
+        web_assembly,
+        "instantiate",
+        "instantiate".len,
+        compiled_module,
+        import_object,
+    );
+    defer js_free(instantiation);
+    const on_linked: Handle = js_func(&onModuleLinked);
+    defer js_free(on_linked);
+    const on_failed: Handle = js_func(&onModuleLinkFailed);
+    defer js_free(on_failed);
+    const chained_promise: Handle = js_call2(instantiation, "then", "then".len, on_linked, on_failed);
+    js_free(chained_promise);
+}
+
 // ---- The entry point ----
 
 /// Called once by the worklet module's loader, right after the program's text has run: registers the processor
@@ -665,6 +874,10 @@ fn initializeProcessor(this_handle: Handle, options_handle: Handle) void {
 /// `process` on its prototype.
 export fn start() void {
     const global_scope: Handle = js_global();
+    // The runtime hands an exception escaping a callback to this, with its stack, before it goes on.
+    const error_reporter: Handle = js_func(&reportCallbackError);
+    defer js_free(error_reporter);
+    setProperty(global_scope, "__zimrOnCallbackError", error_reporter);
     const base_class: Handle = property(global_scope, "AudioWorkletProcessor");
     defer js_free(base_class);
     const initialize_function: Handle = js_func(&initializeProcessor);

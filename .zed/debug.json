@@ -56,6 +56,28 @@
     },
     {
         "adapter": "JavaScript",
+        "label": "Debug: audio-scale-star",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/audio_scale_star/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build audio-scale-star"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: audio-scale-star-hands",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/audio_scale_star_hands/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build audio-scale-star-hands"
+    },
+    {
+        "adapter": "JavaScript",
         "label": "Debug: audio-sound-lab",
         "type": "chrome",
         "request": "launch",
@@ -812,6 +834,17 @@
         "sourceMaps": true,
         "smartStep": true,
         "build": "zig: build geno-fit"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: geno-lab",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/geno_lab/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build geno-lab"
     },
     {
         "adapter": "JavaScript",
@@ -3570,6 +3603,30 @@
     },
     {
         "adapter": "CodeLLDB",
+        "label": "Debug: audio-scale-star (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/audio_scale_star.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build audio-scale-star (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: audio-scale-star-hands (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/audio_scale_star_hands.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build audio-scale-star-hands (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
         "label": "Debug: audio-sound-lab (windows)",
         "request": "launch",
         "program": "$ZED_WORKTREE_ROOT/zig-out/windows/audio_sound_lab.exe",
@@ -4395,6 +4452,18 @@
             "settings set target.use-fast-stepping false"
         ],
         "build": "zig: build geno-fit (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: geno-lab (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/geno_lab.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build geno-lab (windows)"
     },
     {
         "adapter": "CodeLLDB",

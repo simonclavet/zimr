@@ -1685,10 +1685,18 @@ robot.solvePointCloud(&amp;model, &amp;data, samples[0..n], opts);</code></pre>
                 <code>forEach</code> runs over every matching entity. The boids
                 example is three passes over one store; the solar system
                 parents bodies so a moon inherits its planet's transform.
-                <strong>Audio.</strong> <code>src/sound.zig</code> drives
-                WebAudio from the Zig host: play decoded clips or stream
-                synthesized samples (the drum machine and live synth make sound
-                with no JavaScript of their own).
+                <strong>Sound.</strong> <code>src/sound.zig</code> is the
+                engine's own mixer: every sound is a voice &mdash; samples in
+                memory, or a generator &mdash; with its own volume, pan and
+                pitch, rendered in blocks where the platform plays them: on a
+                WASAPI audio thread on Windows, in a browser's audio worklet
+                running a second instance of the app's own module, and on the
+                run's clock in a headless run, whose sound a script can save as
+                a WAV file. An instrument plays notes from keys (the keyboard
+                example), and the drum machine and live synth make sound with
+                no JavaScript of their own. The
+                <a href="sound_tutorial.html">sound tutorial</a> explains it from
+                the first sample to the speaker.
             </p>
 
             <h3 id="networking">Peer-to-peer multiplayer</h3>
@@ -1824,6 +1832,10 @@ robot.solvePointCloud(&amp;model, &amp;data, samples[0..n], opts);</code></pre>
                 <li><a href="rtt-tutorial.html">Render to texture</a> &mdash; drawing into an offscreen image, then using it as a texture</li>
                 <li><a href="wgpu-ports-tutorial.html">The WebGPU ports</a> &mdash; the example programs, and what the host layer had to provide for them</li>
                 <li><a href="backends-tutorial.html">Graphics backends</a> &mdash; how zimr reaches the GPU: WebGPU in the browser, Vulkan on Windows and Linux</li>
+            </ul>
+            <h4>Sound</h4>
+            <ul class="tut-index">
+                <li><a href="sound_tutorial.html">Sound</a> &mdash; samples, the mixer and its two sides, each platform's output, latency from a key to its sound, and instruments</li>
             </ul>
             <h4>Compute and learning</h4>
             <ul class="tut-index">

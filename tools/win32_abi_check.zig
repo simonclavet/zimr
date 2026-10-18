@@ -16,19 +16,52 @@ const win32 = @import("win32");
 const win32_c = @import("win32_c");
 
 const comptimePrint = std.fmt.comptimePrint;
-const eql = std.mem.eql;
+const startsWith = std.mem.startsWith;
 
-/// Declarations whose C twin translate-c cannot express: `IDC_ARROW` is `MAKEINTRESOURCE(32512)`, a pointer cast
-/// through the narrow-or-wide macro pair; `win32.zig` declares the resource number itself.
-const without_comparable_twin = [_][]const u8{"IDC_ARROW"};
+/// The prefixes of declarations whose C twin translate-c cannot express. The cursors' `IDC_` names are each
+/// `MAKEINTRESOURCE(n)`, a pointer cast through the narrow-or-wide macro pair (`__MINGW_NAME_AW`), which translate-c
+/// leaves as a compile error; `win32.zig` declares the resource numbers themselves. Skipped by prefix, so that a
+/// cursor added later needs no entry here - listing `IDC_ARROW` alone let the nine added with the cursors (C3) fail
+/// the check.
+const prefixes_without_comparable_twin = [_][]const u8{"IDC_"};
 
 fn isSkipped(comptime decl_name: []const u8) bool {
-    for (without_comparable_twin) |skipped| {
-        if (eql(u8, skipped, decl_name)) {
+    for (prefixes_without_comparable_twin) |prefix| {
+        if (startsWith(u8, decl_name, prefix)) {
             return true;
         }
     }
     return false;
+}
+
+/// A field of a structure's flattened layout (`flatFields`): its name, its offset from the structure's start, and its
+/// size.
+const FlatField = struct {
+    name: []const u8,
+    offset: usize,
+    size: usize,
+};
+
+/// The fields of `T`, in order, with each nameless structure member replaced by its own fields at their offsets within
+/// `T`. The headers write a structure that extends another as a nameless member - MinGW-w64's
+/// `__C89_NAMELESS struct { ... };`, the SDK's `MONITORINFO DUMMYSTRUCTNAME;` - which translate-c names `unnamed_N`,
+/// while `win32.zig` writes the same fields in a row: `MONITORINFOEXW` is a nameless member and `szDevice` in the
+/// headers, and five fields here. Flattened, both are the same five. A nameless union stays one field, compared by
+/// its size: its members overlap, and have no order to compare.
+fn flatFields(comptime T: type, comptime base_offset: usize) []const FlatField {
+    var fields: []const FlatField = &.{};
+    const info: std.lang.Type.Struct = @typeInfo(T).@"struct";
+    for (info.field_names, info.field_types) |name, Field| {
+        const offset: usize = base_offset + @offsetOf(T, name);
+        const is_nameless_structure: bool = startsWith(u8, name, "unnamed_") and @typeInfo(Field) == .@"struct";
+        if (is_nameless_structure) {
+            fields = fields ++ flatFields(Field, offset);
+        } else {
+            const flat_field: FlatField = .{ .name = name, .offset = offset, .size = @sizeOf(Field) };
+            fields = fields ++ &[_]FlatField{flat_field};
+        }
+    }
+    return fields;
 }
 
 fn checkLayout(
@@ -41,23 +74,19 @@ fn checkLayout(
             decl_name, @sizeOf(T), @alignOf(T), @sizeOf(C), @alignOf(C),
         }));
     }
-    const info: std.lang.Type.Struct = @typeInfo(T).@"struct";
-    const c_info: std.lang.Type.Struct = @typeInfo(C).@"struct";
-    if (info.field_names.len != c_info.field_names.len) {
+    const fields: []const FlatField = flatFields(T, 0);
+    const c_fields: []const FlatField = flatFields(C, 0);
+    if (fields.len != c_fields.len) {
         @compileError(comptimePrint("win32.{s}: {d} fields, but the headers: {d}", .{
-            decl_name, info.field_names.len, c_info.field_names.len,
+            decl_name, fields.len, c_fields.len,
         }));
     }
-    const c_names: []const [:0]const u8 = c_info.field_names;
-    const c_types: []const type = c_info.field_types;
-    for (info.field_names, info.field_types, c_names, c_types, 0..) |name, Field, c_name, CField, index| {
-        const offset: usize = @offsetOf(T, name);
-        const c_offset: usize = @offsetOf(C, c_name);
-        if (offset != c_offset or @sizeOf(Field) != @sizeOf(CField)) {
+    for (fields, c_fields, 0..) |field, c_field, index| {
+        if (field.offset != c_field.offset or field.size != c_field.size) {
             const message_format: []const u8 = "win32.{s} field {d} ({s}): offset {d} size {d}, " ++
                 "but {s}: offset {d} size {d}";
             @compileError(comptimePrint(message_format, .{
-                decl_name, index, name, offset, @sizeOf(Field), c_name, c_offset, @sizeOf(CField),
+                decl_name, index, field.name, field.offset, field.size, c_field.name, c_field.offset, c_field.size,
             }));
         }
     }
@@ -92,6 +121,12 @@ fn checkDeclaration(comptime decl_name: [:0]const u8) void {
     const Value: type = @TypeOf(value);
     const twin: @TypeOf(@field(win32_c, decl_name)) = @field(win32_c, decl_name);
     if (Value == type) {
+        // translate-c demotes a structure it cannot express - one with bit-fields - to `opaque {}`, which has no
+        // layout to compare with; `win32.zig` pins each such structure's layout itself, from Microsoft's
+        // documentation (the `DISPLAYCONFIG_` structures' comptime checks).
+        if (@typeInfo(twin) == .@"opaque") {
+            return;
+        }
         if (@typeInfo(value) == .@"struct" and @typeInfo(value).@"struct".layout == .@"extern") {
             checkLayout(decl_name, value, twin);
         }

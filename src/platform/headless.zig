@@ -10,6 +10,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const native_os = @import("../native_os.zig");
 const copyForwards = std.mem.copyForwards;
 const eql = std.mem.eql;
 const bufPrint = std.fmt.bufPrint;
@@ -284,9 +285,34 @@ pub fn openUrl(url: []const u8) void {
     log(.info, line);
 }
 
+// lint:off module-var: the folder a run keeps its saved values in, set once as the run starts
+var values_folder_buffer: [512]u8 = undefined;
+// lint:off module-var: its length; 0 while values are kept in memory
+var values_folder_length: usize = 0;
+
+/// Keeps the run's saved values as files in `folder` instead of in memory (the run's `ZIMR_VALUES_DIR`): each value
+/// one file, as a native program keeps them (`native_os.saveValue`), so a run can carry on from what an earlier run
+/// saved, and a value may be of any size. A folder too long to hold is ignored.
+pub fn keepValuesIn(folder: []const u8) void {
+    if (folder.len > values_folder_buffer.len) {
+        return;
+    }
+    @memcpy(values_folder_buffer[0..folder.len], folder);
+    values_folder_length = folder.len;
+}
+
+/// The folder the run keeps its saved values in, or null when they are kept in memory.
+fn valuesFolder() ?[]const u8 {
+    return if (values_folder_length > 0) values_folder_buffer[0..values_folder_length] else null;
+}
+
 /// The saved value of `key`, copied into `buffer`; null when none is saved, or `buffer` is too small. Values are kept
-/// for the run, in memory, so every run starts with none - and repeats exactly.
+/// for the run, in memory, so every run starts with none - and repeats exactly - unless the run names a folder to
+/// keep them in (`keepValuesIn`).
 pub fn loadValue(key: []const u8, buffer: []u8) ?[]u8 {
+    if (valuesFolder()) |folder| {
+        return native_os.loadValueIn(native_os.servicesIo(), folder, key, buffer);
+    }
     const saved: *SavedValue = findSavedValue(key) orelse return null;
     if (saved.value_len > buffer.len) {
         return null;
@@ -296,7 +322,12 @@ pub fn loadValue(key: []const u8, buffer: []u8) ?[]u8 {
 }
 
 /// Saves `bytes` under `key`, for the run; dropped when the key or the value is too long, or every slot is taken.
+/// In a run's folder (`keepValuesIn`), saved as a file, of any size.
 pub fn saveValue(key: []const u8, bytes: []const u8) void {
+    if (valuesFolder()) |folder| {
+        native_os.saveValueIn(native_os.servicesIo(), folder, key, bytes);
+        return;
+    }
     const fits: bool = key.len <= saved_key_room and bytes.len <= saved_value_room;
     if (!fits) {
         return;
@@ -318,6 +349,10 @@ pub fn saveValue(key: []const u8, bytes: []const u8) void {
 
 /// Removes the value saved under `key`, if any.
 pub fn removeValue(key: []const u8) void {
+    if (valuesFolder()) |folder| {
+        native_os.removeValueIn(native_os.servicesIo(), folder, key);
+        return;
+    }
     const saved: *SavedValue = findSavedValue(key) orelse return;
     const index: usize = (@intFromPtr(saved) - @intFromPtr(&saved_values[0])) / @sizeOf(SavedValue);
     saved_values[index] = saved_values[saved_value_count - 1];

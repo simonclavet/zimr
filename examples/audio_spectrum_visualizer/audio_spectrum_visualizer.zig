@@ -1,17 +1,16 @@
 // examples/audio_spectrum_visualizer.zig - live FFT of whatever is playing.
 // Ports raylib's `audio_spectrum_visualizer`.
 //
-// The spectrum comes from a WebAudio AnalyserNode tapped off the master bus. It
-// is a TAP, not an insert: master already reaches the speakers, and the analyser
-// merely receives a copy - so attaching one cannot alter what you hear. Each
-// frame it writes one byte per frequency bin (0..255) STRAIGHT into a wasm-side
-// slice; there is no intermediate copy.
+// The spectrum comes from `z.analyser`: a tap on everything mixed, not an insert -
+// it reads a copy of the sound, so attaching one cannot alter what is heard. Each
+// frame it writes one byte per frequency bin (0..255) into a slice: Web Audio's
+// `getByteFrequencyData` at its defaults - a Blackman window, the transform, each
+// bin's magnitude smoothed from frame to frame, -100 dB to -30 dB onto the bytes.
+// The mixer computes it from the frames its renderer keeps - on a page, the frames
+// the renderer in the audio worklet sends back when asked.
 //
-// What this exercises (the engine work this drove):
-//   - `z.analyser.attach / read / detach` - NEW. Backed by three new host
-//     functions in the WebAudio bridge (`js_audio_create_analyser`,
-//     `js_audio_get_frequency_data`, `js_audio_destroy_analyser`), which is only
-//     possible now that bridge.zig provides an `audio` import namespace at all.
+// What this exercises:
+//   - `z.analyser.attach / read / detach`.
 //
 // Bins are drawn on a LOG frequency axis, because a linear one wastes most of the
 // screen on the inaudible top octaves - musical content lives in the bottom fifth
@@ -101,12 +100,16 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn update(f: *z.Frame, s: *State) void {
+    // A black screen with a start button, until it is pressed and the audio runs (`z.showAudioStartScreen`).
+    if (z.showAudioStartScreen(f, &s.font)) {
+        return;
+    }
     const fw: f32 = f.window.widthf();
     const fh: f32 = f.window.heightf();
 
-    // Pull this frame's spectrum. Returns 0 bins when there's no analyser (e.g. a
-    // native host), so everything below degrades to a flat, silent display rather
-    // than reading stale samples.
+    // Pull this frame's spectrum. Returns 0 bins when there is no analyser (no
+    // audio device, or every analyser in use), so everything below degrades to a
+    // flat, silent display rather than reading stale samples.
     const n: u32 = z.analyser.read(f.audio_device, s.an, &s.spectrum);
 
     z.clearViewport(f, .{ .r = 14, .g = 16, .b = 24, .a = 255 });

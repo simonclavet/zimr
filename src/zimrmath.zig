@@ -7047,7 +7047,7 @@ pub const Color = extern struct {
     }
     /// From a 0..1 sRGB `Vec` (clamped). Inverse of `toVec`.
     pub fn fromVec(v: Vec) Color {
-        const c: Vec = clamp01(v) * @as(Vec, @splat(255.0));
+        const c: Vec = clamp01(v) * splat(255.0);
         return .{
             .r = @trunc(c[0]),
             .g = @trunc(c[1]),
@@ -7110,7 +7110,7 @@ pub const Color = extern struct {
     pub fn lerp(a: Color, b: Color, t: f32) Color {
         const av: Vec = .{ float(a.r), float(a.g), float(a.b), float(a.a) };
         const bv: Vec = .{ float(b.r), float(b.g), float(b.b), float(b.a) };
-        const v: Vec = av + @as(Vec, @splat(t)) * (bv - av);
+        const v: Vec = av + splat(t) * (bv - av);
         return .{
             .r = @trunc(std.math.clamp(v[0], 0, 255)),
             .g = @trunc(std.math.clamp(v[1], 0, 255)),
@@ -8449,17 +8449,24 @@ test "zm.vec2" {
     try expectEqual(@as(f32, 8.0), v[1]);
 }
 
-// `splat(v)` / `splat2(v)` - broadcast a scalar to the zimr storage-as-Vec
+// `splat(v)` / `splat2(v)` / `splat3(v)` - broadcast a scalar to the zimr storage-as-Vec
 // types.  Shadow zmath's 2-arg `@as(T, @splat(v))` because at zimr call sites the
-// type is almost always `Vec`, and `v * splat(s)` reads as pure
-// type-annotation noise.  These give `v * splat(s)` for 3D/4D math and
-// `v * splat2(s)` for 2D (Vec2 = @Vector(2, f32)).  The original
-// `zm.@as(T, @splat(v))` is shadowed at the zimr public surface (`z.splat`
-// resolves to this form) - explicit-type calls can still use `@splat`
-// directly with `@as(T, ...)`.
+// type is almost always `Vec`, and `v * @as(Vec, @splat(s))` reads as pure
+// type-annotation noise.  These give `v * splat(s)` for 3D/4D math,
+// `v * splat3(s)` for Vec3 and `v * splat2(s)` for 2D (Vec2 = @Vector(2, f32)).
+// The original `zm.@as(T, @splat(v))` is shadowed at the zimr public surface
+// (`z.splat` resolves to this form) - explicit-type calls can still use `@splat`
+// directly with `@as(T, ...)`.  The `prefer-splat` lint rule rewrites
+// `@as(Vec, @splat(v))` / Vec3 / Vec2 / Vec2i to these.
 
 /// Broadcast a scalar to a 2-wide `@Vector(2, f32)`.  For UI / 2D math.
 pub fn splat2(v: f32) Vec2 {
+    return @splat(v);
+}
+
+/// Broadcast a scalar to a 3-wide `@Vector(3, f32)` (`Vec3`).  For shader
+/// and packed-xyz math that works in `Vec3` rather than the 4-wide `Vec`.
+pub fn splat3(v: f32) Vec3 {
     return @splat(v);
 }
 
@@ -8476,19 +8483,22 @@ pub fn splat2i(v: i32) Vec2i {
 /// `@as(T, @splat(v))`, and restores the *upstream zmath* shape
 /// (`zm.splat(T, v)`) under a non-shadowing name - porting code
 /// between upstream zmath and zimr is then a 1:1 identifier change.
-/// Use this when the result type isn't `Vec`/`@Vector(2, f32)`; in
-/// those cases prefer `splat`/`splat2`.
+/// Use this when the result type isn't `Vec`/`Vec3`/`Vec2`/`Vec2i`; in
+/// those cases prefer `splat`/`splat3`/`splat2`/`splat2i`.
 pub fn zsplat(comptime T: type, v: f32) T {
     return @splat(v);
 }
 
-test "zm.splat / splat2" {
+test "zm.splat / splat2 / splat3" {
     const a: Vec = splat(3.5);
     try expectEqual(@as(f32, 3.5), a[0]);
     try expectEqual(@as(f32, 3.5), a[3]);
     const b: Vec2 = splat2(-1.25);
     try expectEqual(@as(f32, -1.25), b[0]);
     try expectEqual(@as(f32, -1.25), b[1]);
+    const c: Vec3 = splat3(0.75);
+    try expectEqual(@as(f32, 0.75), c[0]);
+    try expectEqual(@as(f32, 0.75), c[2]);
 }
 
 // Z2 / Category 2 - scalar utilities
@@ -8813,7 +8823,7 @@ pub fn refract2(
 test "zm.refract2" {
     // straight-through at r = 1 (no bending) returns v unchanged
     const v0: Vec2 = .{ 0.3, -1.0 };
-    const v: Vec2 = v0 / @as(Vec2, @splat(length2(v0)));
+    const v: Vec2 = v0 / splat2(length2(v0));
     const out: Vec2 = refract2(v, .{ 0.0, 1.0 }, 1.0);
     try expectApproxEqAbs(v[0], out[0], 1.0e-5);
     try expectApproxEqAbs(v[1], out[1], 1.0e-5);

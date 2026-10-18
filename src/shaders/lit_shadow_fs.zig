@@ -17,6 +17,7 @@ const zm = @import("zm");
 const Vec3 = zm.Vec3;
 const dot = zm.dot;
 const normalize = zm.normalize;
+const splat3 = zm.splat3;
 const shader_io = @import("lit_shadow_fs_io.zig");
 const shader_externs = @import("lit_shadow_fs_externs");
 
@@ -33,7 +34,7 @@ fn shadowProjCoords(io_in: Io) Vec3 {
         io_in.frag_light_space_pos[1] * inv_w,
         io_in.frag_light_space_pos[2] * inv_w,
     };
-    proj = proj * @as(Vec3, @splat(0.5)) + @as(Vec3, @splat(0.5));
+    proj = proj * splat3(0.5) + splat3(0.5);
     // WebGPU render-texture origin is top-left, but NDC +y is up, so the
     // shadow map is stored y-flipped relative to the projected coordinate.
     // Flip v for the texel lookup (z stays - it's the depth we compare).

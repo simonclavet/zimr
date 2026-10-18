@@ -143,6 +143,9 @@ const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const indexOfScalar = std.mem.indexOfScalar;
 
+/// The native host's operating-system services: files by path, child programs, saved values, the clock. Native only;
+/// a web build that reaches a file by path fails to compile, saying so.
+pub const native_os = @import("native_os.zig");
 pub const wgpu = @import("wgpu.zig");
 /// Which platform the engine runs on, as three comptime facts (`is_browser`, `has_gpu`, `has_window`).
 pub const host = @import("host.zig");
@@ -227,6 +230,7 @@ pub const drawBillboardRec = wgpu_app.drawBillboardRec;
 // 2D texture/shape/spline draw is now a draw2d sink method (gl.texture / gl.image /
 // gl.spline*), so this is the only texture draw left as an rlgl free function.
 pub const drawTexturedTriangles = wgpu_app.drawTexturedTriangles;
+pub const drawTexture = wgpu_app.drawTexture;
 pub const uploadDecalReceiver = wgpu_app.uploadDecalReceiver;
 pub const drawDecal = wgpu_app.drawDecal;
 pub const DecalDesc = wgpu_app.DecalDesc;
@@ -992,6 +996,10 @@ pub fn getGestureHoldDuration(state: *const GesturesState, t: wgpu_app.TimeState
 }
 pub const MouseCursor = @import("types.zig").MouseCursor;
 pub const isKeyPressed = wgpu_app.isKeyPressed;
+pub const showAudioStartScreen = wgpu_app.showAudioStartScreen;
+pub const InputEvent = wgpu_app.InputEvent;
+pub const getKeyPressTime = wgpu_app.getKeyPressTime;
+pub const getLastPressTime = wgpu_app.getLastPressTime;
 pub const getCharPressed = wgpu_app.getCharPressed;
 pub const isMouseButtonPressed = wgpu_app.isMouseButtonPressed;
 pub const isMouseButtonReleased = wgpu_app.isMouseButtonReleased;

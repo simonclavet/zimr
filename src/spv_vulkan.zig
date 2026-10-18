@@ -20,13 +20,10 @@
 //!      the decoration means nothing, so `legalize` drops it.
 //!   4. `OpSource` names the source language, and Zig's value (12) was added to SPIR-V in 2024: validators built
 //!      before then reject the whole module over it. It is debug information only, so `legalize` declares `Unknown`.
-//!   5. While lowering a `StorageBuffer(T)`, the compiler may declare structs around the buffer's runtime-sized array
-//!      that it then does not use. Vulkan rejects any struct holding a runtime array without the `Block` decoration,
-//!      used or not, so `legalize` drops the unused ones, with their pointer types, names and decorations.
 //!
 //! And three refusals, each by name: `Capability Linkage`, which marks a module that is not a complete program (some
 //! compiler versions emit it on every module); a vertex shader that writes a storage buffer; and a struct holding a
-//! runtime array without `Block` that something does use.
+//! runtime array without `Block`, which Vulkan rejects whether or not anything uses it.
 //!
 //! The file also REFLECTS an entry point - which globals it uses, where each is bound, what a vertex input looks like
 //! - so the host can build descriptor-set layouts and vertex layouts from the SPIR-V itself, and CHECKS a module
@@ -87,8 +84,8 @@ pub const Error = error{
     /// A vertex shader writes a storage buffer. WebGPU forbids writable storage in the vertex stage, so such a shader
     /// cannot run on the web, and is not one of zimr's.
     VertexStageStorageWrite,
-    /// A struct holding a runtime-sized array, without `Block`, is used: Vulkan allows a runtime array only as the last
-    /// member of a `Block` struct, so the module cannot be expressed.
+    /// A struct holds a runtime-sized array without `Block`: Vulkan allows a runtime array only as the last member of
+    /// a `Block` struct, and rejects any other struct holding one, used or not.
     RuntimeArrayOutsideBlock,
     /// `reflect` was asked for an entry point the module does not have.
     NoSuchEntryPoint,
@@ -135,6 +132,7 @@ pub const Op = enum(u16) {
     AccessChain = 65,
     InBoundsAccessChain = 66,
     PtrAccessChain = 67,
+    InBoundsPtrAccessChain = 70,
     Decorate = 71,
     MemberDecorate = 72,
     DecorationGroup = 73,
@@ -474,7 +472,8 @@ pub const Module = struct {
                     });
                 }
             },
-            .PtrAccessChain => {
+            // Either form gives a pointer type's `ArrayStride` its meaning.
+            .PtrAccessChain, .InBoundsPtrAccessChain => {
                 self.has_ptr_access_chain = true;
             },
             else => {},
@@ -726,9 +725,7 @@ pub const ViolationKind = enum {
     /// `OpSource` declares the Zig source language, which validators from before 2024 reject (legalize declares
     /// `Unknown`).
     zig_source_language,
-    /// An unused struct holding a runtime array, without `Block` (legalize drops it).
-    unused_struct_with_runtime_array,
-    /// A USED struct holding a runtime array, without `Block` (legalize refuses the module).
+    /// A struct holding a runtime array without `Block` (legalize refuses the module).
     runtime_array_outside_block,
 };
 
@@ -915,126 +912,27 @@ fn storageUses(gpa: Allocator, module: Module) Error!StorageUses {
     return uses;
 }
 
-/// The struct types that hold a runtime-sized array without the `Block` decoration. Vulkan allows a runtime array
-/// only as the last member of a `Block` struct and rejects ANY struct holding one otherwise, used or not
-/// (VUID-StandaloneSpirv-OpTypeRuntimeArray-04680). The compiler declares such structs while lowering a
-/// `StorageBuffer(T)` and then builds the variable from a decorated copy, leaving them behind unused, with unused
-/// pointer types to them. (`BufferBlock`, the spelling before SPIR-V 1.3, is not emitted by the compiler.)
-///
-/// A pointer type to one of them is DEAD when nothing mentions it but its own declaration, names and decorations;
-/// the struct is dead when nothing mentions it but its declaration, names, decorations and dead pointer types.
-/// "Mentions" counts every operand word equal to the id, which can only overcount - a wrong guess keeps a type, it
-/// never drops a used one.
-const RuntimeArrayStructs = struct {
-    /// The type ids `legalize` drops: the dead structs and the dead pointer types to them.
-    dead: AutoHashMapUnmanaged(u32, void) = .empty,
-    /// The number of dead STRUCTS among them, for `check`'s report.
-    dead_struct_count: u32 = 0,
-    /// A struct of this kind that something uses (0 when none): the module cannot be expressed in Vulkan.
-    used_struct: u32 = 0,
-
-    fn deinit(structs: *RuntimeArrayStructs, gpa: Allocator) void {
-        structs.dead.deinit(gpa);
-    }
-};
-
-/// Whether `op` declares a type, with its result id as its first operand.
-fn declaresType(op: Op) bool {
-    const opcode: u16 = @backingInt(op);
-    // OpTypeVoid (19) through OpTypePipe (38); OpTypeForwardPointer (39) names an existing pointer instead.
-    return opcode >= 19 and opcode <= 38;
-}
-
-/// Whether `op` only names or decorates the id in its first operand (debug and annotation instructions).
-fn describesId(op: Op) bool {
-    return switch (op) {
-        .Name, .MemberName, .Decorate, .MemberDecorate => true,
-        else => false,
-    };
-}
-
-fn runtimeArrayStructs(gpa: Allocator, module: Module) Error!RuntimeArrayStructs {
-    var structs: RuntimeArrayStructs = .{};
-    errdefer structs.deinit(gpa);
-    // The candidates: structs without Block that hold a runtime array.
-    var candidates: AutoHashMapUnmanaged(u32, void) = .empty;
-    defer candidates.deinit(gpa);
+/// The first struct type that holds a runtime-sized array without the `Block` decoration, or null. Vulkan allows a
+/// runtime array only as the last member of a `Block` struct, and rejects any other struct holding one, used or not
+/// (VUID-StandaloneSpirv-OpTypeRuntimeArray-04680). (`BufferBlock`, the spelling before SPIR-V 1.3, is not emitted by
+/// the compiler.)
+fn structWithRuntimeArrayOutsideBlock(module: Module) ?u32 {
     var type_iterator: AutoHashMapUnmanaged(u32, Instruction).Iterator = module.types.iterator();
     while (type_iterator.next()) |entry| {
+        const struct_id: u32 = entry.key_ptr.*;
         const declaration: Instruction = entry.value_ptr.*;
-        if (declaration.op != .TypeStruct or module.decorationsOf(entry.key_ptr.*).block) {
+        if (declaration.op != .TypeStruct or module.decorationsOf(struct_id).block) {
             continue;
         }
-        for (declaration.operands[1..]) |member_type| {
+        const member_types: []const u32 = declaration.operands[1..];
+        for (member_types) |member_type| {
             const member: Instruction = module.types.get(member_type) orelse continue;
             if (member.op == .TypeRuntimeArray) {
-                try candidates.put(gpa, entry.key_ptr.*, {});
-                break;
+                return struct_id;
             }
         }
     }
-    if (candidates.count() == 0) {
-        return structs;
-    }
-    // The pointer types to candidates: pointer id -> the struct it points to.
-    var pointers: AutoHashMapUnmanaged(u32, u32) = .empty;
-    defer pointers.deinit(gpa);
-    type_iterator = module.types.iterator();
-    while (type_iterator.next()) |entry| {
-        const declaration: Instruction = entry.value_ptr.*;
-        if (declaration.op == .TypePointer and declaration.operands.len >= 3 and
-            candidates.contains(declaration.operands[2]))
-        {
-            try pointers.put(gpa, entry.key_ptr.*, declaration.operands[2]);
-        }
-    }
-    // Every mention of a candidate or one of its pointers, apart from declarations, names and decorations. A
-    // pointer's own mention of its struct is counted apart: it stops counting when the pointer is dead.
-    var mentions: AutoHashMapUnmanaged(u32, u32) = .empty;
-    defer mentions.deinit(gpa);
-    var reader: InstructionReader = try .init(module.words);
-    while (try reader.next()) |instruction| {
-        const is_candidate_pointer: bool = instruction.op == .TypePointer and instruction.operands.len >= 1 and
-            pointers.contains(instruction.operands[0]);
-        if (is_candidate_pointer) {
-            continue;
-        }
-        const skipped_operands: usize = if (declaresType(instruction.op) or describesId(instruction.op)) 1 else 0;
-        if (instruction.operands.len <= skipped_operands) {
-            continue;
-        }
-        for (instruction.operands[skipped_operands..]) |word| {
-            if (candidates.contains(word) or pointers.contains(word)) {
-                const count: AutoHashMapUnmanaged(u32, u32).Entry = try mentions.getOrPutValue(gpa, word, 0);
-                count.value_ptr.* += 1;
-            }
-        }
-    }
-    // Dead pointers first; then a struct is dead when its only mentions came through dead pointers.
-    var pointer_iterator: AutoHashMapUnmanaged(u32, u32).Iterator = pointers.iterator();
-    while (pointer_iterator.next()) |entry| {
-        if (mentions.get(entry.key_ptr.*) == null) {
-            try structs.dead.put(gpa, entry.key_ptr.*, {});
-        }
-    }
-    var candidate_iterator: AutoHashMapUnmanaged(u32, void).Iterator = candidates.iterator();
-    while (candidate_iterator.next()) |entry| {
-        const struct_id: u32 = entry.key_ptr.*;
-        var reached_by_live_pointer: bool = false;
-        pointer_iterator = pointers.iterator();
-        while (pointer_iterator.next()) |pointer| {
-            if (pointer.value_ptr.* == struct_id and !structs.dead.contains(pointer.key_ptr.*)) {
-                reached_by_live_pointer = true;
-            }
-        }
-        if (mentions.get(struct_id) == null and !reached_by_live_pointer) {
-            try structs.dead.put(gpa, struct_id, {});
-            structs.dead_struct_count += 1;
-        } else if (structs.used_struct == 0) {
-            structs.used_struct = struct_id;
-        }
-    }
-    return structs;
+    return null;
 }
 
 /// The gaps `legalize` closes, reported so a raw module's check says what loading it will change.
@@ -1048,13 +946,8 @@ fn checkGaps(
     if (module.declares_zig_source) {
         try violations.append(gpa, .{ .kind = .zig_source_language, .id = 0 });
     }
-    var runtime_array_structs: RuntimeArrayStructs = try runtimeArrayStructs(gpa, module);
-    defer runtime_array_structs.deinit(gpa);
-    if (runtime_array_structs.dead_struct_count > 0) {
-        try violations.append(gpa, .{ .kind = .unused_struct_with_runtime_array, .id = 0 });
-    }
-    if (runtime_array_structs.used_struct != 0) {
-        try violations.append(gpa, .{ .kind = .runtime_array_outside_block, .id = runtime_array_structs.used_struct });
+    if (structWithRuntimeArrayOutsideBlock(module)) |struct_id| {
+        try violations.append(gpa, .{ .kind = .runtime_array_outside_block, .id = struct_id });
     }
     for (module.entry_points.items) |entry_point| {
         if (entry_point.execution_model == .Fragment and !entry_point.has_depth_replacing) {
@@ -1115,9 +1008,9 @@ pub fn check(gpa: Allocator, words: []const u32) Error![]Violation {
 
 /// A copy of `words` that Vulkan accepts: `DepthReplacing` declared where `FragDepth` is written, vertex-stage
 /// storage buffers decorated `NonWritable`, pointer-type `ArrayStride`s dropped when nothing uses them, the Zig
-/// source language declared `Unknown`, unused runtime-array structs without `Block` dropped (with their unused
-/// pointer types, names and decorations) - and `Linkage`, or such a struct in use, refused. The copy is owned (free
-/// it with `gpa.free`) and 4-byte aligned, as `vkCreateShaderModule` requires (an `@embedFile` is only byte aligned).
+/// source language declared `Unknown` - and `Linkage`, or a struct holding a runtime array without `Block`, refused.
+/// The copy is owned (free it with `gpa.free`) and 4-byte aligned, as `vkCreateShaderModule` requires (an
+/// `@embedFile` is only byte aligned).
 /// Legalizing a legal module returns an identical copy.
 pub fn legalize(gpa: Allocator, words: []const u32) Error![]u32 {
     var module: Module = try .parse(gpa, words);
@@ -1188,29 +1081,16 @@ pub fn legalize(gpa: Allocator, words: []const u32) Error![]u32 {
         }
     }
 
-    // 3b. Unused structs holding a runtime array without Block, their unused pointer types, and their names and
-    // decorations; a used one is refused.
-    var runtime_array_structs: RuntimeArrayStructs = try runtimeArrayStructs(gpa, module);
-    defer runtime_array_structs.deinit(gpa);
-    if (runtime_array_structs.used_struct != 0) {
+    // A struct holding a runtime array without Block cannot be expressed in Vulkan, used or not.
+    if (structWithRuntimeArrayOutsideBlock(module) != null) {
         return Error.RuntimeArrayOutsideBlock;
-    }
-    if (runtime_array_structs.dead.count() > 0) {
-        var reader: InstructionReader = try .init(words);
-        while (try reader.next()) |instruction| {
-            const names_or_declares: bool = declaresType(instruction.op) or describesId(instruction.op);
-            if (names_or_declares and instruction.operands.len >= 1 and
-                runtime_array_structs.dead.contains(instruction.operands[0]))
-            {
-                try dropped_starts.put(gpa, instruction.start, {});
-            }
-        }
     }
 
     // 4. The copy: every instruction in order, the new ones at their sections' ends, the dropped ones skipped.
     var legal: ArrayList(u32) = .empty;
     errdefer legal.deinit(gpa);
-    try legal.ensureTotalCapacity(gpa, words.len + new_execution_modes.items.len + new_decorations.items.len);
+    const added_word_count: usize = new_execution_modes.items.len + new_decorations.items.len;
+    try legal.ensureTotalCapacity(gpa, words.len + added_word_count);
     try legal.appendSlice(gpa, words[0..header_word_count]);
     var reader: InstructionReader = try .init(words);
     while (try reader.next()) |instruction| {
@@ -1592,15 +1472,13 @@ test "spv_vulkan: the Zig source language is declared Unknown, in place" {
 }
 
 /// A vertex shader's storage buffer `%20`, a Block struct `%43` holding a runtime array `%40` - and a second struct
-/// `%41` holding the same array, without Block, with a pointer type `%42` to it: the shape the compiler leaves
-/// behind. `used` adds a variable of that pointer type, which makes the struct used.
-fn assembleRuntimeArrayStructs(gpa: Allocator, used: bool) Error![]u32 {
+/// `%41` holding the same array, without Block, with a pointer type `%42` to it and nothing using either.
+fn assembleRuntimeArrayOutsideBlock(gpa: Allocator) Error![]u32 {
     var assembler: Assembler = try .init(gpa, 50);
     errdefer assembler.deinit(gpa);
     try assembler.add(gpa, .Capability, &.{@backingInt(Capability.Shader)});
     try assembler.add(gpa, .MemoryModel, &.{ 0, 1 });
     try assembler.addWithString(gpa, .EntryPoint, &.{ @backingInt(ExecutionModel.Vertex), 1 }, "main", &.{20});
-    try assembler.addWithString(gpa, .Name, &.{41}, "dead", &.{});
     try assembler.add(gpa, .Decorate, &.{ 20, @backingInt(Decoration.DescriptorSet), 0 });
     try assembler.add(gpa, .Decorate, &.{ 20, @backingInt(Decoration.Binding), 0 });
     try assembler.add(gpa, .Decorate, &.{ 43, @backingInt(Decoration.Block) });
@@ -1613,40 +1491,15 @@ fn assembleRuntimeArrayStructs(gpa: Allocator, used: bool) Error![]u32 {
     try assembler.add(gpa, .TypeStruct, &.{ 43, 40 });
     try assembler.add(gpa, .TypePointer, &.{ 44, @backingInt(StorageClass.StorageBuffer), 43 });
     try assembler.add(gpa, .Variable, &.{ 44, 20, @backingInt(StorageClass.StorageBuffer) });
-    if (used) {
-        try assembler.add(gpa, .Variable, &.{ 42, 21, @backingInt(StorageClass.StorageBuffer) });
-    }
     return assembler.words.toOwnedSlice(gpa);
 }
 
-test "spv_vulkan: an unused runtime-array struct without Block is dropped; a used one is refused" {
+test "spv_vulkan: a struct holding a runtime array without Block is reported and refused, used or not" {
     const gpa: Allocator = testing_allocator;
-    const unused: []u32 = try assembleRuntimeArrayStructs(gpa, false);
-    defer gpa.free(unused);
-    const raw_violations: []Violation = try check(gpa, unused);
-    defer gpa.free(raw_violations);
-    try expectEqual(@as(usize, 1), countViolations(raw_violations, .unused_struct_with_runtime_array));
-    const legal: []u32 = try legalize(gpa, unused);
-    defer gpa.free(legal);
-    const legal_violations: []Violation = try check(gpa, legal);
-    defer gpa.free(legal_violations);
-    try expectEqual(@as(usize, 0), countViolations(legal_violations, .unused_struct_with_runtime_array));
-    // Gone: the struct, its pointer type, its name and its member decoration; the Block struct and the array stay.
-    var reader: InstructionReader = try .init(legal);
-    var block_struct_kept: bool = false;
-    while (try reader.next()) |instruction| {
-        const first: u32 = if (instruction.operands.len > 0) instruction.operands[0] else 0;
-        try expect(first != 41 and first != 42);
-        if (instruction.op == .TypeStruct and first == 43) {
-            block_struct_kept = true;
-        }
-    }
-    try expect(block_struct_kept);
-
-    const in_use: []u32 = try assembleRuntimeArrayStructs(gpa, true);
-    defer gpa.free(in_use);
-    const used_violations: []Violation = try check(gpa, in_use);
-    defer gpa.free(used_violations);
-    try expectEqual(@as(usize, 1), countViolations(used_violations, .runtime_array_outside_block));
-    try expectError(Error.RuntimeArrayOutsideBlock, legalize(gpa, in_use));
+    const module_words: []u32 = try assembleRuntimeArrayOutsideBlock(gpa);
+    defer gpa.free(module_words);
+    const violations: []Violation = try check(gpa, module_words);
+    defer gpa.free(violations);
+    try expectEqual(@as(usize, 1), countViolations(violations, .runtime_array_outside_block));
+    try expectError(Error.RuntimeArrayOutsideBlock, legalize(gpa, module_words));
 }

@@ -43,6 +43,7 @@
 const std = @import("std");
 const report = @import("test_report.zig");
 const zm = @import("zm");
+const isFinite = zm.isFinite;
 const codecs = @import("codecs.zig");
 /// The task's clip format - a copied clip is one, exactly as an IK-baked clip is.
 const dance = @import("robot_dance.zig");
@@ -53,6 +54,8 @@ const robot_policy = @import("robot_policy.zig");
 const robot_gym = @import("robot_gym.zig");
 /// The task's servo - the law a policy acts through - which Geno must be driven by unchanged (R8a).
 const robot_track = @import("robot_track.zig");
+const ppo_track = @import("robot_ppo_track.zig");
+const rbt = @import("robot.zig");
 /// The stable spring both servo laws share.
 const robot_maximal = @import("robot_maximal.zig");
 /// The collision shapes `tools/geno_fit.py` fitted to Geno's mesh (R4), in bind-pose world coordinates.
@@ -70,6 +73,15 @@ const indexOfScalar = std.mem.indexOfScalar;
 const copyForwards = std.mem.copyForwards;
 const readInt = std.mem.readInt;
 const sortSlice = std.mem.sort;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const allocPrint = std.fmt.allocPrint;
+const expectEqual = std.testing.expectEqual;
+const expectError = std.testing.expectError;
+const startsWith = std.mem.startsWith;
+const splitScalar = std.mem.splitScalar;
+const expectApproxEqAbs = std.testing.expectApproxEqAbs;
+const parseFloat = std.fmt.parseFloat;
+const parseInt = std.fmt.parseInt;
 const Vec = zm.Vec;
 const Quat = zm.Quat;
 const vec = zm.vec;
@@ -93,6 +105,7 @@ const asinRad = zm.asinRad;
 const clamp = zm.clamp;
 const pi = zm.pi;
 const length3 = zm.length3;
+const nan = zm.nan;
 
 /// Geno's files are in centimetres; everything in zimr is metres.
 pub const cm: f32 = 0.01;
@@ -1473,9 +1486,16 @@ pub const drecon_actuated = [_][]const u8{
 /// reflex it holds the T-pose the full 10 s; it costs the dance nothing (1.26 s against 1.24 for the servo).
 pub const standing_armature: f32 = 2.0;
 
-const robot_mjcf = @import("robot_mjcf.zig");
+/// Geno's physics, as everything that trains, judges or shows him builds it: 60 steps a second, Earth's gravity
+/// along -z, room for a whole body's contacts and joint limits at once, and the Newton solver - one definition, so
+/// that a program pacing its frames to the physics reads the model's own timestep (`Model.opt.timestep`).
+pub fn physicsOptions() rbt.Options {
+    var options: rbt.Options = .{ .timestep = 1.0 / 60.0, .gravity = vec(0, 0, -9.81), .max_contacts = 256 };
+    options.solver.algorithm = .newton;
+    return options;
+}
 
-const rbt = @import("robot.zig");
+const robot_mjcf = @import("robot_mjcf.zig");
 
 /// THE CAPTURE-POINT REFLEX (S2c), shared by `ServoRun` and the page: lean the body back through the ankles'
 /// targets when its capture point drifts ahead of the feet. Treat the body as an inverted pendulum on its
@@ -4912,8 +4932,7 @@ fn trackTrial(
             }
         }
     }
-    var build_options: rbt.Options = .{ .timestep = 1.0 / 60.0, .gravity = vec(0, 0, -9.81), .max_contacts = 256 };
-    build_options.solver.algorithm = .newton;
+    const build_options: rbt.Options = physicsOptions();
     var imported: robot_mjcf.Imported = try robot_mjcf.build(gpa, &robot, build_options);
     defer imported.deinit();
     var bind: Posed = try readPose(gpa, bind_bvh);
@@ -5168,8 +5187,7 @@ test "robot_geno: S2b - SAC holds Geno's T-pose, model-free" {
     defer doc.deinit();
     var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
     defer robot.deinit();
-    var build_options: rbt.Options = .{ .timestep = 1.0 / 60.0, .gravity = vec(0, 0, -9.81), .max_contacts = 256 };
-    build_options.solver.algorithm = .newton;
+    const build_options: rbt.Options = physicsOptions();
     var imported: robot_mjcf.Imported = try robot_mjcf.build(gpa, &robot, build_options);
     defer imported.deinit();
     const m: *rbt.Model = &imported.model;
@@ -6355,8 +6373,7 @@ test "robot_geno: D3 - does a world model trained on the teacher's data know wha
             joint.armature = standing_armature;
         }
     }
-    var build_options: rbt.Options = .{ .timestep = 1.0 / 60.0, .gravity = vec(0, 0, -9.81), .max_contacts = 256 };
-    build_options.solver.algorithm = .newton;
+    const build_options: rbt.Options = physicsOptions();
     var imported: robot_mjcf.Imported = try robot_mjcf.build(gpa, &robot, build_options);
     defer imported.deinit();
     const m: *rbt.Model = &imported.model;
@@ -6767,8 +6784,7 @@ test "robot_geno: D4 - a policy cloned from the teacher, judged in the real simu
             joint.armature = standing_armature;
         }
     }
-    var build_options: rbt.Options = .{ .timestep = 1.0 / 60.0, .gravity = vec(0, 0, -9.81), .max_contacts = 256 };
-    build_options.solver.algorithm = .newton;
+    const build_options: rbt.Options = physicsOptions();
     var imported: robot_mjcf.Imported = try robot_mjcf.build(gpa, &robot, build_options);
     defer imported.deinit();
     const m: *rbt.Model = &imported.model;
@@ -7293,6 +7309,703 @@ pub const drecon_bodies: robot_policy.Bodies = .{
     .actuated = &drecon_actuated,
 };
 
+// ---- PPO's recipe on Geno, and a training run's parameters ----
+//
+// DReCon trained by PPO on Geno has one set of settings, used by the training page, by the training program that
+// runs through a night, and by the viewer that shows what a run learned: the PPO recipe (`PpoRecipe`). A run that is
+// not a page - the training program - takes its own from a ZON file in its run folder, `run.zon`, which a viewer of
+// that run reads too, so that both build the same network and act through the same scale and filter. Every field
+// has a default, the page's own choice; a file names only what it changes:
+//
+//     .{
+//         .motion = .dance,
+//         .recipe = .{ .envs = 64, .hidden = 64 },
+//         .stop_after_hours = 10,
+//     }
+//
+// The task (servo, floor, reward, failure rule: `tracking_task`) and DReCon's watched and actuated bodies
+// (`drecon_bodies`) are Geno's, not a run's, and stay out of the file.
+
+/// The motions a PPO run on Geno can train: both on the baked dance clip, getting up from the floor first or not.
+pub const PpoMotion = enum {
+    getup,
+    dance,
+
+    /// The motion's name in files and on screen.
+    pub fn label(motion: PpoMotion) []const u8 {
+        return switch (motion) {
+            .getup => "get-up",
+            .dance => "dance",
+        };
+    }
+
+    /// What the motion's networks are trained for, carried in their weights file (`ppo_track.Options.tag`): a file
+    /// for another motion is refused. Both motions share the dance clip, and so one tag.
+    pub fn tag(motion: PpoMotion) u32 {
+        return switch (motion) {
+            .getup, .dance => 3,
+        };
+    }
+};
+
+/// PPO's recipe on Geno: every scalar of the trainer's options (`ppo_track.Options`), each defaulted to the value the
+/// training page trains with. `options` joins it to Geno's task and bodies.
+pub const PpoRecipe = struct {
+    /// Characters training at once. Eight keep a decision inside a phone's frame; a desktop takes many more.
+    envs: u32 = 8,
+    /// Decisions per character per batch.
+    horizon: u32 = 64,
+    /// Passes over each batch, and the minibatch each step of a pass takes.
+    epochs: u32 = 4,
+    minibatch: u32 = 256,
+    /// The discount and the advantage's lambda (GAE).
+    gamma: f32 = 0.99,
+    lambda: f32 = 0.95,
+    /// What the clip running out counts as (`ppo_track.ClipEnd`).
+    clip_end: ppo_track.ClipEnd = .terminal,
+    /// Both networks' width.
+    hidden: u32 = 48,
+    learning_rate: f32 = 3.0e-4,
+    /// Exploration at the start: log sigma -1.2, a Gaussian of 0.3 action units - 0.36 rad of raw offset at
+    /// `student_scale`, 4 degrees at the joint once DReCon's filter has taken its fifth.
+    initial_log_std: f32 = -1.2,
+    /// Inputs scaled by their running mean and spread.
+    normalize: bool = true,
+    /// The helping hand on the root: this much at the first batch, fading to none over `assist_batches`.
+    assist_start: f32 = 1.0,
+    assist_batches: u32 = 300,
+    /// Episodes end here even while tracking is fine, in physics steps: longer than the dance's ten seconds.
+    max_episode_steps: u32 = 700,
+    /// Radians of raw pose offset per unit of action (`student_scale`, where the reasoning lives).
+    action_scale: f32 = student_scale,
+    /// Physics steps a decision is held (30 Hz decisions over 60 Hz physics), and DReCon's filter: the share of
+    /// a new action a joint receives each decision.
+    decimation: u32 = 2,
+    beta: f32 = 0.2,
+    seed: u64 = 1,
+
+    /// The trainer's options for `motion`: this recipe, Geno's task and DReCon bodies, and the motion's tag.
+    pub fn options(recipe: PpoRecipe, motion: PpoMotion) ppo_track.Options {
+        return .{
+            .envs = recipe.envs,
+            .horizon = recipe.horizon,
+            .epochs = recipe.epochs,
+            .gamma = recipe.gamma,
+            .lambda = recipe.lambda,
+            .clip_end = recipe.clip_end,
+            .hidden = recipe.hidden,
+            .minibatch = recipe.minibatch,
+            .learning_rate = recipe.learning_rate,
+            .initial_log_std = recipe.initial_log_std,
+            .normalize = recipe.normalize,
+            .assist_start = recipe.assist_start,
+            .assist_batches = recipe.assist_batches,
+            .max_episode_steps = recipe.max_episode_steps,
+            .action_scale = recipe.action_scale,
+            .task = tracking_task,
+            .bodies = drecon_bodies,
+            .tag = motion.tag(),
+            .decimation = recipe.decimation,
+            .beta = recipe.beta,
+            .seed = recipe.seed,
+        };
+    }
+};
+
+/// A training run's parameters, as its run folder's `run.zon` writes them: the motion, the recipe, and the run's own
+/// controls. Every field defaulted, so an empty `.{}` is the page's training of the dance, run until stopped.
+pub const PpoRun = struct {
+    motion: PpoMotion = .dance,
+    recipe: PpoRecipe = .{},
+    /// Minutes of training between rewrites of the folder's newest weights.
+    save_minutes: f32 = 2,
+    /// Minutes of training between checkpoints - weights kept under their batch number. Zero keeps none.
+    checkpoint_minutes: f32 = 30,
+    /// The run stops by itself after this many hours of training, or this many batches; zero is never.
+    stop_after_hours: f32 = 0,
+    stop_after_batches: u64 = 0,
+
+    /// What `parse` reports for a file it cannot read: the parser's own description, kept in `arena`.
+    pub const ParseFailure = struct {
+        description: []const u8,
+    };
+
+    /// A run from `run.zon`'s text: the fields it names, every other field its default. A field the run does not
+    /// have, a value of the wrong kind, or text that is not ZON fails, with the parser's description of where and
+    /// why (`failure`, in `arena`).
+    pub fn parse(
+        gpa: Allocator,
+        arena: Allocator,
+        source: [:0]const u8,
+        failure: *ParseFailure,
+    ) error{ OutOfMemory, ParseZon }!PpoRun {
+        // Filled by the parser when it fails.
+        var diagnostics: std.zon.parse.Diagnostics = undefined;
+        return std.zon.parse.fromSlice(PpoRun, .{
+            .gpa = gpa,
+            .arena = arena,
+            .source = source,
+            .diagnostics = &diagnostics,
+        }) catch |err| {
+            if (err == error.ParseZon) {
+                const described: std.zon.parse.Diagnostics.Formatter = diagnostics.fmt("run.zon");
+                failure.description = allocPrint(arena, "{f}", .{described}) catch "unreadable";
+            }
+            return err;
+        };
+    }
+
+    /// What makes this run impossible to train, naming the field and the range it must be in - or null when it can
+    /// be trained. ZON checks each value's kind; this checks what the trainer needs of it: at least one character,
+    /// one decision and one pass per batch, a minibatch no larger than the batch (envs x horizon rows), a network,
+    /// a discount and filter in their ranges, a positive and finite step size and action scale.
+    pub fn problem(run: PpoRun) ?[]const u8 {
+        const recipe: PpoRecipe = run.recipe;
+        if (recipe.envs == 0) {
+            return "recipe.envs: at least 1 character";
+        }
+        if (recipe.horizon == 0) {
+            return "recipe.horizon: at least 1 decision per batch";
+        }
+        if (recipe.epochs == 0) {
+            return "recipe.epochs: at least 1 pass over each batch";
+        }
+        if (recipe.hidden == 0) {
+            return "recipe.hidden: at least 1 unit";
+        }
+        const batch_rows: u64 = @as(u64, recipe.envs) * recipe.horizon;
+        const is_minibatch_in_batch: bool = recipe.minibatch >= 1 and recipe.minibatch <= batch_rows;
+        if (!is_minibatch_in_batch) {
+            return "recipe.minibatch: from 1 to envs x horizon";
+        }
+        const is_gamma_in_range: bool = recipe.gamma > 0 and recipe.gamma <= 1;
+        if (!is_gamma_in_range) {
+            return "recipe.gamma: above 0, at most 1";
+        }
+        const is_lambda_in_range: bool = recipe.lambda >= 0 and recipe.lambda <= 1;
+        if (!is_lambda_in_range) {
+            return "recipe.lambda: from 0 to 1";
+        }
+        const is_learning_rate_usable: bool = recipe.learning_rate > 0 and isFinite(recipe.learning_rate);
+        if (!is_learning_rate_usable) {
+            return "recipe.learning_rate: above 0";
+        }
+        if (!isFinite(recipe.initial_log_std)) {
+            return "recipe.initial_log_std: a finite number";
+        }
+        const is_assist_usable: bool = recipe.assist_start >= 0 and isFinite(recipe.assist_start);
+        if (!is_assist_usable) {
+            return "recipe.assist_start: 0 or more";
+        }
+        if (recipe.max_episode_steps == 0) {
+            return "recipe.max_episode_steps: at least 1";
+        }
+        const is_action_scale_usable: bool = recipe.action_scale > 0 and isFinite(recipe.action_scale);
+        if (!is_action_scale_usable) {
+            return "recipe.action_scale: above 0";
+        }
+        if (recipe.decimation == 0) {
+            return "recipe.decimation: at least 1 physics step per decision";
+        }
+        const is_beta_in_range: bool = recipe.beta > 0 and recipe.beta <= 1;
+        if (!is_beta_in_range) {
+            return "recipe.beta: above 0, at most 1";
+        }
+        const is_save_interval_usable: bool = run.save_minutes > 0 and isFinite(run.save_minutes);
+        if (!is_save_interval_usable) {
+            return "save_minutes: above 0";
+        }
+        const is_checkpoint_interval_usable: bool = run.checkpoint_minutes >= 0 and isFinite(run.checkpoint_minutes);
+        if (!is_checkpoint_interval_usable) {
+            return "checkpoint_minutes: 0 or more";
+        }
+        const is_hour_limit_usable: bool = run.stop_after_hours >= 0 and isFinite(run.stop_after_hours);
+        if (!is_hour_limit_usable) {
+            return "stop_after_hours: 0 or more";
+        }
+        return null;
+    }
+
+    /// The run as ZON text, every field written: what a run folder's `run.zon` reads back as this run.
+    pub fn write(run: PpoRun, writer: *Io.Writer) Io.Writer.Error!void {
+        try std.zon.stringify.serialize(run, .{}, writer);
+    }
+};
+
+test "PpoRun: an empty file is the page's own training, and the recipe's options are Geno's" {
+    var arena_state: ArenaAllocator = .init(testing_allocator);
+    defer arena_state.deinit();
+    var failure: PpoRun.ParseFailure = .{ .description = "" };
+    const run: PpoRun = try .parse(testing_allocator, arena_state.allocator(), ".{}", &failure);
+    try expectEqual(PpoMotion.dance, run.motion);
+    try expectEqual(@as(u32, 8), run.recipe.envs);
+    try expectEqual(student_scale, run.recipe.action_scale);
+    const options: ppo_track.Options = run.recipe.options(run.motion);
+    try expectEqual(student_scale, options.action_scale);
+    try expectEqual(@as(u32, 3), options.tag);
+    try expect(options.normalize);
+    try expectEqual(tracking_task.floor_friction, options.task.floor_friction);
+    try expectEqual(tracking_task.rest_on_floor, options.task.rest_on_floor);
+}
+
+test "PpoRun: a file names only what it changes; an unknown field is refused by name" {
+    var arena_state: ArenaAllocator = .init(testing_allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    var failure: PpoRun.ParseFailure = .{ .description = "" };
+    const partial_source: [:0]const u8 =
+        \\.{
+        \\    .motion = .getup,
+        \\    .recipe = .{ .envs = 64, .learning_rate = 2e-4 },
+        \\    .stop_after_hours = 10,
+        \\}
+    ;
+    const partial: PpoRun = try .parse(testing_allocator, arena, partial_source, &failure);
+    try expectEqual(PpoMotion.getup, partial.motion);
+    try expectEqual(@as(u32, 64), partial.recipe.envs);
+    try expectEqual(@as(f32, 2e-4), partial.recipe.learning_rate);
+    try expectEqual(@as(u32, 64), partial.recipe.horizon);
+    try expectEqual(@as(f32, 10), partial.stop_after_hours);
+
+    const misspelt_source: [:0]const u8 = ".{ .recipe = .{ .envz = 64 } }";
+    try expectError(error.ParseZon, PpoRun.parse(testing_allocator, arena, misspelt_source, &failure));
+    try expect(indexOf(u8, failure.description, "envz") != null);
+}
+
+test "PpoRun: the defaults can be trained; a value out of its range is named" {
+    const defaults: PpoRun = .{};
+    try expect(defaults.problem() == null);
+    var no_characters: PpoRun = .{};
+    no_characters.recipe.envs = 0;
+    try expect(startsWith(u8, no_characters.problem().?, "recipe.envs"));
+    var minibatch_larger_than_batch: PpoRun = .{};
+    minibatch_larger_than_batch.recipe.envs = 2;
+    minibatch_larger_than_batch.recipe.horizon = 8;
+    try expect(startsWith(u8, minibatch_larger_than_batch.problem().?, "recipe.minibatch"));
+    var unfiltered: PpoRun = .{};
+    unfiltered.recipe.beta = 0;
+    try expect(startsWith(u8, unfiltered.problem().?, "recipe.beta"));
+    var never_saves: PpoRun = .{};
+    never_saves.save_minutes = nan(f32);
+    try expect(startsWith(u8, never_saves.problem().?, "save_minutes"));
+}
+
+test "PpoRun: what `write` writes reads back as the same run" {
+    var arena_state: ArenaAllocator = .init(testing_allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    var run: PpoRun = .{ .motion = .getup, .save_minutes = 5, .stop_after_batches = 20_000 };
+    run.recipe.hidden = 96;
+    run.recipe.clip_end = .bootstrap;
+    var text: Io.Writer.Allocating = .init(arena);
+    try run.write(&text.writer);
+    const written: [:0]const u8 = try arena.dupeSentinel(u8, text.written(), 0);
+    var failure: PpoRun.ParseFailure = .{ .description = "" };
+    const read_back: PpoRun = try .parse(testing_allocator, arena, written, &failure);
+    try expectEqual(run, read_back);
+}
+
+/// The files of a training run's folder, each by its name there: `tools/geno_trainer.zig` writes them, the training
+/// lab (`examples/geno_lab`) reads them - one definition for both.
+pub const RunFile = enum {
+    /// The run's parameters, `PpoRun` as ZON.
+    parameters,
+    /// The newest weights (`ppo_track.Trainer.exportWeights`), rewritten whole every few minutes.
+    weights,
+    /// One line per batch (`RunLog`).
+    log,
+    /// Where the run is, ZON.
+    status,
+    /// Present when someone wants the run to stop: the trainer saves everything and exits.
+    stop,
+
+    /// The largest run file a reader takes in: a log of a few weeks of batches, weights many times over.
+    pub const most_bytes: usize = 64 << 20;
+
+    /// The file's name in the folder.
+    pub fn fileName(file: RunFile) []const u8 {
+        return switch (file) {
+            .parameters => "run.zon",
+            .weights => "weights",
+            .log => "log.csv",
+            .status => "status.zon",
+            .stop => "stop",
+        };
+    }
+
+    /// What every checkpoint's name starts with.
+    pub const checkpoint_prefix: []const u8 = "weights_b";
+
+    /// A checkpoint's name in the folder: the weights after batch `batch`, `weights_b<batch>` with seven digits, so
+    /// that a folder listed by name lists its checkpoints in training order.
+    pub fn checkpointName(batch: u64, buffer: []u8) []const u8 {
+        return bufPrint(buffer, checkpoint_prefix ++ "{d:0>7}", .{batch}) catch checkpoint_prefix;
+    }
+
+    /// The batch a checkpoint's name says (`checkpointName` the other way); null for any other name.
+    pub fn checkpointBatch(name: []const u8) ?u64 {
+        if (!startsWith(u8, name, checkpoint_prefix)) {
+            return null;
+        }
+        const digits: []const u8 = name[checkpoint_prefix.len..];
+        return parseInt(u64, digits, 10) catch null;
+    }
+};
+
+/// Where a run is, as its `status.zon` says.
+pub const RunState = enum {
+    /// The servo alone is being measured, before any training.
+    measuring_servo,
+    training,
+    /// Its `stop` file appeared.
+    stopped,
+    /// It reached the hours or the batches its `run.zon` allows.
+    finished,
+};
+
+/// What a run's `status.zon` holds: enough for a person, or a program watching the run, to know where it is without
+/// reading the log. Times to failure in seconds; null when nothing has failed yet. Written by the trainer, read by the
+/// training lab.
+pub const RunStatus = struct {
+    state: RunState,
+    batches: u64,
+    steps: u64,
+    training_minutes: f32,
+    servo_seconds_to_failure: ?f32,
+    recent_seconds_to_failure: ?f32,
+    assist: f32,
+    /// When the status was written, in seconds since the Unix epoch by the wall clock; 0 when unknown - a status
+    /// written by an older trainer.
+    written_at_seconds: i64 = 0,
+
+    /// Whether the run's trainer has gone silent: the status says it trains, but was written longer ago than three
+    /// of the run's save intervals (`save_minutes`) - a trainer that died, or a machine that slept, without a word.
+    /// A status of unknown age is never judged.
+    pub fn isSilent(status: RunStatus, now_seconds: i64, save_minutes: f32) bool {
+        const is_training: bool = status.state == .training or status.state == .measuring_servo;
+        const has_known_age: bool = status.written_at_seconds > 0;
+        if (!is_training or !has_known_age) {
+            return false;
+        }
+        const age_seconds: f32 = float(now_seconds - status.written_at_seconds);
+        const allowed_seconds: f32 = 3.0 * 60.0 * save_minutes;
+        return age_seconds > allowed_seconds;
+    }
+
+    /// A status from its file's text; null when the text is not one - the file of an older trainer, or another
+    /// program's.
+    pub fn parse(gpa: Allocator, arena: Allocator, source: [:0]const u8) ?RunStatus {
+        // Filled by the parser when it fails; a status that cannot be read is only not shown.
+        var diagnostics: std.zon.parse.Diagnostics = undefined;
+        const options: std.zon.parse.Options = .{
+            .gpa = gpa,
+            .arena = arena,
+            .source = source,
+            .diagnostics = &diagnostics,
+        };
+        return std.zon.parse.fromSlice(RunStatus, options) catch null;
+    }
+};
+
+/// A training run's log: one CSV line per batch, of raw counts rather than conclusions, so that any measure - the
+/// time to failure over any window, the reward's trend - can be worked out from it afterwards. Written by the
+/// trainer and the training page, read by the lab's curves.
+pub const RunLog = struct {
+    /// How many recent batches a run's time to failure is estimated over - by the trainer's status, the training
+    /// page and the lab's curves alike: about two minutes of character-time at eight characters, enough failures to
+    /// tell 10 seconds from 20.
+    pub const window_batches: usize = 8;
+
+    /// The log's first line: its columns.
+    pub const header: []const u8 =
+        "batch,training_minutes,steps,steps_watched,failures,mean_reward,episodes,mean_episode_steps,assist\n";
+
+    /// Appends the line of a finished batch: the batches trained, the minutes they took, and the batch's counts.
+    pub fn appendLine(
+        gpa: Allocator,
+        log: *ArrayList(u8),
+        batches: u64,
+        training_minutes: f32,
+        stats: ppo_track.Stats,
+    ) !void {
+        var line_buffer: [160]u8 = undefined;
+        const line: []const u8 = try bufPrint(&line_buffer, "{d},{d:.2},{d},{d},{d},{d:.5},{d},{d:.1},{d:.3}\n", .{
+            batches,
+            training_minutes,
+            stats.steps,
+            stats.exposure,
+            stats.failures,
+            stats.mean_reward,
+            stats.episodes,
+            stats.mean_episode,
+            stats.assist,
+        });
+        try log.appendSlice(gpa, line);
+    }
+
+    /// One batch's line, read back: the fields `appendLine` writes, in its order.
+    pub const Line = struct {
+        batch: u64,
+        training_minutes: f32,
+        steps: u64,
+        steps_watched: u64,
+        failures: u32,
+        mean_reward: f32,
+        episodes: u32,
+        mean_episode_steps: f32,
+        assist: f32,
+    };
+
+    /// A batch's line read back, without its newline - or null for the header, or for a line that is not one of the
+    /// log's: a column missing, one too many, or one that is not a number.
+    pub fn parseLine(text: []const u8) ?Line {
+        var columns: std.mem.SplitIterator(u8, .scalar) = splitScalar(u8, text, ',');
+        const line: Line = .{
+            .batch = nextInteger(u64, &columns) orelse return null,
+            .training_minutes = nextFloat(&columns) orelse return null,
+            .steps = nextInteger(u64, &columns) orelse return null,
+            .steps_watched = nextInteger(u64, &columns) orelse return null,
+            .failures = nextInteger(u32, &columns) orelse return null,
+            .mean_reward = nextFloat(&columns) orelse return null,
+            .episodes = nextInteger(u32, &columns) orelse return null,
+            .mean_episode_steps = nextFloat(&columns) orelse return null,
+            .assist = nextFloat(&columns) orelse return null,
+        };
+        const has_extra_column: bool = columns.next() != null;
+        return if (has_extra_column) null else line;
+    }
+
+    /// The next column as an integer of type `Integer`; null when there is none, or it is not one.
+    fn nextInteger(comptime Integer: type, columns: *std.mem.SplitIterator(u8, .scalar)) ?Integer {
+        const column: []const u8 = columns.next() orelse return null;
+        return parseInt(Integer, column, 10) catch null;
+    }
+
+    /// The next column as a number; null when there is none, or it is not one.
+    fn nextFloat(columns: *std.mem.SplitIterator(u8, .scalar)) ?f32 {
+        const column: []const u8 = columns.next() orelse return null;
+        return parseFloat(f32, column) catch null;
+    }
+};
+
+/// A run's learning curve, read from its log as the log grows (`readMore`): one point per batch - its training
+/// minutes, and the time to failure over the window of it and the batches before it (`RunLog.window_batches`), the
+/// measure the trainer reports.
+///
+///     log         batch 1: 600 watched, 0 failures     batch 2: 600, 1     batch 3: 600, 2
+///     window      600 / 0                              1200 / 1             1800 / 3
+///     point       none failed yet                      20 s                 10 s          (at 60 steps a second)
+pub const RunCurve = struct {
+    pub const Point = struct {
+        batch: u64,
+        training_minutes: f32,
+        /// Null while nothing in the window has failed: no time to failure to tell yet.
+        seconds_to_failure: ?f32,
+    };
+
+    points: ArrayList(Point) = .empty,
+    /// How far into the log's text the curve has read: always the end of a whole line.
+    bytes_read: usize = 0,
+    /// The last batches' steps watched and failures, in a ring.
+    window_steps_watched: [RunLog.window_batches]u64 = @splat(0),
+    window_failures: [RunLog.window_batches]u32 = @splat(0),
+    batches_seen: usize = 0,
+    /// Lines that are not the log's - another program's, or a damaged file's: skipped, and counted.
+    skipped_lines: usize = 0,
+
+    pub fn deinit(self: *RunCurve, gpa: Allocator) void {
+        self.points.deinit(gpa);
+    }
+
+    /// Reads the log's whole lines past `bytes_read`, `log_text` being the whole log as its file holds it now. A
+    /// last line without its newline - the log being written as it is read - waits for the next read. A log
+    /// shorter than what was read - a run carried on from an earlier save - is read again from its start.
+    pub fn readMore(
+        self: *RunCurve,
+        gpa: Allocator,
+        log_text: []const u8,
+        physics_steps_per_second: f32,
+    ) !void {
+        if (log_text.len < self.bytes_read) {
+            // A fresh curve, keeping the points' memory: the list is set aside first, since the new value is
+            // written straight into `self`.
+            var kept_points: ArrayList(Point) = self.points;
+            kept_points.clearRetainingCapacity();
+            self.* = .{ .points = kept_points };
+        }
+        const unread: []const u8 = log_text[self.bytes_read..];
+        const last_newline: usize = std.mem.lastIndexOfScalar(u8, unread, '\n') orelse return;
+        const whole_lines: []const u8 = unread[0..last_newline];
+        var lines: std.mem.SplitIterator(u8, .scalar) = splitScalar(u8, whole_lines, '\n');
+        while (lines.next()) |line_text| {
+            const is_header: bool = startsWith(u8, line_text, "batch,");
+            if (is_header) {
+                continue;
+            }
+            const line: RunLog.Line = RunLog.parseLine(line_text) orelse {
+                self.skipped_lines += 1;
+                continue;
+            };
+            try self.addBatch(gpa, line, physics_steps_per_second);
+        }
+        self.bytes_read += last_newline + 1;
+    }
+
+    /// One batch into the window, and its point onto the curve.
+    fn addBatch(
+        self: *RunCurve,
+        gpa: Allocator,
+        line: RunLog.Line,
+        physics_steps_per_second: f32,
+    ) !void {
+        const slot: usize = self.batches_seen % RunLog.window_batches;
+        self.window_steps_watched[slot] = line.steps_watched;
+        self.window_failures[slot] = line.failures;
+        self.batches_seen += 1;
+        const batches_in_window: usize = @min(self.batches_seen, RunLog.window_batches);
+        var steps_watched: u64 = 0;
+        var failures: u64 = 0;
+        for (0..batches_in_window) |window_slot| {
+            steps_watched += self.window_steps_watched[window_slot];
+            failures += self.window_failures[window_slot];
+        }
+        const seconds_to_failure: ?f32 = ppo_track.secondsToFailure(steps_watched, failures, physics_steps_per_second);
+        try self.points.append(gpa, .{
+            .batch = line.batch,
+            .training_minutes = line.training_minutes,
+            .seconds_to_failure = seconds_to_failure,
+        });
+    }
+};
+
+test "RunFile: a checkpoint's batch reads back from its name; other names have none" {
+    var name_buffer: [32]u8 = undefined;
+    const name: []const u8 = RunFile.checkpointName(1234, &name_buffer);
+    try expectEqual(@as(?u64, 1234), RunFile.checkpointBatch(name));
+    try expectEqual(@as(?u64, null), RunFile.checkpointBatch("weights"));
+    try expectEqual(@as(?u64, null), RunFile.checkpointBatch("weights_bnew"));
+    try expectEqual(@as(?u64, null), RunFile.checkpointBatch("log.csv"));
+}
+
+test "RunStatus: silent when it trains but was written three save intervals ago; never when its age is unknown" {
+    const minute: i64 = 60;
+    const now: i64 = 1_000_000_000;
+    const save_minutes: f32 = 2;
+    const recent: RunStatus = .{
+        .state = .training,
+        .batches = 10,
+        .steps = 0,
+        .training_minutes = 1,
+        .servo_seconds_to_failure = null,
+        .recent_seconds_to_failure = null,
+        .assist = 0,
+        .written_at_seconds = now - 5 * minute,
+    };
+    try expect(!recent.isSilent(now, save_minutes));
+    var old: RunStatus = recent;
+    old.written_at_seconds = now - 7 * minute;
+    try expect(old.isSilent(now, save_minutes));
+    var finished_long_ago: RunStatus = old;
+    finished_long_ago.state = .finished;
+    try expect(!finished_long_ago.isSilent(now, save_minutes));
+    var of_unknown_age: RunStatus = old;
+    of_unknown_age.written_at_seconds = 0;
+    try expect(!of_unknown_age.isSilent(now, save_minutes));
+}
+
+test "RunLog: a line written reads back as written; the header and a stranger's line do not" {
+    var log: ArrayList(u8) = .empty;
+    defer log.deinit(testing_allocator);
+    const stats: ppo_track.Stats = .{
+        .decisions = 64,
+        .steps = 1024,
+        .mean_reward = 0.25,
+        .episodes = 2,
+        .mean_episode = 70,
+        .exposure = 1000,
+        .failures = 3,
+        .assist = 0.5,
+    };
+    try RunLog.appendLine(testing_allocator, &log, 7, 1.5, stats);
+    const line_text: []const u8 = std.mem.trimEnd(u8, log.items, "\n");
+    const line: RunLog.Line = RunLog.parseLine(line_text).?;
+    try expectEqual(@as(u64, 7), line.batch);
+    try expectEqual(@as(f32, 1.5), line.training_minutes);
+    try expectEqual(@as(u64, 1024), line.steps);
+    try expectEqual(@as(u64, 1000), line.steps_watched);
+    try expectEqual(@as(u32, 3), line.failures);
+    try expectEqual(@as(f32, 0.25), line.mean_reward);
+    try expectEqual(@as(u32, 2), line.episodes);
+    try expectEqual(@as(f32, 70), line.mean_episode_steps);
+    try expectEqual(@as(f32, 0.5), line.assist);
+    const header_line: []const u8 = std.mem.trimEnd(u8, RunLog.header, "\n");
+    try expect(RunLog.parseLine(header_line) == null);
+    try expect(RunLog.parseLine("7,1.5,1024") == null);
+    try expect(RunLog.parseLine("7,1.5,1024,1000,3,0.25,2,70,0.5,extra") == null);
+}
+
+test "RunCurve: a point per batch, the window's time to failure, none where nothing failed" {
+    const log_text: []const u8 = RunLog.header ++
+        "1,0.10,600,600,0,0.3,1,600.0,1.0\n" ++
+        "2,0.20,600,600,1,0.3,1,600.0,1.0\n" ++
+        "3,0.30,600,600,2,0.3,2,300.0,1.0\n";
+    var curve: RunCurve = .{};
+    defer curve.deinit(testing_allocator);
+    try curve.readMore(testing_allocator, log_text, 60);
+    try expectEqual(@as(usize, 3), curve.points.items.len);
+    try expect(curve.points.items[0].seconds_to_failure == null);
+    try expectApproxEqAbs(@as(f32, 20), curve.points.items[1].seconds_to_failure.?, 1e-4);
+    try expectApproxEqAbs(@as(f32, 10), curve.points.items[2].seconds_to_failure.?, 1e-4);
+    try expectEqual(@as(f32, 0.30), curve.points.items[2].training_minutes);
+    try expectEqual(@as(usize, 0), curve.skipped_lines);
+}
+
+test "RunCurve: a line still being written waits; a shorter log is read again; a stranger's line is skipped" {
+    var curve: RunCurve = .{};
+    defer curve.deinit(testing_allocator);
+    // The header alone: no points.
+    try curve.readMore(testing_allocator, RunLog.header, 60);
+    try expectEqual(@as(usize, 0), curve.points.items.len);
+    // A last line without its newline waits; once its newline is there, it is read - and only once.
+    const partial: []const u8 = RunLog.header ++ "1,0.10,600,600,1,0.3,1,600.0,1.0\n2,0.20,600";
+    try curve.readMore(testing_allocator, partial, 60);
+    try expectEqual(@as(usize, 1), curve.points.items.len);
+    const whole: []const u8 = RunLog.header ++ "1,0.10,600,600,1,0.3,1,600.0,1.0\n2,0.20,600,600,1,0.3,1,600.0,1.0\n";
+    try curve.readMore(testing_allocator, whole, 60);
+    try expectEqual(@as(usize, 2), curve.points.items.len);
+    try expectEqual(@as(u64, 2), curve.points.items[1].batch);
+    // A shorter log - the run carried on from an earlier save - is read again from its start.
+    const shorter: []const u8 = RunLog.header ++ "1,0.10,600,600,1,0.3,1,600.0,1.0\n";
+    try curve.readMore(testing_allocator, shorter, 60);
+    try expectEqual(@as(usize, 1), curve.points.items.len);
+    // A line that is not the log's is skipped, and counted.
+    const with_stranger: []const u8 = shorter ++ "not,a,batch\n";
+    try curve.readMore(testing_allocator, with_stranger, 60);
+    try expectEqual(@as(usize, 1), curve.points.items.len);
+    try expectEqual(@as(usize, 1), curve.skipped_lines);
+}
+
+test "RunLog: a batch's line has a value for every column of the header" {
+    var log: ArrayList(u8) = .empty;
+    defer log.deinit(testing_allocator);
+    try log.appendSlice(testing_allocator, RunLog.header);
+    const stats: ppo_track.Stats = .{
+        .decisions = 64,
+        .steps = 1024,
+        .mean_reward = 0.25,
+        .episodes = 2,
+        .mean_episode = 70,
+    };
+    try RunLog.appendLine(testing_allocator, &log, 3, 1.5, stats);
+    var lines = splitScalar(u8, std.mem.trimEnd(u8, log.items, "\n"), '\n');
+    const header_line: []const u8 = lines.next().?;
+    const batch_line: []const u8 = lines.next().?;
+    const header_columns: usize = std.mem.count(u8, header_line, ",") + 1;
+    const batch_columns: usize = std.mem.count(u8, batch_line, ",") + 1;
+    try expectEqual(header_columns, batch_columns);
+    try expect(startsWith(u8, batch_line, "3,1.50,1024,"));
+}
+
 /// D5's demonstrations: the teacher's decisions as DReCon's policy would see and make them - rows of an
 /// observation (`robot_policy.observe`, built exactly as PPO's trainer builds one) and a label (the raw first
 /// offset / the student's scale, in the subset's order).
@@ -7472,8 +8185,7 @@ test "robot_geno: D5 recorder - each observation's last action is what DReCon's 
             joint.armature = standing_armature;
         }
     }
-    var build_options: rbt.Options = .{ .timestep = 1.0 / 60.0, .gravity = vec(0, 0, -9.81), .max_contacts = 256 };
-    build_options.solver.algorithm = .newton;
+    const build_options: rbt.Options = physicsOptions();
     var imported: robot_mjcf.Imported = try robot_mjcf.build(gpa, &robot, build_options);
     defer imported.deinit();
     const m: *rbt.Model = &imported.model;
@@ -7567,8 +8279,7 @@ test "robot_geno: D5 step 2 - the teacher's decisions replayed through DReCon's 
             joint.armature = standing_armature;
         }
     }
-    var build_options: rbt.Options = .{ .timestep = 1.0 / 60.0, .gravity = vec(0, 0, -9.81), .max_contacts = 256 };
-    build_options.solver.algorithm = .newton;
+    const build_options: rbt.Options = physicsOptions();
     var imported: robot_mjcf.Imported = try robot_mjcf.build(gpa, &robot, build_options);
     defer imported.deinit();
     const m: *rbt.Model = &imported.model;

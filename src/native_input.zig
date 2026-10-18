@@ -428,6 +428,11 @@ pub const InputQueue = struct {
 pub const ContractEvents = struct {
     pointer: Position = .{ .x = 0, .y = 0 },
     text_bytes: [4]u8 = undefined,
+    /// When the events being converted arrived, in milliseconds on the system's monotonic clock - the clock sound is
+    /// requested on - or 0 for none: the time a press carries (`KeyDown.time_ms`, `MouseButton.time_ms`), from which
+    /// the latency readout measures the frame's wait. The window's loop sets it as it hands a pass's input over, which
+    /// it does as soon as the input arrives (`native_loop.waitForFrame`).
+    arrival_ms: f64 = 0,
 
     pub fn convert(converter: *ContractEvents, event: InputEvent) contract.Event {
         return switch (event) {
@@ -436,6 +441,7 @@ pub const ContractEvents = struct {
                 .repeat = down.repeat,
                 .label = down.label,
                 .modifiers = .{},
+                .time_ms = converter.arrival_ms,
             } },
             .key_up => |key| .{ .key_up = .{ .key = key, .modifiers = .{} } },
             .character => |code_point| .{ .text = .{ .bytes = converter.encode(code_point) } },
@@ -482,6 +488,7 @@ pub const ContractEvents = struct {
             .x = converter.pointer.x,
             .y = converter.pointer.y,
             .modifiers = .{},
+            .time_ms = converter.arrival_ms,
         };
     }
 
@@ -621,6 +628,13 @@ pub fn translate(message: win32.InputMessage, queue: *InputQueue) void {
 pub const most_frames_per_advance: u32 = 36_000;
 
 /// A wheel's turn, in notches: `dy` positive away from the person, `dx` to the right; an axis not given does not turn.
+/// A frame saved shrunk (`Command.capture_thumbnail`): the file's path, and the width it is shrunk to - its height in
+/// proportion. A width at least the frame's saves it whole.
+pub const Thumbnail = struct {
+    path: []const u8,
+    width: u32,
+};
+
 pub const Notches = struct {
     dx: f32 = 0,
     dy: f32 = 0,
@@ -656,6 +670,8 @@ pub const GamepadAxisValue = struct {
 ///     .{ .paste = "12ab34" }                    text pasted by the system's paste command
 ///     .capture                                  saves the frame last drawn, as frame_<n>.png in the capture directory
 ///     .{ .capture_to = "shots/name.png" }       saves the frame last drawn at a path of its own
+///     .{ .capture_thumbnail = .{ .path = "shots/name.png", .width = 320 } }  ... shrunk to that width, its height
+///                                               in proportion (`Thumbnail`) - each pixel the mean of those it covers
 ///     .{ .capture_audio_to = "run.wav" }        saves the sound played so far, as a 32-bit float WAV - headless only
 ///     .{ .sync = "7" }                          answered with "synced 7" once every line before it has run
 ///     .{ .gamepad_connect = 0 }                 a gamepad is plugged into slot 0: every button up, the sticks centred
@@ -678,6 +694,7 @@ pub const Command = union(enum) {
     paste: []const u8,
     capture,
     capture_to: []const u8,
+    capture_thumbnail: Thumbnail,
     capture_audio_to: []const u8,
     sync: []const u8,
     gamepad_connect: contract.GamepadSlot,
@@ -785,6 +802,7 @@ pub const ScriptedPerson = struct {
             .advance,
             .capture,
             .capture_to,
+            .capture_thumbnail,
             .capture_audio_to,
             .sync,
             .quit,
@@ -1121,6 +1139,10 @@ test "native_input: script lines are commands written in ZON" {
     try expectEqualStrings("two\nlines \u{e9}", typed.text);
     const saved: Command = try parseForTest(arena, ".{ .capture_to = \"shots/a frame.png\" }");
     try expectEqualStrings("shots/a frame.png", saved.capture_to);
+    const thumbnail_line: []const u8 = ".{ .capture_thumbnail = .{ .path = \"shots/t.png\", .width = 320 } }";
+    const shrunk: Command = try parseForTest(arena, thumbnail_line);
+    try expectEqualStrings("shots/t.png", shrunk.capture_thumbnail.path);
+    try expectEqual(@as(u32, 320), shrunk.capture_thumbnail.width);
     try expect(isBlankLine("  // a comment\r"));
     try expect(!isBlankLine(".quit"));
 }

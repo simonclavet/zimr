@@ -176,15 +176,25 @@ pub fn audioOutputLatencyMilliseconds() f64 {
     return web.dom.audio_output_latency_ms();
 }
 
-/// Which path plays the page's sound: the engine's renderer in the browser's audio worklet; the worklet playing blocks
-/// the main thread renders; or, where no worklet can load, a script processor on the main thread.
+/// Whether the page's sound has settled: playing, or never going to start - the worklet running or failed, or the
+/// script processor, which plays as soon as the context runs - and not while the worklet's processor starts or the
+/// context waits for a gesture. The audio start screen waits for it (`wgpu_app.showAudioStartScreen`).
+pub fn isAudioOutputSettled() bool {
+    return switch (web.dom.audio_output_status()) {
+        .worklet_starting, .worklet_waiting_for_gesture => false,
+        .script_processor, .worklet_running, .worklet_failed => true,
+    };
+}
+
+/// Which path plays the page's sound: the engine's renderer in the browser's audio worklet, or, where no worklet can
+/// load, a script processor on the main thread - and how far it has come.
 pub fn audioOutputName() []const u8 {
-    return switch (web.dom.audio_output_path()) {
-        2 => "zimr's renderer in the audio worklet, starting",
-        3 => "zimr's renderer, in the audio worklet",
-        4 => "zimr's renderer in the audio worklet FAILED - see the log",
-        5 => "zimr's renderer in the audio worklet, suspended until a tap",
-        else => "a script processor, on the main thread",
+    return switch (web.dom.audio_output_status()) {
+        .worklet_starting => "zimr's renderer in the audio worklet, starting",
+        .worklet_running => "zimr's renderer, in the audio worklet",
+        .worklet_failed => "zimr's renderer in the audio worklet FAILED - see the log",
+        .worklet_waiting_for_gesture => "zimr's renderer in the audio worklet, suspended until a tap",
+        .script_processor => "a script processor, on the main thread",
     };
 }
 
@@ -271,8 +281,35 @@ pub fn forwardAudioSamples(samples_id: u16, samples: []const f32) void {
     web.dom.audio_forward_samples(samples_id, samples);
 }
 
-pub fn forwardAudioNote(key: u8, is_down: bool, velocity: f32) void {
-    web.dom.audio_forward_note(key, is_down, velocity);
+pub fn forwardAudioNote(
+    key: u8,
+    is_down: bool,
+    velocity: f32,
+    requested_at_ms: f64,
+    pressed_at_ms: f64,
+) void {
+    web.dom.audio_forward_note(key, is_down, velocity, requested_at_ms, pressed_at_ms);
+}
+
+/// A forwarded stream's frames, to the renderer in the worklet (`mixer.ForwardingOutput.send_stream_frames`).
+pub fn forwardAudioStreamFrames(
+    stream_id: u8,
+    channels: u8,
+    frames_per_second: u32,
+    frames: []const f32,
+) void {
+    web.dom.audio_forward_stream_frames(stream_id, channels, frames_per_second, frames);
+}
+
+/// Asks the renderer in the worklet for its last frames mixed, for an analyser (`mixer.ForwardingOutput.ask_analysis`).
+pub fn askAudioAnalysis() void {
+    web.dom.audio_ask_analysis();
+}
+
+/// The last `frames.len` frames of the renderer's last answer, oldest first (`mixer.ForwardingOutput.
+/// take_analysis_frames`): how many were copied, 0 before the first answer.
+pub fn takeAudioAnalysisFrames(frames: []f32) usize {
+    return web.dom.audio_take_analysis_frames(frames);
 }
 
 /// The notices the renderer sent back, whole ones of `notice_byte_count` bytes only - the mixer's size of a notice,

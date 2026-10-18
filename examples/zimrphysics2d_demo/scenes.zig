@@ -10,6 +10,7 @@ const z = @import("zimr");
 const zm = @import("zm");
 const assertUnreachable = zm.assertUnreachable;
 const float = zm.float;
+const splat2 = zm.splat2;
 const std = @import("std");
 const eql = std.mem.eql;
 const common = @import("example_common");
@@ -1997,19 +1998,19 @@ fn benchmarkWasher(world: *phys.World) !void {
         const a1: Vec2 = rotateVec2(qo_inv, dir_a);
         const a2: Vec2 = rotateVec2(qo, dir_b);
         const ring = [_]Vec2{
-            a1 * @as(Vec2, @splat(r1)),
-            a1 * @as(Vec2, @splat(r2)),
-            a2 * @as(Vec2, @splat(r1)),
-            a2 * @as(Vec2, @splat(r2)),
+            a1 * splat2(r1),
+            a1 * splat2(r2),
+            a2 * splat2(r1),
+            a2 * splat2(r2),
         };
         const ring_hull: phys.Hull = phys.computeHull(&ring);
         _ = try phys.createShape(world, drum, .{ .geom = .{ .polygon = phys.makePolygon(ring_hull, 0) } });
         if (i % 9 == 0) {
             const spoke = [_]Vec2{
-                dir_a * @as(Vec2, @splat(r0)),
-                dir_a * @as(Vec2, @splat(r1)),
-                dir_b * @as(Vec2, @splat(r0)),
-                dir_b * @as(Vec2, @splat(r1)),
+                dir_a * splat2(r0),
+                dir_a * splat2(r1),
+                dir_b * splat2(r0),
+                dir_b * splat2(r1),
             };
             const spoke_hull: phys.Hull = phys.computeHull(&spoke);
             _ = try phys.createShape(world, drum, .{ .geom = .{ .polygon = phys.makePolygon(spoke_hull, 0) } });

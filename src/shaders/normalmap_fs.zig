@@ -17,6 +17,7 @@ const Vec = zm.Vec;
 const Vec3 = zm.Vec3;
 const dot = zm.dot;
 const normalize = zm.normalize;
+const splat3 = zm.splat3;
 const shader_io = @import("normalmap_fs_io.zig");
 const shader_externs = @import("normalmap_fs_externs");
 
@@ -52,14 +53,14 @@ pub fn shaderMain(io_in: Io) Out {
         n_geom[1] * t[2] - n_geom[2] * t[1],
         n_geom[2] * t[0] - n_geom[0] * t[2],
         n_geom[0] * t[1] - n_geom[1] * t[0],
-    } * @as(Vec3, @splat(handed));
+    } * splat3(handed);
     const n_sample: Vec = io_in.normal(io_in.frag_tex_coord);
     const n_ts: Vec3 = Vec3{ n_sample[0], n_sample[1], n_sample[2] } *
-        @as(Vec3, @splat(2.0)) - @as(Vec3, @splat(1.0));
+        splat3(2.0) - splat3(1.0);
     const world_n: Vec3 = normalize(
-        t * @as(Vec3, @splat(n_ts[0])) +
-            bitangent * @as(Vec3, @splat(n_ts[1])) +
-            n_geom * @as(Vec3, @splat(n_ts[2])),
+        t * splat3(n_ts[0]) +
+            bitangent * splat3(n_ts[1]) +
+            n_geom * splat3(n_ts[2]),
     );
 
     // 3. Lighting. View vector for the Blinn-Phong half-vector.
@@ -86,8 +87,8 @@ pub fn shaderMain(io_in: Io) Out {
         const s8: f32 = s4 * s4;
         const spec: f32 = s8 * s8 * n_dot_l;
 
-        const diffuse: Vec3 = albedo * lcol * @as(Vec3, @splat(n_dot_l));
-        const specular: Vec3 = lcol * @as(Vec3, @splat(spec * 0.5));
+        const diffuse: Vec3 = albedo * lcol * splat3(n_dot_l);
+        const specular: Vec3 = lcol * splat3(spec * 0.5);
         color = color + diffuse + specular;
     }
 

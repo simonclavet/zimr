@@ -38,6 +38,7 @@ const d3 = z.draw3d;
 const bufPrint = std.fmt.bufPrint;
 const Color = zm.Color;
 const Vec2 = zm.Vec2;
+const splat = zm.splat;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 /// The default clip, so the viewer is never blank: 10 seconds of `dance1_subject2`, frames
@@ -329,7 +330,7 @@ fn drawSkeleton(
     const n: usize = c.clip.boneCount();
     const end_color: Color = .{ .r = 255, .g = 90, .b = 90, .a = 255 };
     for (0..n) |i| {
-        const p: Vec = c.positions[i] * @as(Vec, @splat(scale));
+        const p: Vec = c.positions[i] * splat(scale);
         const is_end: bool = c.clip.end_site[i];
         if (is_end and !show_end_sites) {
             continue;
@@ -342,7 +343,7 @@ fn drawSkeleton(
 
         const parent: i32 = c.clip.skeleton.bones[i].parent;
         if (parent >= 0) {
-            const pp: Vec = c.positions[@intCast(parent)] * @as(Vec, @splat(scale));
+            const pp: Vec = c.positions[@intCast(parent)] * splat(scale);
             z.drawLine3D(gl, p, pp, if (is_end) end_color else c.color);
         }
 

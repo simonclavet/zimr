@@ -19,6 +19,7 @@ const Vec2 = zm.Vec2;
 const Color = zm.Color;
 const clamp = zm.clamp;
 const pi = zm.pi;
+const splat = zm.splat;
 const ui = z.ui_real;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -68,7 +69,7 @@ fn lerpColor(
         @floatFromInt(b.r), @floatFromInt(b.g),
         @floatFromInt(b.b), @floatFromInt(b.a),
     };
-    const mix: Vec = af + (bf - af) * @as(Vec, @splat(tc));
+    const mix: Vec = af + (bf - af) * splat(tc);
     return .{
         .r = @trunc(mix[0]),
         .g = @trunc(mix[1]),

@@ -8,7 +8,7 @@
 // dead code must either compile or be deleted.  Shallow (not
 // recursive): file-level decls are forced; inner namespaces get
 // coverage from real call sites + their own tests.  Wasm entry
-// roots (spv2wgsl_wasm, wgpu_smoke_test, wgpu_runner) are excluded - they only
+// roots (wgpu_smoke_test, wgpu_runner) are excluded - they only
 // make sense as wasm module roots.
 //
 // To add a test file:
@@ -33,7 +33,7 @@ comptime {
     //
     // Found by walking the import closure of every test root: these are not in `fast_test_roots`
     // and were not listed here, so they compiled nowhere and ran never. The header's documented
-    // exclusions (`spv2wgsl_wasm`, `wgpu_smoke_test`, `wgpu_runner` - wasm module roots) are
+    // exclusions (`wgpu_smoke_test`, `wgpu_runner` - wasm module roots) are
     // deliberate and stay out; these six had no such reason. Every dependency they name was
     // already inside this aggregator's closure, so wiring them costs no extra compile.
     //
@@ -58,8 +58,8 @@ comptime {
     // `ulimit -s unlimited`.  Coverage tradeoff (accepted zimr1233): the
     // 181-fixture Tint corpus regression now runs ONLY via the separate
     // `zig build naga-tint` step (scripts/naga-validate-tint.sh, needs
-    // naga); the routine `wgpu-check` gate carries just the 2-case locked
-    // web corpus (webtests/transpiler_corpus.zig) plus fixture + smoke.
+    // naga); the routine `check` gate carries the spv2wgsl corpus
+    // (tools/wgsl_corpus.zig, every graphics shader) plus fixture + smoke.
     // If the full corpus regression is wanted back in-process, wrap it in
     // a `std.Thread.spawn(.{ .stack_size = ... })` rather than the global
     // ulimit footgun.)

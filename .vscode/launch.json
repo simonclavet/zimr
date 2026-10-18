@@ -57,6 +57,28 @@
             "smartStep": true
         },
         {
+            "name": "Debug: audio-scale-star",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/audio_scale_star/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build audio-scale-star",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: audio-scale-star-hands",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/audio_scale_star_hands/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build audio-scale-star-hands",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
             "name": "Debug: audio-sound-lab",
             "type": "chrome",
             "request": "launch",
@@ -811,6 +833,17 @@
             "url": "http://localhost:8080/geno_fit/",
             "webRoot": "${workspaceFolder}/zig-out/web",
             "preLaunchTask": "zig: build geno-fit",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: geno-lab",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/geno_lab/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build geno-lab",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -3566,6 +3599,28 @@
             "preLaunchTask": "zig: build audio-mixer (windows)"
         },
         {
+            "name": "Debug: audio-scale-star (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/audio_scale_star.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build audio-scale-star (windows)"
+        },
+        {
+            "name": "Debug: audio-scale-star-hands (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/audio_scale_star_hands.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build audio-scale-star-hands (windows)"
+        },
+        {
             "name": "Debug: audio-sound-lab (windows)",
             "type": "lldb",
             "request": "launch",
@@ -4323,6 +4378,17 @@
                 "settings set target.use-fast-stepping false"
             ],
             "preLaunchTask": "zig: build geno-fit (windows)"
+        },
+        {
+            "name": "Debug: geno-lab (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/geno_lab.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build geno-lab (windows)"
         },
         {
             "name": "Debug: geno-ppo (windows)",

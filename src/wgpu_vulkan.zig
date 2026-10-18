@@ -553,6 +553,9 @@ const Host = struct {
     frame_slot: usize = 0,
     acquired_image: ?u32 = null,
     acquire_waited: bool = false,
+    /// The swapchain image acquired before its frame began (`tryAcquireAhead`), which the frame's `acquireImage`
+    /// takes; null when the frame acquires its own.
+    image_acquired_ahead: ?u32 = null,
     swapchain: Swapchain = .{},
     swapchain_dirty: bool = false,
     texture_views: Pool(TextureViewSlot) = .{},
@@ -1774,21 +1777,80 @@ fn rebuildSwapchain(self: *Host) BringUpError!void {
 /// Asks the presentation engine for the swapchain's next image, to signal the frame slot's acquire semaphore when the
 /// image is free; its index lands in `image_index`. The result also says whether the swapchain still matches its
 /// surface: `suboptimal_khr`, usable but not ideal; `error_out_of_date_khr`, no longer usable.
-fn acquireNextImage(self: *Host, image_index: *u32) vk.Result {
+fn acquireNextImage(self: *Host, image_index: *u32, timeout_nanoseconds: u64) vk.Result {
     return self.swapchain_dispatch.acquireNextImageKHR(
         self.device,
         self.swapchain.handle,
-        no_timeout,
+        timeout_nanoseconds,
         self.acquire_semaphores[self.frame_slot],
         .null_handle,
         image_index,
     );
 }
 
-/// The next swapchain image, as the engine sees it: the handle of its view. The frame slot is waited for, a stale
-/// swapchain rebuilt, the image acquired, and its preparation - its one layout change, and a clear - recorded into
-/// `uploads`, which the first batch after the acquire runs once the image is free.
+/// An acquired image made ready for its frame: kept as the frame's (`acquired_image`), and its preparation - its one
+/// layout change, and a clear - recorded into `uploads`, which the first batch after the acquire runs once the image
+/// is free. The handle of its view, as the engine sees the image.
+fn prepareAcquiredImage(self: *Host, image_index: u32) BringUpError!u32 {
+    self.acquired_image = image_index;
+    self.acquire_waited = false;
+    // The image's preparation, into `uploads`: from UNDEFINED - its old contents are not needed - to GENERAL.
+    const uploads: vk.CommandBuffer = try uploadsCommandBuffer(self);
+    const image: vk.Image = self.swapchain.images[image_index];
+    imageBarrier(self, uploads, image, single_color_range, .undefined, .general);
+    // WebGPU's current texture starts as zeros (transparent black) every frame: a first pass that LOADS instead of
+    // clearing sees black on the web, so it must here too - not whatever the image held.
+    const zero_color: vk.ClearColorValue = .{ .float_32 = @splat(0) };
+    self.device_dispatch.cmdClearColorImage(uploads, image, .general, &zero_color, 1, @ptrCast(&single_color_range));
+    return self.swapchain.view_handles.items[image_index];
+}
+
+/// Whether the next frame can begin without waiting - and if so, its image acquired already (`image_acquired_ahead`):
+/// the batch that last presented from the frame slot finished (the timeline read without waiting, `readCompleted`),
+/// and an image free at once (`acquireNextImageKHR` with a timeout of 0). The native loop asks before each frame and,
+/// between askings, handles the window's messages, so that input arriving during the frame's wait reaches the app the
+/// moment it arrives (`AppSpec.on_input`) - the wait moved from inside the frame's `acquireImage` to before the frame,
+/// where no app code runs. True also when there is nothing to wait for here - no host; a swapchain to rebuild, an
+/// image out of date, an error - each left to the frame's own `acquireImage`, so that the loop never waits on them.
+pub fn tryAcquireAhead() bool {
+    const self: *Host = host orelse return true;
+    if (self.image_acquired_ahead != null) {
+        return true;
+    }
+    const completed: u64 = readCompleted(self) catch return true;
+    if (completed < self.present_serials[self.frame_slot]) {
+        return false;
+    }
+    const window: *win32.Window = theWindow(self);
+    const is_stale: bool = self.swapchain_dirty or window.size_changed or self.swapchain.handle == .null_handle;
+    if (is_stale) {
+        return true;
+    }
+    var image_index: u32 = 0;
+    const result: vk.Result = acquireNextImage(self, &image_index, 0);
+    switch (result) {
+        .success, .suboptimal_khr => {
+            // An image WAS acquired: this frame uses it, and a suboptimal swapchain is rebuilt at the next.
+            if (result == .suboptimal_khr) {
+                self.swapchain_dirty = true;
+            }
+            self.image_acquired_ahead = image_index;
+            return true;
+        },
+        .not_ready, .timeout => return false,
+        else => return true,
+    }
+}
+
+/// The next swapchain image, as the engine sees it: the handle of its view. An image acquired before the frame
+/// (`tryAcquireAhead`) is taken as it is; otherwise the frame slot is waited for, a stale swapchain rebuilt, and the
+/// image acquired. Then its preparation (`prepareAcquiredImage`).
 fn acquireImage(self: *Host) BringUpError!u32 {
+    if (self.image_acquired_ahead) |ahead_index| {
+        self.image_acquired_ahead = null;
+        try retireCompleted(self);
+        return prepareAcquiredImage(self, ahead_index);
+    }
     // The frame slot: the batch that last presented from it must be done; reclaim what is.
     try waitTimeline(self, self.present_serials[self.frame_slot]);
     try retireCompleted(self);
@@ -1807,28 +1869,18 @@ fn acquireImage(self: *Host) BringUpError!u32 {
         panic("vulkan host: no swapchain - the window is zero-sized", .{});
     }
     var image_index: u32 = 0;
-    var result: vk.Result = acquireNextImage(self, &image_index);
+    var result: vk.Result = acquireNextImage(self, &image_index, no_timeout);
     if (result == .error_out_of_date_khr) {
         // Nothing was acquired and the semaphore was not signalled: rebuild, and acquire once more.
         try rebuildSwapchain(self);
-        result = acquireNextImage(self, &image_index);
+        result = acquireNextImage(self, &image_index, no_timeout);
     }
     try vk.check(result);
     if (result == .suboptimal_khr) {
         // An image WAS acquired: this frame uses it, the next one rebuilds.
         self.swapchain_dirty = true;
     }
-    self.acquired_image = image_index;
-    self.acquire_waited = false;
-    // The image's preparation, into `uploads`: from UNDEFINED - its old contents are not needed - to GENERAL.
-    const uploads: vk.CommandBuffer = try uploadsCommandBuffer(self);
-    const image: vk.Image = self.swapchain.images[image_index];
-    imageBarrier(self, uploads, image, single_color_range, .undefined, .general);
-    // WebGPU's current texture starts as zeros (transparent black) every frame: a first pass that LOADS instead of
-    // clearing sees black on the web, so it must here too - not whatever the image held.
-    const zero_color: vk.ClearColorValue = .{ .float_32 = @splat(0) };
-    self.device_dispatch.cmdClearColorImage(uploads, image, .general, &zero_color, 1, @ptrCast(&single_color_range));
-    return self.swapchain.view_handles.items[image_index];
+    return prepareAcquiredImage(self, image_index);
 }
 
 /// Presents the acquired image. A batch of its own - with any writes still pending - moves the image to PRESENT_SRC
@@ -3257,14 +3309,24 @@ fn createComputePipeline(
     };
     var pipeline: vk.Pipeline = .null_handle;
     const no_pipeline_cache: vk.PipelineCache = .null_handle;
-    try vk.check(self.device_dispatch.createComputePipelines(
+    const result: vk.Result = self.device_dispatch.createComputePipelines(
         self.device,
         no_pipeline_cache,
         1,
         @ptrCast(&create_info),
         null,
         @ptrCast(&pipeline),
-    ));
+    );
+    // A refusal's own code in the log - the driver's, raw - since `vk.check` folds the codes it does not name into
+    // one, and a compute pipeline is where a driver refuses a shader it cannot compile.
+    if (result != .success) {
+        log.err("compute pipeline '{s}' (entry '{s}'): the driver answered {d}", .{
+            label,
+            entry_point,
+            @backingInt(result),
+        });
+    }
+    try vk.check(result);
     nameObject(self, .pipeline, @backingInt(pipeline), label);
     retainPipelineLayout(self, layout_handle);
     return .{

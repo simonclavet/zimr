@@ -14,6 +14,7 @@ const zm = @import("zm");
 const Vec3 = zm.Vec3;
 const mulMatPoint = zm.mulMatPoint;
 const normalize = zm.normalize;
+const splat3 = zm.splat3;
 const shader_io = @import("outline_hull_vs_io.zig");
 const shader_externs = @import("outline_hull_vs_externs");
 
@@ -28,7 +29,7 @@ pub fn shaderMain(io_in: Io) Out {
     // the width immune to un-normalized art normals.
     const n: Vec3 = normalize(io_in.vertex_normal);
     const thickness: f32 = io_in.u.params[0];
-    const puffed: Vec3 = io_in.vertex_position + n * @as(Vec3, @splat(thickness));
+    const puffed: Vec3 = io_in.vertex_position + n * splat3(thickness);
     out.position = mulMatPoint(io_in.u.mvp, puffed);
 
     // The ink, riding the frag_gray varying into depth_fs's passthrough.

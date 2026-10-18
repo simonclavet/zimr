@@ -21,6 +21,7 @@
 
 const std = @import("std");
 const ArrayList = std.ArrayList;
+const endsWith = std.mem.endsWith;
 
 // Local aliases for the std.Build types this file works with so the
 // type annotations at every `const x: T = b.addX(...)` site stay
@@ -57,6 +58,51 @@ const LazyPath = std.Build.LazyPath;
 // the locked design decisions; `src/notes/zig-shader-pipeline-plan.md`
 // for the multi-step rollout plan.
 
+/// The spv2wgsl corpus's input: every graphics shader the pipeline translates, once each, as
+/// `<source path without .zig>.spv` - the compiler's SPIR-V - and `.wgsl` - what a page embeds - in one directory.
+/// `tools/wgsl_corpus.zig` holds the directory to `tests/fixtures/wgsl_corpus.txt` (`zig build corpus`), so what it
+/// checks is what this build ships, named by source file.
+pub const WgslCorpus = struct {
+    files: *WriteFile,
+    /// The shaders already added, by name.
+    names: std.StringHashMapUnmanaged(void) = .empty,
+
+    pub fn init(b: *Build) WgslCorpus {
+        return .{ .files = b.addWriteFiles() };
+    }
+
+    /// Add a shader under its source path. A shader several apps compile is added once: every compile of one source
+    /// passes the compiler the same arguments, so the first stands for the rest. A shader whose source the build
+    /// generates has no stable name to pin it under, and is left out.
+    fn add(
+        corpus: *WgslCorpus,
+        b: *Build,
+        source: LazyPath,
+        spv: LazyPath,
+        wgsl: LazyPath,
+    ) void {
+        const is_source_file: bool = source == .src_path;
+        if (!is_source_file) {
+            return;
+        }
+        const display_name: []const u8 = source.getDisplayName();
+        const stem: []const u8 = if (endsWith(u8, display_name, ".zig"))
+            display_name[0 .. display_name.len - ".zig".len]
+        else
+            display_name;
+        // `LazyPath.path` joins with the host's separator: one name on every machine.
+        const name: []u8 = b.allocator.dupe(u8, stem) catch @panic("OOM");
+        std.mem.replaceScalar(u8, name, '\\', '/');
+        const entry: @TypeOf(corpus.names).GetOrPutResult = corpus.names.getOrPut(b.allocator, name) catch
+            @panic("OOM");
+        if (entry.found_existing) {
+            return;
+        }
+        _ = corpus.files.addCopyFile(spv, b.fmt("{s}.spv", .{name}));
+        _ = corpus.files.addCopyFile(wgsl, b.fmt("{s}.wgsl", .{name}));
+    }
+};
+
 /// Pipeline context.  Stores the shared subbuild dependency and the
 /// known paths to the three vendored tool binaries (built once by
 /// `tools/build.zig`).  Construct once at the top of `pub fn build`,
@@ -66,6 +112,9 @@ pub const ShaderPipeline = struct {
     /// Every compute kernel entry built so far, in the order the build wired them: what `kernels-wgsl` installs, and
     /// what a native build embeds.
     compute_outputs: ArrayList(ComputeOutput) = .empty,
+    /// Where every graphics shader this pipeline translates is collected for the spv2wgsl corpus (`WgslCorpus`), or
+    /// null when nothing checks them - a project that depends on zimr.
+    wgsl_corpus: ?*WgslCorpus = null,
     tools_dep: ?*std.Build.Step = null,
     /// `spv2wgsl` - pure-Zig SPIR-V -> WGSL translator.  Operates on
     /// the compiler's raw `shader.spv` directly.  No Naga / Tint in
@@ -526,6 +575,11 @@ pub const ShaderPipeline = struct {
             break :checked checked;
         } else wgsl_path;
 
+        if (self.wgsl_corpus) |corpus| {
+            if (checked_wgsl_path) |embedded_wgsl| {
+                corpus.add(b, source, raw_spv, embedded_wgsl);
+            }
+        }
         return .{
             .externs = externs_module,
             .spv = raw_spv,

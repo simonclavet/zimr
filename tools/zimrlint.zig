@@ -19,7 +19,10 @@
 //!
 //! HOW TO RUN IT
 //!   zimrlint --enable=<tag>,<tag> <file.zig> ...   check these rules; exits non-zero on any issue
-//!   zimrlint --fix --enable=<tag>,... <file.zig>   apply the autofixes those rules marked safe
+//!   zimrlint --fix --enable=<tag>,... <file.zig>   apply the autofixes those rules marked safe: each fixed file
+//!                                           written once, laid out as `zig fmt` lays it out, with a line naming
+//!                                           what was fixed (`zimrlint: fixed <file>: <rule> x<count>, ...`) and
+//!                                           a count of what is left for a person (`zimrlint: N left in <file>`)
 //!   zimrlint --list-rules                   every tag (those in progress marked)
 //!   zimrlint --cache-dir <dir> ...          where the per-file clean stamps go
 //!   Built as a ReleaseSafe exe (NOT ReleaseFast -- this dev Zig miscompiles it in
@@ -39,7 +42,7 @@
 //!     math -> zm  : no-qualified-zm, reserved-math-names, std-math, clamp-pattern,
 //!                   prefer-vec, array-mult, int-from-float, float-from-int,
 //!                   as-round, redundant-cast, std-debug-assert, custom-degrad,
-//!                   turn-in-radian-call
+//!                   turn-in-radian-call, prefer-splat
 //!     errors      : catch-suppression, no-catch-return, useless-error-return,
 //!                   prefer-assert-unreachable
 //!     bugs        : returned-stack-reference, whole-init-first, state-uninit,
@@ -134,6 +137,8 @@ const Fix = struct {
     start: u32,
     end: u32,
     replacement: []const u8 = "",
+    /// The rule whose finding this repairs - a static tag - for the report of what a fix run changed.
+    tag: []const u8 = "",
 };
 
 const Issue = struct {
@@ -487,6 +492,7 @@ const Ctx = struct {
         errdefer self.alloc.free(replacement_owned);
         var fix_owned: Fix = fix;
         fix_owned.replacement = replacement_owned;
+        fix_owned.tag = tag;
         try self.issues.append(self.alloc, .{
             .file = self.path,
             .line = line,
@@ -663,14 +669,15 @@ const keywords = std.StaticStringMap(void).initComptime(.{
     .{ "Vec3", {} },         .{ "Vec2", {} },          .{ "Color", {} },          .{ "Ray", {} },
     .{ "RayCollision", {} }, .{ "Transform", {} },     .{ "quat", {} },           .{ "Camera2D", {} },
     .{ "Camera3D", {} },
-    // more functions (distinctive, no collisions)
+    // more functions (distinctive, no collisions). `splat3` / `splat2` / `splat2i` are the rest of the `splat`
+    // family - what `prefer-splat` writes for Vec3 / Vec2 / Vec2i.
         .{ "complex", {} },       .{ "determinant", {} },    .{ "f32x4", {} },
     .{ "f32x8", {} },        .{ "lerpV", {} },         .{ "mapLinear", {} },      .{ "modAngle", {} },
     .{ "mulMat", {} },       .{ "mulMatVec", {} },     .{ "niceNum", {} },        .{ "remap", {} },
     .{ "scaling", {} },      .{ "splat", {} },         .{ "swizzle", {} },        .{ "transpose", {} },
-    .{ "vec", {} },
+    .{ "vec", {} },          .{ "splat3", {} },        .{ "splat2", {} },         .{ "splat2i", {} },
     // numeric conversions (int<->float helpers; never a local name)
-             .{ "float", {} },         .{ "float64", {} },        .{ "int", {} },
+    .{ "float", {} },        .{ "float64", {} },       .{ "int", {} },
 });
 
 // ============================================================================
@@ -1598,6 +1605,24 @@ const rule_notes = [_]RuleNote{
         \\
         \\`--fix` rewrites to `float(x)` when the file binds `const float =
         \\zm.float;`, and to `zm.float(x)` when it only imports zm.
+        ,
+    },
+    .{
+        .tag = "prefer-splat",
+        .title = "prefer-splat - `@as(Vec, @splat(x))` is `splat(x)`",
+        .body =
+        \\`@splat` takes its type from where the value lands, and a binary operator
+        \\gives it none - so `v * @splat(s)` does not compile, and the usual way out,
+        \\`v * @as(Vec, @splat(s))`, spells the type to say nothing. zm's broadcast
+        \\helpers carry it: `splat(s)` -> Vec, `splat3(s)` -> Vec3, `splat2(s)` ->
+        \\Vec2, `splat2i(s)` -> Vec2i. The type may be qualified (`zm.Vec`,
+        \\`rbt.Vec`): these names are reserved for zm's types, so any `Vec` is zm's.
+        \\A `const k: Vec = @splat(s);` already has its type and is left alone, as
+        \\is any other vector type (`@as(T, @splat(s))` in generic code).
+        \\
+        \\`--fix` rewrites to `splat(x)` when the file binds `const splat =
+        \\zm.splat;` (or declares the helper itself), and to `zm.splat(x)` when it
+        \\only imports zm - which `no-qualified-zm` then binds.
         ,
     },
     .{
@@ -4549,6 +4574,120 @@ fn checkFloatFromInt(
     );
 }
 
+/// The name token of a file-scope declaration, or null for `test` /
+/// `comptime` / `usingnamespace` (which have no name to reference).
+fn declNameToken(ast: *const Ast, node: Index) ?u32 {
+    if (ast.nodeTag(node) == .fn_decl) {
+        var buf: [1]Index = undefined;
+        const proto: Ast.full.FnProto = ast.fullFnProto(&buf, node) orelse return null;
+        return proto.name_token;
+    }
+    const vd: Ast.full.VarDecl = ast.fullVarDecl(node) orelse return null;
+    return vd.ast.mut_token + 1;
+}
+
+/// Whether a bare `name` already resolves above `use_token`: the file binds it from zm (`const splat = zm.splat;`)
+/// or declares a function of that name itself (zimrmath.zig, where the helpers live) - either one ABOVE the use,
+/// so the rewrite never puts a use before its declaration (`decl-order`).
+fn bareNameResolvesAbove(ctx: Ctx, name: []const u8, use_token: u32) bool {
+    const ast: *const Ast = ctx.ast;
+    if (fileScopeBinding(ast, ctx.zm_aliases, .zm, name)) |binding_token| {
+        return binding_token < use_token;
+    }
+    for (ast.rootDecls()) |decl| {
+        if (ast.nodeTag(decl) != .fn_decl) {
+            continue;
+        }
+        const name_token: u32 = declNameToken(ast, decl) orelse continue;
+        if (eql(u8, ast.tokenSlice(name_token), name)) {
+            return ast.firstToken(decl) < use_token;
+        }
+    }
+    return false;
+}
+
+/// `prefer-splat`: `@as(Vec, @splat(x))` - the `@as` only gives `@splat` a result type, which zm's broadcast
+/// helpers carry themselves: `splat(x)` -> Vec, `splat3` -> Vec3, `splat2` -> Vec2, `splat2i` -> Vec2i. The
+/// type may be bare or qualified (`zm.Vec`, `rbt.Vec`): the names are reserved for zm's types
+/// (`reserved-math-names`), so a `Vec` reached through any module is zm's. Each helper takes the lane type
+/// (`f32`, or `i32` for `splat2i`), which `@splat` coerces `x` to as well, so the two spellings accept the same
+/// arguments. Autofixes like `float-from-int`: bare when the name resolves above the use, `zm.<helper>(x)` when the
+/// file only imports zm (`no-qualified-zm` then binds it), a report alone when it has no zm import.
+fn checkPreferSplat(ctx: Ctx, node: Index, tag: Ast.Node.Tag) !void {
+    if (tag != .builtin_call_two and tag != .builtin_call_two_comma) {
+        return;
+    }
+    const ast: *const Ast = ctx.ast;
+    if (!eql(u8, ast.tokenSlice(ast.nodeMainToken(node)), "@as")) {
+        return;
+    }
+    // @as(T, value): T is the first builtin arg, the cast value is the second.
+    const ty_opt, const val_opt = ast.nodeData(node).opt_node_and_opt_node;
+    const ty: Index = ty_opt.unwrap() orelse return;
+    const val: Index = val_opt.unwrap() orelse return;
+
+    // T is `Vec` / `Vec3` / `Vec2` / `Vec2i`, bare or as the last segment of a member access.
+    const type_token: u32 = switch (ast.nodeTag(ty)) {
+        .identifier => ast.nodeMainToken(ty),
+        .field_access => ast.nodeData(ty).node_and_token[1],
+        else => return,
+    };
+    const type_name: []const u8 = ast.tokenSlice(type_token);
+    const helper: []const u8 = if (eql(u8, type_name, "Vec"))
+        "splat"
+    else if (eql(u8, type_name, "Vec3"))
+        "splat3"
+    else if (eql(u8, type_name, "Vec2"))
+        "splat2"
+    else if (eql(u8, type_name, "Vec2i"))
+        "splat2i"
+    else
+        return;
+
+    // value is `@splat(x)`, with its one argument.
+    const val_tag: Ast.Node.Tag = ast.nodeTag(val);
+    if (val_tag != .builtin_call_two and val_tag != .builtin_call_two_comma) {
+        return;
+    }
+    if (!eql(u8, ast.tokenSlice(ast.nodeMainToken(val)), "@splat")) {
+        return;
+    }
+    const x_opt, const extra_opt = ast.nodeData(val).opt_node_and_opt_node;
+    const x: Index = x_opt.unwrap() orelse return;
+    if (extra_opt.unwrap() != null) {
+        return; // two arguments: not a valid `@splat`, the compiler's to report
+    }
+
+    // The whole `@as(...)` node is replaced by `helper(x_src)`.
+    const as_last: u32 = ast.lastToken(node);
+    const as_start: u32 = @intCast(ast.tokenStart(ast.firstToken(node)));
+    const as_end: u32 = @intCast(ast.tokenStart(as_last) + ast.tokenSlice(as_last).len);
+    const x_last: u32 = ast.lastToken(x);
+    const x_start: usize = ast.tokenStart(ast.firstToken(x));
+    const x_end: usize = ast.tokenStart(x_last) + ast.tokenSlice(x_last).len;
+    const x_src: []const u8 = ctx.source[x_start..x_end];
+
+    const message: []const u8 = "@as({s}, @splat(x)) spells the type to say nothing - use {s}(x) " ++
+        "(`// lint:off prefer-splat: <why>` for a deliberate one)";
+    // A temporary: `emitFix` copies it if the issue is kept, so it is freed here either way.
+    const replacement: []const u8 = if (bareNameResolvesAbove(ctx, helper, ast.firstToken(node)))
+        try allocPrint(ctx.alloc, "{s}({s})", .{ helper, x_src })
+    else if (ctx.zm_aliases.len > 0)
+        try allocPrint(ctx.alloc, "{s}.{s}({s})", .{ ctx.zm_aliases[0], helper, x_src })
+    else
+        return ctx.emitAt(ast.nodeMainToken(node), "prefer-splat", 0, message, .{ type_name, helper });
+    defer ctx.alloc.free(replacement);
+
+    try ctx.emitFix(
+        ast.nodeMainToken(node),
+        "prefer-splat",
+        0,
+        .{ .start = as_start, .end = as_end, .replacement = replacement },
+        message,
+        .{ type_name, helper },
+    );
+}
+
 /// Byte length of the source line containing `byte_offset`, newline excluded -
 /// matches the line-length rule's measure (raw bytes, no tab expansion).
 fn lineLenAt(source: [:0]const u8, byte_offset: usize) usize {
@@ -5602,6 +5741,7 @@ fn walkNode(
     try checkAsRound(ctx, node, tag);
     try checkIntFromFloat(ctx, node, tag);
     try checkFloatFromInt(ctx, node, tag);
+    try checkPreferSplat(ctx, node, tag);
     try checkBannedConversion(ctx, node, tag);
     try checkFnArgsMultiline(ctx, node, tag);
     try checkAnonReturn(ctx, node, tag);
@@ -6389,18 +6529,6 @@ const DeclSite = struct {
     /// The earliest reference that appears before `first_token`, if any.
     earliest_use: ?u32 = null,
 };
-
-/// The name token of a file-scope declaration, or null for `test` /
-/// `comptime` / `usingnamespace` (which have no name to reference).
-fn declNameToken(ast: *const Ast, node: Index) ?u32 {
-    if (ast.nodeTag(node) == .fn_decl) {
-        var buf: [1]Index = undefined;
-        const proto: Ast.full.FnProto = ast.fullFnProto(&buf, node) orelse return null;
-        return proto.name_token;
-    }
-    const vd: Ast.full.VarDecl = ast.fullVarDecl(node) orelse return null;
-    return vd.ast.mut_token + 1;
-}
 
 /// `decl-order`: flag a reference to a file-scope declaration (`fn`, `const`,
 /// or `var`) that appears in the source BEFORE that declaration, so files read
@@ -8524,9 +8652,35 @@ fn collectFixes(gpa: Allocator, issues: []const Issue, out: *ArrayList(Fix)) !vo
 
 /// Outcome of fixing one file: the final source (owned), how many edits landed,
 /// and whether any fix was refused because it would have broken the file.
+/// How many fixes of each rule a fix run applied to a file, in the order the rules first applied one: what the run
+/// reports for the file (`zimrlint: fixed <file>: <rule> x<count>, ...`).
+const FixTally = struct {
+    const RuleCount = struct {
+        tag: []const u8,
+        count: usize,
+    };
+    rule_counts: ArrayList(RuleCount) = .empty,
+
+    fn add(self: *FixTally, gpa: Allocator, tag: []const u8) !void {
+        for (self.rule_counts.items) |*rule_count| {
+            if (eql(u8, rule_count.tag, tag)) {
+                rule_count.count += 1;
+                return;
+            }
+        }
+        try self.rule_counts.append(gpa, .{ .tag = tag, .count = 1 });
+    }
+
+    fn deinit(self: *FixTally, gpa: Allocator) void {
+        self.rule_counts.deinit(gpa);
+    }
+};
+
 const FixOutcome = struct {
     bytes: []u8,
     edits_applied: usize,
+    /// The fixes applied, by rule.
+    tally: FixTally,
     /// Some fixes were refused: applied, they would have broken the file (`applyFixesGuarded`). The findings they
     /// belong to stay, marked for a human.
     refused_any: bool,
@@ -8543,7 +8697,12 @@ const GuardedOutcome = struct {
 /// leaves the file clean (`compilesClean`) and refusing the others. What the fix loop falls back to when a pass,
 /// applied all at once, breaks the file: one bad fix, or two that only clash together, must not cost the file all
 /// the good ones. `fixes` are sorted ascending and do not overlap (`collectFixes`).
-fn applyFixesGuarded(gpa: Allocator, source: []const u8, fixes: []const Fix) !GuardedOutcome {
+fn applyFixesGuarded(
+    gpa: Allocator,
+    source: []const u8,
+    fixes: []const Fix,
+    tally: *FixTally,
+) !GuardedOutcome {
     var current: []u8 = try gpa.dupe(u8, source);
     var applied: usize = 0;
     var refused: usize = 0;
@@ -8555,12 +8714,40 @@ fn applyFixesGuarded(gpa: Allocator, source: []const u8, fixes: []const Fix) !Gu
             gpa.free(current);
             current = candidate;
             applied += 1;
+            try tally.add(gpa, fixes[index].tag);
         } else {
             gpa.free(candidate);
             refused += 1;
         }
     }
     return .{ .bytes = current, .applied = applied, .refused = refused };
+}
+
+/// `source` laid out as `zig fmt` lays it out - its own renderer, `std.zig.Ast.render` - so that a fixed file is
+/// written formatted, in the one write that fixes it: a fix makes the smallest edit (one comma, say) and leaves the
+/// layout to the renderer, and nothing that stops a build between the two can leave a file fixed but unformatted.
+/// The source unchanged, as a copy, when it does not parse.
+fn zigFormatted(gpa: Allocator, source: []const u8) ![]u8 {
+    const source_z: [:0]u8 = try gpa.allocSentinel(u8, source.len, 0);
+    defer gpa.free(source_z);
+    @memcpy(source_z, source);
+    var tree: std.zig.Ast = try .parse(gpa, source_z, .{ .mode = .zig });
+    defer tree.deinit(gpa);
+    if (tree.errors.len > 0) {
+        return gpa.dupe(u8, source);
+    }
+    return tree.renderAlloc(gpa);
+}
+
+/// One line for a file a fix run rewrote: `zimrlint: fixed <path>: <rule> x<count>, ...`, the rules in the order
+/// they first applied a fix - what a person, or a program editing the file, needs to know to read it again.
+fn printFixTally(out: *Io.Writer, path: []const u8, tally: FixTally) !void {
+    try out.print("zimrlint: fixed {s}:", .{path});
+    for (tally.rule_counts.items, 0..) |rule_count, index| {
+        const separator: []const u8 = if (index == 0) " " else ", ";
+        try out.print("{s}{s} x{d}", .{ separator, rule_count.tag, rule_count.count });
+    }
+    try out.print("\n", .{});
 }
 
 /// Iteratively analyze -> collect fixes -> splice, until no more fixes (or 5
@@ -8571,6 +8758,8 @@ fn runFixLoop(gpa: Allocator, path: []const u8, original: []const u8, args: *con
     var cur: []u8 = try gpa.dupe(u8, original);
     var total_edits: usize = 0;
     var refused_any: bool = false;
+    var tally: FixTally = .{};
+    errdefer tally.deinit(gpa);
     var pass: usize = 0;
     while (pass < 5) : (pass += 1) {
         const cur_z: [:0]u8 = try gpa.allocSentinel(u8, cur.len, 0);
@@ -8602,7 +8791,7 @@ fn runFixLoop(gpa: Allocator, path: []const u8, original: []const u8, args: *con
         if (before_ok and !after_ok) {
             // Together these edits break a clean file. Keep the ones that do not, one at a time; refuse the rest.
             gpa.free(next);
-            const guarded: GuardedOutcome = try applyFixesGuarded(gpa, cur, fixes.items);
+            const guarded: GuardedOutcome = try applyFixesGuarded(gpa, cur, fixes.items, &tally);
             gpa.free(cur);
             cur = guarded.bytes;
             total_edits += guarded.applied;
@@ -8616,8 +8805,11 @@ fn runFixLoop(gpa: Allocator, path: []const u8, original: []const u8, args: *con
         gpa.free(cur);
         cur = next;
         total_edits += fixes.items.len;
+        for (fixes.items) |applied_fix| {
+            try tally.add(gpa, applied_fix.tag);
+        }
     }
-    return .{ .bytes = cur, .edits_applied = total_edits, .refused_any = refused_any };
+    return .{ .bytes = cur, .edits_applied = total_edits, .tally = tally, .refused_any = refused_any };
 }
 
 // ==== --reorder-decls: move declarations above their first use (the hoist strategy) ====
@@ -9152,9 +9344,6 @@ fn runReorderDecls(
 /// `--fix`. zimr's build and a project's pass `zig build fix` instead - the step that runs `--fix`, then zig fmt.
 const fix_command_default: []const u8 = "rerun this command with --fix";
 
-/// The hint after `--fix` REFUSED a finding's fix (it would have broken the file): not an autofix any more.
-const fix_refused_hint: []const u8 = "refused here (it would break this file) - by hand";
-
 /// Sort + print a file's issues (with first-hit rule notes), shared by the
 /// check path and the fix path's residual report. A finding with a mechanical
 /// fix ends with how to apply it - ` - autofix: <fix_command>` - the same for
@@ -9533,7 +9722,14 @@ pub fn main(init: std.process.Init) !u8 {
             };
             defer gpa.free(source_bytes);
 
-            const outcome: FixOutcome = try runFixLoop(gpa, path, source_bytes, &args);
+            var outcome: FixOutcome = try runFixLoop(gpa, path, source_bytes, &args);
+            defer outcome.tally.deinit(gpa);
+            // The fixed file is written formatted (`zigFormatted`); a file nothing fixed is left exactly as it was.
+            if (outcome.edits_applied > 0) {
+                const formatted_bytes: []u8 = try zigFormatted(gpa, outcome.bytes);
+                gpa.free(outcome.bytes);
+                outcome.bytes = formatted_bytes;
+            }
             defer gpa.free(outcome.bytes);
 
             if (outcome.refused_any) {
@@ -9549,7 +9745,7 @@ pub fn main(init: std.process.Init) !u8 {
                         io_failures += 1;
                         continue;
                     };
-                    try out.print("fixed {d} in {s}\n", .{ outcome.edits_applied, path });
+                    try printFixTally(out, path, outcome.tally);
                 }
             }
 
@@ -9566,15 +9762,24 @@ pub fn main(init: std.process.Init) !u8 {
                 fix_issues.deinit(gpa);
             }
             _ = try analyzeSource(gpa, path, final_z, &args, &fix_issues);
-            // After a refusal, what still carries a fix is exactly what was refused: say so, not "autofix".
-            const residual_hint: []const u8 = if (outcome.refused_any) fix_refused_hint else fix_command;
-            const residual_fixable: usize = try printIssues(out, &seen_tags, fix_issues.items, residual_hint);
+            // What is left is counted, not listed: the check that runs after the fix and the format lists it, where it
+            // can fail the build. Listed here, its lines would read as findings to a build watcher that stops at the
+            // first one - between the fix and the format, leaving the edit unformatted.
+            var residual_fixable: usize = 0;
+            for (fix_issues.items) |residual| {
+                if (residual.fix != null) {
+                    residual_fixable += 1;
+                }
+            }
+            if (fix_issues.items.len > 0) {
+                try out.print("zimrlint: {d} left in {s} for a person - `zig build lint` lists them\n", .{
+                    fix_issues.items.len,
+                    path,
+                });
+            }
             if (outcome.refused_any) {
                 total_refused += residual_fixable;
-            } else {
-                total_fixable += residual_fixable;
             }
-            total_issues += fix_issues.items.len;
 
             // Stamp clean when the file is fully resolved (no residual, no
             // rollback, real write). Re-stat after a write so the stamp records
@@ -9742,9 +9947,8 @@ pub fn main(init: std.process.Init) !u8 {
     }
     try out.flush();
 
-    // `--fix` rewrites; it does not gate. What it could not fix is printed above, and `zig build lint` / `check`
-    // fail on it - but failing HERE would stop `zig build fix` before its zig fmt, leaving the edits unformatted the
-    // moment a by-hand finding exists anywhere. Only an input it could not read or write fails a fix run.
+    // `--fix` rewrites; it does not gate. What it could not fix is counted above (`zimrlint: N left in <file>`), and
+    // `zig build lint` / `check` list it and fail on it. Only an input it could not read or write fails a fix run.
     if (args.fix) {
         return if (io_failures > 0) 1 else 0;
     }
@@ -10221,6 +10425,7 @@ test "tags asserted by the harness are documented in rule_notes" {
         "import-at-root",
         "state-uninit",
         "float-from-int",
+        "prefer-splat",
         "unknown-lint-tag",
     };
     for (tested) |tag| {
@@ -10336,6 +10541,95 @@ test "float-from-int fixes to the spelling the file can resolve" {
     try expect(eql(u8, (try fixReplacement(a, unbound, "float-from-int")).?, "zm.float(n)"));
     try expect(try fixReplacement(a, no_zm, "float-from-int") == null);
     try expectFires(no_zm, "float-from-int");
+}
+
+test "prefer-splat fixes to the spelling the file can resolve" {
+    var arena: ArenaAllocator = .init(testing_allocator);
+    defer arena.deinit();
+    const a: Allocator = arena.allocator();
+    const bound: []const u8 =
+        \\const zm = @import("zm");
+        \\const Vec = zm.Vec;
+        \\const splat = zm.splat;
+        \\pub fn f(v: Vec, s: f32) Vec {
+        \\    return v * @as(Vec, @splat(s));
+        \\}
+        \\
+    ;
+    const unbound: []const u8 =
+        \\const zm = @import("zm");
+        \\const Vec = zm.Vec;
+        \\pub fn f(v: Vec, s: f32) Vec {
+        \\    return v * @as(Vec, @splat(s));
+        \\}
+        \\
+    ;
+    // Bound only BELOW the use: the bare name would be a use before its declaration.
+    const bound_below: []const u8 =
+        \\const zm = @import("zm");
+        \\const Vec = zm.Vec;
+        \\pub fn f(v: Vec, s: f32) Vec {
+        \\    return v * @as(Vec, @splat(s));
+        \\}
+        \\const splat = zm.splat;
+        \\
+    ;
+    // zimrmath.zig's own shape: no zm import, the helper declared in the file.
+    const declares_helper: []const u8 =
+        \\pub const Vec = @Vector(4, f32);
+        \\pub fn splat(v: f32) Vec {
+        \\    return @splat(v);
+        \\}
+        \\pub fn half(v: Vec) Vec {
+        \\    return v * @as(Vec, @splat(0.5));
+        \\}
+        \\
+    ;
+    const no_zm: []const u8 = "pub fn f(v: @Vector(4, f32)) @Vector(4, f32) {\n" ++
+        "    return v * @as(Vec, @splat(2.0));\n}\n";
+    try expectEqualStrings("splat(s)", (try fixReplacement(a, bound, "prefer-splat")).?);
+    try expectEqualStrings("zm.splat(s)", (try fixReplacement(a, unbound, "prefer-splat")).?);
+    try expectEqualStrings("zm.splat(s)", (try fixReplacement(a, bound_below, "prefer-splat")).?);
+    try expectEqualStrings("splat(0.5)", (try fixReplacement(a, declares_helper, "prefer-splat")).?);
+    try expect(try fixReplacement(a, no_zm, "prefer-splat") == null);
+    try expectFires(no_zm, "prefer-splat");
+}
+
+test "prefer-splat: each width gets its helper, the type bare or qualified, the argument kept whole" {
+    var arena: ArenaAllocator = .init(testing_allocator);
+    defer arena.deinit();
+    const a: Allocator = arena.allocator();
+    const prefix: []const u8 = "const zm = @import(\"zm\");\nconst rbt = @import(\"robot.zig\");\n";
+    const Case = struct { expression: []const u8, replacement: []const u8 };
+    const cases = [_]Case{
+        .{ .expression = "@as(Vec3, @splat(r * 2.0))", .replacement = "zm.splat3(r * 2.0)" },
+        .{ .expression = "@as(Vec2, @splat(1.0 / r))", .replacement = "zm.splat2(1.0 / r)" },
+        .{ .expression = "@as(Vec2i, @splat(0))", .replacement = "zm.splat2i(0)" },
+        .{ .expression = "@as(zm.Vec, @splat(r))", .replacement = "zm.splat(r)" },
+        .{ .expression = "@as(rbt.Vec, @splat(length(v)))", .replacement = "zm.splat(length(v))" },
+    };
+    for (cases) |case| {
+        const src: []const u8 = try std.mem.concat(a, u8, &.{
+            prefix,
+            "pub fn f(r: f32) void {\n    _ = r;\n    _ = ",
+            case.expression,
+            ";\n}\n",
+        });
+        try expectEqualStrings(case.replacement, (try fixReplacement(a, src, "prefer-splat")).?);
+    }
+}
+
+test "prefer-splat stays quiet where the type is not one of zm's or the @as is not wrapping a splat" {
+    const tag: []const u8 = "prefer-splat";
+    const prefix: []const u8 = "const zm = @import(\"zm\");\nconst Vec = zm.Vec;\n";
+    // The declaration already gives `@splat` its type - nothing to remove.
+    try expectClean(prefix ++ "pub fn f(s: f32) Vec {\n    const k: Vec = @splat(s);\n    return k;\n}\n", tag);
+    // Generic code and the wide types keep the explicit form.
+    try expectClean("pub fn f(comptime T: type, s: f32) T {\n    return @as(T, @splat(s));\n}\n", tag);
+    try expectClean(prefix ++ "pub fn f(s: f32) zm.F32x8 {\n    return @as(zm.F32x8, @splat(s));\n}\n", tag);
+    try expectClean("pub fn f(s: f32) [4]f32 {\n    return @as([4]f32, @splat(s));\n}\n", tag);
+    // An `@as(Vec, ...)` of something other than `@splat`.
+    try expectClean(prefix ++ "pub fn f(v: Vec) Vec {\n    return @as(Vec, v);\n}\n", tag);
 }
 
 // ---- no-qualified-zm, pinned before its machinery was shared with no-qualified-std --------------------------------
@@ -10815,6 +11109,44 @@ test "a binding below the use gets no rewrite - it would put the use before the 
     try expect(indexOf(u8, std_issues[0].message, "only below this use (line 5)") != null);
 }
 
+test "a fixed file is written formatted: a trailing comma's parameters one per line, in the same write" {
+    const gpa: Allocator = testing_allocator;
+    // What a fix leaves - one comma - and what the renderer makes of it.
+    const fixed_source: []const u8 = "fn open(a: u32, b: u32, c: u32,) void {\n    _ = a;\n    _ = b;\n    _ = c;\n}\n";
+    const written: []u8 = try zigFormatted(gpa, fixed_source);
+    defer gpa.free(written);
+    const expected: []const u8 =
+        \\fn open(
+        \\    a: u32,
+        \\    b: u32,
+        \\    c: u32,
+        \\) void {
+        \\    _ = a;
+        \\    _ = b;
+        \\    _ = c;
+        \\}
+        \\
+    ;
+    try expectEqualStrings(expected, written);
+    // A source that does not parse is kept as it is.
+    const broken: []u8 = try zigFormatted(gpa, "fn (");
+    defer gpa.free(broken);
+    try expectEqualStrings("fn (", broken);
+}
+
+test "a fix run's report names each rule once, with its count, in the order the rules first fixed" {
+    var arena: ArenaAllocator = .init(testing_allocator);
+    defer arena.deinit();
+    const alloc: Allocator = arena.allocator();
+    var tally: FixTally = .{};
+    try tally.add(alloc, "fn-args-multiline");
+    try tally.add(alloc, "std-alias");
+    try tally.add(alloc, "fn-args-multiline");
+    var report: Io.Writer.Allocating = .init(alloc);
+    try printFixTally(&report.writer, "tools/x.zig", tally);
+    try expectEqualStrings("zimrlint: fixed tools/x.zig: fn-args-multiline x2, std-alias x1\n", report.written());
+}
+
 test "applyFixesGuarded keeps each fix that leaves the file clean and refuses the one that would not" {
     var arena: ArenaAllocator = .init(testing_allocator);
     defer arena.deinit();
@@ -10823,12 +11155,15 @@ test "applyFixesGuarded keeps each fix that leaves the file clean and refuses th
     const source: []const u8 = "const a: u32 = 1;\n";
     const end: u32 = @intCast(source.len);
     const fixes = [_]Fix{
-        .{ .start = end, .end = end, .replacement = "const b: u32 = 2;\n" },
-        .{ .start = end, .end = end, .replacement = "const b: u32 = a;\n" },
+        .{ .start = end, .end = end, .replacement = "const b: u32 = 2;\n", .tag = "first-binding" },
+        .{ .start = end, .end = end, .replacement = "const b: u32 = a;\n", .tag = "second-binding" },
     };
     try expect(!compilesClean(alloc, try applyFixes(alloc, source, &fixes)));
-    const guarded: GuardedOutcome = try applyFixesGuarded(alloc, source, &fixes);
+    var tally: FixTally = .{};
+    const guarded: GuardedOutcome = try applyFixesGuarded(alloc, source, &fixes, &tally);
     try expect(guarded.applied == 1 and guarded.refused == 1);
+    // Only the applied fix is counted, under its rule.
+    try expect(tally.rule_counts.items.len == 1 and tally.rule_counts.items[0].count == 1);
     try expect(compilesClean(alloc, guarded.bytes));
 }
 
@@ -11010,7 +11345,8 @@ test "reorder-decls refuses a cycle and changes nothing; an ordered file comes b
 /// The fix loop on `source` with every rule enabled, as `--fix` runs it; the result must be `expected`.
 fn expectFixedTo(source: []const u8, expected: []const u8) !void {
     const args: Args = allRulesArgs();
-    const outcome: FixOutcome = try runFixLoop(testing_allocator, "src/lint_fixture.zig", source, &args);
+    var outcome: FixOutcome = try runFixLoop(testing_allocator, "src/lint_fixture.zig", source, &args);
+    defer outcome.tally.deinit(testing_allocator);
     defer testing_allocator.free(outcome.bytes);
     try expect(!outcome.refused_any);
     try expectEqualStrings(expected, outcome.bytes);
@@ -11044,6 +11380,18 @@ test "no-qualified-std --fix: three uses of one missing name make ONE binding" {
             "pub fn f(a: []const u8, b: []const u8, c: []const u8) bool {\n" ++
             "    return eql(u8, a, b) and eql(u8, b, c) and eql(u8, a, c);\n}\n" ++
             "pub fn g(gpa: Allocator) void {\n    _ = gpa;\n}\n",
+    );
+}
+
+test "prefer-splat --fix in a file that binds no helper: `zm.splat`, then the binding, then the bare use" {
+    try expectFixedTo(
+        "const zm = @import(\"zm\");\nconst Vec = zm.Vec;\nconst Vec3 = zm.Vec3;\n\n" ++
+            "pub fn f(v: Vec, s: f32) Vec {\n    return v * @as(Vec, @splat(s));\n}\n" ++
+            "pub fn g(p: Vec3, s: f32) Vec3 {\n    return p * @as(Vec3, @splat(s));\n}\n",
+        "const zm = @import(\"zm\");\nconst Vec = zm.Vec;\nconst Vec3 = zm.Vec3;\n" ++
+            "const splat = zm.splat;\nconst splat3 = zm.splat3;\n\n" ++
+            "pub fn f(v: Vec, s: f32) Vec {\n    return v * splat(s);\n}\n" ++
+            "pub fn g(p: Vec3, s: f32) Vec3 {\n    return p * splat3(s);\n}\n",
     );
 }
 

@@ -328,7 +328,7 @@ fn spawnShipsTick(
     }
     const sp: Pos = sun_pos orelse return;
 
-    const idx: u32 = rng.random().uintLessThan(u32, planet_count);
+    const idx: usize = rng.random().uintLessThan(usize, planet_count);
     const target: ecs.Entity = planets_buf[idx];
     const tp: Pos = planet_pos_buf[idx];
 

@@ -27,6 +27,7 @@ const Vec2 = zm.Vec2;
 const Vec3 = zm.Vec3;
 const dot = zm.dot;
 const normalize = zm.normalize;
+const splat3 = zm.splat3;
 const shader_io = @import("deferred_shading_fs_io.zig");
 const shader_externs = @import("deferred_shading_fs_externs");
 
@@ -74,7 +75,7 @@ pub fn shaderMain(io_in: Io) Out {
     });
 
     // ---- Ambient floor, then accumulate the four point lights ----
-    var lit: Vec3 = albedo * @as(Vec3, @splat(ambient_strength));
+    var lit: Vec3 = albedo * splat3(ambient_strength);
 
     inline for (0..shader_io.max_lights) |i| {
         const lp: Vec = io_in.u.light_pos[i];
@@ -87,7 +88,7 @@ pub fn shaderMain(io_in: Io) Out {
             lp[2] - world_pos[2],
         };
         const dist: f32 = @sqrt(@max(dot(to_light, to_light), 1.0e-8));
-        const light_dir: Vec3 = to_light * @as(Vec3, @splat(1.0 / dist));
+        const light_dir: Vec3 = to_light * splat3(1.0 / dist);
 
         // Diffuse - with the NORMALIZED light direction (the raylib fix).
         const n_dot_l: f32 = @max(dot(normal, light_dir), 0.0);
@@ -104,7 +105,7 @@ pub fn shaderMain(io_in: Io) Out {
         const attenuation: f32 = 1.0 / (1.0 + linear_falloff * d + quadratic_falloff * d * d);
 
         const gain: f32 = enabled * attenuation * (n_dot_l + spec);
-        lit += Vec3{ lc[0], lc[1], lc[2] } * albedo * @as(Vec3, @splat(gain));
+        lit += Vec3{ lc[0], lc[1], lc[2] } * albedo * splat3(gain);
     }
 
     out.final_color = .{ lit[0], lit[1], lit[2], 1.0 };

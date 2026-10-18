@@ -28,6 +28,7 @@ const Color = zm.Color;
 const Vec2 = zm.Vec2;
 const clamp = zm.clamp;
 const float = zm.float;
+const splat2 = zm.splat2;
 
 const fx = z.effect_shaders;
 
@@ -260,7 +261,7 @@ fn drawSourceScene(f: *z.Frame, s: *State, t: f32, dt: f32) void {
     const h: f32 = float(s.rt_src.height);
 
     for (&s.balls) |*b| {
-        b.pos += b.vel * @as(Vec2, @splat(dt));
+        b.pos += b.vel * splat2(dt);
         if (b.pos[0] < b.radius or b.pos[0] > w - b.radius) {
             b.vel[0] = -b.vel[0];
             b.pos[0] = clamp(b.pos[0], b.radius, w - b.radius);
@@ -469,7 +470,7 @@ fn update(f: *z.Frame, s: *State) void {
         else
             Vec2{ mp[0] * sx, mp[1] * sy };
         const chase: f32 = @min(dt * 6.0, 1.0);
-        s.spot_pos += (target - s.spot_pos) * @as(Vec2, @splat(chase));
+        s.spot_pos += (target - s.spot_pos) * splat2(chase);
     }
 
     s.ui_host.render(f);

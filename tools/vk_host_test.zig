@@ -23,6 +23,10 @@
 //!             the result read back with `readLatest` once `readGeneration` shows it holds both
 //!     zimrnum zimrnum's GPU sweep: every operation of `zn_conformance`'s table run through the engine on its kernel
 //!             file's SPIR-V and judged against its CPU reference, as the `zimrnum_field` example judges it
+//!     pipelines  every pipeline of zimrnum's training kernel files (`zn_train`, `zn_mlp`) made and released, the
+//!             validation layer judging each
+//!     constant   a kernel writing storage-buffer elements by constant indices, at one level and at two, read back:
+//!             the written elements hold their values and every other element its zero
 //!     lifetimes  a texture view and a sampler released while a bind group holds them, and in the other order: the
 //!             host keeps each alive until its handle and its last hold are gone, as WebGPU does
 //!     sort    the counting sort (`sort_min`) - clear, count, prefix sum, scatter, four dispatches in one pass - and
@@ -40,9 +44,12 @@
 const std = @import("std");
 const sortSlice = std.mem.sort;
 const double_it = @import("double_it");
+const constant_index = @import("constant_index");
 const sort_min = @import("sort_min");
 const conf = @import("zn_conformance");
 const zn_binary = @import("zn_binary");
+const zn_train = @import("zn_train");
+const zn_mlp = @import("zn_mlp");
 const zn_matmul = @import("zn_matmul");
 const zn_unary = @import("zn_unary");
 const zrl_binary = @import("zrl_binary");
@@ -497,6 +504,8 @@ fn runEngineCompute(
 }
 
 /// Each zimrnum kernel file's SPIR-V: one module per file, holding all of the file's entries.
+const zn_train_spirv: []const u8 = @embedFile("zn_train_spv");
+const zn_mlp_spirv: []const u8 = @embedFile("zn_mlp_spv");
 const zn_binary_spirv: []const u8 = @embedFile("zn_binary_spv");
 const zn_matmul_spirv: []const u8 = @embedFile("zn_matmul_spv");
 const zn_unary_spirv: []const u8 = @embedFile("zn_unary_spv");
@@ -510,6 +519,81 @@ fn spirvEntries(comptime Kernel: type, spirv: []const u8) [Kernel.kernels.len]z.
         table[index] = .{ .name = name, .wgsl = spirv };
     }
     return table;
+}
+
+/// Every pipeline of zimrnum's two training kernel files, made and released: `zn_train` (the two-layer network) and
+/// `zn_mlp` (dense layers, their gradients, the optimisers). The sweep runs single operations; these files' kernels
+/// index their buffers by constants too - a loss written to `loss[0]` and `loss[1]` - which the compiler lowers by
+/// another path, and the validation layer judges each pipeline as it is made.
+fn makeTrainingPipelines(
+    gpa: Allocator,
+    device: wgpu.DeviceHandle,
+    queue: wgpu.QueueHandle,
+) !void {
+    var two_layer: z.Compute(zn_train) = try .initGpu(gpa, device, queue, &spirvEntries(zn_train, zn_train_spirv));
+    two_layer.deinit();
+    var dense_layers: z.Compute(zn_mlp) = try .initGpu(gpa, device, queue, &spirvEntries(zn_mlp, zn_mlp_spirv));
+    dense_layers.deinit();
+}
+
+const constant_index_spirv: []const u8 = @embedFile("constant_index_spv");
+
+/// The constant-index kernel (`constant_index.zig`) run through the engine and read back: `values[2]` and
+/// `grid[1][2]` hold what it wrote, every other element its zero - so each constant index reached the element it
+/// names, at one level and at two.
+fn runConstantIndex(
+    gpa: Allocator,
+    device: wgpu.DeviceHandle,
+    queue: wgpu.QueueHandle,
+) !bool {
+    const ConstantIndex: type = z.Compute(constant_index);
+    var compute: ConstantIndex = try .initGpu(gpa, device, queue, &spirvEntries(constant_index, constant_index_spirv));
+    defer compute.deinit();
+    // Both fields read back whole: `readLatest` slices to the lesser of this count and a field's own length.
+    compute.element_count = constant_index.config.max;
+    const zero_values: [16]f32 = @splat(0);
+    const zero_rows: [4][3]f32 = @splat(@splat(0));
+    compute.upload(.values, &zero_values);
+    compute.upload(.grid, &zero_rows);
+    const one_thread: u32 = 1;
+    compute.run("writeConstantElements", one_thread);
+    const dispatched: u64 = compute.readGeneration().submitted;
+
+    var polls: u32 = 0;
+    while (polls < engine_poll_limit) : (polls += 1) {
+        const latest_values: ?[]const f32 = compute.readLatest(.values);
+        const latest_rows: ?[]const [3]f32 = compute.readLatest(.grid);
+        if (compute.readGeneration().mirrored < dispatched) {
+            continue;
+        }
+        const values: []const f32 = latest_values orelse continue;
+        const rows: []const [3]f32 = latest_rows orelse continue;
+        for (values, 0..) |value, index| {
+            const expected: f32 = if (index == 2) constant_index.value_written else 0;
+            if (value != expected) {
+                print("vk-host-test: values[{d}] came back {d}, expected {d}\n", .{ index, value, expected });
+                return false;
+            }
+        }
+        for (rows, 0..) |row, row_index| {
+            for (row, 0..) |value, column_index| {
+                const is_written: bool = row_index == 1 and column_index == 2;
+                const expected: f32 = if (is_written) constant_index.grid_value_written else 0;
+                if (value != expected) {
+                    print("vk-host-test: grid[{d}][{d}] came back {d}, expected {d}\n", .{
+                        row_index,
+                        column_index,
+                        value,
+                        expected,
+                    });
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+    print("vk-host-test: the constant-index kernel's read never held its dispatch\n", .{});
+    return false;
 }
 
 /// Runs one entry of a pipeline, then polls `readLatest(.out)` until the mirror holds that dispatch. Null when it
@@ -960,6 +1044,8 @@ pub fn main() !u8 {
     var debug_allocator: DebugAllocator(.{}) = .init;
     const engine_doubles: bool = try runEngineCompute(debug_allocator.allocator(), device, queue);
     const zimrnum_failures: u32 = try runZimrnumSweep(debug_allocator.allocator(), device, queue);
+    try makeTrainingPipelines(debug_allocator.allocator(), device, queue);
+    const constants_land: bool = try runConstantIndex(debug_allocator.allocator(), device, queue);
     const engine_leaked: bool = debug_allocator.deinit() == .leak;
     const sort_matches: bool = runCountingSort(device, queue);
     releaseWhileHeld(device);
@@ -997,6 +1083,10 @@ pub fn main() !u8 {
         });
         return 1;
     }
+    if (!constants_land) {
+        print("vk-host-test: FAILED - an element written by a constant index came back wrong\n", .{});
+        return 1;
+    }
     if (engine_leaked) {
         print("vk-host-test: FAILED - the engine's compute path leaked memory\n", .{});
         return 1;
@@ -1011,8 +1101,8 @@ pub fn main() !u8 {
     }
     if (counts.errors == 0 and counts.warnings == 0) {
         print(
-            "vk-host-test: clear, targets, read, copy, screen, views, compute, engine, zimrnum, lifetimes, sort, " ++
-                "churn and large writes" ++
+            "vk-host-test: clear, targets, read, copy, screen, views, compute, engine, zimrnum, pipelines, " ++
+                "constant, lifetimes, sort, churn and large writes" ++
                 " - no validation errors, no warnings\n",
             .{},
         );

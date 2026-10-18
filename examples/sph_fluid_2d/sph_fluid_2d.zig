@@ -48,6 +48,7 @@ const vec3 = zm.vec3;
 const assert = zm.assert;
 const z = @import("zimr");
 const Color = zm.Color;
+const splat2 = zm.splat2;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // --- Constants -----------------------------------------------------
@@ -376,7 +377,7 @@ fn step(s: *State) void {
             const dist: f32 = @sqrt(dist_sq);
             const falloff: f32 = 1.0 - dist / mouse_radius;
             const scale: f32 = mouse_force * falloff / dist;
-            v.* += to_part * @as(Vec2, @splat(scale));
+            v.* += to_part * splat2(scale);
         }
     }
 
@@ -457,7 +458,7 @@ fn step(s: *State) void {
 
                     const r_dist: f32 = @sqrt(r_sq);
                     const inv_r: f32 = 1.0 / r_dist;
-                    const r_hat: Vec2 = r * @as(Vec2, @splat(inv_r));
+                    const r_hat: Vec2 = r * splat2(inv_r);
                     const q: f32 = r_dist * inv_h;
                     const dv: Vec2 = v_i - s.velocities[j];
                     const u_radial: f32 = dv[0] * r_hat[0] + dv[1] * r_hat[1];
@@ -490,7 +491,7 @@ fn step(s: *State) void {
                     // gives equal-and-opposite half-impulses.
                     const i_mag: f32 =
                         dt * (1.0 - q) * beta * u_radial * 0.5;
-                    accum -= r_hat * @as(Vec2, @splat(i_mag));
+                    accum -= r_hat * splat2(i_mag);
                 }
             }
         }
@@ -548,7 +549,7 @@ fn step(s: *State) void {
         for (s.positions, s.prev_positions, s.velocities) |*p, *pp, *v| {
             const p_start: Vec2 = p.*;
             var v_local: Vec2 = v.*;
-            var predicted: Vec2 = p_start + v_local * @as(Vec2, @splat(dt));
+            var predicted: Vec2 = p_start + v_local * splat2(dt);
             if (predicted[0] < margin_lo[0] or predicted[0] > margin_hi[0]) {
                 predicted[0] = p_start[0];
                 v_local[0] = 0;
@@ -697,7 +698,7 @@ fn step(s: *State) void {
                     var r_dist: f32 = undefined;
                     if (r_sq > 0.25) {
                         r_dist = @sqrt(r_sq);
-                        r_hat = r * @as(Vec2, @splat(1.0 / r_dist));
+                        r_hat = r * splat2(1.0 / r_dist);
                     } else {
                         // Co-location fallback: r ~ 0 -> r_hat undefined.
                         // 1D x-only would force all of a corner-clamped
@@ -732,7 +733,7 @@ fn step(s: *State) void {
 
                     // r_hat points FROM i TO j; pressure pushes i
                     // away -> subtract.
-                    accum -= r_hat * @as(Vec2, @splat(mag));
+                    accum -= r_hat * splat2(mag);
                 }
             }
         }
@@ -789,7 +790,7 @@ fn step(s: *State) void {
     const inv_dt: f32 = 1.0 / dt;
     for (s.positions, s.prev_positions, s.velocities) |*p, pp, *v| {
         var p_local: Vec2 = p.*;
-        var new_v: Vec2 = (p_local - pp) * @as(Vec2, @splat(inv_dt));
+        var new_v: Vec2 = (p_local - pp) * splat2(inv_dt);
         if (p_local[0] < margin_lo[0]) {
             p_local[0] = margin_lo[0];
             new_v[0] = 0;
@@ -807,7 +808,7 @@ fn step(s: *State) void {
         const speed_sq: f32 = new_v[0] * new_v[0] + new_v[1] * new_v[1];
         if (speed_sq > max_speed_sq) {
             const scale: f32 = max_speed / @sqrt(speed_sq);
-            new_v *= @as(Vec2, @splat(scale));
+            new_v *= splat2(scale);
         }
         p.* = p_local;
         v.* = new_v;

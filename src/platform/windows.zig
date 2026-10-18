@@ -379,6 +379,16 @@ const WasapiOutput = struct {
     /// main thread.
     is_low_latency_stream: std.atomic.Value(bool) = .{ .raw = false },
     stream_latency_microseconds: std.atomic.Value(u32) = .{ .raw = 0 },
+    /// The stream's buffer and, for the low-latency stream, its periods - the one it runs at, the shortest the device
+    /// allows and its default - in frames (`openLowLatencyClient`, `playOnDefaultDevice`): what the readout's output
+    /// line shows (`audioOutputName`), how soon a sound can start depending on them. 0 where unknown. Written by the
+    /// render thread when a stream opens, read by the main thread.
+    stream_buffer_frames: std.atomic.Value(u32) = .{ .raw = 0 },
+    stream_period_frames: std.atomic.Value(u32) = .{ .raw = 0 },
+    shortest_period_frames: std.atomic.Value(u32) = .{ .raw = 0 },
+    default_period_frames: std.atomic.Value(u32) = .{ .raw = 0 },
+    /// The output line `audioOutputName` writes, with the stream's numbers. Main thread only.
+    output_name_buffer: [160]u8 = undefined,
 };
 
 // lint:off module-var: the one sound output: its state, shared with its render thread, and the thread itself
@@ -555,6 +565,25 @@ fn fillStreamRoom(
 
 /// The stream's loop: at each signal of `render_event`, has the renderer fill the room in the stream's buffer, until
 /// the output stops, the default device changes, or the stream fails. Render thread only.
+/// How far ahead of the device the low-latency stream is kept, beyond one period: 2 ms, 96 frames at 48 kHz.
+const fill_margin_milliseconds: f64 = 2;
+
+/// How full the stream's buffer is kept, in frames (`streamUntilChange`). The audio engine reads one period from the
+/// buffer each period and then signals the render thread, which has until the engine's next read - a period - to
+/// write the next one: that is its slack against a dropout, however full the buffer is. Sound queued beyond one period
+/// only delays every new sound by as much. So the low-latency stream, whose period is known
+/// (`stream_period_frames`), is kept at one period and a small margin, in case the engine reads a little early; the
+/// standard stream, whose period is the engine's own and unreported, is kept full, as before.
+fn fillTargetFrames(buffer_frames: u32) u32 {
+    const period_frames: u32 = audio_output.stream_period_frames.load(.acquire);
+    if (period_frames == 0) {
+        return buffer_frames;
+    }
+    const frames_per_millisecond: f64 = float64(audio_output.format.sample_rate) / 1000.0;
+    const margin_frames: u32 = @round(fill_margin_milliseconds * frames_per_millisecond);
+    return @min(buffer_frames, period_frames + margin_frames);
+}
+
 fn streamUntilChange(
     client: *win32.IAudioClient,
     render_client: *win32.IAudioRenderClient,
@@ -582,10 +611,12 @@ fn streamUntilChange(
         if (padding_result < 0) {
             return .failed;
         }
-        const room_frames: u32 = buffer_frames - padding_frames;
-        if (room_frames == 0) {
+        // Topped up to the fill target (`fillTargetFrames`), not to the buffer's end.
+        const target_frames: u32 = fillTargetFrames(buffer_frames);
+        if (padding_frames >= target_frames) {
             continue;
         }
+        const room_frames: u32 = target_frames - padding_frames;
         if (!fillStreamRoom(render_client, room_frames, padding_frames)) {
             return .failed;
         }
@@ -643,6 +674,9 @@ fn openLowLatencyClient(device: *win32.IMMDevice, stream_format: *const win32.WA
         _ = client.vtable.Release(client);
         return null;
     }
+    audio_output.stream_period_frames.store(shortest_period_frames, .release);
+    audio_output.shortest_period_frames.store(shortest_period_frames, .release);
+    audio_output.default_period_frames.store(default_period_frames, .release);
     return client;
 }
 
@@ -724,6 +758,13 @@ fn playOnDefaultDevice(enumerator: *win32.IMMDeviceEnumerator) ?StreamEnd {
         return null;
     }
     reportStream(low_latency_client != null, buffer_frames);
+    audio_output.stream_buffer_frames.store(buffer_frames, .release);
+    if (low_latency_client == null) {
+        // The standard stream's period is the engine's own, which it does not say; none shown.
+        audio_output.stream_period_frames.store(0, .release);
+        audio_output.shortest_period_frames.store(0, .release);
+        audio_output.default_period_frames.store(0, .release);
+    }
     // WASAPI's own latency past the buffer, in units of 100 ns: kept for the latency readout.
     var stream_latency: win32.REFERENCE_TIME = 0;
     if (client.vtable.GetStreamLatency(client, &stream_latency) >= 0) {
@@ -740,9 +781,9 @@ fn playOnDefaultDevice(enumerator: *win32.IMMDeviceEnumerator) ?StreamEnd {
     }
     const render_client: *win32.IAudioRenderClient = @ptrCast(@alignCast(render_client_object.?));
     defer _ = render_client.vtable.Release(render_client);
-    // The whole buffer is filled by the renderer before the stream starts, so that the device's first period has
-    // something to play rather than an empty buffer.
-    if (!fillStreamRoom(render_client, buffer_frames, 0)) {
+    // The buffer is filled to its target (`fillTargetFrames`) before the stream starts, so that the device's first
+    // period has something to play rather than an empty buffer.
+    if (!fillStreamRoom(render_client, fillTargetFrames(buffer_frames), 0)) {
         return null;
     }
     if (client.vtable.Start(client) < 0) {
@@ -754,7 +795,8 @@ fn playOnDefaultDevice(enumerator: *win32.IMMDeviceEnumerator) ?StreamEnd {
 
 /// The render thread: COM for itself, the device enumerator, Windows' notice of device changes - then streams on the
 /// default device, one after another, until the output stops; between them, with no device, it renders to nowhere at
-/// the real rate (`drainWithoutDevice`).
+/// the real rate (`drainWithoutDevice`). Subnormal numbers are the renderer's own concern: it flushes them for each
+/// block it renders, on whatever thread (`sound.zig`, `enterFlushToZero`).
 fn renderThreadMain() void {
     // Scheduled as audio work (MMCSS's "Pro Audio" task), ahead of ordinary threads, while the thread lives.
     var multimedia_task_index: win32.DWORD = 0;
@@ -848,11 +890,32 @@ pub fn audioOutputLatencyMilliseconds() f64 {
 }
 
 /// Which stream plays: the low-latency one (`IAudioClient3`) or the standard one.
+/// The output, as the latency readout's first line names it: the stream, and the numbers how soon a sound can start
+/// depends on - its period (the shortest the device allows, and its default), its buffer, and how full the render
+/// thread keeps it (`fillTargetFrames`), in milliseconds at the stream's rate. The low-latency stream runs at the
+/// shortest period, kept one period and a margin full: that margin is about what is queued ahead of a new block.
 pub fn audioOutputName() []const u8 {
-    if (audio_output.is_low_latency_stream.load(.acquire)) {
-        return "WASAPI, low-latency stream";
+    const is_low_latency: bool = audio_output.is_low_latency_stream.load(.acquire);
+    const stream_kind: []const u8 = if (is_low_latency) "low-latency stream" else "standard stream";
+    const frames_per_millisecond: f64 = float64(audio_output.format.sample_rate) / 1000.0;
+    const buffer_ms: f64 = float64(audio_output.stream_buffer_frames.load(.acquire)) / frames_per_millisecond;
+    const period_ms: f64 = float64(audio_output.stream_period_frames.load(.acquire)) / frames_per_millisecond;
+    const shortest_ms: f64 = float64(audio_output.shortest_period_frames.load(.acquire)) / frames_per_millisecond;
+    const default_ms: f64 = float64(audio_output.default_period_frames.load(.acquire)) / frames_per_millisecond;
+    const buffer: []u8 = &audio_output.output_name_buffer;
+    if (period_ms > 0) {
+        const kept_frames: u32 = fillTargetFrames(audio_output.stream_buffer_frames.load(.acquire));
+        const kept_ms: f64 = float64(kept_frames) / frames_per_millisecond;
+        return bufPrint(
+            buffer,
+            "WASAPI, {s}: period {d:.1} ms (shortest {d:.1}, default {d:.1}), buffer {d:.1} ms, kept {d:.1} ms",
+            .{ stream_kind, period_ms, shortest_ms, default_ms, buffer_ms, kept_ms },
+        ) catch stream_kind;
     }
-    return "WASAPI, standard stream";
+    if (buffer_ms > 0) {
+        return bufPrint(buffer, "WASAPI, {s}: buffer {d:.1} ms", .{ stream_kind, buffer_ms }) catch stream_kind;
+    }
+    return bufPrint(buffer, "WASAPI, {s}", .{stream_kind}) catch stream_kind;
 }
 
 /// Opens the output at `wanted` - up to two channels; Windows converts the rate on the standard stream - and starts

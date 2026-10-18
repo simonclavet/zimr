@@ -56,6 +56,7 @@ const float = zm.float;
 const mulMat = zm.mulMat;
 const translation = zm.translation;
 const scaling = zm.scaling;
+const splat = zm.splat;
 
 // ---- `humanoid_flex`, WHICH IS ALL HINGES ----
 //
@@ -649,7 +650,7 @@ fn buildRetargetedSkeleton(s: *State, positions: []const Vec) void {
             s.retargeted[b] = s.retargeted[parent] + m.body_pos[b];
             continue;
         }
-        s.retargeted[b] = s.retargeted[parent] + normalize3(bone) * @as(Vec, @splat(own_length));
+        s.retargeted[b] = s.retargeted[parent] + normalize3(bone) * splat(own_length);
     }
 }
 
