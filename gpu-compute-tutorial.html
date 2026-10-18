@@ -1,0 +1,1477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPU compute — kernels in Zig with kompute</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\25b8\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\25be\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+/* The code pane under the example: web/<name>/source.json, highlighted at
+   build time by this file's highlightZig. `code-open` shows it; --f is the
+   stage's share of the height below the bar, set by dragging the divider. */
+.g-main{--f:.58;}
+.code-open .g-stage{flex:0 0 calc((100% - 44px) * var(--f));}
+.g-btn.g-wide{width:auto;padding:0 .7em;font-size:.85em;}
+.g-btn.on{color:var(--fg);border-color:var(--tok-fn);}
+.g-split{
+  display:none;flex:none;height:9px;margin:-4px 0;position:relative;z-index:2;
+  cursor:row-resize;touch-action:none;
+}
+.g-split::after{content:"";position:absolute;left:0;right:0;top:4px;height:1px;background:var(--rule);}
+.g-split:hover::after,.dragging .g-split::after{top:3px;height:3px;background:var(--tok-fn);}
+.code-open .g-split{display:block;}
+.dragging{cursor:row-resize;user-select:none;}
+.dragging iframe{pointer-events:none;}
+.g-code{display:none;flex:1 1 0;min-height:0;flex-direction:column;background:var(--bg);}
+.code-open .g-code{display:flex;}
+.g-tabs{
+  flex:none;display:flex;overflow-x:auto;background:var(--panel);
+  border-bottom:1px solid var(--rule);font-size:12px;
+}
+.g-tab{
+  flex:none;padding:.45em .9em;background:none;color:var(--dim);font:inherit;cursor:pointer;white-space:nowrap;
+  border:0;border-right:1px solid var(--rule);border-bottom:2px solid transparent;
+}
+.g-tab:hover{color:var(--fg);}
+.g-tab.on{color:#fff;background:var(--bg);border-bottom-color:var(--tok-fn);}
+.g-tab .n{margin-left:.6em;color:var(--faint);font-size:.9em;}
+.g-tab.g-copy{margin-left:auto;border-left:1px solid var(--rule);border-right:0;}
+.g-src{flex:1;min-height:0;overflow:auto;}
+.g-src:focus{outline:none;}
+.g-src:focus-visible{outline:1px solid var(--tok-fn);outline-offset:-1px;}
+.g-src pre{
+  margin:0;padding:8px 0 3em;background:none;border:0;border-radius:0;overflow:visible;
+  font-size:12.5px;line-height:1.55;
+}
+/* one row per source line; the number is a CSS counter, so it is never
+   selected or copied, and it stays on the first row of a wrapped line */
+.g-src code{display:block;counter-reset:ln;padding:0;}
+.g-src .l{display:block;position:relative;min-height:1.55em;padding:0 1.2em 0 calc(4ch + 2.2em);}
+.g-src .l::before{
+  counter-increment:ln;content:counter(ln);position:absolute;left:0;top:0;bottom:0;
+  width:calc(4ch + 1em);padding-right:.9em;box-sizing:border-box;
+  text-align:right;color:var(--faint);border-right:1px solid var(--rule);
+}
+.g-src-msg{padding:1em 1.2em;color:var(--faint);}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:3;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+  .g-src .l{white-space:pre-wrap;overflow-wrap:anywhere;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+<!--
+  Editing this page? Its CODE is generated, so never paste code into it.
+  Every code block names where it comes from: data-src (the file) and data-decl (how the
+  declaration's first line starts; add data-in="..." when that alone is ambiguous). To show
+  another declaration, add an empty tagged block like the others and run
+      zig build doc-folds
+  which fills in every block from the source. What is left to keep in sync by hand is the prose
+  around the code. Diagrams are marked class="sketch": they illustrate, they do not quote.
+-->
+</head>
+<body>
+<h1>GPU compute</h1>
+<p class="sub">How zimr computes on the GPU: kernels written once in Zig with the kompute library, run on the GPU
+as compute shaders and, from the same source, on the CPU as plain loops. The document follows a fluid of 20,000
+particles from its first kernel to its performance. How the build and each platform turn a kernel into a GPU's code
+is the subject of the <a href="backends-tutorial.html#compute">backends tutorial</a>.</p>
+
+<p>Code is shown in folds, generated from the source files on every build, so it is always the code that ships. A
+closed fold opens with a click; the prose reads straight through without opening any.</p>
+
+<nav>
+<strong>Contents</strong>
+<ol>
+  <li><a href="#gpu">Compute on the GPU</a></li>
+  <li><a href="#builds">The CPU and GPU builds</a></li>
+  <li><a href="#kernelfiles">Kernel files</a>
+    <ol><li><a href="#buffers">Buffers and parameters</a></li>
+        <li><a href="#context">The context</a></li>
+        <li><a href="#entries">Entry points</a></li></ol></li>
+  <li><a href="#toshader">From kernel to shader</a></li>
+  <li><a href="#running">Running kernels</a>
+    <ol><li><a href="#dispatch">Dispatch</a></li>
+        <li><a href="#batching">Batching</a></li>
+        <li><a href="#ongpu">Data on the GPU</a></li>
+        <li><a href="#results">Reading results</a></li></ol></li>
+  <li><a href="#fluid">The SPH fluid</a>
+    <ol><li><a href="#state">The simulation state</a></li>
+        <li><a href="#grid">The neighbour grid</a></li>
+        <li><a href="#density">Density</a></li>
+        <li><a href="#pressure">Pressure</a></li>
+        <li><a href="#viscosity">Viscosity</a></li>
+        <li><a href="#walls">Gravity, prediction and walls</a></li>
+        <li><a href="#substep">The sub-step</a></li></ol></li>
+  <li><a href="#performance">Performance</a>
+    <ol><li><a href="#measured">Measured effects</a></li>
+        <li><a href="#coalesced">Coalesced memory</a></li>
+        <li><a href="#techniques">Other techniques</a></li>
+        <li><a href="#tiling">Tiling and sorting</a></li></ol></li>
+</ol>
+</nav>
+
+<h2 id="gpu">1. Compute on the GPU</h2>
+
+<p>A CPU has a few cores, and each runs through its instructions one after another. A GPU has thousands of simpler
+cores, which run the same instructions at the same time, each on its own data. A computation that applies one rule
+to many elements has the GPU's shape: instead of a loop over 20,000 particles, the GPU runs 20,000 threads, one for
+each particle.</p>
+
+<pre class="sketch"><code>   the CPU: one core walks the elements          the GPU: one thread for each element
+   ------------------------------------------    ------------------------------------------
+   for (0..20_000) |id| step(id);                 thread 0:      step(0)
+                                                  thread 1:      step(1)
+                                                  ...            ...   all at once
+                                                  thread 19999:  step(19999)</code></pre>
+
+<p>A program run this way is a <em>compute shader</em>. It draws nothing: it reads and writes buffers in GPU memory,
+where a renderer can then draw from them. Each function a compute shader starts from is a <em>kernel</em>.</p>
+
+<p>The example throughout is a fluid simulated by SPH - <em>smoothed-particle hydrodynamics</em> - in which the water
+is 20,000 particles that push on their neighbours. Every frame, each particle measures how crowded its neighbourhood
+is and moves to relieve the pressure. On the CPU that is 20,000 particles, each against dozens of neighbours, several
+times a frame; on the GPU the particles are handled together.</p>
+
+<h2 id="builds">2. The CPU and GPU builds</h2>
+
+<p>zimr's kernels are written in Zig, with a small library called <em>kompute</em>, and each kernel is compiled
+twice from the same source: for the GPU, as a compute shader, and for the CPU, as an ordinary function called in a
+loop. A constant known at compile time tells the source which of the two builds it is in:</p>
+
+<pre data-src="src/kompute.zig" data-decl="pub const is_gpu: bool = builtin.target.cpu.arch.isSpirV();"><code class="zig"><span class="tok-comment">/// True when compiling for SPIR-V (the GPU dispatch). False for the native CPU</span>
+<span class="tok-comment">/// loop. Kernel files comptime-branch on it via the generated helpers below.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> is_gpu: bool = builtin.target.cpu.arch.<span class="tok-fn">isSpirV</span>();</code></pre>
+
+<p>A test of <code>is_gpu</code> costs nothing when the program runs: the compiler keeps one branch and removes the
+other, so the two builds contain different code made from one text. The CPU build is the reference. It can be run,
+stepped through in a debugger and compared with the GPU's results; where the two differ, the GPU's are wrong.</p>
+
+<p>The same constant lets kompute offer one call where the two machines differ. An <em>atomic</em> add lets
+thousands of threads add into one counter without losing a single addition: the CPU has an instruction for it, the
+GPU's shader language a built-in function. A kernel calls <code>k.atomicAdd</code> either way, and kompute chooses:</p>
+
+<pre data-src="src/kompute.zig" data-decl="pub inline fn atomicAdd(arr: anytype, idx: u32, val: u32) u32 {"><code class="zig"><span class="tok-comment">/// Atomic read-modify-write add. Returns the value stored before the add (the</span>
+<span class="tok-comment">/// WGSL `atomicAdd` semantics - the per-particle grid build uses this returned</span>
+<span class="tok-comment">/// value as the claimed slot index).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">inline</span> <span class="tok-kw">fn</span> <span class="tok-fn">atomicAdd</span>(arr: <span class="tok-kw">anytype</span>, idx: u32, val: u32) u32 {
+    <span class="tok-kw">comptime</span> <span class="tok-fn">requireU32ArrayPointer</span>(<span class="tok-builtin">@TypeOf</span>(arr));
+    <span class="tok-kw">if</span> (is_gpu) {
+        <span class="tok-kw">return</span> <span class="tok-fn">gpuAtomicAdd</span>(&amp;arr[idx], val);
+    }
+    <span class="tok-kw">return</span> <span class="tok-builtin">@atomicRmw</span>(u32, &amp;arr[idx], .Add, val, .monotonic);
+}</code></pre>
+
+<h2 id="kernelfiles">3. Kernel files</h2>
+
+<p>A kernel file declares the data a kernel works on and the kernel itself; kompute provides everything else. The
+smallest doubles every number in an array:</p>
+
+<pre class="sketch"><code>   config         the most elements a dispatch covers, and the threads in a workgroup
+   Buffers        the arrays
+   Params         a few values for the whole dispatch
+   g              kompute's access to both, made from the file itself: k.Globals(@This())
+   the kernel     run once for each element
+   installKernel  makes the function a kernel the GPU can start</code></pre>
+
+<pre data-src="examples/compute_smoke/double_it.zig" data-decl="pub const config = k.Config{ .max = 1024, .workgroup = 64 };"><code class="zig"><span class="tok-kw">pub</span> <span class="tok-kw">const</span> config = k.Config{ .max = <span class="tok-num">1024</span>, .workgroup = <span class="tok-num">64</span> };</code></pre>
+
+<h3 id="buffers">3.1 Buffers and parameters</h3>
+
+<p><code>Buffers</code> holds the arrays a kernel reads and writes - positions, velocities, grid counters. On the GPU
+each field becomes a buffer of its own; on the CPU the fields are ordinary arrays. A kernel reaches a field through
+an alias made once, at the file's top level, by <code>g.bind</code>, and indexes it the same way in both builds:</p>
+
+<pre data-src="examples/compute_smoke/double_it.zig" data-decl="pub const Buffers = extern struct {"><code class="zig"><span class="tok-kw">pub</span> <span class="tok-kw">const</span> Buffers = <span class="tok-kw">extern</span> <span class="tok-kw">struct</span> {
+    data: [config.max]f32,
+};</code></pre>
+
+<p>Giving each field its own buffer is a rule, not a choice of style: the same data placed in one large buffer was
+read at wrong offsets by some mobile GPUs once a dispatch passed about a thousand threads, while separate buffers -
+the arrangement hand-written WebGPU programs use - read correctly on the same devices.</p>
+
+<p><code>Params</code> holds a few values that stay the same for the whole dispatch: how many elements there are, the
+time step, a constant. On the GPU it is a <em>uniform</em> buffer, and the layout rules for uniforms apply: its size
+is a multiple of 16 bytes, padded with single scalar fields, because an array used as padding would take a layout a
+uniform buffer does not accept.</p>
+
+<pre data-src="examples/compute_smoke/double_it.zig" data-decl="pub const Params = extern struct {"><code class="zig"><span class="tok-kw">pub</span> <span class="tok-kw">const</span> Params = <span class="tok-kw">extern</span> <span class="tok-kw">struct</span> {
+    count: u32,
+    _pad0: u32 = <span class="tok-num">0</span>,
+    _pad1: u32 = <span class="tok-num">0</span>,
+    _pad2: u32 = <span class="tok-num">0</span>,
+};</code></pre>
+
+<h3 id="context">3.2 The context</h3>
+
+<p>A kernel receives one argument, its <em>context</em>: <code>c.id</code>, the index of the element this thread
+handles, and <code>c.params</code>, the dispatch's <code>Params</code>. That is nearly everything a thread needs to
+know, and nothing more:</p>
+
+<pre data-src="src/kompute.zig" data-decl="pub fn Ctx(comptime Module: type) type {"><code class="zig"><span class="tok-comment">/// The compute context handed to a kernel: `c.id` is this invocation's global</span>
+<span class="tok-comment">/// index, `c.params` is the kernel's `Params` by value. Buffers are NOT in here -</span>
+<span class="tok-comment">/// reach them through the module-level `b` alias (`b.field[c.id]`).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">Ctx</span>(<span class="tok-kw">comptime</span> Module: type) type {
+    <span class="tok-kw">return</span> <span class="tok-kw">struct</span> {
+        id: u32,
+        params: Module.Params,
+    };
+}</code></pre>
+
+<p>Every kernel begins by comparing <code>c.id</code> with the element count, because the GPU starts threads in whole
+<em>workgroups</em>. With 64 threads to a workgroup and 1,000 elements, 16 workgroups start 1,024 threads, and the
+last 24 have no element; without the test they would read and write past the end of the arrays:</p>
+
+<pre data-src="examples/compute_smoke/double_it.zig" data-decl="pub fn double(c: k.Ctx(@This())) void {"><code class="zig"><span class="tok-comment">/// The kernel, the same on CPU and GPU: the array is reached through the module-level `b_data`.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">double</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">if</span> (c.id &gt;= c.params.count) {
+        <span class="tok-kw">return</span>;
+    }
+    b_data[c.id] = b_data[c.id] * <span class="tok-num">2.0</span>;
+}</code></pre>
+
+<h3 id="entries">3.3 Entry points</h3>
+
+<p>The line <code>comptime { k.installKernel(@This(), "double"); }</code> at the end of the file turns the function
+into a kernel the GPU can start. In the GPU build it generates the shader's <em>entry point</em> - the function the
+GPU calls for each thread - which reads the thread's index, builds the context and calls the kernel; it also gives
+the entry point its workgroup size, from <code>config</code>. In the CPU build it generates nothing, since the host
+calls the kernel itself in a loop:</p>
+
+<details class="src-fold" data-src="src/kompute.zig" data-decl="pub fn installKernel(comptime Module: type, comptime name: []const u8) void {"><summary><code>installKernel</code></summary><pre><code class="zig"><span class="tok-comment">/// Generate the SPIR-V compute entry point for kernel `name` in `Module`. Reads</span>
+<span class="tok-comment">/// `global_invocation_id`, builds a `Ctx` (params by value from the uniform), and</span>
+<span class="tok-comment">/// calls `Module.&lt;name&gt;(ctx)`. The exported symbol is `name`, so the host selects</span>
+<span class="tok-comment">/// it with `createComputePipeline(module, name)`. A no-op on the CPU target.</span>
+<span class="tok-comment">/// Call once per kernel from the file's `comptime {}` block.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">installKernel</span>(<span class="tok-kw">comptime</span> Module: type, <span class="tok-kw">comptime</span> name: []<span class="tok-kw">const</span> u8) void {
+    <span class="tok-kw">if</span> (!is_gpu) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-comment">// `config.workgroup` is the single source of truth for the workgroup size:</span>
+    <span class="tok-comment">// emit it as the entry's SPIR-V `OpExecutionMode LocalSize` so spv2wgsl reads</span>
+    <span class="tok-comment">// the WGSL `@workgroup_size` straight off the compiled module. No build-side</span>
+    <span class="tok-comment">// `--workgroup` flag, no duplicated literal in build.zig.</span>
+    <span class="tok-kw">const</span> wg_x: u32 = Module.config.workgroup;
+    <span class="tok-kw">const</span> Entry = <span class="tok-kw">struct</span> {
+        <span class="tok-kw">fn</span> <span class="tok-fn">run</span>() <span class="tok-kw">callconv</span>(.{ .spirv_kernel = .{ .x = wg_x, .y = <span class="tok-num">1</span>, .z = <span class="tok-num">1</span> } }) void {
+            <span class="tok-builtin">@setRuntimeSafety</span>(false);
+
+            <span class="tok-comment">// FIELD BY FIELD, never `.params = Module.g.P`.</span>
+            <span class="tok-comment">//</span>
+            <span class="tok-comment">// `P` lives in the UNIFORM address space, where SPIR-V decorates its struct</span>
+            <span class="tok-comment">// as a Block with explicit member Offsets. `Ctx.params` is a function-local,</span>
+            <span class="tok-comment">// with no such decorations. Writing `.params = Module.g.P` asks for a</span>
+            <span class="tok-comment">// whole-struct copy BETWEEN THOSE TWO LAYOUTS - an OpCopyLogical - and it</span>
+            <span class="tok-comment">// silently dropped a member: `n_cols` (field 15 of 20) arrived as 0 on device</span>
+            <span class="tok-comment">// while its neighbour `n_rows` (field 16) arrived correctly, so the uniform</span>
+            <span class="tok-comment">// buffer was right and the COPY was wrong. It cost a fluid sim that computed</span>
+            <span class="tok-comment">// a 5704-cell grid with n_cols = 0, collapsed every particle onto one cell,</span>
+            <span class="tok-comment">// and rendered a black screen.</span>
+            <span class="tok-comment">//</span>
+            <span class="tok-comment">// Reading each member instead emits an OpAccessChain + OpLoad at a known</span>
+            <span class="tok-comment">// offset - no cross-layout struct copy exists to get wrong. Scalars only, so</span>
+            <span class="tok-comment">// it is the same number of loads the kernel would have done anyway.</span>
+            <span class="tok-comment">// Iterate FIELD ENUM VALUES, not the `field_names` slice: iterating the</span>
+            <span class="tok-comment">// slice-of-slices makes the SPIR-V backend materialise every field NAME as</span>
+            <span class="tok-comment">// data (`array&lt;u32,6&gt;` = "count"+nul), and spv2wgsl cannot lower the</span>
+            <span class="tok-comment">// initialiser functions Zig emits for them. Enum values are plain integers.</span>
+            <span class="tok-kw">const</span> FE = meta.<span class="tok-fn">FieldEnum</span>(Module.Params);
+            <span class="tok-kw">var</span> params: Module.Params = undefined;
+            <span class="tok-kw">inline</span> <span class="tok-kw">for</span> (<span class="tok-kw">comptime</span> std.enums.<span class="tok-fn">values</span>(FE)) |fe| {
+                <span class="tok-builtin">@field</span>(params, <span class="tok-builtin">@tagName</span>(fe)) = <span class="tok-builtin">@field</span>(Module.g.P, <span class="tok-builtin">@tagName</span>(fe));
+            }
+
+            <span class="tok-kw">const</span> c: <span class="tok-fn">Ctx</span>(Module) = .{
+                .id = gpu.global_invocation_id[<span class="tok-num">0</span>],
+                .params = params,
+            };
+            <span class="tok-builtin">@field</span>(Module, name)(c);
+        }
+    };
+    <span class="tok-builtin">@export</span>(&amp;Entry.run, .{ .name = name });
+}</code></pre></details>
+
+<h2 id="toshader">4. From kernel to shader</h2>
+
+<p>Between the kernel file and the GPU, the build compiles the kernel to SPIR-V, a GPU program format, and for the
+browser translates it to WGSL, the language WebGPU runs. The backends tutorial follows those steps - for every shader
+in <a href="backends-tutorial.html#shaders">its chapter 5</a>, for kernels in <a href="backends-tutorial.html#compute">its
+chapter 12</a>, where each buffer's binding number is chosen too. A kernel's author meets that path only through a
+few rules:</p>
+
+<pre class="sketch"><code>   in a kernel                                   because
+   -------------------------------------------   ------------------------------------------------
+   Params: scalar fields, a multiple of 16       a uniform buffer's layout rules
+   bytes, padded with scalar fields
+   atomics through k.atomicAdd, k.atomicLoad,    the GPU build and the CPU build each use their
+   k.atomicStore, on arrays of u32               own atomic operations
+   one Buffers field for each array              one buffer for each field, on the GPU
+   at most 8 Buffers fields                      the storage buffers a WebGPU shader stage may use</code></pre>
+
+<p>The WGSL the browser receives for every kernel can be read: <code>zig build kernels-wgsl</code> writes each one to
+<code>zig-out/kernels-wgsl</code>.</p>
+
+<h2 id="running">5. Running kernels</h2>
+
+<p>The <em>host</em> is the program's ordinary code, on the CPU, that loads the kernels, creates their buffers and
+starts them. kompute's host, <code>compute_host.zig</code>, runs a module's kernels in one of three places, chosen
+when the program creates it, behind the same calls:</p>
+
+<pre class="sketch"><code>   .cpu       the CPU build, in a plain loop inside the frame: synchronous - the frame waits for it
+   .worker    the same loop in a Web Worker: asynchronous, so the frame never waits; the buffers
+              travel to the worker and back with each dispatch, one dispatch at a time
+   .gpu       the GPU build, as a compute dispatch: asynchronous, the results about a frame later</code></pre>
+
+<p>The three are interchangeable in the program's code, not in their cost: a device without a GPU can still run the
+fluid, on a worker, without freezing its frames.</p>
+
+<h3 id="dispatch">5.1 Dispatch</h3>
+
+<p>Starting a kernel over <code>n</code> elements is a <em>dispatch</em>. On <code>.cpu</code> and
+<code>.worker</code>, <code>run</code> is a loop that calls the kernel once for each element. On <code>.gpu</code> it
+records a dispatch of enough workgroups to cover the elements - the count divided by the workgroup size, rounded up,
+which is why every kernel tests its index (section 3.2):</p>
+
+<details class="src-fold" data-src="src/compute_host.zig" data-decl="pub fn run(self: *Self, comptime name: []const u8, n: u32) void {"><summary><code>run</code></summary><pre><code class="zig"><span class="tok-comment">/// Run kernel `name` over exactly `n` invocations. `n` is the dispatch</span>
+<span class="tok-comment">/// width FOR THIS CALL - explicit, because a multi-kernel pipeline mixes</span>
+<span class="tok-comment">/// widths (clearGrid over grid_cells, the particle kernels over</span>
+<span class="tok-comment">/// num_particles, prefixSum over 1). Passing it per call kills the old</span>
+<span class="tok-comment">/// footgun of a mutable `pipe.count` you had to re-set between kernels:</span>
+<span class="tok-comment">/// forget, and a kernel silently dispatched the PREVIOUS kernel's width.</span>
+<span class="tok-comment">///   CPU: a plain `for id in 0..n` loop calling the kernel (the dual-shape</span>
+<span class="tok-comment">///        source runs as ordinary Zig).</span>
+<span class="tok-comment">///   GPU: dispatch `ceil(n / config.workgroup)` workgroups - into the open</span>
+<span class="tok-comment">///        batch pass if one is active, else a fresh single-dispatch submit.</span>
+<span class="tok-comment">/// Readback is unaffected by `n`; it slices by `element_count` (set once).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">run</span>(self: *Self, <span class="tok-kw">comptime</span> name: []<span class="tok-kw">const</span> u8, n: u32) void {
+    <span class="tok-fn">assertf</span>(n &gt; <span class="tok-num">0</span>, <span class="tok-builtin">@src</span>(), <span class="tok-str">"run('"</span> ++ name ++ <span class="tok-str">"'): n must be &gt; 0"</span>, .{});
+    <span class="tok-fn">assertf</span>(
+        n &lt;= M.config.max,
+        <span class="tok-builtin">@src</span>(),
+        <span class="tok-str">"run('"</span> ++ name ++ <span class="tok-str">"'): n={d} exceeds capacity config.max={d}"</span>,
+        .{ n, M.config.max },
+    );
+    <span class="tok-kw">switch</span> (self.backend) {
+        .cpu =&gt; {
+            <span class="tok-comment">// `M.g.P` is set either way: the LEAN form reads it through `g.uniform()`,</span>
+            <span class="tok-comment">// and the stock form's `Ctx` carries a copy.</span>
+            M.g.P = self.params;
+            <span class="tok-kw">var</span> id: u32 = <span class="tok-num">0</span>;
+            <span class="tok-kw">while</span> (id &lt; n) : (id += <span class="tok-num">1</span>) {
+                <span class="tok-comment">// ** A LEAN KERNEL TAKES THE RAW INDEX, a stock one takes a `Ctx`. The</span>
+                <span class="tok-comment">// signature is the discriminator, so a file can mix both forms and</span>
+                <span class="tok-comment">// neither has to declare which it is. Without this the CPU driver only</span>
+                <span class="tok-comment">// spoke the `Ctx` dialect, and `installKernelLean` compiled but could</span>
+                <span class="tok-comment">// never be run on the host - half a merge.</span>
+                <span class="tok-comment">// Compared as a TYPE rather than through `@typeInfo`: on</span>
+                <span class="tok-comment">// 0.17.0-dev.1980 `Type.Fn` no longer carries `.params`, and a direct</span>
+                <span class="tok-comment">// comparison needs no reflection to survive.</span>
+                <span class="tok-kw">const</span> takes_raw_id: bool = <span class="tok-builtin">@TypeOf</span>(<span class="tok-builtin">@field</span>(M, name)) == <span class="tok-kw">fn</span> (u32) void;
+                <span class="tok-kw">if</span> (takes_raw_id) {
+                    <span class="tok-builtin">@field</span>(M, name)(id);
+                } <span class="tok-kw">else</span> {
+                    <span class="tok-builtin">@field</span>(M, name)(.{ .id = id, .params = self.params });
+                }
+            }
+        },
+        <span class="tok-comment">// The same loop, somewhere else. Three things diverge from `.cpu`, and</span>
+        <span class="tok-comment">// they are the price of not freezing the frame:</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">//   1. It is ASYNCHRONOUS. `readLatest` returns null until the job lands</span>
+        <span class="tok-comment">//      - as the GPU arm already does, so an app written for `.gpu` needs</span>
+        <span class="tok-comment">//      no change.</span>
+        <span class="tok-comment">//   2. It runs ONE JOB AT A TIME. A `run` issued while a job is still out</span>
+        <span class="tok-comment">//      is DROPPED, because two jobs would both write back into the same</span>
+        <span class="tok-comment">//      mirror. `.cpu` and `.gpu` would simply run again; this cannot.</span>
+        <span class="tok-comment">//   3. It copies the WHOLE `Buffers` to the worker and back, every</span>
+        <span class="tok-comment">//      dispatch. Fine for one-shot work with modest state; a poor trade</span>
+        <span class="tok-comment">//      for a megabyte of particles you wanted stepped every frame. That</span>
+        <span class="tok-comment">//      is what `.gpu` is for.</span>
+        .worker =&gt; {
+            <span class="tok-comment">// Gated on `kernels` so a module that never opts in pays NOTHING for</span>
+            <span class="tok-comment">// this arm - an untaken comptime `if` is never analyzed, so none of</span>
+            <span class="tok-comment">// the jobs machinery is linked. Selecting `.worker` requires</span>
+            <span class="tok-comment">// `initWorker`, which is a compile error without it.</span>
+            <span class="tok-kw">if</span> (<span class="tok-kw">comptime</span> <span class="tok-builtin">@hasDecl</span>(M, <span class="tok-str">"kernels"</span>)) {
+                <span class="tok-kw">const</span> wk: *Worker = &amp;(self.worker <span class="tok-kw">orelse</span> {
+                    <span class="tok-fn">assertUnreachable</span>(<span class="tok-builtin">@src</span>(), <span class="tok-str">"run('"</span> ++ name ++ <span class="tok-str">"'): .worker needs initWorker(gpa)"</span>, .{});
+                    <span class="tok-kw">return</span>;
+                });
+                <span class="tok-kw">if</span> (wk.job.<span class="tok-fn">inFlight</span>()) {
+                    <span class="tok-kw">return</span>; <span class="tok-comment">// still working on the last one - see (2) above</span>
+                }
+                wk.job = <span class="tok-fn">komputeRegistry</span>(M).<span class="tok-fn">submit</span>(
+                    wk.gpa,
+                    <span class="tok-fn">komputeKernel</span>(M, name),
+                    .{ .n = n, .params = self.params },
+                    <span class="tok-fn">asBytes</span>(wk.mirror), <span class="tok-comment">// OUR state, not the module's</span>
+                ) <span class="tok-kw">catch</span> |err| blk: {
+                    std.log.<span class="tok-fn">err</span>(<span class="tok-str">"Compute.run('"</span> ++ name ++ <span class="tok-str">"') on .worker: {s}"</span>, .{<span class="tok-builtin">@errorName</span>(err)});
+                    <span class="tok-kw">break</span> :blk .{};
+                };
+            }
+        },
+        .gpu =&gt; {
+            <span class="tok-kw">const</span> gp: *Gpu = &amp;self.gpu.?;
+            <span class="tok-kw">const</span> workgroups: u32 = <span class="tok-builtin">@divCeil</span>(n, M.config.workgroup);
+            <span class="tok-comment">// Find this kernel's slot so we get BOTH its pipeline and its</span>
+            <span class="tok-comment">// own bind group - each kernel binds a different subset of the</span>
+            <span class="tok-comment">// buffers now, so the two always travel together.</span>
+            <span class="tok-kw">const</span> ki: usize = blk: {
+                <span class="tok-kw">for</span> (gp.kernel_names, <span class="tok-num">0</span>..) |kn, idx| {
+                    <span class="tok-kw">if</span> (<span class="tok-fn">eql</span>(u8, kn, name)) {
+                        <span class="tok-kw">break</span> :blk idx;
+                    }
+                }
+                <span class="tok-comment">// A correctly-registered kernel is always found; reaching</span>
+                <span class="tok-comment">// here means a name typo or a kernel missing from initGpu's</span>
+                <span class="tok-comment">// list. assertf gives a localized message in dev and lowers</span>
+                <span class="tok-comment">// to the `unreachable` optimization hint once stripped.</span>
+                <span class="tok-fn">assertUnreachable</span>(<span class="tok-builtin">@src</span>(), <span class="tok-str">"run: kernel '"</span> ++ name ++ <span class="tok-str">"' is not registered with this pipe"</span>, .{});
+                <span class="tok-kw">unreachable</span>;
+            };
+            <span class="tok-kw">const</span> pipeline: wgpu.ComputePipelineHandle = gp.pipelines[ki];
+            <span class="tok-kw">const</span> bind_group: wgpu.BindGroupHandle = gp.bind_groups[ki];
+            gp.kernel_last_n[ki] = n; <span class="tok-comment">// for describe()</span>
+            <span class="tok-kw">if</span> (gp.rec_enc != .invalid) {
+                <span class="tok-comment">// Recording: this dispatch's params into the next table slot, a copy of</span>
+                <span class="tok-comment">// that slot into the uniform, and the dispatch in its own pass - all in</span>
+                <span class="tok-comment">// the ONE open encoder. The copies execute in order on the GPU timeline,</span>
+                <span class="tok-comment">// so every dispatch sees exactly its own params.</span>
+                <span class="tok-kw">if</span> (gp.rec_base + gp.rec_count == recording_slots) {
+                    <span class="tok-comment">// The ring's end: submit what is recorded, carry on from its start.</span>
+                    <span class="tok-fn">flushRecording</span>(gp);
+                    gp.rec_base = <span class="tok-num">0</span>;
+                    gp.rec_enc = wgpu.<span class="tok-fn">createCommandEncoder</span>(gp.dev);
+                }
+                <span class="tok-kw">const</span> slot: u32 = gp.rec_base + gp.rec_count;
+                gp.rec_slots[slot] = self.params;
+                <span class="tok-kw">const</span> size: u32 = <span class="tok-builtin">@sizeOf</span>(Params);
+                wgpu.<span class="tok-fn">copyBufferToBuffer</span>(gp.rec_enc, gp.rec_table, slot * size, gp.uniform, <span class="tok-num">0</span>, size);
+                <span class="tok-kw">const</span> rp: wgpu.ComputePassEncoderHandle = compute_pass.<span class="tok-fn">begin</span>(gp.rec_enc);
+                compute_pass.<span class="tok-fn">setPipeline</span>(rp, pipeline);
+                compute_pass.<span class="tok-fn">setBindGroup</span>(rp, <span class="tok-num">0</span>, bind_group);
+                compute_pass.<span class="tok-fn">dispatchWorkgroups</span>(rp, .{ .x = workgroups });
+                compute_pass.<span class="tok-fn">end</span>(rp);
+                gp.rec_count += <span class="tok-num">1</span>;
+                <span class="tok-kw">return</span>;
+            }
+            <span class="tok-kw">if</span> (gp.batch_enc != .invalid) {
+                <span class="tok-comment">// Open batch: encode into the shared pass. Params were</span>
+                <span class="tok-comment">// written once at beginBatch (all batched dispatches share</span>
+                <span class="tok-comment">// them). The bind group is set PER DISPATCH now - adjacent</span>
+                <span class="tok-comment">// kernels bind different buffer subsets, so it can't be</span>
+                <span class="tok-comment">// hoisted to beginBatch the way the old shared one was.</span>
+                compute_pass.<span class="tok-fn">setPipeline</span>(gp.batch_pass, pipeline);
+                compute_pass.<span class="tok-fn">setBindGroup</span>(gp.batch_pass, <span class="tok-num">0</span>, bind_group);
+                compute_pass.<span class="tok-fn">dispatchWorkgroups</span>(gp.batch_pass, .{ .x = workgroups });
+                <span class="tok-kw">return</span>;
+            }
+            self.<span class="tok-fn">syncParamsUniform</span>(gp);
+            <span class="tok-kw">const</span> enc: wgpu.CommandEncoderHandle = wgpu.<span class="tok-fn">createCommandEncoder</span>(gp.dev);
+            <span class="tok-kw">const</span> cp: wgpu.ComputePassEncoderHandle = compute_pass.<span class="tok-fn">begin</span>(enc);
+            compute_pass.<span class="tok-fn">setPipeline</span>(cp, pipeline);
+            compute_pass.<span class="tok-fn">setBindGroup</span>(cp, <span class="tok-num">0</span>, bind_group);
+            compute_pass.<span class="tok-fn">dispatchWorkgroups</span>(cp, .{ .x = workgroups });
+            compute_pass.<span class="tok-fn">end</span>(cp);
+            <span class="tok-kw">const</span> cmd: wgpu.CommandBufferHandle = wgpu.<span class="tok-fn">finishCommandEncoder</span>(enc);
+            <span class="tok-comment">// Both dispatch paths go through `submitDispatch`, which counts. I</span>
+            <span class="tok-comment">// incremented by hand at the batched site only, and every caller using</span>
+            <span class="tok-comment">// `run()` outside a batch then saw `submitted == 0` - so the sweep retired</span>
+            <span class="tok-comment">// each row before its own dispatch had executed. **7 of 105 on device**,</span>
+            <span class="tok-comment">// with `inf` against bars of zero: another row's data.</span>
+            <span class="tok-fn">submitDispatch</span>(gp, cmd);
+        },
+    }
+}</code></pre></details>
+
+<h3 id="batching">5.2 Batching</h3>
+
+<p>Each submission of work to the GPU has a fixed cost on the CPU and in the driver. A sub-step of the fluid starts
+eleven kernels; submitted one kernel at a time, the fixed costs would outweigh the work. A <em>batch</em> collects every dispatch of the frame into one recording, submitted once: between
+<code>beginBatch</code> and <code>endBatch</code>, each <code>run</code> only records its dispatch.</p>
+
+<pre data-src="src/compute_host.zig" data-decl="pub fn beginBatch(self: *Self, params: Params) void {"><code class="zig"><span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">beginBatch</span>(self: *Self, params: Params) void {
+    self.params = params;
+    <span class="tok-kw">if</span> (self.backend != .gpu) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">const</span> gp: *Gpu = &amp;self.gpu.?;
+    <span class="tok-fn">assertf</span>(gp.batch_enc == .invalid, <span class="tok-builtin">@src</span>(), <span class="tok-str">"beginBatch: a batch is already open"</span>, .{});
+    gp.batch_params = params;
+    self.<span class="tok-fn">syncParamsUniform</span>(gp);
+    gp.batch_enc = wgpu.<span class="tok-fn">createCommandEncoder</span>(gp.dev);
+    gp.batch_pass = compute_pass.<span class="tok-fn">begin</span>(gp.batch_enc);
+}</code></pre>
+
+<pre data-src="src/compute_host.zig" data-decl="pub fn endBatch(self: *Self) void {"><code class="zig"><span class="tok-comment">/// Close + submit the open batch.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">endBatch</span>(self: *Self) void {
+    <span class="tok-kw">if</span> (self.backend != .gpu) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">const</span> gp: *Gpu = &amp;self.gpu.?;
+    <span class="tok-fn">assertf</span>(gp.batch_enc != .invalid, <span class="tok-builtin">@src</span>(), <span class="tok-str">"endBatch: no batch is open"</span>, .{});
+    <span class="tok-comment">// The uniform was written once at beginBatch; if params changed since,</span>
+    <span class="tok-comment">// those changes never reached the GPU (batched dispatches don't</span>
+    <span class="tok-comment">// re-upload). That's a silent-stale bug - flag it by name.</span>
+    <span class="tok-fn">assertf</span>(
+        meta.<span class="tok-fn">eql</span>(self.params, gp.batch_params),
+        <span class="tok-builtin">@src</span>(),
+        <span class="tok-str">"endBatch: params changed during the batch — pass them to beginBatch(params), "</span> ++
+            <span class="tok-str">"not after (a post-beginBatch change is silently ignored on-device)"</span>,
+        .{},
+    );
+    compute_pass.<span class="tok-fn">end</span>(gp.batch_pass);
+    <span class="tok-kw">const</span> cmd: wgpu.CommandBufferHandle = wgpu.<span class="tok-fn">finishCommandEncoder</span>(gp.batch_enc);
+    <span class="tok-fn">submitDispatch</span>(gp, cmd);
+    gp.batch_enc = .invalid;
+    gp.batch_pass = .invalid;
+}</code></pre>
+
+<h3 id="ongpu">5.3 Data on the GPU</h3>
+
+<p>Once the particles are in GPU memory, they stay there. The kernels write positions into a buffer, and the renderer
+draws the particles from that same buffer: the simulation and the drawing share memory, and no position crosses back
+to the CPU during a frame.</p>
+
+<pre class="sketch"><code>   GPU memory: pos, vel, ...
+        ^   written by the kernels, every sub-step
+        |
+        +-- read by the renderer, every frame, to draw the particles
+   the CPU: none of it, unless the program asks (section 5.4)</code></pre>
+
+<h3 id="results">5.4 Reading results</h3>
+
+<p>A result the CPU needs - a count, an average, a value for the screen - is read back with <code>readLatest</code>.
+On <code>.cpu</code> the values are there at once. On <code>.gpu</code> the read is asynchronous: the GPU runs behind
+the CPU, so the bytes arrive a frame or two after they are asked for, and the call returns the latest ones that have
+arrived, or nothing yet; it starts the next copy itself when none is in flight (<code>.worker</code> behaves the
+same way). (How a read waits for the GPU, and why, is in the <a href="backends-tutorial.html#readback">backends
+tutorial</a>.) A copy moves each field's live elements into a staging buffer, and the CPU then scans them, so the
+fluid samples once every 30 frames rather than reading every frame - the fluid's extent, a density, the first grid
+cells, for its diagnostics. A read returns exactly the field's own elements, however large its buffer; reading
+further would return the next field's data.</p>
+
+<details class="src-fold" data-src="src/compute_host.zig" data-decl="pub fn readLatest(self: *Self, comptime field: Field) ?[]const ElemOf(field) {"><summary><code>readLatest</code></summary><pre><code class="zig"><span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">readLatest</span>(self: *Self, <span class="tok-kw">comptime</span> field: Field) ?[]<span class="tok-kw">const</span> <span class="tok-fn">ElemOf</span>(field) {
+    <span class="tok-comment">// Variable-count fields (pos/vel/...) are sized to capacity and slice to</span>
+    <span class="tok-comment">// the live `element_count`; fixed fields (grid_counts, cell_start) must</span>
+    <span class="tok-comment">// slice to THEIR OWN array length, never the particle count - else</span>
+    <span class="tok-comment">// grid_counts (grid_cells long) overruns the next field. Clamp to the</span>
+    <span class="tok-comment">// lesser of the two.</span>
+    <span class="tok-kw">const</span> arr_len: usize = <span class="tok-builtin">@field</span>(M.g.B, <span class="tok-builtin">@tagName</span>(field)).len;
+    <span class="tok-kw">const</span> n: usize = <span class="tok-builtin">@min</span>(self.element_count, arr_len);
+    <span class="tok-kw">switch</span> (self.backend) {
+        .cpu =&gt; {
+            <span class="tok-kw">return</span> <span class="tok-builtin">@field</span>(M.g.B, <span class="tok-builtin">@tagName</span>(field))[<span class="tok-num">0</span>..n];
+        },
+        <span class="tok-comment">// Same contract as the GPU arm: null until it lands, then the data -</span>
+        <span class="tok-comment">// out of our OWN mirror, never out of `M.g.B`, so a `.cpu` pipe on the</span>
+        <span class="tok-comment">// same module keeps its answer.</span>
+        .worker =&gt; {
+            <span class="tok-kw">if</span> (<span class="tok-kw">comptime</span> <span class="tok-builtin">@hasDecl</span>(M, <span class="tok-str">"kernels"</span>)) {
+                <span class="tok-kw">const</span> wk: *Worker = &amp;(self.worker <span class="tok-kw">orelse</span> <span class="tok-kw">return</span> null);
+                <span class="tok-kw">if</span> (wk.job.<span class="tok-fn">poll</span>()) |maybe_bytes| {
+                    <span class="tok-kw">if</span> (maybe_bytes) |bytes| {
+                        <span class="tok-kw">if</span> (bytes.len == <span class="tok-builtin">@sizeOf</span>(Buffers)) {
+                            <span class="tok-builtin">@memcpy</span>(<span class="tok-fn">asBytes</span>(wk.mirror), bytes);
+                            wk.have_read = true;
+                        }
+                        wk.job.<span class="tok-fn">deinit</span>();
+                    }
+                } <span class="tok-kw">else</span> |err| {
+                    std.log.<span class="tok-fn">err</span>(<span class="tok-str">"Compute.readLatest on .worker: {s}"</span>, .{<span class="tok-builtin">@errorName</span>(err)});
+                    wk.job.<span class="tok-fn">deinit</span>();
+                }
+                <span class="tok-kw">if</span> (!wk.have_read) {
+                    <span class="tok-kw">return</span> null;
+                }
+                <span class="tok-kw">return</span> <span class="tok-builtin">@field</span>(wk.mirror.*, <span class="tok-builtin">@tagName</span>(field))[<span class="tok-num">0</span>..n];
+            }
+            <span class="tok-kw">return</span> null;
+        },
+        .gpu =&gt; {
+            <span class="tok-kw">const</span> gp: *Gpu = &amp;self.gpu.?;
+            <span class="tok-kw">if</span> (gp.read != .invalid <span class="tok-kw">and</span> wgpu.<span class="tok-fn">bufferReadPoll</span>(gp.read)) {
+                <span class="tok-kw">const</span> mirror_bytes: []u8 = <span class="tok-fn">asBytes</span>(gp.mirror);
+                wgpu.<span class="tok-fn">bufferReadInto</span>(gp.read, mirror_bytes[<span class="tok-num">0</span>..gp.read_bytes]);
+                <span class="tok-fn">unpackPrefixes</span>(mirror_bytes, gp.read_count);
+                wgpu.<span class="tok-fn">bufferReadRelease</span>(gp.read);
+                gp.read = .invalid;
+                gp.have_read = true;
+                <span class="tok-comment">// The mirror now holds whatever had been dispatched when this copy was</span>
+                <span class="tok-comment">// ENCODED, which is `copy_at` - not `submitted`, which may have moved on</span>
+                <span class="tok-comment">// since. Recording the wrong one of those two is the whole bug this</span>
+                <span class="tok-comment">// counter exists to prevent, so it is stored at encode time below.</span>
+                gp.mirrored = gp.copy_at;
+            }
+            <span class="tok-kw">if</span> (gp.read == .invalid) {
+                <span class="tok-comment">// Stamp the encode, not the completion: everything submitted BEFORE this</span>
+                <span class="tok-comment">// point is what the copy will capture. Anything dispatched afterwards is</span>
+                <span class="tok-comment">// not in it, and a caller comparing generations needs that to be exact</span>
+                <span class="tok-comment">// rather than approximately recent.</span>
+                <span class="tok-comment">// NOT `submitted += 1` here, and the asymmetry is the point: this</span>
+                <span class="tok-comment">// submits a COPY, not a dispatch. Counting it would make the mirror</span>
+                <span class="tok-comment">// appear to reflect work that was never run.</span>
+                gp.copy_at = gp.submitted;
+                <span class="tok-comment">// ** ONLY WHAT `readLatest` CAN RETURN: each field's first</span>
+                <span class="tok-comment">// `element_count` elements, packed back to back. This copied every field</span>
+                <span class="tok-comment">// WHOLE - 7 MiB a readback for the zn_mlp kit's 1 MiB fields, mapped and</span>
+                <span class="tok-comment">// copied into wasm memory up to 60 times a second, to return 6 KB of</span>
+                <span class="tok-comment">// weights. The data a caller sees is unchanged: it was always sliced to</span>
+                <span class="tok-comment">// `element_count`.</span>
+                <span class="tok-kw">const</span> count: usize = self.element_count;
+                <span class="tok-kw">const</span> enc: wgpu.CommandEncoderHandle = wgpu.<span class="tok-fn">createCommandEncoder</span>(gp.dev);
+                <span class="tok-comment">// In MEMORY order, which `unpackPrefixes` relies on (`fields_by_offset`).</span>
+                <span class="tok-kw">var</span> packed_at: u32 = <span class="tok-num">0</span>;
+                <span class="tok-kw">inline</span> <span class="tok-kw">for</span> (fields_by_offset) |fi| {
+                    <span class="tok-kw">const</span> bytes: u32 = <span class="tok-fn">prefixBytes</span>(buffer_field_names[fi], count);
+                    <span class="tok-kw">if</span> (bytes &gt; <span class="tok-num">0</span>) {
+                        wgpu.<span class="tok-fn">copyBufferToBuffer</span>(enc, gp.field_bufs[fi], <span class="tok-num">0</span>, gp.staging, packed_at, bytes);
+                    }
+                    packed_at += bytes;
+                }
+                <span class="tok-kw">const</span> cmd: wgpu.CommandBufferHandle = wgpu.<span class="tok-fn">finishCommandEncoder</span>(enc);
+                wgpu.<span class="tok-fn">queueSubmit</span>(gp.queue, cmd);
+                gp.read_bytes = packed_at;
+                gp.read_count = count;
+                <span class="tok-kw">if</span> (packed_at &gt; <span class="tok-num">0</span>) {
+                    gp.read = wgpu.<span class="tok-fn">bufferReadStart</span>(gp.staging, packed_at);
+                } <span class="tok-kw">else</span> {
+                    <span class="tok-comment">// Nothing to return (element_count 0): the copy is trivially complete.</span>
+                    gp.mirrored = gp.copy_at;
+                    gp.have_read = true;
+                }
+            }
+            <span class="tok-kw">if</span> (!gp.have_read) {
+                <span class="tok-kw">return</span> null;
+            }
+            <span class="tok-kw">return</span> <span class="tok-builtin">@field</span>(gp.mirror.*, <span class="tok-builtin">@tagName</span>(field))[<span class="tok-num">0</span>..n];
+        },
+    }
+}</code></pre></details>
+
+<h2 id="fluid">6. The SPH fluid</h2>
+
+<p>The fluid follows <em>double-density relaxation</em> (Clavet, Beaudoin and Poulin, 2005), a particle method that is
+stable and cheap enough for real time. Each frame advances the fluid by one sub-step: a short sequence of kernels,
+each started over every particle or every grid cell.</p>
+
+<h3 id="state">6.1 The simulation state</h3>
+
+<p>The kernels share their data through one <code>Buffers</code>: the particles' positions, velocities and previous
+positions, their position corrections and densities, the grid's counters and starts, and a scratch copy that the sort
+writes into.</p>
+
+<details class="src-fold" data-src="examples/fluid_sort/sort_kernels.zig" data-decl="pub const Buffers = struct {"><summary><code>Buffers</code>, the fluid's state</summary><pre><code class="zig"><span class="tok-kw">pub</span> <span class="tok-kw">const</span> Buffers = <span class="tok-kw">struct</span> {
+    pos: [num_particles]Vec2,
+    prev: [num_particles]Vec2,
+    vel: [num_particles]Vec2,
+    delta: [num_particles]Vec2,
+    <span class="tok-comment">/// (rho, rho_near) per particle - also read by the renderer for colour.</span>
+    density: [num_particles]Vec2,
+    <span class="tok-comment">/// Per-cell particle count (atomic). countGrid accumulates it; prefixSum</span>
+    <span class="tok-comment">/// consumes it into cell_start and ZEROES it so scatter can reuse it as the</span>
+    <span class="tok-comment">/// per-cell write cursor.</span>
+    grid_counts: [grid_cells]u32,
+    <span class="tok-comment">/// Exclusive prefix sum of grid_counts, +1 sentinel: cell c's particles</span>
+    <span class="tok-comment">/// occupy sorted slots [cell_start[c], cell_start[c+1]); cell_start[cells]=N.</span>
+    cell_start: [grid_cells + <span class="tok-num">1</span>]u32,
+    <span class="tok-comment">/// Scatter scratch - scatter writes the cell-sorted pos/vel/prev here, then</span>
+    <span class="tok-comment">/// copyback copies them back so pos/vel/prev are canonical (= sorted).</span>
+    <span class="tok-comment">/// ONE scratch buffer for the counting sort's reorder, holding pos, vel and prev</span>
+    <span class="tok-comment">/// back-to-back: `[0..N)` = pos2, `[N..2N)` = vel2, `[2N..3N)` = prev2.</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">/// This used to be THREE separate buffers, which put the module at TEN - and WebGPU</span>
+    <span class="tok-comment">/// guarantees only EIGHT storage buffers per shader stage. Bindings past the eighth</span>
+    <span class="tok-comment">/// silently do not bind: the writes vanish with no error and the kernel runs on happily,</span>
+    <span class="tok-comment">/// which is exactly how this fluid came to fill its box while its twin `fluid_gpu`</span>
+    <span class="tok-comment">/// (which sits at exactly eight) worked perfectly. Packing them costs one multiply-add</span>
+    <span class="tok-comment">/// and buys the module back under the ceiling. `Compute.initGpu` now refuses to compile</span>
+    <span class="tok-comment">/// a module over the limit, so this can never be silently re-introduced.</span>
+    <span class="tok-comment">/// ...plus 16 spare Vec2 at the tail, which `paramEcho` uses to write back every field</span>
+    <span class="tok-comment">/// of `Params` AS THE SHADER ACTUALLY SEES IT. No new buffer: the module is at WebGPU's</span>
+    <span class="tok-comment">/// hard ceiling of 8.</span>
+    scratch: [<span class="tok-num">3</span> * num_particles + <span class="tok-num">16</span>]Vec2,
+};</code></pre></details>
+
+<h3 id="grid">6.2 The neighbour grid</h3>
+
+<p>A particle only interacts with particles closer than an interaction radius. Comparing every particle with every
+other would be 400 million comparisons for 20,000 particles. Instead the domain is divided into square cells the size
+of the radius, and a particle looks only in its own cell and the eight around it: anything farther is out of reach.</p>
+
+<p>How a cell's particles are stored decides the speed. A list of indices per cell sends every neighbour read to
+wherever that particle happens to sit in memory. The fluid instead moves the particles themselves into cell order,
+every sub-step, so that each cell's particles occupy one contiguous run of the arrays. The reordering is a
+<em>counting sort</em>, in five kernels. With six particles in three cells:</p>
+
+<pre class="sketch"><code>   the particles' cells:     p0: 2   p1: 0   p2: 1   p3: 0   p4: 2   p5: 2
+
+   clearGrid    counts = [0, 0, 0]                        one thread per cell
+   countGrid    counts = [2, 1, 3]                        one thread per particle, atomic adds
+   prefixSum    starts = [0, 2, 3, 6]                     one thread: cell c owns slots
+                counts = [0, 0, 0]                        starts[c] to starts[c+1]; counts is
+                                                          zeroed, to count the slots taken
+   scatter      slot = starts[cell] + atomicAdd(counts[cell], 1)
+                cell 0: slots 0 and 1   cell 1: slot 2   cell 2: slots 3, 4 and 5
+   copyback     the sorted copy replaces the originals:   p1 p3 | p2 | p0 p4 p5
+                                                          (the order inside a cell may vary)</code></pre>
+
+<p>Counting is an atomic add, so thousands of particles can count into the same cell at once without losing a count:</p>
+
+<pre data-src="examples/fluid_sort/sort_kernels.zig" data-decl="pub fn countGrid(c: k.Ctx(@This())) void {"><code class="zig"><span class="tok-comment">/// Per PARTICLE: count this particle into its cell (the counting pass). The</span>
+<span class="tok-comment">/// atomicAdd result is unused - we only want the final per-cell totals.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">countGrid</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">const</span> i: u32 = c.id;
+    <span class="tok-kw">if</span> (i &gt;= c.params.count) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">const</span> cell: u32 = <span class="tok-fn">cellOf</span>(b_pos[i], c.params.n_cols, c.params.n_rows, c.params.h);
+    _ = k.<span class="tok-fn">atomicAdd</span>(b_grid_counts, cell, <span class="tok-num">1</span>);
+}</code></pre>
+
+<p>The prefix sum turns the counts into each cell's first slot. It is a single running total over about 1,300 cells
+- small beside 20,000 particles - so one thread does it:</p>
+
+<pre data-src="examples/fluid_sort/sort_kernels.zig" data-decl="pub fn prefixSum(c: k.Ctx(@This())) void {"><code class="zig"><span class="tok-comment">/// SINGLE invocation (dispatch count = 1): serial exclusive prefix sum of</span>
+<span class="tok-comment">/// grid_counts into cell_start, zeroing grid_counts as we go so scatter can</span>
+<span class="tok-comment">/// reuse it as the per-cell write cursor. cell count (~1.3k) is tiny next to N.</span>
+<span class="tok-comment">/// !! BROKEN ON GPU - spv2wgsl mis-structurizes this loop. See `src/notes/claude.md`.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// This is the ONLY kernel in the tree with a real runtime loop (every other neighbour</span>
+<span class="tok-comment">/// walk is an `inline for` and unrolls), and it is the only one that trips the bug.</span>
+<span class="tok-comment">/// spv2wgsl emits two OpPhi variables DECLARED, READ, and NEVER ASSIGNED:</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">///     var phi26853: u32;              // never written</span>
+<span class="tok-comment">///     let _26845: bool = 72u == 72u;  // computed, then discarded</span>
+<span class="tok-comment">///     phi26855 = phi26853;            // reads the zero-init</span>
+<span class="tok-comment">///     let _26859: bool = phi26855 == 41u;   // -&gt; false -&gt; loop breaks immediately</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// WGSL zero-initialises them, so the loop exits on its first iteration, `cell_start`</span>
+<span class="tok-comment">/// stays all zeroes, `scatter` piles every particle into slot 0, and `copyback` writes</span>
+<span class="tok-comment">/// those zeros back into `pos`. That is the whole "fluid stuck in the corner" bug.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// Neither `@setRuntimeSafety(false)` nor changing the loop form (while-with-continue-</span>
+<span class="tok-comment">/// expression vs manual increment) changes it - both still emit 2 unassigned phis. The</span>
+<span class="tok-comment">/// fix belongs in spv2wgsl's phi/default-exit handling (`applyDefaultToShortestExit`).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">prefixSum</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">if</span> (c.id != <span class="tok-num">0</span>) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">const</span> cells: u32 = c.params.n_cols * c.params.n_rows;
+    <span class="tok-kw">var</span> acc: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> cell: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (cell &lt; cells) : (cell += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> cnt: u32 = k.<span class="tok-fn">atomicLoad</span>(b_grid_counts, cell);
+        b_cell_start[cell] = acc;
+        acc += cnt;
+        k.<span class="tok-fn">atomicStore</span>(b_grid_counts, cell, <span class="tok-num">0</span>);
+    }
+    b_cell_start[cells] = acc;
+}</code></pre>
+
+<p>Each particle then claims the next free slot in its cell, again with an atomic add, and writes itself there:</p>
+
+<pre data-src="examples/fluid_sort/sort_kernels.zig" data-decl="pub fn scatter(c: k.Ctx(@This())) void {"><code class="zig"><span class="tok-comment">/// Per PARTICLE: claim a slot in this particle's cell (atomicAdd on the reused</span>
+<span class="tok-comment">/// grid_counts cursor) and write its pos/vel/prev into the cell-sorted scratch</span>
+<span class="tok-comment">/// at cell_start[cell] + slot.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">scatter</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">const</span> i: u32 = c.id;
+    <span class="tok-kw">if</span> (i &gt;= c.params.count) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">const</span> cell: u32 = <span class="tok-fn">cellOf</span>(b_pos[i], c.params.n_cols, c.params.n_rows, c.params.h);
+    <span class="tok-kw">const</span> slot: u32 = k.<span class="tok-fn">atomicAdd</span>(b_grid_counts, cell, <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> dest: u32 = b_cell_start[cell] + slot;
+    b_scratch[dest] = b_pos[i];
+    b_scratch[num_particles + dest] = b_vel[i];
+    b_scratch[<span class="tok-num">2</span> * num_particles + dest] = b_prev[i];
+}</code></pre>
+
+<p>The particles are interchangeable, so the sorted order simply becomes the order for the rest of the sub-step and
+the next; nothing is ever unsorted. And with exact ranges, a cell has no fixed capacity to overflow: a dense clump
+keeps every neighbour.</p>
+
+<h3 id="density">6.3 Density</h3>
+
+<p><code>density</code> walks the nine cells around each particle and sums how close its neighbours are, into two
+numbers: the <em>density</em>, and a sharper <em>near-density</em> that rises steeply as particles come close to
+touching. The near-density is what keeps the fluid from collapsing into itself. After the sort, each neighbour cell is
+one contiguous range, so the loop reads consecutive particles from consecutive memory.</p>
+
+<details class="src-fold" data-src="examples/fluid_sort/sort_kernels.zig" data-decl="pub fn density(c: k.Ctx(@This())) void {"><summary><code>density</code></summary><pre><code class="zig"><span class="tok-comment">/// Per particle: rho = sum(1-q)^2, rho_near = sum(1-q)^3 over the 3x3 neighbourhood,</span>
+<span class="tok-comment">/// iterating each cell's CONTIGUOUS sorted range [cell_start[c], cell_start[c+1]).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">density</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">const</span> i: u32 = c.id;
+    <span class="tok-kw">if</span> (i &gt;= c.params.count) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">const</span> my_pos: Vec2 = b_pos[i];
+    <span class="tok-kw">var</span> rho: f32 = <span class="tok-num">0.0</span>;
+    <span class="tok-kw">var</span> rho_near: f32 = <span class="tok-num">0.0</span>;
+    <span class="tok-kw">const</span> ccx: i32 = <span class="tok-builtin">@floor</span>(my_pos[<span class="tok-num">0</span>] / c.params.h);
+    <span class="tok-kw">const</span> ccy: i32 = <span class="tok-builtin">@floor</span>(my_pos[<span class="tok-num">1</span>] / c.params.h);
+    <span class="tok-kw">var</span> dy: i32 = -<span class="tok-num">1</span>;
+    <span class="tok-kw">while</span> (dy &lt;= <span class="tok-num">1</span>) : (dy += <span class="tok-num">1</span>) {
+        <span class="tok-kw">var</span> dx: i32 = -<span class="tok-num">1</span>;
+        <span class="tok-kw">while</span> (dx &lt;= <span class="tok-num">1</span>) : (dx += <span class="tok-num">1</span>) {
+            <span class="tok-kw">const</span> nx: i32 = ccx + dx;
+            <span class="tok-kw">const</span> ny: i32 = ccy + dy;
+            <span class="tok-kw">if</span> (nx &lt; <span class="tok-num">0</span> <span class="tok-kw">or</span> ny &lt; <span class="tok-num">0</span>) {
+                <span class="tok-kw">continue</span>;
+            }
+            <span class="tok-kw">const</span> unx: u32 = <span class="tok-builtin">@intCast</span>(nx);
+            <span class="tok-kw">const</span> uny: u32 = <span class="tok-builtin">@intCast</span>(ny);
+            <span class="tok-kw">if</span> (unx &gt;= c.params.n_cols <span class="tok-kw">or</span> uny &gt;= c.params.n_rows) {
+                <span class="tok-kw">continue</span>;
+            }
+            <span class="tok-kw">const</span> cell: u32 = unx + uny * c.params.n_cols;
+            <span class="tok-kw">const</span> start: u32 = b_cell_start[cell];
+            <span class="tok-comment">// CAP THE CELL, exactly as `fluid_gpu` does. Its bucket lists hold at most</span>
+            <span class="tok-comment">// `max_per_cell` indices and silently drop the overflow, so it never sees more</span>
+            <span class="tok-comment">// than 64 neighbours from one cell. This walk used to read the WHOLE range -</span>
+            <span class="tok-comment">// and with cellmax running 74..97 that is ~30 extra neighbours per dense cell</span>
+            <span class="tok-comment">// that the twin never counts. rho comes out systematically higher from the SAME</span>
+            <span class="tok-comment">// configuration, and `rest_density = 15.39` was tuned against the capped number.</span>
+            <span class="tok-comment">// Two demos cannot be a controlled comparison while one of them silently counts</span>
+            <span class="tok-comment">// a different neighbourhood.</span>
+            <span class="tok-kw">const</span> end_raw: u32 = b_cell_start[cell + <span class="tok-num">1</span>];
+            <span class="tok-kw">const</span> end: u32 = <span class="tok-kw">if</span> (end_raw - start &gt; max_per_cell) start + max_per_cell <span class="tok-kw">else</span> end_raw;
+            <span class="tok-kw">var</span> kk: u32 = start;
+            <span class="tok-kw">while</span> (kk &lt; end) : (kk += <span class="tok-num">1</span>) {
+                <span class="tok-kw">if</span> (kk == i) {
+                    <span class="tok-kw">continue</span>;
+                }
+                <span class="tok-kw">const</span> sep: Vec2 = b_pos[kk] - my_pos;
+                <span class="tok-kw">const</span> d2: f32 = <span class="tok-fn">dot</span>(sep, sep);
+                <span class="tok-kw">if</span> (d2 &lt; c.params.h * c.params.h) {
+                    <span class="tok-kw">const</span> dist: f32 = <span class="tok-builtin">@sqrt</span>(d2);
+                    <span class="tok-kw">const</span> omq: f32 = <span class="tok-num">1.0</span> - dist / c.params.h;
+                    rho += omq * omq;
+                    rho_near += omq * omq * omq;
+                }
+            }
+        }
+    }
+    b_density[i] = .{ rho, rho_near };
+}</code></pre></details>
+
+<h3 id="pressure">6.4 Pressure</h3>
+
+<p><code>force</code> turns the densities into movement: a crowded particle pushes its neighbours away, harder the
+closer they are. The kernel does not change velocities directly; it accumulates a correction of each particle's
+position, which the last kernel of the sub-step turns into velocity.</p>
+
+<details class="src-fold" data-src="examples/fluid_sort/sort_kernels.zig" data-decl="pub fn force(c: k.Ctx(@This())) void {"><summary><code>force</code></summary><pre><code class="zig"><span class="tok-comment">/// Per particle: pressure-only double-density displacement (viscosity is the</span>
+<span class="tok-comment">/// separate pre-predict pass). Reads neighbour pos + density from the CONTIGUOUS</span>
+<span class="tok-comment">/// sorted ranges.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">force</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">const</span> i: u32 = c.id;
+    <span class="tok-kw">if</span> (i &gt;= c.params.count) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">const</span> my_pos: Vec2 = b_pos[i];
+    <span class="tok-kw">const</span> my_d: Vec2 = b_density[i];
+    <span class="tok-kw">const</span> my_press: f32 = c.params.k_far * (my_d[<span class="tok-num">0</span>] - c.params.r0);
+    <span class="tok-kw">const</span> my_near: f32 = c.params.k_near * my_d[<span class="tok-num">1</span>];
+    <span class="tok-kw">var</span> corr: Vec2 = .{ <span class="tok-num">0.0</span>, <span class="tok-num">0.0</span> };
+    <span class="tok-kw">const</span> ccx: i32 = <span class="tok-builtin">@floor</span>(my_pos[<span class="tok-num">0</span>] / c.params.h);
+    <span class="tok-kw">const</span> ccy: i32 = <span class="tok-builtin">@floor</span>(my_pos[<span class="tok-num">1</span>] / c.params.h);
+    <span class="tok-kw">var</span> dy: i32 = -<span class="tok-num">1</span>;
+    <span class="tok-kw">while</span> (dy &lt;= <span class="tok-num">1</span>) : (dy += <span class="tok-num">1</span>) {
+        <span class="tok-kw">var</span> dx: i32 = -<span class="tok-num">1</span>;
+        <span class="tok-kw">while</span> (dx &lt;= <span class="tok-num">1</span>) : (dx += <span class="tok-num">1</span>) {
+            <span class="tok-kw">const</span> nx: i32 = ccx + dx;
+            <span class="tok-kw">const</span> ny: i32 = ccy + dy;
+            <span class="tok-kw">if</span> (nx &lt; <span class="tok-num">0</span> <span class="tok-kw">or</span> ny &lt; <span class="tok-num">0</span>) {
+                <span class="tok-kw">continue</span>;
+            }
+            <span class="tok-kw">const</span> unx: u32 = <span class="tok-builtin">@intCast</span>(nx);
+            <span class="tok-kw">const</span> uny: u32 = <span class="tok-builtin">@intCast</span>(ny);
+            <span class="tok-kw">if</span> (unx &gt;= c.params.n_cols <span class="tok-kw">or</span> uny &gt;= c.params.n_rows) {
+                <span class="tok-kw">continue</span>;
+            }
+            <span class="tok-kw">const</span> cell: u32 = unx + uny * c.params.n_cols;
+            <span class="tok-kw">const</span> start: u32 = b_cell_start[cell];
+            <span class="tok-comment">// Capped to match `fluid_gpu` - see the note in `density`.</span>
+            <span class="tok-kw">const</span> end_raw: u32 = b_cell_start[cell + <span class="tok-num">1</span>];
+            <span class="tok-kw">const</span> end: u32 = <span class="tok-kw">if</span> (end_raw - start &gt; max_per_cell) start + max_per_cell <span class="tok-kw">else</span> end_raw;
+            <span class="tok-kw">var</span> kk: u32 = start;
+            <span class="tok-kw">while</span> (kk &lt; end) : (kk += <span class="tok-num">1</span>) {
+                <span class="tok-kw">if</span> (kk == i) {
+                    <span class="tok-kw">continue</span>;
+                }
+                <span class="tok-kw">const</span> rel: Vec2 = b_pos[kk] - my_pos;
+                <span class="tok-kw">const</span> d2: f32 = <span class="tok-fn">dot</span>(rel, rel);
+                <span class="tok-kw">if</span> (d2 &gt;= c.params.h * c.params.h) {
+                    <span class="tok-kw">continue</span>;
+                }
+                <span class="tok-kw">const</span> dist: f32 = <span class="tok-builtin">@sqrt</span>(d2);
+                <span class="tok-kw">var</span> dir: Vec2 = undefined;
+                <span class="tok-kw">if</span> (dist &gt; <span class="tok-num">0.5</span>) {
+                    dir = rel * <span class="tok-fn">splat2</span>(<span class="tok-num">1.0</span> / dist);
+                } <span class="tok-kw">else</span> {
+                    <span class="tok-comment">// Co-location fallback (particles at ~the same point). THE BUG</span>
+                    <span class="tok-comment">// this replaces: a FIXED +/-x axis whose sign was `i &lt; kk`. But i,</span>
+                    <span class="tok-comment">// kk are sorted SLOTS, and the sort key is cell = cx + cy*n_cols,</span>
+                    <span class="tok-comment">// so slot grows with ROW (cy). For a vertically-stacked</span>
+                    <span class="tok-comment">// coincident pair the lower row always has the lower slot -&gt;</span>
+                    <span class="tok-comment">// always pushed -x, upper row +x. That is a systematic shear</span>
+                    <span class="tok-comment">// (v_x grows with y) which funnels particles into the (0,0) and</span>
+                    <span class="tok-comment">// (W,H) corners - the bottom-left / top-right ejections. Fix:</span>
+                    <span class="tok-comment">// pick a pair-CONSISTENT pseudo-random direction (seed is</span>
+                    <span class="tok-comment">// symmetric in i,kk), signed by `i &lt; kk` so it stays</span>
+                    <span class="tok-comment">// antisymmetric (momentum-conserving) but has NO axis bias.</span>
+                    <span class="tok-kw">const</span> seed: u32 = (i +% kk) *% <span class="tok-num">2654435761</span>;
+                    <span class="tok-kw">const</span> ang: f32 = <span class="tok-fn">float</span>(seed % <span class="tok-num">6283</span>) * <span class="tok-num">0.001</span>;
+                    <span class="tok-kw">const</span> sgn: f32 = <span class="tok-kw">if</span> (i &lt; kk) <span class="tok-num">1.0</span> <span class="tok-kw">else</span> -<span class="tok-num">1.0</span>;
+                    dir = .{ <span class="tok-builtin">@cos</span>(ang) * sgn, <span class="tok-builtin">@sin</span>(ang) * sgn };
+                }
+                <span class="tok-kw">const</span> omq: f32 = <span class="tok-num">1.0</span> - dist / c.params.h;
+                <span class="tok-kw">const</span> jd: Vec2 = b_density[kk];
+                <span class="tok-kw">const</span> j_press: f32 = c.params.k_far * (jd[<span class="tok-num">0</span>] - c.params.r0);
+                <span class="tok-kw">const</span> j_near: f32 = c.params.k_near * jd[<span class="tok-num">1</span>];
+                <span class="tok-kw">const</span> disp: f32 = <span class="tok-num">0.5</span> * c.params.dt * c.params.dt *
+                    ((my_press + j_press) * omq + (my_near + j_near) * omq * omq);
+                corr = corr - dir * <span class="tok-fn">splat2</span>(disp);
+            }
+        }
+    }
+    <span class="tok-comment">// NO CORRECTION CLAMP - `fluid_gpu` has none, and this is meant to be its twin.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// There WAS one here (|corr| bounded to h/2), added to stop a rho_near spike in a</span>
+    <span class="tok-comment">// corner flinging a particle across the domain. But it also silently changes the</span>
+    <span class="tok-comment">// pressure solve wherever the correction is large, which is exactly where the fluid</span>
+    <span class="tok-comment">// is deciding how to compress - and with `h` raised from 10 to 22 the clamp bites in</span>
+    <span class="tok-comment">// places it never used to. Two demos cannot be compared while one of them quietly</span>
+    <span class="tok-comment">// truncates its own pressure. The wall clamp and the 40 px/s speed cap in</span>
+    <span class="tok-comment">// `applyAndFinalize` already bound the runaway this was guarding against.</span>
+    b_delta[i] = corr;
+}</code></pre></details>
+
+<h3 id="viscosity">6.5 Viscosity</h3>
+
+<p><code>viscosity</code> makes the fluid behave like water rather than a gas: a drag between particles moving toward
+each other. It acts only on a pair that is approaching, grows with the square of the approach speed, and is limited so
+that at most it brings the pair's approach to rest. It can therefore calm the fluid, and never add energy to it. It
+runs as its own kernel, before the prediction, in the order of Clavet's method, which is more stable than combining it
+with the pressure.</p>
+
+<details class="src-fold" data-src="examples/fluid_sort/sort_kernels.zig" data-decl="pub fn viscosity(c: k.Ctx(@This())) void {"><summary><code>viscosity</code></summary><pre><code class="zig"><span class="tok-comment">/// Per particle: collision-style viscosity (t1178). Acts ONLY on approaching</span>
+<span class="tok-comment">/// pairs (closing speed u &gt; 0); the impulse is QUADRATIC in u, then CLAMPED so</span>
+<span class="tok-comment">/// it can at most bring the pair's radial motion to rest (u' = u - imp &gt;= 0):</span>
+<span class="tok-comment">/// never a bounce, strictly dissipative, 1/2 each. Weight 1 inside h/2, linear to</span>
+<span class="tok-comment">/// 0 at h. Reads the STALE sort (last frame's cell_start + the still-sorted</span>
+<span class="tok-comment">/// pos) - it runs before predict and the reorder.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">viscosity</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">const</span> i: u32 = c.id;
+    <span class="tok-kw">if</span> (i &gt;= c.params.count) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">const</span> my_pos: Vec2 = b_pos[i];
+    <span class="tok-kw">var</span> my_vel: Vec2 = b_vel[i];
+    <span class="tok-kw">const</span> ccx: i32 = <span class="tok-builtin">@floor</span>(my_pos[<span class="tok-num">0</span>] / c.params.h);
+    <span class="tok-kw">const</span> ccy: i32 = <span class="tok-builtin">@floor</span>(my_pos[<span class="tok-num">1</span>] / c.params.h);
+    <span class="tok-kw">var</span> dy: i32 = -<span class="tok-num">1</span>;
+    <span class="tok-kw">while</span> (dy &lt;= <span class="tok-num">1</span>) : (dy += <span class="tok-num">1</span>) {
+        <span class="tok-kw">var</span> dx: i32 = -<span class="tok-num">1</span>;
+        <span class="tok-kw">while</span> (dx &lt;= <span class="tok-num">1</span>) : (dx += <span class="tok-num">1</span>) {
+            <span class="tok-kw">const</span> nx: i32 = ccx + dx;
+            <span class="tok-kw">const</span> ny: i32 = ccy + dy;
+            <span class="tok-kw">if</span> (nx &lt; <span class="tok-num">0</span> <span class="tok-kw">or</span> ny &lt; <span class="tok-num">0</span>) {
+                <span class="tok-kw">continue</span>;
+            }
+            <span class="tok-kw">const</span> unx: u32 = <span class="tok-builtin">@intCast</span>(nx);
+            <span class="tok-kw">const</span> uny: u32 = <span class="tok-builtin">@intCast</span>(ny);
+            <span class="tok-kw">if</span> (unx &gt;= c.params.n_cols <span class="tok-kw">or</span> uny &gt;= c.params.n_rows) {
+                <span class="tok-kw">continue</span>;
+            }
+            <span class="tok-kw">const</span> cell: u32 = unx + uny * c.params.n_cols;
+            <span class="tok-kw">const</span> start: u32 = b_cell_start[cell];
+            <span class="tok-comment">// Capped to match `fluid_gpu` - see the note in `density`.</span>
+            <span class="tok-kw">const</span> end_raw: u32 = b_cell_start[cell + <span class="tok-num">1</span>];
+            <span class="tok-kw">const</span> end: u32 = <span class="tok-kw">if</span> (end_raw - start &gt; max_per_cell) start + max_per_cell <span class="tok-kw">else</span> end_raw;
+            <span class="tok-kw">var</span> kk: u32 = start;
+            <span class="tok-kw">while</span> (kk &lt; end) : (kk += <span class="tok-num">1</span>) {
+                <span class="tok-kw">if</span> (kk == i) {
+                    <span class="tok-kw">continue</span>;
+                }
+                <span class="tok-kw">const</span> sep: Vec2 = b_pos[kk] - my_pos;
+                <span class="tok-kw">const</span> dist: f32 = <span class="tok-fn">length</span>(sep);
+                <span class="tok-kw">if</span> (dist &lt; <span class="tok-num">0.1</span> <span class="tok-kw">or</span> dist &gt;= c.params.h) {
+                    <span class="tok-kw">continue</span>;
+                }
+                <span class="tok-kw">const</span> n: Vec2 = sep * <span class="tok-fn">splat2</span>(<span class="tok-num">1.0</span> / dist);
+                <span class="tok-kw">const</span> u: f32 = <span class="tok-fn">dot</span>(my_vel - b_vel[kk], n);
+                <span class="tok-kw">if</span> (u &lt;= <span class="tok-num">0.0</span>) {
+                    <span class="tok-kw">continue</span>;
+                }
+                <span class="tok-kw">const</span> w_lin: f32 = <span class="tok-num">2.0</span> * (<span class="tok-num">1.0</span> - dist / c.params.h);
+                <span class="tok-kw">const</span> w: f32 = <span class="tok-kw">if</span> (w_lin &lt; <span class="tok-num">1.0</span>) w_lin <span class="tok-kw">else</span> <span class="tok-num">1.0</span>;
+                <span class="tok-kw">const</span> imp_raw: f32 = c.params.visc_beta * w * u * u;
+                <span class="tok-kw">const</span> imp: f32 = <span class="tok-kw">if</span> (imp_raw &lt; u) imp_raw <span class="tok-kw">else</span> u;
+                my_vel = my_vel - n * <span class="tok-fn">splat2</span>(<span class="tok-num">0.5</span> * imp);
+            }
+        }
+    }
+    b_vel[i] = my_vel;
+}</code></pre></details>
+
+<h3 id="walls">6.6 Gravity, prediction and walls</h3>
+
+<p>Three kernels surround the neighbour work. <code>gravityMouse</code> adds gravity, and any push from the mouse, to
+each velocity. <code>predict</code> records each position as the previous one and moves the particle by its velocity.
+<code>applyAndFinalize</code>, last, adds the accumulated correction, keeps the particle inside the box, and recovers
+its velocity from how far it actually moved.</p>
+
+<p>The walls are constraints on position. A hard clamp alone would pin a particle in a corner to the corner point on
+both axes; several particles sharing one point make the near-density grow without bound, and they fly apart. So the
+walls push softly over a band near each wall, and the clamp that follows moves each particle by a small amount of its
+own along the wall, so that no two share a point. The velocity is computed after the walls, from the movement that
+remains.</p>
+
+<details class="src-fold" data-src="examples/fluid_sort/sort_kernels.zig" data-decl="pub fn applyAndFinalize(c: k.Ctx(@This())) void {"><summary><code>applyAndFinalize</code></summary><pre><code class="zig"><span class="tok-comment">/// Per particle: derive velocity from the PHYSICS step, then resolve the domain</span>
+<span class="tok-comment">/// boundary. Velocity is taken BEFORE any boundary position edit (so clamps/pushes</span>
+<span class="tok-comment">/// can't pump energy in - the corner-jet fix), then a wall contact removes a</span>
+<span class="tok-comment">/// tunable proportion of the normal and tangential velocity (diagnostic knobs).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">applyAndFinalize</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">const</span> i: u32 = c.id;
+    <span class="tok-kw">if</span> (i &gt;= c.params.count) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-comment">// Physics result for this substep: predicted position + the pressure</span>
+    <span class="tok-comment">// correction. Velocity is read from THIS, before any boundary edit, so a</span>
+    <span class="tok-comment">// position correction can never leak into velocity.</span>
+    <span class="tok-comment">// POSITION FIRST, VELOCITY FROM THE FINAL POSITION.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// This is position-based dynamics: the walls are CONSTRAINTS, so the velocity has to be</span>
+    <span class="tok-comment">// derived from the position that survives them - `v = (p_final - p_prev) / dt`. It used</span>
+    <span class="tok-comment">// to be taken from `p_phys`, BEFORE the wall band and the clamp. That made the wall band</span>
+    <span class="tok-comment">// a free teleport: it shoved a particle inward every substep and left its velocity</span>
+    <span class="tok-comment">// untouched, so the particle paid nothing for the displacement. An energy pump running</span>
+    <span class="tok-comment">// along all four walls. The fluid inflated until it filled the box (rho 11.5 against a</span>
+    <span class="tok-comment">// rest density of 15.39) and flung particles clean through the boundary - `cellmax 97`</span>
+    <span class="tok-comment">// against an average of 16.7, because `cellOf` clamps every out-of-bounds particle into</span>
+    <span class="tok-comment">// cell 0. `fluid_gpu`, which computes v after its clamp, showed none of it (cap 0).</span>
+    <span class="tok-kw">var</span> p: Vec2 = b_pos[i] + b_delta[i];
+    <span class="tok-comment">// (Re-added) soft inward repulsion over a margin band. POSITION-ONLY: it</span>
+    <span class="tok-comment">// edits p, never v - and since predict makes next frame's b_pos = b_prev +</span>
+    <span class="tok-comment">// vel*dt, the b_prev cancels in the velocity formula, so this can never pump.</span>
+    <span class="tok-kw">const</span> band: f32 = c.params.h;
+    <span class="tok-kw">const</span> push: f32 = <span class="tok-num">0.25</span>;
+    <span class="tok-kw">if</span> (p[<span class="tok-num">0</span>] &lt; band) {
+        p[<span class="tok-num">0</span>] += (band - p[<span class="tok-num">0</span>]) * push;
+    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (p[<span class="tok-num">0</span>] &gt; c.params.dom_w - band) {
+        p[<span class="tok-num">0</span>] -= (p[<span class="tok-num">0</span>] - (c.params.dom_w - band)) * push;
+    }
+    <span class="tok-kw">if</span> (p[<span class="tok-num">1</span>] &lt; band) {
+        p[<span class="tok-num">1</span>] += (band - p[<span class="tok-num">1</span>]) * push;
+    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (p[<span class="tok-num">1</span>] &gt; c.params.dom_h - band) {
+        p[<span class="tok-num">1</span>] -= (p[<span class="tok-num">1</span>] - (c.params.dom_h - band)) * push;
+    }
+    <span class="tok-comment">// Hard clamp + per-axis jitter (different x/y bases -&gt; 2D scatter, not a</span>
+    <span class="tok-comment">// diagonal line). Position-only.</span>
+    <span class="tok-kw">const</span> margin: f32 = <span class="tok-num">1.5</span>;
+    <span class="tok-kw">const</span> jx: f32 = <span class="tok-fn">float</span>(i % <span class="tok-num">7</span>) * <span class="tok-num">0.4</span>;
+    <span class="tok-kw">const</span> jy: f32 = <span class="tok-fn">float</span>((i / <span class="tok-num">7</span>) % <span class="tok-num">7</span>) * <span class="tok-num">0.4</span>;
+    <span class="tok-kw">const</span> lo_x: f32 = margin + jx;
+    <span class="tok-kw">const</span> hi_x: f32 = c.params.dom_w - margin - jx;
+    <span class="tok-kw">const</span> lo_y: f32 = margin + jy;
+    <span class="tok-kw">const</span> hi_y: f32 = c.params.dom_h - margin - jy;
+    <span class="tok-kw">const</span> hit_x_lo: bool = p[<span class="tok-num">0</span>] &lt; lo_x;
+    <span class="tok-kw">const</span> hit_x_hi: bool = p[<span class="tok-num">0</span>] &gt; hi_x;
+    <span class="tok-kw">const</span> hit_y_lo: bool = p[<span class="tok-num">1</span>] &lt; lo_y;
+    <span class="tok-kw">const</span> hit_y_hi: bool = p[<span class="tok-num">1</span>] &gt; hi_y;
+    <span class="tok-kw">if</span> (hit_x_lo) {
+        p[<span class="tok-num">0</span>] = lo_x;
+    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (hit_x_hi) {
+        p[<span class="tok-num">0</span>] = hi_x;
+    }
+    <span class="tok-kw">if</span> (hit_y_lo) {
+        p[<span class="tok-num">1</span>] = lo_y;
+    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (hit_y_hi) {
+        p[<span class="tok-num">1</span>] = hi_y;
+    }
+    <span class="tok-comment">// Wall-contact damping (the experiment): remove a proportion of the into-wall</span>
+    <span class="tok-comment">// NORMAL velocity and the along-wall TANGENTIAL velocity. keep = 1 - damp.</span>
+    <span class="tok-comment">// The constraint has been applied; NOW the velocity follows from the motion the particle</span>
+    <span class="tok-comment">// actually made. A particle stopped by a wall gets a small v here by construction, so</span>
+    <span class="tok-comment">// the explicit damping below only shapes what the constraint already resolved.</span>
+    <span class="tok-kw">var</span> v: Vec2 = (p - b_prev[i]) * <span class="tok-fn">splat2</span>(<span class="tok-num">1.0</span> / c.params.dt);
+    <span class="tok-kw">const</span> kn: f32 = <span class="tok-num">1.0</span> - c.params.wall_normal_damp;
+    <span class="tok-kw">const</span> kt: f32 = <span class="tok-num">1.0</span> - c.params.wall_tangent_damp;
+    <span class="tok-kw">const</span> hit_x: bool = hit_x_lo <span class="tok-kw">or</span> hit_x_hi;
+    <span class="tok-kw">const</span> hit_y: bool = hit_y_lo <span class="tok-kw">or</span> hit_y_hi;
+    <span class="tok-comment">// Normal = the axis that hit; damp only the INTO-wall direction.</span>
+    <span class="tok-kw">if</span> (hit_x_lo <span class="tok-kw">and</span> v[<span class="tok-num">0</span>] &lt; <span class="tok-num">0.0</span>) {
+        v[<span class="tok-num">0</span>] = v[<span class="tok-num">0</span>] * kn;
+    }
+    <span class="tok-kw">if</span> (hit_x_hi <span class="tok-kw">and</span> v[<span class="tok-num">0</span>] &gt; <span class="tok-num">0.0</span>) {
+        v[<span class="tok-num">0</span>] = v[<span class="tok-num">0</span>] * kn;
+    }
+    <span class="tok-kw">if</span> (hit_y_lo <span class="tok-kw">and</span> v[<span class="tok-num">1</span>] &lt; <span class="tok-num">0.0</span>) {
+        v[<span class="tok-num">1</span>] = v[<span class="tok-num">1</span>] * kn;
+    }
+    <span class="tok-kw">if</span> (hit_y_hi <span class="tok-kw">and</span> v[<span class="tok-num">1</span>] &gt; <span class="tok-num">0.0</span>) {
+        v[<span class="tok-num">1</span>] = v[<span class="tok-num">1</span>] * kn;
+    }
+    <span class="tok-comment">// Tangential = the perpendicular axis; damp it on any wall touch (friction).</span>
+    <span class="tok-comment">// At a corner both components get hit, which is fine (strong corner bleed).</span>
+    <span class="tok-kw">if</span> (hit_x) {
+        v[<span class="tok-num">1</span>] = v[<span class="tok-num">1</span>] * kt;
+    }
+    <span class="tok-kw">if</span> (hit_y) {
+        v[<span class="tok-num">0</span>] = v[<span class="tok-num">0</span>] * kt;
+    }
+    b_pos[i] = p;
+    <span class="tok-kw">const</span> speed: f32 = <span class="tok-fn">length</span>(v);
+    <span class="tok-kw">const</span> max_speed: f32 = <span class="tok-num">40.0</span>;
+    <span class="tok-kw">if</span> (speed &gt; max_speed) {
+        v = v * <span class="tok-fn">splat2</span>(max_speed / speed);
+    }
+    b_vel[i] = v;
+}</code></pre></details>
+
+<h3 id="substep">6.7 The sub-step</h3>
+
+<p>Together, one sub-step is eleven dispatches, recorded into the frame's batch:</p>
+
+<pre class="sketch"><code>   gravityMouse        per particle   gravity and the mouse, into the velocities
+   viscosity           per particle   the drag, on last sub-step's grid
+   predict             per particle   move by the velocity; remember the previous position
+   clearGrid           per cell       \
+   countGrid           per particle    |
+   prefixSum           one thread      |  the counting sort: particles into cell order
+   scatter             per particle    |
+   copyback            per particle   /
+   density             per particle   density and near-density, from the neighbours
+   force               per particle   the pressure correction
+   applyAndFinalize    per particle   the correction applied, the walls, the velocity</code></pre>
+
+<p>Viscosity runs before the sort, so it reads the grid built in the previous sub-step: a damping term is not
+disturbed by a grid a few particle movements old. Density and force run after the sort, on the fresh grid. The
+sequence runs once a frame for 20,000 particles, in one submission, and the renderer draws the result straight from
+GPU memory.</p>
+
+<h2 id="performance">7. Performance</h2>
+
+<p>A simulation can be correct and still too slow. The measure used here is the time of one sub-step: frames per
+second stop at the display's refresh rate, while the sub-step's time keeps showing every change.</p>
+
+<h3 id="measured">7.1 Measured effects</h3>
+
+<p>Measured on one phone's GPU (an Adreno), each technique's effect on the time of one sub-step:</p>
+
+<pre class="sketch"><code>   the grid                                                       ms per sub-step
+   ------------------------------------------------------------   ---------------
+   built by one thread                                            15.5
+   built in parallel, with atomic adds                            11.9
+   with workgroups of 256 threads, and the arithmetic trimmed     about 10
+   with the counting sort: each cell's neighbours contiguous      3.8</code></pre>
+
+<p>A frame at 60 frames per second has 16.7 ms for the simulation and the drawing together; the measure is per
+sub-step so that a frame can hold several when the simulation needs a smaller time step.</p>
+
+<h3 id="coalesced">7.2 Coalesced memory</h3>
+
+<p>A GPU runs threads in lockstep groups of 32 or 64. When the threads of a group read memory together, the hardware
+serves them with one wide transaction if their addresses are adjacent - a <em>coalesced</em> read - and with one
+transaction per thread if the addresses are scattered. The bytes are the same; the time is many times longer.</p>
+
+<pre class="sketch"><code>   neighbours read through an index list       neighbours after the sort
+   ---------------------------------------     ---------------------------------------
+   thread 0: pos[17]                           thread 0: pos[812]
+   thread 1: pos[9402]                         thread 1: pos[813]
+   thread 2: pos[311]                          thread 2: pos[814]
+   thread 3: pos[15020]                        thread 3: pos[815]
+   one transaction for each thread             one transaction for the group</code></pre>
+
+<p>The neighbour walks are nearly the whole cost of the fluid, so their reads decide its speed. Through an index list,
+every neighbour read is a scattered jump. After the sort, a cell's particles are consecutive in memory and the reads
+coalesce, for the positions and for the densities and velocities the pressure kernel reads too. The sort costs four
+small kernels, each of them cheap and coalesced, and the two neighbour walks repay them many times over.</p>
+
+<h3 id="techniques">7.3 Other techniques</h3>
+
+<p>Three other techniques contribute:</p>
+
+<pre class="sketch"><code>   atomic adds          countGrid and scatter let every particle count into, and claim a slot in, a
+                        shared cell at once, with the hardware ensuring that no two collide
+   workgroups of 256    enough threads in flight that while some wait for memory, others compute:
+                        what hides the memory latency the sort does not remove
+   squared distances    a neighbour's range is tested on the squared distance, so the candidates
+                        out of range - the corners of the 3 x 3 cells, always - cost no square root</code></pre>
+
+<h3 id="tiling">7.4 Tiling and sorting</h3>
+
+<p><em>Tiling</em> is the usual way to make repeated neighbour reads cheap: one workgroup takes one cell, copies the
+cell's neighbourhood once into the GPU's small, fast on-chip memory (<code>k.shared</code>), and every thread reads
+its neighbours from there. On this fluid it is slower, by about a fifth. A workgroup has 256 threads, and a cell holds
+17 to 30 particles, so fewer than one thread in eight has a particle; the rest hold the workgroup open with nothing to
+do, and the GPU is mostly idle. Tiling saves memory traffic and loses more than it saves.</p>
+
+<p>The counting sort reaches the same goal from the other side. Rather than copy scattered data into fast memory, it
+stops the data from being scattered, and it keeps one thread for each particle, which keeps every thread busy.</p>
+
+</body>
+</html>
