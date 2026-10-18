@@ -10417,8 +10417,9 @@ pub const Camera2D = struct {
     offset: Vec2 = .{ 0, 0 },
     /// World-space point that maps to `offset` on screen.
     target: Vec2 = .{ 0, 0 },
-    /// Rotation around `target`, degrees.
-    rotation: f32 = 0, // radians (counter-clockwise)
+    /// Rotation around `target`, radians (`rotationZ`'s unit): counter-clockwise in a y-up world, so a positive
+    /// angle turns the view clockwise on a y-down screen. Convert degrees with `radFromDeg` where the angle is set.
+    rotation: f32 = 0,
     /// Zoom multiplier (must not be 0).
     zoom: f32 = 1,
     /// When true, world +Y maps toward screen -Y. Use for a Y-up world (e.g. a

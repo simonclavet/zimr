@@ -114,9 +114,8 @@ pub const Vertex2D = extern struct {
 /// The fix at the call site is to bracket the custom draw:
 /// `f.gl.flushBeforeMaterialSwap()` before it, `f.gl.renderer().bindForPass(ps)`
 /// after it. `pipeline_basic` gets away without the bracket only because its
-/// shader binds no resources at all; `pipeline_sampler` only because it puts
-/// its sampler at group 0. `vertex_texture_test` is the worked example of the
-/// bracket done right.
+/// shader binds no resources at all. `vertex_texture_test` is the worked example
+/// of the bracket done right.
 pub const batch_reserved_group: u32 = 1;
 
 /// Whether it is safe for `flushBatch` to drain the 2D shapes batch under

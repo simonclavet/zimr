@@ -435,7 +435,11 @@ pub fn stopAudio() void {
 
 /// Keeps at most `most_frames` played frames, the newest: once the samples kept exceed that by `slack_frames`, the
 /// oldest are dropped and the rest moved to the front - in one move per `slack_frames`, rather than one per frame.
-fn trimPlayedSamples(most_frames: usize, slack_frames: usize, channel_count: usize) void {
+fn trimPlayedSamples(
+    most_frames: usize,
+    slack_frames: usize,
+    channel_count: usize,
+) void {
     const kept_sample_count: usize = audio_output.played_samples.items.len;
     const most_samples: usize = most_frames * channel_count;
     const trim_threshold_samples: usize = most_samples + slack_frames * channel_count;

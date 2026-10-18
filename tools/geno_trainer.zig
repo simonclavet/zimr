@@ -31,6 +31,7 @@ const allocPrint = std.fmt.allocPrint;
 const ArrayList = std.ArrayList;
 const parseFloat = std.fmt.parseFloat;
 const splitScalar = std.mem.splitScalar;
+const basename = std.fs.path.basename;
 const z = @import("zimr");
 const cli = @import("cli");
 const zn_mlp = @import("zn_mlp");
@@ -56,20 +57,9 @@ const zn_mlp_spirv: []const u8 = @embedFile("zn_mlp_spv");
 /// The dance, retargeted to Geno and baked (`zig build clip-bake`), as the training page embeds it.
 const dance_zclip: []const u8 = @embedFile("geno_dance_zclip");
 
-/// How the trainer ends, as its exit code tells whoever started it.
-const Exit = enum(u8) {
-    /// The run ended as asked: its `stop` file, or its limits.
-    finished = 0,
-    /// The run was refused before training: no folder named, an unreadable or out-of-range `run.zon`, weights that
-    /// do not fit.
-    refused = 1,
-    /// The run failed: the GPU or the robot could not be set up, or a file could not be written.
-    failed = 2,
-
-    fn code(exit: Exit) u8 {
-        return @backingInt(exit);
-    }
-};
+/// How the trainer ends, as its exit code tells whoever started it: `robot_geno`'s, so the training lab reads the
+/// code by the same definition.
+const Exit = geno.TrainerExit;
 
 // ---- The run folder ----
 //
@@ -361,11 +351,13 @@ fn measureServo(
     return ppo_track.secondsToFailure(steps_watched, failures, physicsStepsPerSecond(trainer));
 }
 
-/// A line of progress, at most every `report_interval_ms` (`--report-seconds`): the batch, the minutes trained, the
-/// reward, and the time to failure over the recent window - or that nothing in the window failed.
+/// A line of progress, at most every `report_interval_ms` (`--report-seconds`): the run's folder name - several
+/// trainers started by the lab share its console -, the batch, the minutes trained, the reward, and the time to
+/// failure over the recent window - or that nothing in the window failed.
 fn reportProgress(
     io: Io,
     report_interval_ms: f64,
+    folder: []const u8,
     trainer: *const Trainer,
     progress: *RunProgress,
     stats: ppo_track.Stats,
@@ -384,7 +376,9 @@ fn reportProgress(
         bufPrint(&failure_buffer, "loses the reference every {d:.2} s", .{seconds}) catch "?"
     else
         "no losses in the recent batches";
-    say(io, "batch {d}  {d:.1} min  {d} steps  reward {d:.3}  assist {d:.2}  {s}", .{
+    const run_name: []const u8 = basename(folder);
+    say(io, "{s}  batch {d}  {d:.1} min  {d} steps  reward {d:.3}  assist {d:.2}  {s}", .{
+        run_name,
         trainer.iterations,
         trainingMinutes(progress),
         trainer.steps,
@@ -435,7 +429,7 @@ fn train(
         if (is_checkpoint_due) {
             try saveCheckpoint(gpa, arena, io, folder, trainer, progress);
         }
-        reportProgress(io, report_interval_ms, trainer, progress, stats);
+        reportProgress(io, report_interval_ms, folder, trainer, progress, stats);
     }
 }
 

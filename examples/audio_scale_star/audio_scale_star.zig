@@ -935,7 +935,12 @@ fn drawChordLine(
 /// other between the chord, its third and its fifth - IV's green between IV, 4 and 6, and fainter between IV, 6 and
 /// 1 - so that each chord's part of the figure reads as one region. Drawn first, under the lines and the shapes. Not
 /// for vii, the diminished chord, which sits among the others inside.
-fn drawChordTriangles(f: *z.Frame, layout: Layout, chord: ScaleChord, is_lit: bool) void {
+fn drawChordTriangles(
+    f: *z.Frame,
+    layout: Layout,
+    chord: ScaleChord,
+    is_lit: bool,
+) void {
     if (chord.quality == .diminished) {
         return;
     }

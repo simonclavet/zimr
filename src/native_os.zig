@@ -131,13 +131,30 @@ pub fn monotonicMilliseconds() f64 {
 // lint:off module-var: the program's one `std.Io`, started at its first use and kept for the program's life
 var program_threaded: ?Io.Threaded = null;
 
+/// This program's own environment, as an `std.Io.Threaded` hands it to the programs it starts (`ChildProgram`): on
+/// Windows the live environment itself, elsewhere the C library's - so a child inherits it, as one started from a
+/// shell does. `Io.Threaded`'s default is an EMPTY environment, and a program started with none fails in ways that
+/// name no cause: on Windows, NVIDIA's Vulkan driver refuses to make an instance (`vkCreateInstance` returns -3), the
+/// loader skips it, and the child runs on another GPU - while `ZIMR_VK_VALIDATE` and every other setting is lost. A
+/// build without the C library outside Windows has no environment to hand on: its children start with none.
+fn programEnvironment() std.process.Environ {
+    if (comptime is_windows) {
+        return .{ .block = .global };
+    }
+    if (comptime builtin.link_libc) {
+        const variables: [:null]const ?[*:0]const u8 = std.mem.sliceTo(std.c.environ, null);
+        return .{ .block = .{ .slice = variables } };
+    }
+    return .empty;
+}
+
 /// An `std.Io` for callers that have none to pass: the platform contract's saved values (`loadValue`), whose
 /// signatures - shared with the web's - carry no `Io`, and an app, which has no `main` of its own to receive one.
 /// Everything else in this file takes the caller's `io`. `std.Io.Threaded`'s, on the program's thread-safe
-/// allocator, started at its first use.
+/// allocator, with the program's environment for the programs it starts, started at its first use.
 pub fn servicesIo() Io {
     if (program_threaded == null) {
-        program_threaded = Io.Threaded.init(std.heap.smp_allocator, .{});
+        program_threaded = Io.Threaded.init(std.heap.smp_allocator, .{ .environ = programEnvironment() });
     }
     return program_threaded.?.io();
 }
@@ -628,6 +645,16 @@ test "native_os: a file written whole reads back, is listed in its folder, and i
     try testing.expectEqual(@as(usize, 0), missing.len);
 }
 
+/// Waits for `program` to end, at most five seconds, looking every millisecond.
+fn waitForEnd(io: Io, program: *const ChildProgram) void {
+    var polls: u32 = 0;
+    const one_millisecond: Io.Clock.Duration = .{ .raw = .fromMilliseconds(1), .clock = .awake };
+    while (program.currentState() == .running and polls < 5000) : (polls += 1) {
+        // lint:off catch-suppression: a sleep cut short only polls once more
+        one_millisecond.sleep(io) catch {};
+    }
+}
+
 test "native_os: a child program's end is recorded - its exit code - and one that cannot start says so" {
     const io: Io = servicesIo();
     // A shell to run: present on the systems the host's tests run on, Linux and macOS.
@@ -640,12 +667,7 @@ test "native_os: a child program's end is recorded - its exit code - and one tha
     var exits_three: ChildProgram = .{};
     defer exits_three.deinit();
     exits_three.start(io, &.{ "/bin/sh", "-c", "exit 3" });
-    var polls: u32 = 0;
-    const one_millisecond: Io.Clock.Duration = .{ .raw = .fromMilliseconds(1), .clock = .awake };
-    while (exits_three.currentState() == .running and polls < 5000) : (polls += 1) {
-        // lint:off catch-suppression: a sleep cut short only polls once more
-        one_millisecond.sleep(io) catch {};
-    }
+    waitForEnd(io, &exits_three);
     try testing.expectEqual(ChildState.failed, exits_three.currentState());
     try testing.expectEqual(@as(u32, 3), exits_three.exit_code);
 
@@ -653,4 +675,36 @@ test "native_os: a child program's end is recorded - its exit code - and one tha
     defer missing.deinit();
     missing.start(io, &.{"/no/such/program"});
     try testing.expectEqual(ChildState.not_started, missing.currentState());
+}
+
+test "native_os: a child program started through the services' Io inherits the program's environment" {
+    if (comptime !reaches_system_libraries) {
+        return error.SkipZigTest;
+    }
+    const io: Io = servicesIo();
+    // A variable every system sets, tested by the system's own shell: exit 0 when the child sees it, 3 when not.
+    // A child with an empty environment - `Io.Threaded`'s default - exits 3.
+    var shell_buffer: [512]u8 = undefined;
+    const windows_test: []const u8 = "if defined SystemRoot (exit 0) else (exit 3)";
+    const posix_test: []const u8 = "test -n \"$PATH\" || exit 3";
+    var argv_buffer: [4][]const u8 = undefined;
+    const argv: []const []const u8 = if (comptime is_windows) windows: {
+        var root_buffer: [256]u8 = undefined;
+        const system_root: []const u8 = environmentVariable("SystemRoot", &root_buffer) orelse
+            return error.SkipZigTest;
+        const shell: []const u8 = try bufPrint(&shell_buffer, "{s}\\System32\\cmd.exe", .{system_root});
+        argv_buffer = .{ shell, "/d", "/c", windows_test };
+        break :windows &argv_buffer;
+    } else posix: {
+        if (!fileExists(io, "/bin/sh")) {
+            return error.SkipZigTest;
+        }
+        argv_buffer[0..3].* = .{ "/bin/sh", "-c", posix_test };
+        break :posix argv_buffer[0..3];
+    };
+    var program: ChildProgram = .{};
+    defer program.deinit();
+    program.start(io, argv);
+    waitForEnd(io, &program);
+    try testing.expectEqual(ChildState.closed, program.currentState());
 }

@@ -106,11 +106,12 @@
 //!
 //! The file
 //!
-//! The file reads from its vocabulary to its frame: the colors; the scale - notes, chords and the circle of thirds; the
-//! pedals; shapes and their sizes; the chooser's curve and the star's; the star's layout; the window's parts, the
-//! chooser and the circle of twelve; guitar chords and the key's window; choosing a chord; the app's state; playing -
-//! holding and letting go of notes; reading the input and the options; the chord's curve; naming the chord; drawing;
-//! the outlines; and the frame, which runs them in turn.
+//! The file reads from its vocabulary to its frame: the params, every color, size, speed, default and limit in one
+//! place (`params`); the scale - the degrees' colors, notes, chords and the circle of thirds; the pedals; shapes and
+//! their sizes; the chooser's curve and the star's; the star's layout; the window's parts, the chooser and the circle
+//! of twelve; guitar chords and the key's window; choosing a chord; the app's state; playing - holding and letting go
+//! of notes; reading the input and the options; the chord's curve; naming the chord; drawing; the outlines; and the
+//! frame, which runs them in turn.
 const std = @import("std");
 // Names used often enough to be worth using bare: from the standard library, the engine (`z`) and its math
 // (`zm`). Each is the same declaration under a shorter name.
@@ -148,61 +149,416 @@ const splat2 = zm.splat2;
 /// sizes - embedded in the app.
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
-// ---- Colors ----
+// ---- The params ----
 
-/// The window's background: a near-black, blue-grey, against which the degrees' colors read clearly.
-const background: Color = .{ .r = 16, .g = 17, .b = 22, .a = 255 };
-/// Text and white marks: a soft white.
-const text_color: Color = .{ .r = 235, .g = 235, .b = 240, .a = 255 };
-/// Text that matters less, and a chart's fret number: a mid grey.
-const dim_text_color: Color = .{ .r = 150, .g = 156, .b = 170, .a = 255 };
-/// The thin lines of the boxes round the diagrams and the circle of twelve: a dark grey.
-const note_path_color: Color = .{ .r = 70, .g = 74, .b = 90, .a = 255 };
-/// The notes' outlines and the circle of thirds' path: a white a little softer than the text's.
-const outline_color: Color = .{ .r = 225, .g = 228, .b = 236, .a = 255 };
-/// A chosen chord's note's own outline: black, inside its colored one.
-const chosen_note_outline_color: Color = .{ .r = 0, .g = 0, .b = 0, .a = 255 };
-/// Text on a lit note or chord, which is filled with its full color: dark, since some of the colors are light.
-const lit_text_color: Color = .{ .r = 16, .g = 17, .b = 22, .a = 255 };
+/// The app's tunable values in one place: every color, size, speed, default and limit the code reads and never
+/// changes, grouped by topic. Each is read where it is needed - `params.colors.background` - and never passed.
+const params = struct {
+    /// The colors: the window's, the text's and the marks', each degree's own, and the outlines'.
+    const colors = struct {
+        /// The window's background: a near-black, blue-grey, against which the degrees' colors read clearly.
+        const background: Color = .{ .r = 16, .g = 17, .b = 22, .a = 255 };
+        /// Text and white marks: a soft white.
+        const text: Color = .{ .r = 235, .g = 235, .b = 240, .a = 255 };
+        /// Text that matters less, and a chart's fret number: a mid grey.
+        const dim_text: Color = .{ .r = 150, .g = 156, .b = 170, .a = 255 };
+        /// The thin lines of the boxes round the diagrams and the circle of twelve: a dark grey.
+        const note_path: Color = .{ .r = 70, .g = 74, .b = 90, .a = 255 };
+        /// The notes' outlines and the circle of thirds' path: a white a little softer than the text's.
+        const outline: Color = .{ .r = 225, .g = 228, .b = 236, .a = 255 };
+        /// A chosen chord's note's own outline: black, inside its colored one.
+        const chosen_note_outline: Color = .{ .r = 0, .g = 0, .b = 0, .a = 255 };
+        /// Text on a lit note or chord, which is filled with its full color: dark, since some of the colors are light.
+        const lit_text: Color = .{ .r = 16, .g = 17, .b = 22, .a = 255 };
 
-/// Each degree's color, as a rainbow keyboard colors its white keys from C: red, orange, yellow, green, cyan, blue,
-/// violet. A note is filled with its color, dimmed until it sounds; a chord takes its root's color.
-const degree_colors = [7]Color{
-    .rgbHex(0xF52A2A),
-    .rgbHex(0xFFA514),
-    .rgbHex(0xFFF200),
-    .rgbHex(0x18E018),
-    .rgbHex(0x18E6F0),
-    .rgbHex(0x1464FF),
-    .rgbHex(0xA83CF0),
+        /// Each degree's color, as a rainbow keyboard colors its white keys from C: red, orange, yellow, green, cyan,
+        /// blue, violet. A note is filled with its color, dimmed until it sounds; a chord takes its root's color.
+        const degrees = [7]Color{
+            .rgbHex(0xF52A2A),
+            .rgbHex(0xFFA514),
+            .rgbHex(0xFFF200),
+            .rgbHex(0x18E018),
+            .rgbHex(0x18E6F0),
+            .rgbHex(0x1464FF),
+            .rgbHex(0xA83CF0),
+        };
+
+        /// The boxes round the left hand's diagrams (`window.left_diagram_box_inset`): the star's note path's color,
+        /// quiet on the background.
+        const left_diagram_box: Color = note_path;
+
+        /// A chord's outline: black, so that the chords - small among the notes - stand apart from them.
+        const chord_outline: Color = .{ .r = 0, .g = 0, .b = 0, .a = 255 };
+
+        /// The colors the outlines give a note by its part in a chord: its root red, its third yellow, its fifth cyan -
+        /// the colors of the chord's own lines to its notes (`drawChordLine`): the arrow, the zigzag, the dashes.
+        const role_outlines = [3]Color{
+            .{ .r = 235, .g = 52, .b = 52, .a = 255 },
+            .{ .r = 250, .g = 222, .b = 40, .a = 255 },
+            .{ .r = 0, .g = 222, .b = 236, .a = 255 },
+        };
+
+        /// A black key of the keyboard: a little lighter than the background, so that it reads as a key against it.
+        const black_key: Color = .{ .r = 0, .g = 0, .b = 0, .a = 255 };
+
+        /// A white key the scale does not use: grey, a little lighter than the boxes' lines.
+        const unused_white_key: Color = .{ .r = 92, .g = 96, .b = 108, .a = 255 };
+
+        /// The light gray of a chart's strings and frets.
+        const guitar_line: Color = .{ .r = 196, .g = 200, .b = 210, .a = 255 };
+    };
+
+    /// How far toward the background a color is drawn while what it fills is silent.
+    const dimming = struct {
+        /// How far toward the background a color is drawn while its note or chord is silent: lit, it is drawn whole.
+        const resting: f32 = 0.45;
+
+        /// How far toward the background a chord's fans are drawn (`drawChordShapes`): faint while the chord is
+        /// silent, a little less faint while it sounds.
+        const Fan = struct {
+            /// While the chord is silent.
+            resting: f32,
+            /// While it sounds.
+            lit: f32,
+        };
+
+        /// The fan to the arc from the root to the third is the more opaque of a chord's two: the third is what makes a
+        /// chord major or minor.
+        const root_third_fan: Fan = .{ .resting = 0.8, .lit = 0.6 };
+
+        /// The fan to the arc from the third to the fifth, fainter.
+        const third_fifth_fan: Fan = .{ .resting = 0.9, .lit = 0.76 };
+    };
+
+    /// The options' values as the app starts (`initState`), each named after the field it starts.
+    const defaults = struct {
+        /// How hard the chord held on the chooser strikes its notes, by default, as a share of the other notes'
+        /// strength (`State.chooser_chord_volume`, set in the options): 0.3 of it, so that the left thumb's chord
+        /// sounds well beneath what the right hand plays (`HoldLayer.thumb`).
+        const chooser_chord_volume: f32 = 0.3;
+
+        /// A pedal's loudness by default, as its voice's volume (`Pedal.volume`, set in the options): 0, silent - the
+        /// pedals sound only once their sliders are raised.
+        const pedal_volume: f32 = 0;
+
+        /// The options' first choice of how many boxes, an index into `progression.box_counts`: 4.
+        const progression_box_count_choice: i32 = 2;
+
+        /// The progression's tempo, in beats a minute (`State.progression_beats_per_minute`, set in the options).
+        const progression_beats_per_minute: f32 = 90;
+
+        /// The delay between a chord's notes as it starts (`State.chord_strum_seconds`, set in the options): 0.1
+        /// seconds, quick enough to be one chord, slow enough to hear its notes come in.
+        const chord_strum_seconds: f32 = 0.1;
+    };
+
+    /// Playing: how hard a note is struck, how far a finger moves before it changes what it plays or carries a chord,
+    /// and the keys that play the degrees.
+    const playing = struct {
+        /// How hard every note is struck: half the instrument's full level, so that a chord of three stays clear of
+        /// clipping.
+        const note_velocity: f32 = 0.5;
+
+        /// The keys that play each degree while held: the top row's digits and the keypad's.
+        const digit_keys = [7]z.KeyboardKey{ .one, .two, .three, .four, .five, .six, .seven };
+        /// The keypad's digits, which play the degrees as the top row's do (`digit_keys`).
+        const keypad_keys = [7]z.KeyboardKey{ .kp_1, .kp_2, .kp_3, .kp_4, .kp_5, .kp_6, .kp_7 };
+
+        /// How far a pointer must move from where it took its target before it takes another: 6 pixels. Every point of
+        /// the star, the chooser, the key's window and the circle belongs to its nearest target, so boundaries run
+        /// everywhere, and a finger resting near one moves a pixel or two back and forth between touch events - each
+        /// time it crossed, the note it held was let go and the next one struck, many times a second, heard as crackle.
+        /// A finger sliding on moves far more than this, and changes target as soon as it crosses; one resting keeps
+        /// what it holds.
+        const target_switch_distance: f32 = 6;
+
+        /// How far a finger carrying a chord goes from where it came down before the chord is shown following it, and
+        /// before a box under it takes the chord when it lifts: 12 pixels - a tap's wobble does not carry a chord
+        /// anywhere.
+        const chord_drag_start_distance: f32 = 12;
+    };
+
+    /// The pedals' sound (`generatePedal`).
+    const pedal = struct {
+        /// The pedals: notes held low beneath everything while their checkboxes at the top are ticked, as an organist
+        /// holds notes with the feet - one on the chosen chord's root, following the left hand, the other on the
+        /// scale's tonic, unchanging. Each is a Shepard tone like the notes the hands play, but lower: the same pitch
+        /// class sounding in every octave at once under a bell of loudness, the bell centred two octaves down - at
+        /// 100 Hz rather than the instrument's 400. It keeps the notes' character, a pitch class with no height of its
+        /// own, and sits beneath them. Each plays as a voice of its own (`generatePedal`), beside the instrument's
+        /// notes.
+        const bell_centre_hz: f64 = 100;
+
+        /// The bell's width, its partials and their reach: as the Shepard instrument's (`z.mixer.shepard_*`) - one
+        /// octave's standard deviation, ten partials an octave apart, five octaves either side of the centre.
+        const bell_width_octaves: f64 = 1;
+        /// Ten partials, an octave apart.
+        const partial_count: usize = 10;
+        /// The partials' reach: five octaves either side of the bell's centre.
+        const reach_octaves: f64 = 5;
+
+        /// How long a pedal takes to rise from silence to full: 30 ms, so that it starts without a click.
+        const attack_seconds: f32 = 0.03;
+    };
+
+    /// The notes' and chords' sizes, in size units, and the shares of them drawn (`ShapedSize`).
+    const sizes = struct {
+        /// How far apart the three shapes of a chord's triplet stand on the star, as a share of a shape's width: a
+        /// third, so that each hides two thirds of the one behind it (`ChordTriplet`).
+        const chord_triplet_step_share: f32 = 1.0 / 3.0;
+
+        /// A note's size: two units.
+        const note_size_in_units: f32 = 2;
+        /// The chosen chord's three notes - its root, third and fifth, at the places of 1, 3 and 5 under the right
+        /// hand - are its heroes, drawn a fifth larger than the others.
+        const hero_note_size_in_units: f32 = 2.4;
+        /// The tonic beside the other notes, in every diagram - the star, the chooser, the key's window, the circle of
+        /// the twelve: 30% larger, the scale's home found at a glance.
+        const tonic_size_share: f32 = 1.3;
+        /// How large a note is drawn beside the room the star's layout keeps for it (`StarLayout.noteHalfSize`): 95%,
+        /// and the tonic 90%.
+        const note_drawn_share: f32 = 0.95;
+        /// The tonic's, a little smaller still, as it is the larger.
+        const tonic_drawn_share: f32 = 0.9;
+        /// A chord's size: one unit.
+        const chord_size_in_units: f32 = 1;
+        /// The scale's two main chords', a quarter larger.
+        const main_chord_size_in_units: f32 = 1.25;
+        /// The diminished chord's, a quarter smaller.
+        const diminished_chord_size_in_units: f32 = 0.75;
+        /// The largest of the chords' sizes: what the chooser's spacing must allow for.
+        const largest_chord_size_in_units: f32 = main_chord_size_in_units;
+    };
+
+    /// The star's path and its turning (`drawNotePath`, `StarTransition`).
+    const star = struct {
+        /// The straight pieces each link of the star's curve is drawn in - the white path (`drawNotePath`) and the
+        /// chords' fans' edges along it (`drawChordFan`), the same pieces, so that a fan meets the path exactly.
+        const curve_pieces_per_link: usize = 24;
+
+        /// How long the star takes to turn to a newly chosen chord, its chords trading sides with it: 0.04 seconds,
+        /// under three frames at 60 a second - quick enough to follow the hand, slow enough to be seen moving.
+        const transition_duration_seconds: f32 = 0.04;
+
+        /// The circle of thirds' thickness beside the notes' outlines: 1.4 times.
+        const note_path_thickness_share: f32 = 1.4;
+    };
+
+    /// The small copies of the notes halfway along the star's links (`NoteProxy`).
+    const note_proxy = struct {
+        /// How much of the room between a proxy and the notes either side of it the proxy takes for touches: three
+        /// quarters; the rest, by the notes' edges, stays theirs.
+        const room_share: f32 = 0.75;
+
+        /// A proxy's size beside its note's: 22%.
+        const size_share: f32 = 0.22;
+
+        /// How far a touch reaches a proxy: within 1.8 times its half-size - more than its little size, so that a
+        /// finger sliding along the link meets it, and less than halfway to the notes on either side.
+        const reach: f32 = 1.8;
+
+        /// The opacity of a proxy's fill, out of 255: faint beside the notes.
+        const alpha: u8 = 150;
+    };
+
+    /// The window's parts: their shares of it and the room kept between and inside them (`WindowParts`).
+    const window = struct {
+        /// The room left between the keyboard's end and the fullscreen button, beyond the margin.
+        const keyboard_gap_before_button: f32 = 16;
+
+        /// The left hand's share of the window: its column - or its band, on a screen held upright - a quarter, leaving
+        /// the star, where the right hand plays, the rest. The chooser's buttons are as large as its width allows: at a
+        /// phone's proportions, 900 by 415, their size unit is 17.3 at a share of 0.21, 20.6 at this one - a fifth
+        /// larger, room for their names - and no larger beyond it, the column's height then the limit.
+        const chooser_share: f32 = 0.252;
+
+        /// The key's window on the circle of fifths (`drawFifths`): its share of the left hand's column, at the top -
+        /// 65%, room for its guitar chords - the chooser the rest below, 35%, its curve squished flatter to fit
+        /// (`ChooserLayout.vertical_squish`).
+        const fifths_share: f32 = 0.65;
+
+        /// The circle of the twelve notes, at the top right: the side of its square as a share of the window's width.
+        const chromatic_share: f32 = 0.2;
+
+        /// The sounding box's height on a window held upright, as a share of the content's width: 30%.
+        const upright_sounding_share: f32 = 0.3;
+
+        /// The space between the left hand's column and the star, as a share of the content's width: 4%.
+        const star_gap_share: f32 = 0.04;
+
+        /// The space the header's window keeps after its text: its own padding, and a little more.
+        const header_padding: f32 = 16;
+
+        /// How far inside its part each of the left hand's diagrams is drawn: its box 3 pixels in - so that the key's
+        /// window's and the chooser's, one above the other, do not touch - and its buttons 5 pixels in, clear of the
+        /// box. Measured at a phone's proportions, 900 by 415, both diagrams then fit a size unit of 19.3, the two in
+        /// balance with half the column's height each; 8 pixels in, 18.5.
+        const left_diagram_box_inset: f32 = 3;
+        /// The room kept inside each box, between its line and what it holds, in pixels.
+        const left_diagram_padding: f32 = 5;
+
+        /// How much of the circle's side the star stops short of the content's right edge: all of it - the star's room
+        /// ends where the circle's square begins. Its top right corner holds the 7 and its chord now that the curve no
+        /// longer pulls the 7 down beside the row (`warpAt`), and the star, fitted for every turn, would reach into the
+        /// circle there.
+        const star_under_chromatic_share: f32 = 1.0;
+
+        /// A borrowed chord's button's size, as a share of its root's chord's.
+        const borrowed_button_share: f32 = 0.6;
+
+        /// The options panel's width, as a share of the window's - 70% - and the least it is: 460 pixels, for its
+        /// labels.
+        const options_panel_share: f32 = 0.7;
+        /// The least the panel is: 460 pixels, room for its labels.
+        const options_panel_least_width: f32 = 460;
+    };
+
+    /// The keyboard's keys (`drawKeyboard`).
+    const keyboard = struct {
+        /// A black key's width and height beside a white key's: 60% of each.
+        const black_key_width_share: f32 = 0.6;
+        const black_key_height_share: f32 = 0.6;
+
+        /// How far a sounding key rises above the keyboard, as a share of its height: 30%.
+        const sounding_key_rise_share: f32 = 0.3;
+    };
+
+    /// The outlines of the chosen chord's notes and of the coming chord's (`drawChordOutlines`).
+    const outline = struct {
+        /// The outlines' sizes, as shares of the note's half-size: the gap between a note and its outline; the chosen
+        /// chord's outline's thickness, and the coming chord's, thinner; and how far out the coming chord's outline
+        /// starts, closing in on its note as the chord travels to its button.
+        const gap_share: f32 = 0.18;
+        /// The chosen chord's outlines' thickness.
+        const chosen_share: f32 = 0.26;
+        /// The coming chord's, thinner.
+        const coming_share: f32 = 0.07;
+        /// How far out the coming chord's outline starts, closing in on its note as the chord comes.
+        const coming_reach_share: f32 = 0.9;
+        /// The coming chord's button's outline beside its notes': twice as thick, and setting out five times as far.
+        const coming_button_thickness_factor: f32 = 2;
+        const coming_button_reach_factor: f32 = 5;
+
+        /// The share of a bar the coming chord's outlines show for, on every view - the star's notes and button, the
+        /// keyboard's keys, the circle's notes: its second half, the outlines appearing at its middle and closing in by
+        /// its end, as the chord arrives.
+        const coming_shown_share: f32 = 0.5;
+    };
+
+    /// The progression track and its editor (`advanceProgression`, `drawProgressionEditor`).
+    const progression = struct {
+        /// The beats each chord of a progression lasts: a bar of four.
+        const beats_per_chord: f64 = 4;
+
+        /// How many boxes the editor shows, as the options offer them - the progressions' lengths and the bars' usual
+        /// groupings - and their labels there.
+        const box_counts = [_]u8{ 2, 3, 4, 6, 8, 12, 16 };
+        const box_count_labels = [_][]const u8{
+            "2 boxes",
+            "3 boxes",
+            "4 boxes",
+            "6 boxes",
+            "8 boxes",
+            "12 boxes",
+            "16 boxes",
+        };
+
+        /// How far short of its arrival the track holds a chord awaited, following the player (`advanceProgression`): a
+        /// millionth of a beat - so the chord is still the one on its way, drawn at its button, not yet the one to
+        /// play.
+        const hold_beats: f64 = 1e-6;
+
+        /// How fast the chord the track waits for pulses, and how much it grows (`waitingScale`): three times a
+        /// second - quicker than the beat, so that it reads as a call to play it rather than as the music's pulse - up
+        /// to a fifth larger.
+        const waiting_pulses_per_second: f32 = 3;
+        const waiting_pulse_growth: f32 = 0.2;
+
+        /// The playhead's width, in pixels (`drawProgressionEditor`).
+        const playhead_width: f32 = 2;
+    };
+
+    /// The guitar chords: the tuning, the frets searched and the charts (`guitarChordOf`, `drawGuitarChord`).
+    const guitar = struct {
+        /// The guitar's six strings in standard tuning, the lowest first - E A D G B E - as MIDI keys, E2 to E4.
+        const string_keys = [6]u8{ 40, 45, 50, 55, 59, 64 };
+
+        /// The frets a chord's fingering spans at most: four, the hand's reach - a window from its lowest fret pressed.
+        const window_frets: u8 = 4;
+
+        /// The highest fret a fingering's window starts at: the 12th, an octave up the neck.
+        const highest_window: u8 = 12;
+
+        /// How much larger a chart's own notes are drawn than a plain dot: 30%, whole, even where they overlap.
+        const chart_note_scale: f32 = 1.3;
+    };
+
+    /// The dots moving along the lines between pitch neighbours in the left hand's column (`drawColumnStar`).
+    const column_dots = struct {
+        /// The dots' spacing in the left hand's column, in the chooser's size units: the chooser's and the key's
+        /// window's steps in pitch, at the size of their buttons.
+        const spacing_units: f32 = 0.5;
+
+        /// How many times a second the dots of a line between pitch neighbours move on by one dot's spacing.
+        const dots_per_second: f32 = 3;
+
+        /// How far toward the background a column star's dots are drawn while neither of their notes sounds: 20%.
+        const resting_dimming: f32 = 0.2;
+    };
+
+    /// What sounds: its figure's turning and the band naming its function (`drawChordCurve`).
+    const sounding = struct {
+        /// How fast a three-note curve turns, in turns a second: slow enough to follow its shape as it turns.
+        const curve_turns_per_second: f32 = 0.08;
+
+        /// The sounding box's bottom band, where the function's name is written under the figure, as a share of its
+        /// height: 20%.
+        const function_name_band_share: f32 = 0.2;
+    };
+
+    /// How many of each the state and the drawing have room for.
+    const limits = struct {
+        /// The room for one progression's label in the options' list: its name, its numbers and its chords' names in
+        /// the key.
+        const progression_label_capacity: usize = 96;
+
+        /// The room one mode's label takes in the header's list (`writeModeLabels`): a line of its name and
+        /// alterations, and a line of seven chord names of at most four bytes each - a letter, an accidental and a
+        /// degree sign of two.
+        const mode_label_capacity: usize = 96;
+
+        /// The most boxes the progression editor holds (`State.progression_boxes`): the most it shows.
+        const progression_box_most: usize = progression.box_counts[progression.box_counts.len - 1];
+
+        /// The most pointers held at once: the ten touches the engine tracks, and the mouse.
+        const most_pointers: usize = 11;
+
+        /// The most notes waiting at once: a chord's third and fifth for every pointer, and two over.
+        const most_pending_holds: usize = 2 * most_pointers + 2;
+
+        /// How many columns the first line of a mode's label spans: its name at the left, its alterations at the
+        /// right - the font is monospaced, so the alterations line up down the list.
+        const mode_label_columns: usize = 28;
+
+        /// The most borrowed chords offered at once (`offeredBorrowedChords`).
+        const most_offered_borrowed_chords: usize = 4;
+
+        /// The most points a curve is drawn through: 48 for each swing of its fastest note, and the fastest of any
+        /// notes of the scale `curveNotes` can pick swings 27 times - E, F and D stacked from E, 15 : 16 : 27.
+        const most_curve_points: usize = 48 * 27 + 1;
+
+        /// The most keys the keyboard has with a degree: nine white keys and six black ones.
+        const most_outlined_keys: usize = 15;
+    };
 };
 
-/// How far toward the background a color is drawn while its note or chord is silent: lit, it is drawn whole.
-const resting_dimming: f32 = 0.45;
-
-/// How far toward the background a chord's fans are drawn (`drawChordShapes`): faint while the chord is
-/// silent, a little less faint while it sounds.
-const FanDimming = struct {
-    /// While the chord is silent.
-    resting: f32,
-    /// While it sounds.
-    lit: f32,
-};
-
-/// The fan to the arc from the root to the third is the more opaque of a chord's two: the third is what makes a chord
-/// major or minor.
-const root_third_dimming: FanDimming = .{ .resting = 0.8, .lit = 0.6 };
-
-/// The fan to the arc from the third to the fifth, fainter.
-const third_fifth_dimming: FanDimming = .{ .resting = 0.9, .lit = 0.76 };
+// ---- The scale ----
 
 /// A degree's color, whole while it sounds and dimmed while it does not.
 fn colorOfDegree(degree: u8, is_lit: bool) Color {
-    const whole_color: Color = degree_colors[degree - 1];
-    return if (is_lit) whole_color else whole_color.lerp(background, resting_dimming);
+    const whole_color: Color = params.colors.degrees[degree - 1];
+    return if (is_lit) whole_color else whole_color.lerp(params.colors.background, params.dimming.resting);
 }
-
-// ---- The scale ----
 
 /// The degrees of a scale, 1 (its tonic) to 7, for walking through them.
 const all_degrees = [7]u8{ 1, 2, 3, 4, 5, 6, 7 };
@@ -568,19 +924,6 @@ const Scale = struct {
 /// The scale the app starts in: C major.
 const c_major: Scale = .of(0, .ionian);
 
-/// How hard every note is struck: half the instrument's full level, so that a chord of three stays clear of clipping.
-const note_velocity: f32 = 0.5;
-
-/// How hard the chord held on the chooser strikes its notes, by default, as a share of the other notes' strength
-/// (`State.chooser_chord_volume`, set in the options): 0.3 of it, so that the left thumb's chord sounds well beneath
-/// what the right hand plays (`HoldLayer.thumb`).
-const default_chooser_chord_volume: f32 = 0.3;
-
-/// The keys that play each degree while held: the top row's digits and the keypad's.
-const digit_keys = [7]z.KeyboardKey{ .one, .two, .three, .four, .five, .six, .seven };
-/// The keypad's digits, which play the degrees as the top row's do (`digit_keys`).
-const keypad_keys = [7]z.KeyboardKey{ .kp_1, .kp_2, .kp_3, .kp_4, .kp_5, .kp_6, .kp_7 };
-
 /// Where a degree sits on the circle of thirds, counted clockwise from the top: 0 for 1, then 1 for 3, 2 for 5, 3 for
 /// 7, 4 for 2, 5 for 4, 6 for 6. Walking the circle adds two degrees a place, so the place of a degree undoes that
 /// walk: multiplying by 4 undoes multiplying by 2, since 2 x 4 = 8, which is 1 more than a whole circle of 7.
@@ -617,29 +960,6 @@ comptime {
 
 // ---- The pedals ----
 
-/// The pedals: notes held low beneath everything while their checkboxes at the top are ticked, as an organist holds
-/// notes with the feet - one on the chosen chord's root, following the left hand, the other on the scale's tonic,
-/// unchanging. Each is a Shepard tone like the notes the hands play, but lower: the same pitch class sounding in every
-/// octave at once under a bell of loudness, the bell centred two octaves down - at 100 Hz rather than the instrument's
-/// 400. It keeps the notes' character, a pitch class with no height of its own, and sits beneath them. Each plays as a
-/// voice of its own (`generatePedal`), beside the instrument's notes.
-const pedal_bell_centre_hz: f64 = 100;
-
-/// The bell's width, its partials and their reach: as the Shepard instrument's (`z.mixer.shepard_*`) - one octave's
-/// standard deviation, ten partials an octave apart, five octaves either side of the centre.
-const pedal_bell_width_octaves: f64 = 1;
-/// Ten partials, an octave apart.
-const pedal_partial_count: usize = 10;
-/// The partials' reach: five octaves either side of the bell's centre.
-const pedal_reach_octaves: f64 = 5;
-
-/// A pedal's loudness by default, as its voice's volume (`Pedal.volume`, set in the options): 0, silent - the
-/// pedals sound only once their sliders are raised.
-const default_pedal_volume: f32 = 0;
-
-/// How long a pedal takes to rise from silence to full: 30 ms, so that it starts without a click.
-const pedal_attack_seconds: f32 = 0.03;
-
 /// A pedal's state, inside its voice (`z.mixer.generator_state_capacity`, 64 bytes, at most - this is 64): where its
 /// lowest partial is in its cycle, in turns, and how far it moves a frame, kept and wrapped in 64 bits as the
 /// instrument's are; the level its attack has reached; and each partial's amplitude, the lowest's first.
@@ -651,7 +971,7 @@ const PedalState = struct {
     /// The level the attack has reached, 0 to 1.
     level: f32,
     /// Each partial's amplitude under the bell, the lowest's first.
-    partial_amplitudes: [pedal_partial_count]f32,
+    partial_amplitudes: [params.pedal.partial_count]f32,
 };
 
 /// A pedal's state for `pitch_class`, as the Shepard instrument works out a note's: the pitch class in middle C's
@@ -660,14 +980,14 @@ const PedalState = struct {
 /// Gaussian `exp(-d^2 / 2)` of its distance from the centre in widths - over the bell's area, so that the amplitudes
 /// add to 1 whatever the pitch class.
 fn pedalStateOf(pitch_class: u4) PedalState {
-    const bell_area: f64 = pedal_bell_width_octaves * sqrt(@as(f64, 2 * pi));
+    const bell_area: f64 = params.pedal.bell_width_octaves * sqrt(@as(f64, 2 * pi));
     const semitones_from_a440: f64 = float(@as(u8, pitch_class)) + 60 - 69;
     const key_frequency: f64 = 440 * exp2(semitones_from_a440 / 12);
-    const octaves_from_centre: f64 = log2(key_frequency / pedal_bell_centre_hz);
-    const octaves_above_reach_start: f64 = octaves_from_centre + pedal_reach_octaves;
+    const octaves_from_centre: f64 = log2(key_frequency / params.pedal.bell_centre_hz);
+    const octaves_above_reach_start: f64 = octaves_from_centre + params.pedal.reach_octaves;
     const lowest_octaves_from_centre: f64 =
-        octaves_above_reach_start - @floor(octaves_above_reach_start) - pedal_reach_octaves;
-    const lowest_frequency: f64 = pedal_bell_centre_hz * exp2(lowest_octaves_from_centre);
+        octaves_above_reach_start - @floor(octaves_above_reach_start) - params.pedal.reach_octaves;
+    const lowest_frequency: f64 = params.pedal.bell_centre_hz * exp2(lowest_octaves_from_centre);
     var state: PedalState = .{
         .phase_turns = 0,
         .phase_step_turns = lowest_frequency / float(z.mixer.sample_rate),
@@ -676,7 +996,7 @@ fn pedalStateOf(pitch_class: u4) PedalState {
     };
     for (&state.partial_amplitudes, 0..) |*partial_amplitude, partial_index| {
         const partial_octaves_from_centre: f64 = lowest_octaves_from_centre + float(partial_index);
-        const standard_deviations: f64 = partial_octaves_from_centre / pedal_bell_width_octaves;
+        const standard_deviations: f64 = partial_octaves_from_centre / params.pedal.bell_width_octaves;
         const bell_height: f64 = exp(-0.5 * standard_deviations * standard_deviations);
         partial_amplitude.* = @floatCast(bell_height / bell_area);
     }
@@ -690,7 +1010,7 @@ fn pedalStateOf(pitch_class: u4) PedalState {
 fn generatePedal(state_bytes: *anyopaque, frames: []f32, first_frame: u64) void {
     _ = first_frame;
     const state: *PedalState = @ptrCast(@alignCast(state_bytes));
-    const attack_step: f32 = 1.0 / (pedal_attack_seconds * float(z.mixer.sample_rate));
+    const attack_step: f32 = 1.0 / (params.pedal.attack_seconds * float(z.mixer.sample_rate));
     const frame_count: usize = frames.len / 2;
     for (0..frame_count) |frame_index| {
         const lowest_phase: f32 = @floatCast(state.phase_turns);
@@ -717,7 +1037,7 @@ fn generatePedal(state_bytes: *anyopaque, frames: []f32, first_frame: u64) void 
 /// it plays.
 const Pedal = struct {
     /// Its loudness, as its voice's volume: 0 silent - the voice ended.
-    volume: f32 = default_pedal_volume,
+    volume: f32 = params.defaults.pedal_volume,
     /// The voice playing it: `.none` while it is silent.
     voice: z.mixer.Voice = .none,
     /// The pitch class it plays, C as 0; null before it first sounds.
@@ -725,10 +1045,10 @@ const Pedal = struct {
     /// The volume the voice playing was last given: a change of `volume` reaches it at the next frame.
     voice_volume: f32 = 0,
 
-    /// Keeps the pedal playing `wanted_pitch_class` - or silent, for null. When it changes, the voice playing fades
-    /// out (`stopVoice`, 5 ms) and a new one rises over its attack (`pedal_attack_seconds`). A pedal whose voice is not
-    /// playing - the mixer had no slot free for it, or its voice was ended elsewhere - is started again, at the next
-    /// frame that finds it so.
+    /// Keeps the pedal playing `wanted_pitch_class` - or silent, for null. When it changes, the voice playing fades out
+    /// (`stopVoice`, 5 ms) and a new one rises over its attack (`params.pedal.attack_seconds`). A pedal whose voice is
+    /// not playing - the mixer had no slot free for it, or its voice was ended elsewhere - is started again, at the
+    /// next frame that finds it so.
     fn keep(pedal: *Pedal, f: *z.Frame, wanted_pitch_class: ?u4) void {
         const is_voice_playing: bool = pedal.voice != .none and f.mixer.isPlaying(pedal.voice);
         const is_same_pitch_class: bool = wanted_pitch_class == pedal.pitch_class;
@@ -777,10 +1097,6 @@ fn shapeOfDegree(scale: *const Scale, degree: u8) Shape {
     return shapeOfChord(scale.chordOf(degree));
 }
 
-/// How far apart the three shapes of a chord's triplet stand on the star, as a share of a shape's width: a third, so
-/// that each hides two thirds of the one behind it (`ChordTriplet`).
-const chord_triplet_step_share: f32 = 1.0 / 3.0;
-
 /// A shape where it stands: its centre and its shape.
 const PlacedShape = struct {
     /// Where its centre is.
@@ -799,27 +1115,6 @@ const ShapedSize = struct {
     /// Its half-side or radius, in size units.
     size_in_units: f32,
 };
-/// A note's size: two units.
-const note_size_in_units: f32 = 2;
-/// The chosen chord's three notes - its root, third and fifth, at the places of 1, 3 and 5 under the right hand - are
-/// its heroes, drawn a fifth larger than the others.
-const hero_note_size_in_units: f32 = 2.4;
-/// The tonic beside the other notes, in every diagram - the star, the chooser, the key's window, the circle of the
-/// twelve: 30% larger, the scale's home found at a glance.
-const tonic_size_share: f32 = 1.3;
-/// How large a note is drawn beside the room the star's layout keeps for it (`StarLayout.noteHalfSize`): 95%, and the
-/// tonic 90%.
-const note_drawn_share: f32 = 0.95;
-/// The tonic's, a little smaller still, as it is the larger.
-const tonic_drawn_share: f32 = 0.9;
-/// A chord's size: one unit.
-const chord_size_in_units: f32 = 1;
-/// The scale's two main chords', a quarter larger.
-const main_chord_size_in_units: f32 = 1.25;
-/// The diminished chord's, a quarter smaller.
-const diminished_chord_size_in_units: f32 = 0.75;
-/// The largest of the chords' sizes: what the chooser's spacing must allow for.
-const largest_chord_size_in_units: f32 = main_chord_size_in_units;
 
 /// A chord a progression borrows from outside the scale: the step it is at, and its quality there.
 const ProgressionBorrowing = struct {
@@ -986,35 +1281,8 @@ const progressions = [_]Progression{
     },
 };
 
-/// The beats each chord of a progression lasts: a bar of four.
-const beats_per_progression_chord: f64 = 4;
-
-/// The room for one progression's label in the options' list: its name, its numbers and its chords' names in the key.
-const progression_label_capacity: usize = 96;
-
 /// How many modes the header's list holds: `Mode`'s values.
 const mode_count: usize = std.enums.values(Mode).len;
-
-/// The room one mode's label takes in the header's list (`writeModeLabels`): a line of its name and alterations, and a
-/// line of seven chord names of at most four bytes each - a letter, an accidental and a degree sign of two.
-const mode_label_capacity: usize = 96;
-
-/// How many boxes the editor shows, as the options offer them - the progressions' lengths and the bars' usual groupings
-/// - and their labels there.
-const progression_box_counts = [_]u8{ 2, 3, 4, 6, 8, 12, 16 };
-const progression_box_count_labels = [_][]const u8{
-    "2 boxes",
-    "3 boxes",
-    "4 boxes",
-    "6 boxes",
-    "8 boxes",
-    "12 boxes",
-    "16 boxes",
-};
-/// The most boxes the progression editor holds (`State.progression_boxes`): the most it shows.
-const progression_box_most: usize = progression_box_counts[progression_box_counts.len - 1];
-/// The options' first choice of how many boxes: 4.
-const progression_box_count_first_choice: i32 = 2;
 
 /// A chord's name as its letters show it: its root's spelling in the key, then "m" for a minor triad, a degree sign
 /// for the diminished one, nothing for a major one - C, Dm, and B with the degree sign. The two parts are copied one
@@ -1038,9 +1306,12 @@ fn chordLetterName(buffer: *[8]u8, scale: *const Scale, chord: ScaleChord) []con
 /// one unit.
 fn chordSizeInUnits(scale: *const Scale, chord: ScaleChord) f32 {
     if (scale.isMainChord(chord)) {
-        return main_chord_size_in_units;
+        return params.sizes.main_chord_size_in_units;
     }
-    return if (chord.quality == .diminished) diminished_chord_size_in_units else chord_size_in_units;
+    return if (chord.quality == .diminished)
+        params.sizes.diminished_chord_size_in_units
+    else
+        params.sizes.chord_size_in_units;
 }
 
 /// A chord's shape and size together, as `largestUnitApart` takes them.
@@ -1250,10 +1521,6 @@ fn ellipseArcLength(height_share: f32, from: f32, to: f32, intervals: usize) f32
     return weighted_sum * spacing / 3;
 }
 
-/// The straight pieces each link of the star's curve is drawn in - the white path (`drawNotePath`) and the chords'
-/// fans' edges along it (`drawChordFan`), the same pieces, so that a fan meets the path exactly.
-const curve_pieces_per_link: usize = 24;
-
 /// The star's curve: an ellipse with its bottom cut off by a straight line, the notes spaced equally along it.
 ///
 ///                 .  - ~ -  .
@@ -1422,7 +1689,7 @@ const StarLayout = struct {
     /// A note's half-size, in units of this: the half-side of its square, or its circle's radius.
     size_unit: f32,
     /// The place, on the unturned circle, of the root of the chord whose notes are the heroes
-    /// (`hero_note_size_in_units`): the chosen chord's. Its notes are at that place and the two after it.
+    /// (`params.sizes.hero_note_size_in_units`): the chosen chord's. Its notes are at that place and the two after it.
     hero_root_place: u8,
     /// The scale the star shows: its chords' qualities decide their sides, shapes and sizes, and so the layout.
     scale: Scale,
@@ -1554,24 +1821,27 @@ const StarLayout = struct {
         return places_from_hero_root < 3;
     }
 
-    /// A note's size in units: a hero's, or a plain note's - the tonic's 30% larger (`tonic_size_share`).
+    /// A note's size in units: a hero's, or a plain note's - the tonic's 30% larger (`params.sizes.tonic_size_share`).
     fn noteSizeInUnits(star: StarLayout, degree: u8) f32 {
-        const size_in_units: f32 = if (star.isHeroNote(degree)) hero_note_size_in_units else note_size_in_units;
-        return if (degree == 1) tonic_size_share * size_in_units else size_in_units;
+        const size_in_units: f32 = if (star.isHeroNote(degree))
+            params.sizes.hero_note_size_in_units
+        else
+            params.sizes.note_size_in_units;
+        return if (degree == 1) params.sizes.tonic_size_share * size_in_units else size_in_units;
     }
 
     /// A note's half-size in pixels, as drawn: the half-side of its square, or its circle's radius - its size in units
-    /// times the unit, and a little less (`note_drawn_share`, `tonic_drawn_share`): the layout keeps room for its full
-    /// size (`largestSizeUnit` reads `noteSizeInUnits`), so that the gaps between the notes are wider than the
-    /// layout's clearances.
+    /// times the unit, and a little less (`params.sizes.note_drawn_share`, `params.sizes.tonic_drawn_share`): the
+    /// layout keeps room for its full size (`largestSizeUnit` reads `noteSizeInUnits`), so that the gaps between the
+    /// notes are wider than the layout's clearances.
     fn noteHalfSize(star: StarLayout, degree: u8) f32 {
-        const drawn_share: f32 = if (degree == 1) tonic_drawn_share else note_drawn_share;
+        const drawn_share: f32 = if (degree == 1) params.sizes.tonic_drawn_share else params.sizes.note_drawn_share;
         return drawn_share * star.noteSizeInUnits(degree) * star.size_unit;
     }
 
     /// A note's half-size were it no hero: what the drawing's details are measured in.
     fn plainNoteHalfSize(star: StarLayout) f32 {
-        return note_size_in_units * star.size_unit;
+        return params.sizes.note_size_in_units * star.size_unit;
     }
 
     /// A chord's half-size in pixels.
@@ -1581,10 +1851,11 @@ const StarLayout = struct {
 
     /// The three shapes of a chord's triplet (`ChordTriplet`), all the chord's size, front first: its own shape - a
     /// square for a major chord, a circle for the others - at the left; its third's note's shape at the chord's centre;
-    /// its fifth's at the right, each `chord_triplet_step_share` of a shape's width from the one before it.
+    /// its fifth's at the right, each `params.sizes.chord_triplet_step_share` of a shape's width from the one before
+    /// it.
     fn chordTripletShapes(star: StarLayout, chord: ScaleChord) [3]PlacedShape {
         const centre: Vec2 = star.chordCentre(chord);
-        const step: Vec2 = .{ chord_triplet_step_share * 2 * star.chordHalfSize(chord), 0 };
+        const step: Vec2 = .{ params.sizes.chord_triplet_step_share * 2 * star.chordHalfSize(chord), 0 };
         const degrees: [3]u8 = chord.degrees();
         return .{
             .{ .centre = centre - step, .shape = shapeOfChord(chord) },
@@ -1882,46 +2153,6 @@ const PianoLayout = struct {
     }
 };
 
-/// A black key's width and height beside a white key's: 60% of each.
-const black_key_width_share: f32 = 0.6;
-const black_key_height_share: f32 = 0.6;
-
-/// The room left between the keyboard's end and the fullscreen button, beyond the margin.
-const keyboard_gap_before_button: f32 = 16;
-
-/// The left hand's share of the window: its column - or its band, on a screen held upright - a quarter, leaving the
-/// star, where the right hand plays, the rest. The chooser's buttons are as large as its width allows: at a phone's
-/// proportions, 900 by 415, their size unit is 17.3 at a share of 0.21, 20.6 at this one - a fifth larger, room for
-/// their names - and no larger beyond it, the column's height then the limit.
-const chooser_share: f32 = 0.252;
-
-/// The key's window on the circle of fifths (`drawFifths`): its share of the left hand's column, at the top - 65%,
-/// room for its guitar chords - the chooser the rest below, 35%, its curve squished flatter to fit
-/// (`ChooserLayout.vertical_squish`).
-const fifths_share: f32 = 0.65;
-
-/// The circle of the twelve notes, at the top right: the side of its square as a share of the window's width.
-const chromatic_share: f32 = 0.2;
-
-/// The sounding box's height on a window held upright, as a share of the content's width: 30%.
-const upright_sounding_share: f32 = 0.3;
-
-/// The space between the left hand's column and the star, as a share of the content's width: 4%.
-const star_gap_share: f32 = 0.04;
-
-/// The space the header's window keeps after its text: its own padding, and a little more.
-const header_padding: f32 = 16;
-
-/// How far inside its part each of the left hand's diagrams is drawn: its box 3 pixels in - so that the key's window's
-/// and the chooser's, one above the other, do not touch - and its buttons 5 pixels in, clear of the box. Measured at a
-/// phone's proportions, 900 by 415, both diagrams then fit a size unit of 19.3, the two in balance with half the
-/// column's height each; 8 pixels in, 18.5.
-const left_diagram_box_inset: f32 = 3;
-/// The room kept inside each box, between its line and what it holds, in pixels.
-const left_diagram_padding: f32 = 5;
-/// The boxes' color: the star's note path's, quiet on the background.
-const left_diagram_box_color: Color = note_path_color;
-
 /// `rectangle` shrunk by `inset` on every side.
 fn insetRectangle(rectangle: z.Rectangle, inset: f32) z.Rectangle {
     return .{
@@ -1937,14 +2168,10 @@ fn editorHeight(window_height: f32) f32 {
     return clamp(0.1 * window_height, 30, 64);
 }
 
-/// How much of the circle's side the star stops short of the content's right edge: all of it - the star's room ends
-/// where the circle's square begins. Its top right corner holds the 7 and its chord now that the curve no longer
-/// pulls the 7 down beside the row (`warpAt`), and the star, fitted for every turn, would reach into the circle there.
-const star_under_chromatic_share: f32 = 1.0;
-
-/// The window's parts: the left hand's column in 21% of it (`chooser_share`) - on the left, or across the top of a
-/// screen held upright - with the key's window on the circle of fifths and the chooser; the circle of the twelve notes
-/// at the top right; and the star between them, below the line of text at the top, a margin from the line between.
+/// The window's parts: the left hand's column in 21% of it (`params.window.chooser_share`) - on the left, or across the
+/// top of a screen held upright - with the key's window on the circle of fifths and the chooser; the circle of the
+/// twelve notes at the top right; and the star between them, below the line of text at the top, a margin from the line
+/// between.
 const WindowParts = struct {
     /// The key's window on the circle of fifths (`drawFifths`), at the top of the left hand's column - or at the left
     /// of its band - and the chooser below it, or to its right.
@@ -1976,7 +2203,7 @@ const WindowParts = struct {
         // The header's box as drawn (`buildOptionsButton`): its text and padding, or 360 pixels before its text is
         // measured.
         const header_box_right: f32 = if (header_content_right > 0)
-            header_content_right + header_padding
+            header_content_right + params.window.header_padding
         else
             StarLayout.margin + 360;
         const width: f32 = f.window.widthf();
@@ -1991,7 +2218,7 @@ const WindowParts = struct {
         const keyboard: z.Rectangle = .{
             .x = margin,
             .y = height - margin - keyboard_height,
-            .width = button_corner[0] - 2 * margin - keyboard_gap_before_button,
+            .width = button_corner[0] - 2 * margin - params.window.keyboard_gap_before_button,
             .height = keyboard_height,
         };
         // The star and the chooser above it, the star's part ending a little above the keyboard, so that the chord
@@ -2006,19 +2233,19 @@ const WindowParts = struct {
         if (content.width >= content.height) {
             // The left hand's column, the key's window above the chooser; the circle's square at the top right; the
             // star between, narrowed by the circle's side.
-            const column_width: f32 = chooser_share * content.width;
-            const fifths_height: f32 = fifths_share * content.height;
-            const chromatic_side: f32 = @min(chromatic_share * content.width, content.height);
+            const column_width: f32 = params.window.chooser_share * content.width;
+            const fifths_height: f32 = params.window.fifths_share * content.height;
+            const chromatic_side: f32 = @min(params.window.chromatic_share * content.width, content.height);
             // The circle's square in the content's top right corner, boxed as the left diagrams are, the sounding box
             // below it, as wide, down to the content's bottom; the star stops at their left side
-            // (`star_under_chromatic_share`).
-            const star_right_inset: f32 = star_under_chromatic_share * chromatic_side;
+            // (`params.window.star_under_chromatic_share`).
+            const star_right_inset: f32 = params.window.star_under_chromatic_share * chromatic_side;
             // The star a little away from the column, which its boxes close off: 4% of the width between them.
-            const star_left_gap: f32 = star_gap_share * content.width;
+            const star_left_gap: f32 = params.window.star_gap_share * content.width;
             // The star up to the window's top where the header's text ends before it - the header only as wide as its
             // text - and below the header's line where a long scale's name reaches over it.
             const star_x: f32 = content.x + column_width + star_left_gap;
-            const header_right: f32 = header_content_right + header_padding + margin;
+            const header_right: f32 = header_content_right + params.window.header_padding + margin;
             const is_star_beside_header: bool = header_content_right > 0 and header_right <= star_x;
             // The progression editor across the column's top, the star below it.
             const column_top: f32 = if (is_star_beside_header) margin else content.y;
@@ -2065,10 +2292,10 @@ const WindowParts = struct {
         // Held upright: the band across the top - the key's window, the chooser, the circle's square - the star below,
         // and below it, across, the sounding box: the star is as wide as the window lets it be, and has height to
         // spare.
-        const band_height: f32 = chooser_share * content.height;
+        const band_height: f32 = params.window.chooser_share * content.height;
         const fifths_width: f32 = 0.36 * content.width;
         const chromatic_side: f32 = band_height;
-        const sounding_height: f32 = upright_sounding_share * content.width;
+        const sounding_height: f32 = params.window.upright_sounding_share * content.width;
         // The progression editor between the band and the star.
         const editor: z.Rectangle = .{
             .x = content.x,
@@ -2171,10 +2398,10 @@ const WindowParts = struct {
         }
         const layout: PianoLayout = .ofScale(scale);
         const white_width: f32 = keyboard.width / float(layout.white_count);
-        const is_black_height: bool = point[1] < keyboard.y + black_key_height_share * keyboard.height;
+        const is_black_height: bool = point[1] < keyboard.y + params.keyboard.black_key_height_share * keyboard.height;
         if (is_black_height) {
             const boundary_index: usize = @round(offset_x / white_width);
-            const half_black_width: f32 = 0.5 * black_key_width_share * white_width;
+            const half_black_width: f32 = 0.5 * params.keyboard.black_key_width_share * white_width;
             const is_near_boundary: bool = @abs(offset_x - float(boundary_index) * white_width) < half_black_width;
             if (is_near_boundary and boundary_index >= 1 and layout.hasBlackAfter(boundary_index - 1)) {
                 return layout.degreeAt(scale, layout.whiteSemitones(boundary_index - 1) + 1);
@@ -2263,7 +2490,7 @@ const ChooserLayout = struct {
         const unit_middle: Vec2 = (highest + lowest) * splat2(0.5);
         const room_half_size: Vec2 = .{ room.width / 2, room.height / 2 };
         const room_centre: Vec2 = .{ room.x + room.width / 2, room.y + room.height / 2 };
-        const largest_half_size_in_units: f32 = chosen_chord_scale * largest_chord_size_in_units;
+        const largest_half_size_in_units: f32 = chosen_chord_scale * params.sizes.largest_chord_size_in_units;
         // Each pair of chords at their own sizes - the larger of the two chosen, a quarter larger - with the margin
         // between them: their distance on the unit curve per size unit they need. The smallest of these sets the size.
         var size_unit: f32 = 0;
@@ -2387,20 +2614,7 @@ const ChromaticLayout = struct {
     }
 };
 
-/// The dots' spacing in the left hand's column, in the chooser's size units: the chooser's and the key's window's
-/// steps in pitch, at the size of their buttons.
-const column_dots_spacing_units: f32 = 0.5;
-
 // ---- Guitar chords ----
-
-/// The guitar's six strings in standard tuning, the lowest first - E A D G B E - as MIDI keys, E2 to E4.
-const guitar_string_keys = [6]u8{ 40, 45, 50, 55, 59, 64 };
-
-/// The frets a chord's fingering spans at most: four, the hand's reach - a window from its lowest fret pressed.
-const guitar_window_frets: u8 = 4;
-
-/// The highest fret a fingering's window starts at: the 12th, an octave up the neck.
-const highest_guitar_window: u8 = 12;
 
 /// A chord as fingered on a guitar in standard tuning (`guitarChordOf`): each string's fret, the lowest string first -
 /// 0 an open string, null a string not played; the fret its diagram's window starts at, the lowest pressed; and the
@@ -2439,7 +2653,7 @@ fn isChordPitchClass(chord_pitch_classes: [3]u4, pitch_class: u4) bool {
 
 /// The pitch class string `string_index` sounds at `fret`.
 fn guitarPitchClass(string_index: usize, fret: u8) u4 {
-    return @intCast((guitar_string_keys[string_index] + fret) % 12);
+    return @intCast((params.guitar.string_keys[string_index] + fret) % 12);
 }
 
 /// The barre a fingering in the window from `window_start` can use: a finger flat across the window's first fret,
@@ -2577,7 +2791,7 @@ fn searchGuitarStrings(
         searchGuitarStrings(search, window_start, string_index + 1, frets);
     }
     var fret: u8 = window_start;
-    while (fret < window_start + guitar_window_frets) : (fret += 1) {
+    while (fret < window_start + params.guitar.window_frets) : (fret += 1) {
         if (isChordPitchClass(search.chord_pitch_classes, guitarPitchClass(string_index, fret))) {
             frets[string_index] = fret;
             searchGuitarStrings(search, window_start, string_index + 1, frets);
@@ -2604,7 +2818,7 @@ fn guitarChordOf(chord_pitch_classes: [3]u4) GuitarChord {
         .best_cost = inf(f32),
     };
     var window_start: u8 = 1;
-    while (window_start <= highest_guitar_window) : (window_start += 1) {
+    while (window_start <= params.guitar.highest_window) : (window_start += 1) {
         var frets: [6]?u8 = @splat(null);
         searchGuitarStrings(&search, window_start, 0, &frets);
     }
@@ -2820,13 +3034,9 @@ fn starTurnForChord(chord: ScaleChord) f32 {
     return float(circlePlaceOfDegree(chord.root_degree)) / 7;
 }
 
-/// How long the star takes to turn to a newly chosen chord, its chords trading sides with it: 0.04 seconds, under three
-/// frames at 60 a second - quick enough to follow the hand, slow enough to be seen moving.
-const transition_duration_seconds: f32 = 0.04;
-
 /// The star's move from one chosen chord to the next: a turn, and its chords trading sides with it, both over
-/// `transition_duration_seconds` from the moment of the choice. Everything shown in between is a straight line from
-/// where the move started to where it ends, at the fraction of the time gone (`fraction`).
+/// `params.star.transition_duration_seconds` from the moment of the choice. Everything shown in between is a straight
+/// line from where the move started to where it ends, at the fraction of the time gone (`fraction`).
 const StarTransition = struct {
     /// When the chord was chosen, on the frame's clock.
     started_seconds: f32,
@@ -2857,7 +3067,7 @@ const StarTransition = struct {
     /// How far the move has gone at `now_seconds`: 0 when the chord was chosen, 1 once the duration has passed.
     fn fraction(transition: StarTransition, now_seconds: f32) f32 {
         const elapsed_seconds: f32 = now_seconds - transition.started_seconds;
-        return clamp(elapsed_seconds / transition_duration_seconds, 0, 1);
+        return clamp(elapsed_seconds / params.star.transition_duration_seconds, 0, 1);
     }
 
     /// Whether the star is between two chords at `now_seconds`: turning, its chords trading sides.
@@ -2926,16 +3136,6 @@ const PointerHold = struct {
     anchor: ?Vec2,
 };
 
-/// How far a pointer must move from where it took its target before it takes another: 6 pixels. Every point of the
-/// star, the chooser, the key's window and the circle belongs to its nearest target, so boundaries run everywhere, and
-/// a finger resting near one moves a pixel or two back and forth between touch events - each time it crossed, the
-/// note it held was let go and the next one struck, many times a second, heard as crackle. A finger sliding on
-/// moves far more than this, and changes target as soon as it crosses; one resting keeps what it holds.
-const target_switch_distance: f32 = 6;
-
-/// The most pointers held at once: the ten touches the engine tracks, and the mouse.
-const most_pointers: usize = 11;
-
 /// A chord's third or fifth not yet sounding: held by its chord already, it starts at `due_seconds`, a strum's delay
 /// after the root - the third one delay after it, the fifth two - so that the chord is heard note by note, root,
 /// third, fifth, and then together (`holdChordDegrees`).
@@ -2948,9 +3148,6 @@ const PendingHold = struct {
     due_seconds: f32,
 };
 
-/// The most notes waiting at once: a chord's third and fifth for every pointer, and two over.
-const most_pending_holds: usize = 2 * most_pointers + 2;
-
 /// The mouse's identifier among the pointers: one no touch is given, touches being numbered up from 0.
 const mouse_pointer_id: i32 = -1;
 
@@ -2962,10 +3159,6 @@ const PointerDown = struct {
     position: Vec2,
 };
 
-/// How far a finger carrying a chord goes from where it came down before the chord is shown following it, and before
-/// a box under it takes the chord when it lifts: 12 pixels - a tap's wobble does not carry a chord anywhere.
-const chord_drag_start_distance: f32 = 12;
-
 /// A chord a finger carries toward the progression editor's boxes (`readPointers`): the chord it came down on - on the
 /// star, the chooser, the key's window, a borrowed chord's button or a box - where it came down, and where it is now.
 /// Lifted over a box, the box takes the chord (`dropChord`).
@@ -2975,9 +3168,9 @@ const ChordDrag = struct {
     start: Vec2,
     position: Vec2,
 
-    /// Whether the finger has gone from where it came down (`chord_drag_start_distance`).
+    /// Whether the finger has gone from where it came down (`params.playing.chord_drag_start_distance`).
     fn hasLeftStart(drag: ChordDrag) bool {
-        return length(drag.position - drag.start) > chord_drag_start_distance;
+        return length(drag.position - drag.start) > params.playing.chord_drag_start_distance;
     }
 };
 
@@ -2997,7 +3190,7 @@ const State = struct {
     /// Which degrees their keys hold, so that a key's release is matched with its press.
     is_held_by_digit_key: [7]bool,
     /// What each pointer holds, while it is down: a slot each, free when null.
-    pointer_holds: [most_pointers]?PointerHold,
+    pointer_holds: [params.limits.most_pointers]?PointerHold,
     /// The window's layout last worked out, and the window's size it was worked out for (`windowLayoutOf`).
     window_layout: ?WindowLayout,
     /// The window's size the kept layout was made for (`window_layout`).
@@ -3022,15 +3215,15 @@ const State = struct {
     /// The progression editor's boxes (`drawProgressionEditor`): the chord each holds, null for an empty box. The track
     /// plays the boxes that hold a chord, in order, over and over (`trackChord`). A progression picked in the list
     /// fills them (`placeChosenProgression`); a chord dragged onto a box replaces its own (`dropChord`).
-    progression_boxes: [progression_box_most]?ScaleChord,
-    /// The options' choice of how many boxes the editor shows: an index into `progression_box_counts`, set to fit a
-    /// progression picked in the list (`placeChosenProgression`) and the player's to change after.
+    progression_boxes: [params.limits.progression_box_most]?ScaleChord,
+    /// The options' choice of how many boxes the editor shows: an index into `params.progression.box_counts`, set to
+    /// fit a progression picked in the list (`placeChosenProgression`) and the player's to change after.
     progression_box_count_choice: i32,
     /// The chords being carried toward the boxes, one a finger at most (`ChordDrag`).
-    chord_drags: [most_pointers]?ChordDrag,
+    chord_drags: [params.limits.most_pointers]?ChordDrag,
     /// The pointers down last frame, by their identifiers: a pointer not among them came down this frame - only such a
     /// pointer picks up a chord to carry, not a finger gliding onto one.
-    pointer_ids_last_frame: [most_pointers]?i32,
+    pointer_ids_last_frame: [params.limits.most_pointers]?i32,
     /// The progression's tempo, in beats a minute, set in the options.
     progression_beats_per_minute: f32,
     /// The beats gone since the progression was chosen, counted at its tempo frame by frame (`advanceProgression`).
@@ -3060,18 +3253,19 @@ const State = struct {
     /// start (`drawNote`).
     shows_solfege: bool,
     /// The chords' thirds and fifths waiting to start, a strum's delay after their roots (`PendingHold`).
-    pending_holds: [most_pending_holds]?PendingHold,
+    pending_holds: [params.limits.most_pending_holds]?PendingHold,
     /// The delay between a chord's notes as it starts - the root, the third this long after it, the fifth this long
-    /// after the third (`holdChordDegrees`) - set in the options: 0.1 seconds at the start; 0 starts the three at once.
+    /// after the third (`holdChordDegrees`) - set in the options, from `params.defaults.chord_strum_seconds`; 0 starts
+    /// the three at once.
     chord_strum_seconds: f32,
     /// The options' list of progressions, its labels written in the current key (`writeProgressionLabels`).
-    progression_label_buffers: [progressions.len + 1][progression_label_capacity]u8,
+    progression_label_buffers: [progressions.len + 1][params.limits.progression_label_capacity]u8,
     /// The track dropdown's labels, written once at the start: "off", then each progression's name, numbers and
     /// chords in the chosen key (`writeProgressionLabels`).
     progression_labels: [progressions.len + 1][]const u8,
     /// The header's mode list, its labels written each frame for the tonic chosen (`writeModeLabels`): each mode's
     /// name and the notes it alters from the major scale, then its seven chords on the tonic.
-    mode_label_buffers: [mode_count][mode_label_capacity]u8,
+    mode_label_buffers: [mode_count][params.limits.mode_label_capacity]u8,
     mode_labels: [mode_count][]const u8,
     /// Whether one of the header's lists was open at the last frame (`buildHeader`): a press then is the list's, which
     /// only the frame's UI knows, so that `onInput` leaves the pointers to the frame.
@@ -3116,10 +3310,10 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .is_options_open = false,
         .progression_choice = 0,
         .progression_boxes = @splat(null),
-        .progression_box_count_choice = progression_box_count_first_choice,
+        .progression_box_count_choice = params.defaults.progression_box_count_choice,
         .chord_drags = @splat(null),
         .pointer_ids_last_frame = @splat(null),
-        .progression_beats_per_minute = 90,
+        .progression_beats_per_minute = params.defaults.progression_beats_per_minute,
         .progression_beat = 0,
         .progression_waits_for_player = true,
         .progression_chords_taken = 0,
@@ -3130,14 +3324,14 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .turns_star = false,
         .shows_solfege = false,
         .pending_holds = @splat(null),
-        .chord_strum_seconds = 0.1,
+        .chord_strum_seconds = params.defaults.chord_strum_seconds,
         .progression_label_buffers = undefined,
         .progression_labels = @splat(""),
         .mode_label_buffers = undefined,
         .mode_labels = @splat(""),
         .is_header_list_open = false,
         .is_debugging_handles = false,
-        .chooser_chord_volume = default_chooser_chord_volume,
+        .chooser_chord_volume = params.defaults.chooser_chord_volume,
         .chosen_chord_index = 0,
         .transition = .atRestOnTonic(c_major.chordOf(1)),
         .was_star_moving = false,
@@ -3187,11 +3381,11 @@ fn soundStrengthChange(
     }
     const key: u8 = s.scale.midiKeyOfDegree(degree);
     // The thumb's strength, from its volume in the options: a share of the other notes'.
-    const thumb_velocity: f32 = s.chooser_chord_volume * note_velocity;
+    const thumb_velocity: f32 = s.chooser_chord_volume * params.playing.note_velocity;
     switch (after) {
         .silent => _ = f.mixer.sendNote(.{ .key = key, .is_down = false }),
         .thumb => _ = f.mixer.sendNote(.{ .key = key, .is_down = true, .velocity = thumb_velocity }),
-        .full => _ = f.mixer.sendNote(.{ .key = key, .is_down = true, .velocity = note_velocity }),
+        .full => _ = f.mixer.sendNote(.{ .key = key, .is_down = true, .velocity = params.playing.note_velocity }),
     }
 }
 
@@ -3398,7 +3592,7 @@ fn isChordSounding(s: *const State, chord: ScaleChord) bool {
 /// go. A key still down when the scale changes, which lets go of every note (`changeScale`), holds its note again the
 /// next frame, in the new scale.
 fn readDigitKeys(f: *z.Frame, s: *State) void {
-    for (digit_keys, keypad_keys, 0..) |digit_key, keypad_key, degree_index| {
+    for (params.playing.digit_keys, params.playing.keypad_keys, 0..) |digit_key, keypad_key, degree_index| {
         const degree: u8 = @intCast(degree_index + 1);
         const is_down: bool = z.isKeyDown(f.input, digit_key) or z.isKeyDown(f.input, keypad_key);
         if (is_down and !s.is_held_by_digit_key[degree_index]) {
@@ -3485,7 +3679,7 @@ fn nearestTarget(star: StarLayout, point: Vec2) PlayTarget {
 fn pointersDown(
     f: *z.Frame,
     s: *State,
-    pointers: *[most_pointers]PointerDown,
+    pointers: *[params.limits.most_pointers]PointerDown,
 ) []const PointerDown {
     const touch_count: usize = @intCast(z.getTouchPointCount(f.input));
     if (touch_count > 0) {
@@ -3668,10 +3862,6 @@ const listed_mode_names = [11][]const u8{
     "Phrygian dominant",
 };
 
-/// How many columns the first line of a mode's label spans: its name at the left, its alterations at the right - the
-/// font is monospaced, so the alterations line up down the list.
-const mode_label_columns: usize = 28;
-
 /// The notes a mode alters from the major scale, as its label shows them (`writeModeLabels`): each degree a semitone
 /// below the major scale's a flat, each a semitone above it a sharp - Lydian #4, Dorian b3 b7, Locrian b2 b3 b5 b6 b7 -
 /// and a dash for the major scale itself. Written into `buffer`; at most seven of three bytes, spaces between.
@@ -3707,7 +3897,7 @@ fn writeModeLabels(s: *State) void {
         var alteration_buffer: [32]u8 = undefined;
         const alterations: []const u8 = writeAlterations(&alteration_buffer, mode);
         const name: []const u8 = listed_mode_names[mode_index];
-        const gap: usize = @max(2, mode_label_columns -| (name.len + alterations.len));
+        const gap: usize = @max(2, params.limits.mode_label_columns -| (name.len + alterations.len));
         var label_length: usize = 0;
         @memcpy(buffer[0..name.len], name);
         label_length += name.len;
@@ -3813,7 +4003,7 @@ fn modeListWidth(s: *const State, ui: z.ui_real.Ui) f32 {
 /// window's top beside it (`WindowParts.ofWindow`). A scale picked in either list is taken at once (`changeScale`).
 fn buildHeader(f: *z.Frame, s: *State, ui: z.ui_real.Ui) void {
     const content_width: f32 = s.header_content_right - StarLayout.margin;
-    const toolbar_width: f32 = if (s.header_content_right > 0) content_width + header_padding else 360;
+    const toolbar_width: f32 = if (s.header_content_right > 0) content_width + params.window.header_padding else 360;
     ui.setNextWindowPos(.{ StarLayout.margin, 2 }, .{});
     ui.setNextWindowSize(.{ toolbar_width, StarLayout.header_height }, .{});
     const toolbar_flags: z.ui_real.WindowFlags = .{
@@ -3878,15 +4068,9 @@ fn columnChordHalfSize(chooser: ChooserLayout, chord: ScaleChord, is_chosen: boo
     return chosen_scale * chooser.chordHalfSize(chord);
 }
 
-/// The most borrowed chords offered at once (`offeredBorrowedChords`).
-const most_offered_borrowed_chords: usize = 4;
-
-/// A borrowed chord's button's size, as a share of its root's chord's.
-const borrowed_button_share: f32 = 0.6;
-
 /// How many boxes the editor shows: 2 to 16, as chosen in the options or fitted to a progression picked.
 fn progressionBoxCount(s: *const State) usize {
-    return progression_box_counts[@intCast(s.progression_box_count_choice)];
+    return params.progression.box_counts[@intCast(s.progression_box_count_choice)];
 }
 
 /// How many chords the track plays, over and over: the editor's boxes that hold one.
@@ -3932,22 +4116,22 @@ fn playingBoxIndex(s: *const State) ?usize {
     if (!hasTrack(s)) {
         return null;
     }
-    const chords_arrived: usize = @trunc(s.progression_beat / beats_per_progression_chord);
+    const chords_arrived: usize = @trunc(s.progression_beat / params.progression.beats_per_chord);
     if (chords_arrived == 0) {
         return null;
     }
     return trackBoxIndex(s, chords_arrived - 1);
 }
 
-/// The options' choice of the fewest boxes that hold `chord_count` chords (`progression_box_counts`): 3 for three, 6
-/// for five, the box after them empty; the most there are for a longer progression, which fills them.
+/// The options' choice of the fewest boxes that hold `chord_count` chords (`params.progression.box_counts`): 3 for
+/// three, 6 for five, the box after them empty; the most there are for a longer progression, which fills them.
 fn boxCountChoiceFor(chord_count: usize) i32 {
-    for (progression_box_counts, 0..) |box_count, choice| {
+    for (params.progression.box_counts, 0..) |box_count, choice| {
         if (box_count >= chord_count) {
             return @intCast(choice);
         }
     }
-    return progression_box_counts.len - 1;
+    return params.progression.box_counts.len - 1;
 }
 
 /// Places the progression picked in the list in the editor's boxes: as many boxes as it has chords, or the fewest
@@ -4010,7 +4194,7 @@ fn dropChord(s: *State, parts: WindowParts, drag: ChordDrag) void {
 /// into `buffer`. A box's chord the chosen scale has itself on that root is not offered: its own button plays it.
 fn offeredBorrowedChords(
     s: *const State,
-    buffer: *[most_offered_borrowed_chords]ScaleChord,
+    buffer: *[params.limits.most_offered_borrowed_chords]ScaleChord,
 ) []const ScaleChord {
     var count: usize = 0;
     for (s.progression_boxes[0..progressionBoxCount(s)]) |box| {
@@ -4047,7 +4231,7 @@ fn borrowedButtonCentre(root_centre: Vec2, root_half_size: f32, middle: Vec2) Ve
         toward_middle / splat2(distance_to_middle)
     else
         .{ 0, -1 };
-    const clearance: f32 = 1.1 * root_half_size * (1 + borrowed_button_share);
+    const clearance: f32 = 1.1 * root_half_size * (1 + params.window.borrowed_button_share);
     return root_centre + direction * splat2(clearance);
 }
 
@@ -4058,7 +4242,7 @@ fn chooserBorrowedButton(chooser: ChooserLayout, chord: ScaleChord) ButtonPlace 
     const root_centre: Vec2 = chooser.chordCentre(root_chord);
     return .{
         .centre = borrowedButtonCentre(root_centre, root_half_size, chooser.centre),
-        .half_size = borrowed_button_share * root_half_size,
+        .half_size = params.window.borrowed_button_share * root_half_size,
     };
 }
 
@@ -4119,7 +4303,7 @@ fn writeSongKey(buffer: []u8, original_key: SongKey) []const u8 {
 fn writeProgressionLabels(s: *State) void {
     s.progression_labels[0] = "off";
     for (progressions, 1..) |progression, label_index| {
-        const buffer: *[progression_label_capacity]u8 = &s.progression_label_buffers[label_index];
+        const buffer: *[params.limits.progression_label_capacity]u8 = &s.progression_label_buffers[label_index];
         var label_length: usize = 0;
         const name: []const u8 = bufPrint(buffer, "{s}", .{progression.name}) catch "";
         label_length += name.len;
@@ -4149,12 +4333,8 @@ fn writeProgressionLabels(s: *State) void {
 /// The beat at which the track's chord `chord_count` - counted from its first - reaches its button: the end of its bar
 /// of travel, after the first bar's way in (`drawProgressionTrack`).
 fn progressionArrivalBeat(chord_count: usize) f64 {
-    return beats_per_progression_chord * float64(chord_count + 1);
+    return params.progression.beats_per_chord * float64(chord_count + 1);
 }
-
-/// How far short of its arrival the track holds a chord awaited, following the player (`advanceProgression`): a
-/// millionth of a beat - so the chord is still the one on its way, drawn at its button, not yet the one to play.
-const progression_hold_beats: f64 = 1e-6;
 
 /// Counts the progression's beats on, at its tempo: by the frame's duration, so that a tempo changed on the slider
 /// carries on from where the track is rather than jumping.
@@ -4168,15 +4348,9 @@ fn advanceProgression(f: *z.Frame, s: *State) void {
     // track holds a hair short of its arrival until the player plays it (`takeProgressionChord`).
     if (s.progression_waits_for_player) {
         const awaited_arrival_beat: f64 = progressionArrivalBeat(s.progression_chords_taken);
-        s.progression_beat = @min(s.progression_beat, awaited_arrival_beat - progression_hold_beats);
+        s.progression_beat = @min(s.progression_beat, awaited_arrival_beat - params.progression.hold_beats);
     }
 }
-
-/// How fast the chord the track waits for pulses, and how much it grows (`waitingScale`): three times a second -
-/// quicker than the beat, so that it reads as a call to play it rather than as the music's pulse - up to a fifth
-/// larger.
-const waiting_pulses_per_second: f32 = 3;
-const waiting_pulse_growth: f32 = 0.2;
 
 /// The chord the track waits for the player to play, once it has reached its button: following the player
 /// (`progression_waits_for_player`), the chord awaited (`progression_chords_taken`), held at its arrival until it is
@@ -4186,7 +4360,7 @@ fn awaitedChord(s: *const State) ?ScaleChord {
         return null;
     }
     const arrival_beat: f64 = progressionArrivalBeat(s.progression_chords_taken);
-    if (s.progression_beat < arrival_beat - 2 * progression_hold_beats) {
+    if (s.progression_beat < arrival_beat - 2 * params.progression.hold_beats) {
         return null;
     }
     return trackChord(s, s.progression_chords_taken);
@@ -4198,8 +4372,8 @@ fn waitingScale(f: *z.Frame, s: *const State) f32 {
     if (awaitedChord(s) == null) {
         return 1;
     }
-    const swing: f32 = 0.5 + 0.5 * sinTurns(f.time.time * waiting_pulses_per_second);
-    return 1 + waiting_pulse_growth * swing;
+    const swing: f32 = 0.5 + 0.5 * sinTurns(f.time.time * params.progression.waiting_pulses_per_second);
+    return 1 + params.progression.waiting_pulse_growth * swing;
 }
 
 /// The waiting pulse's scale for the star's note on `degree`: the awaited chord's three notes pulse, every other note
@@ -4228,11 +4402,6 @@ fn leftChordWaitingScale(f: *z.Frame, s: *const State, chord: ScaleChord) f32 {
     return if (is_awaited) waitingScale(f, s) else 1;
 }
 
-/// The options panel's width, as a share of the window's - 70% - and the least it is: 460 pixels, for its labels.
-const options_panel_share: f32 = 0.7;
-/// The least the panel is: 460 pixels, room for its labels.
-const options_panel_least_width: f32 = 460;
-
 /// Whether `point` lies in `rectangle`.
 fn isPointInRectangle(point: Vec2, rectangle: z.Rectangle) bool {
     const is_within_x: bool = point[0] >= rectangle.x and point[0] < rectangle.x + rectangle.width;
@@ -4258,7 +4427,10 @@ fn buildOptions(f: *z.Frame, s: *State, ui: z.ui_real.Ui) bool {
     const window_size: Vec2 = .{ f.window.widthf(), f.window.heightf() };
     const panel_margin: f32 = 0.06 * @min(window_size[0], window_size[1]);
     // Its wanted width, but no wider than the window allows, on a window too narrow for the least.
-    const wanted_panel_width: f32 = @max(options_panel_least_width, options_panel_share * window_size[0]);
+    const wanted_panel_width: f32 = @max(
+        params.window.options_panel_least_width,
+        params.window.options_panel_share * window_size[0],
+    );
     const panel_width: f32 = @min(window_size[0] - 2 * panel_margin, wanted_panel_width);
     const panel_rectangle: z.Rectangle = .{
         .x = panel_margin,
@@ -4272,7 +4444,7 @@ fn buildOptions(f: *z.Frame, s: *State, ui: z.ui_real.Ui) bool {
     if (z.isMouseButtonPressed(f.input, .left) and !ui.isComboOpen()) {
         const press_position: Vec2 = z.getMousePosition(f.input);
         const is_on_header: bool = press_position[1] < StarLayout.header_height + StarLayout.margin and
-            press_position[0] < s.header_content_right + header_padding;
+            press_position[0] < s.header_content_right + params.window.header_padding;
         if (!isPointInRectangle(press_position, panel_rectangle) and !is_on_header) {
             s.is_options_open = false;
             return true;
@@ -4317,14 +4489,14 @@ fn buildOptions(f: *z.Frame, s: *State, ui: z.ui_real.Ui) bool {
         // The editor's boxes: 2 to 16. The boxes shown before keep their chords; more of them, the progression
         // picked carries on into the ones that appear empty (`extendChosenProgression`).
         const box_count_before: usize = progressionBoxCount(s);
-        if (ui.combo("boxes", &s.progression_box_count_choice, &progression_box_count_labels, .{})) {
+        if (ui.combo("boxes", &s.progression_box_count_choice, &params.progression.box_count_labels, .{})) {
             extendChosenProgression(s, box_count_before);
         }
         _ = ui.slider("bpm", &s.progression_beats_per_minute, .{ .min = 40, .max = 200, .fmt = "{d:.0}" });
         // Following the player, from the chord on its way when the box is ticked, so that the track goes on from
         // where it is.
         if (ui.checkbox("wait for the player", &s.progression_waits_for_player) and s.progression_waits_for_player) {
-            s.progression_chords_taken = @trunc(s.progression_beat / beats_per_progression_chord);
+            s.progression_chords_taken = @trunc(s.progression_beat / params.progression.beats_per_chord);
         }
         // The track choosing its chords, the star following the song while the player plays the melody on it
         // (`playProgressionChords`).
@@ -4435,7 +4607,7 @@ fn takeTarget(f: *z.Frame, s: *State, target: PlayTarget) void {
 
 /// The pointer `pointer_id`, at `position`, holds `target`: nothing changes if it holds it already; one holding
 /// something else lets that go first, as a finger sliding from one note onto the next - once it has moved
-/// `target_switch_distance` from where it took what it holds; one holding nothing takes a free slot.
+/// `params.playing.target_switch_distance` from where it took what it holds; one holding nothing takes a free slot.
 fn holdWithPointer(
     f: *z.Frame,
     s: *State,
@@ -4454,7 +4626,7 @@ fn holdWithPointer(
         }
         // Another target: taken only once the finger has moved from where it took the one it holds.
         if (hold.anchor) |anchor| {
-            if (length(position - anchor) < target_switch_distance) {
+            if (length(position - anchor) < params.playing.target_switch_distance) {
                 return;
             }
         }
@@ -4474,10 +4646,11 @@ fn holdWithPointer(
 fn dueProgressionChordCount(s: *const State) usize {
     if (s.progression_waits_for_player) {
         const awaited_arrival_beat: f64 = progressionArrivalBeat(s.progression_chords_taken);
-        const has_awaited_arrived: bool = s.progression_beat >= awaited_arrival_beat - 2 * progression_hold_beats;
+        const held_arrival_beat: f64 = awaited_arrival_beat - 2 * params.progression.hold_beats;
+        const has_awaited_arrived: bool = s.progression_beat >= held_arrival_beat;
         return s.progression_chords_taken + @intFromBool(has_awaited_arrived);
     }
-    return @trunc(s.progression_beat / beats_per_progression_chord);
+    return @trunc(s.progression_beat / params.progression.beats_per_chord);
 }
 
 /// Puts back the scale a borrowed chord the track chose altered (`playProgressionChords`) - unless a finger holds a
@@ -4535,26 +4708,12 @@ const NoteProxy = struct {
     degree: u8,
     /// Where it stands: halfway along its link.
     centre: Vec2,
-    /// How large it is drawn: a share of its note's size (`note_proxy_size_share`).
+    /// How large it is drawn: a share of its note's size (`params.note_proxy.size_share`).
     half_size: f32,
     /// How far from its centre a touch plays it: most of the room between it and the two notes either side - wider
     /// than the proxy is drawn, so that a fingertip finds it (`noteProxyBetween`).
     reach: f32,
 };
-
-/// How much of the room between a proxy and the notes either side of it the proxy takes for touches: three quarters;
-/// the rest, by the notes' edges, stays theirs.
-const note_proxy_room_share: f32 = 0.75;
-
-/// A proxy's size beside its note's: 22%.
-const note_proxy_size_share: f32 = 0.22;
-
-/// How far a touch reaches a proxy: within 1.8 times its half-size - more than its little size, so that a finger
-/// sliding along the link meets it, and less than halfway to the notes on either side.
-const note_proxy_reach: f32 = 1.8;
-
-/// The opacity of a proxy's fill, out of 255: faint beside the notes.
-const note_proxy_alpha: u8 = 150;
 
 /// Whether `point` lies on `degree`'s note as drawn: within its square, or its circle.
 fn isOnNote(star: StarLayout, degree: u8, point: Vec2) bool {
@@ -4594,11 +4753,10 @@ fn noteEdgeOnLink(
 
 /// The proxy of `degree`, on the link between the notes `lower_degree` and `upper_degree` - neighbours on the circle of
 /// thirds, a place apart - halfway along the part of it the notes leave in sight: on the curve, between the edges of
-/// the two notes as they are drawn (`noteEdgeOnLink`), so that it sits on the white path, arc or line, in the middle
-/// of what shows of it. Its reach: the room from it
-/// to the nearer edge of those two notes - each counted out to a square's corner, its half-size times the square root
-/// of two, so that a square's corner pointing at it keeps its touches - of which it takes `note_proxy_room_share`;
-/// never less than `note_proxy_reach` of its own half-size.
+/// the two notes as they are drawn (`noteEdgeOnLink`), so that it sits on the white path, arc or line, in the middle of
+/// what shows of it. Its reach: the room from it to the nearer edge of those two notes - each counted out to a square's
+/// corner, its half-size times the square root of two, so that a square's corner pointing at it keeps its touches - of
+/// which it takes `params.note_proxy.room_share`; never less than `params.note_proxy.reach` of its own half-size.
 fn noteProxyBetween(
     star: StarLayout,
     degree: u8,
@@ -4616,14 +4774,14 @@ fn noteProxyBetween(
     const leaving_share: f32 = noteEdgeOnLink(star, first_degree, first_place, 0, 0.5);
     const entering_share: f32 = noteEdgeOnLink(star, second_degree, first_place, 1, 0.5);
     const halfway: Vec2 = star.pointAtFractionalPlace(first_place + 0.5 * (leaving_share + entering_share), 1);
-    const half_size: f32 = note_proxy_size_share * star.noteHalfSize(degree);
+    const half_size: f32 = params.note_proxy.size_share * star.noteHalfSize(degree);
     const corner_share: f32 = @sqrt(2.0);
     const lower_reach: f32 = corner_share * star.noteHalfSize(lower_degree);
     const upper_reach: f32 = corner_share * star.noteHalfSize(upper_degree);
     const room_to_lower: f32 = length(star.noteCentre(lower_degree) - halfway) - lower_reach;
     const room_to_upper: f32 = length(star.noteCentre(upper_degree) - halfway) - upper_reach;
     const room: f32 = @min(room_to_lower, room_to_upper);
-    const reach: f32 = @max(note_proxy_reach * half_size, note_proxy_room_share * room);
+    const reach: f32 = @max(params.note_proxy.reach * half_size, params.note_proxy.room_share * room);
     return .{ .degree = degree, .centre = halfway, .half_size = half_size, .reach = reach };
 }
 
@@ -4802,7 +4960,7 @@ fn readPointers(
     );
     const is_star_moving: bool = s.transition.isUnderWay(f.time.time);
     // The borrowed chords whose buttons are shown, which a finger can take (`offeredBorrowedChords`).
-    var offered_buffer: [most_offered_borrowed_chords]ScaleChord = undefined;
+    var offered_buffer: [params.limits.most_offered_borrowed_chords]ScaleChord = undefined;
     const borrowed_chords: []const ScaleChord = offeredBorrowedChords(s, &offered_buffer);
     // The turn has just ended: every hold may change at once to what is now under its finger - the same fingers play
     // the new chord's notes, as the star brought them under them - this frame, before the pointers are read.
@@ -4815,7 +4973,7 @@ fn readPointers(
             }
         }
     }
-    var pointers_buffer: [most_pointers]PointerDown = undefined;
+    var pointers_buffer: [params.limits.most_pointers]PointerDown = undefined;
     const pointers: []const PointerDown = pointersDown(f, s, &pointers_buffer);
     carryChords(s, window_layout, star, pointers, is_star_moving, borrowed_chords, is_ui_capturing);
     for (s.pointer_holds) |hold_slot| {
@@ -5041,17 +5199,10 @@ fn curveColorAt(curve: CurveNotes, fraction_along: f32) Color {
     const lower_index: usize = @floor(position);
     const upper_index: usize = @min(lower_index + 1, curve.count - 1);
     const blend: f32 = position - @floor(position);
-    const lower_color: Color = degree_colors[curve.degrees[lower_index] - 1];
-    const upper_color: Color = degree_colors[curve.degrees[upper_index] - 1];
+    const lower_color: Color = params.colors.degrees[curve.degrees[lower_index] - 1];
+    const upper_color: Color = params.colors.degrees[curve.degrees[upper_index] - 1];
     return lower_color.lerp(upper_color, blend);
 }
-
-/// The most points a curve is drawn through: 48 for each swing of its fastest note, and the fastest of any notes of
-/// the scale `curveNotes` can pick swings 27 times - E, F and D stacked from E, 15 : 16 : 27.
-const most_curve_points: usize = 48 * 27 + 1;
-
-/// How fast a three-note curve turns, in turns a second: slow enough to follow its shape as it turns.
-const curve_turns_per_second: f32 = 0.08;
 
 /// The sounding chord as a Lissajous curve, in the sounding box (`WindowParts.sounding`): the path of a point whose
 /// coordinates each swing like one of the notes, `sin(frequency x s)` for `s` once round, the frequencies in the ratio
@@ -5082,14 +5233,17 @@ fn drawChordCurve(f: *z.Frame, s: *const State, room: z.Rectangle) void {
     const upright_frequency: f32 = float(curve.frequencies[0]);
     const depth_frequency: f32 = if (curve.count == 3) float(curve.frequencies[1]) else 0;
     // The turn about the upright axis: none for a flat figure, steady for a figure in depth.
-    const curve_turns: f32 = if (curve.count == 3) @mod(f.time.time * curve_turns_per_second, 1) else 0;
+    const curve_turns: f32 = if (curve.count == 3) @mod(f.time.time * params.sounding.curve_turns_per_second, 1) else 0;
     const turn_cosine: f32 = cosTurns(curve_turns);
     const turn_sine: f32 = sinTurns(curve_turns);
     const segments_per_swing: usize = 48;
-    const segment_count: usize = @min(segments_per_swing * largestFrequency(curve.frequencies), most_curve_points - 1);
+    const segment_count: usize = @min(
+        segments_per_swing * largestFrequency(curve.frequencies),
+        params.limits.most_curve_points - 1,
+    );
     // The points first, with the length the curve has reached at each: the gradient is by length.
-    var points: [most_curve_points]Vec2 = undefined;
-    var lengths_so_far: [most_curve_points]f32 = undefined;
+    var points: [params.limits.most_curve_points]Vec2 = undefined;
+    var lengths_so_far: [params.limits.most_curve_points]f32 = undefined;
     for (0..segment_count + 1) |point_index| {
         // The point's progress once round, in turns.
         const progress: f32 = float(point_index) / float(segment_count);
@@ -5566,9 +5720,9 @@ const LineRole = enum { root, third, fifth };
 /// colors of 1, 3 and 5, the root, third and fifth of the scale's first chord.
 fn lineColorOfRole(role: LineRole) Color {
     return switch (role) {
-        .root => degree_colors[0],
-        .third => degree_colors[2],
-        .fifth => degree_colors[4],
+        .root => params.colors.degrees[0],
+        .third => params.colors.degrees[2],
+        .fifth => params.colors.degrees[4],
     };
 }
 
@@ -5682,7 +5836,10 @@ fn drawChordLine(
     }
     // A lit chord's lines are drawn whole and twice as thick, so that the chord stands out from the six others.
     const whole_color: Color = lineColorOfRole(role);
-    const color: Color = if (is_lit) whole_color else whole_color.lerp(background, resting_dimming);
+    const color: Color = if (is_lit)
+        whole_color
+    else
+        whole_color.lerp(params.colors.background, params.dimming.resting);
     const resting_thickness: f32 = strokeThickness(star);
     const thickness: f32 = if (is_lit) 2 * resting_thickness else resting_thickness;
     const size_unit: f32 = star.size_unit;
@@ -5706,8 +5863,8 @@ fn drawChordFan(
     color: Color,
 ) void {
     var previous_point: Vec2 = star.pointAtFractionalPlace(first_place, 1);
-    for (1..curve_pieces_per_link + 1) |piece_index| {
-        const piece_share: f32 = float(piece_index) / float(curve_pieces_per_link);
+    for (1..params.star.curve_pieces_per_link + 1) |piece_index| {
+        const piece_share: f32 = float(piece_index) / float(params.star.curve_pieces_per_link);
         const point: Vec2 = star.pointAtFractionalPlace(first_place + piece_share, 1);
         f.gl.triangle(apex, previous_point, point, .{ .color = color });
         previous_point = point;
@@ -5730,11 +5887,17 @@ fn drawChordShapes(
     const placed_chord: ScaleChord = star.scale.chords[chord.root_degree - 1];
     const chord_centre: Vec2 = star.chordCentre(chord);
     const root_place: f32 = float(circlePlaceOfDegree(placed_chord.root_degree));
-    const chord_color: Color = degree_colors[chord.root_degree - 1];
-    const root_third_amount: f32 = if (is_lit) root_third_dimming.lit else root_third_dimming.resting;
-    const third_fifth_amount: f32 = if (is_lit) third_fifth_dimming.lit else third_fifth_dimming.resting;
-    const root_third_color: Color = chord_color.lerp(background, root_third_amount);
-    const third_fifth_color: Color = chord_color.lerp(background, third_fifth_amount);
+    const chord_color: Color = params.colors.degrees[chord.root_degree - 1];
+    const root_third_amount: f32 = if (is_lit)
+        params.dimming.root_third_fan.lit
+    else
+        params.dimming.root_third_fan.resting;
+    const third_fifth_amount: f32 = if (is_lit)
+        params.dimming.third_fifth_fan.lit
+    else
+        params.dimming.third_fifth_fan.resting;
+    const root_third_color: Color = chord_color.lerp(params.colors.background, root_third_amount);
+    const third_fifth_color: Color = chord_color.lerp(params.colors.background, third_fifth_amount);
     if (placed_chord.quality == .diminished) {
         const is_minor_side_outside: bool = star.minor_side_outside_fraction >= 0.5;
         if (is_minor_side_outside) {
@@ -5747,9 +5910,6 @@ fn drawChordShapes(
     drawChordFan(f, star, chord_centre, root_place, root_third_color);
     drawChordFan(f, star, chord_centre, root_place + 1, third_fifth_color);
 }
-
-/// A chord's outline: black, so that the chords - small among the notes - stand apart from them.
-const chord_outline_color: Color = .{ .r = 0, .g = 0, .b = 0, .a = 255 };
 
 /// A shape filled with `fill_color` and outlined in `stroke_color`.
 fn drawShape(
@@ -5779,22 +5939,19 @@ fn drawShape(
     }
 }
 
-/// The circle of thirds' thickness beside the notes' outlines: 1.4 times.
-const note_path_thickness_share: f32 = 1.4;
-
 /// The curve the notes sit on, from note to note round it - the path of thirds: along the arc where it curves, along
 /// the line between the bottom notes (`StarCurve`); thick and white, a little thicker than the notes' outlines, so that
-/// the circle of thirds reads first. Each link drawn as `curve_pieces_per_link` short straight pieces, too short for
-/// the bend between two to show.
+/// the circle of thirds reads first. Each link drawn as `params.star.curve_pieces_per_link` short straight pieces, too
+/// short for the bend between two to show.
 fn drawNotePath(f: *z.Frame, star: StarLayout) void {
-    const thickness: f32 = note_path_thickness_share * strokeThickness(star);
+    const thickness: f32 = params.star.note_path_thickness_share * strokeThickness(star);
     for (0..7) |circle_place| {
         var previous_point: Vec2 = star.pointAtPlace(@intCast(circle_place), 1);
-        for (1..curve_pieces_per_link + 1) |piece_index| {
-            const piece_share: f32 = float(piece_index) / float(curve_pieces_per_link);
+        for (1..params.star.curve_pieces_per_link + 1) |piece_index| {
+            const piece_share: f32 = float(piece_index) / float(params.star.curve_pieces_per_link);
             const place: f32 = float(circle_place) + piece_share;
             const point: Vec2 = star.pointAtFractionalPlace(place, 1);
-            f.gl.line(previous_point, point, .{ .color = outline_color, .thickness = thickness });
+            f.gl.line(previous_point, point, .{ .color = params.colors.outline, .thickness = thickness });
             previous_point = point;
         }
     }
@@ -5816,9 +5973,9 @@ fn drawNote(
     const half_size: f32 = star.noteHalfSize(degree) * noteWaitingScale(f, s, degree);
     const fill_color: Color = colorOfDegree(degree, is_lit);
     const note_shape: Shape = shapeOfDegree(&star.scale, degree);
-    const own_outline_color: Color = if (is_chosen) chosen_note_outline_color else outline_color;
+    const own_outline_color: Color = if (is_chosen) params.colors.chosen_note_outline else params.colors.outline;
     drawShape(f, centre, note_shape, half_size, fill_color, strokeThickness(star), own_outline_color);
-    const degree_color: Color = if (is_lit) lit_text_color else text_color;
+    const degree_color: Color = if (is_lit) params.colors.lit_text else params.colors.text;
     const degree_text: [1]u8 = .{'0' + degree};
     const degree_centre: Vec2 = centre - @as(Vec2, .{ 0, 0.25 * half_size });
     drawCentredText(f, s, degree_centre, &degree_text, 0.9 * half_size, degree_color);
@@ -5839,9 +5996,17 @@ fn drawNote(
     if (alteration != 0) {
         const badge_centre: Vec2 = centre + @as(Vec2, .{ 0.8 * half_size, -0.8 * half_size });
         const badge_half_size: f32 = 0.32 * half_size;
-        drawShape(f, badge_centre, .circle, badge_half_size, text_color, strokeThickness(star), outline_color);
+        drawShape(
+            f,
+            badge_centre,
+            .circle,
+            badge_half_size,
+            params.colors.text,
+            strokeThickness(star),
+            params.colors.outline,
+        );
         const sign: []const u8 = if (alteration > 0) "#" else "b";
-        drawCentredText(f, s, badge_centre, sign, 1.3 * badge_half_size, lit_text_color);
+        drawCentredText(f, s, badge_centre, sign, 1.3 * badge_half_size, params.colors.lit_text);
     }
 }
 
@@ -5851,7 +6016,7 @@ fn drawNoteProxies(f: *z.Frame, s: *State, star: StarLayout) void {
     const transparent: Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
     for (noteProxies(star)) |proxy| {
         var fill_color: Color = colorOfDegree(proxy.degree, isDegreeSounding(s, proxy.degree));
-        fill_color.a = note_proxy_alpha;
+        fill_color.a = params.note_proxy.alpha;
         const proxy_shape: Shape = shapeOfDegree(&star.scale, proxy.degree);
         drawShape(f, proxy.centre, proxy_shape, proxy.half_size, fill_color, 0, transparent);
     }
@@ -5876,37 +6041,15 @@ fn drawChord(
         layer -= 1;
         const fill_color: Color = colorOfDegree(triplet.degrees[layer], is_lit);
         const shape: Shape = triplet.shapes[layer];
-        drawShape(f, triplet.centres[layer], shape, half_size, fill_color, stroke, chord_outline_color);
+        drawShape(f, triplet.centres[layer], shape, half_size, fill_color, stroke, params.colors.chord_outline);
     }
-    const name_color: Color = if (is_lit) lit_text_color else text_color;
+    const name_color: Color = if (is_lit) params.colors.lit_text else params.colors.text;
     const numeral: []const u8 = chord.numeral();
     const numeral_size: f32 = fittedTextSize(s, numeral, 1.4 * half_size, 1.8 * half_size);
     drawCentredText(f, s, triplet.centres[0], numeral, numeral_size, name_color);
 }
 
 // ---- The chord chosen and the chord coming, outlined on the star ----
-
-/// The colors the outlines give a note by its part in a chord: its root red, its third yellow, its fifth cyan - the
-/// colors of the chord's own lines to its notes (`drawChordLine`): the arrow, the zigzag, the dashes.
-const role_outline_colors = [3]Color{
-    .{ .r = 235, .g = 52, .b = 52, .a = 255 },
-    .{ .r = 250, .g = 222, .b = 40, .a = 255 },
-    .{ .r = 0, .g = 222, .b = 236, .a = 255 },
-};
-
-/// The outlines' sizes, as shares of the note's half-size: the gap between a note and its outline; the chosen chord's
-/// outline's thickness, and the coming chord's, thinner; and how far out the coming chord's outline starts, closing
-/// in on its note as the chord travels to its button.
-const outline_gap_share: f32 = 0.18;
-/// The chosen chord's outlines' thickness.
-const chosen_outline_share: f32 = 0.26;
-/// The coming chord's, thinner.
-const coming_outline_share: f32 = 0.07;
-/// How far out the coming chord's outline starts, closing in on its note as the chord comes.
-const coming_outline_reach_share: f32 = 0.9;
-/// The coming chord's button's outline beside its notes': twice as thick, and setting out five times as far.
-const coming_button_thickness_factor: f32 = 2;
-const coming_button_reach_factor: f32 = 5;
 
 /// How many chords of the left diagrams fingers hold now - the chooser's, the key's window's, the borrowed ones: two
 /// or more held, the chosen chord's outlines are not drawn (`drawChordOutlines`).
@@ -5936,11 +6079,6 @@ fn outlinePulse(f: *z.Frame, s: *const State) f32 {
     return swell * swell;
 }
 
-/// The share of a bar the coming chord's outlines show for, on every view - the star's notes and button, the
-/// keyboard's keys, the circle's notes: its second half, the outlines appearing at its middle and closing in by its
-/// end, as the chord arrives.
-const coming_outline_shown_share: f32 = 0.5;
-
 /// `color` at `opacity`, 0 to 1.
 fn withOpacity(color: Color, opacity: f32) Color {
     var faded: Color = color;
@@ -5957,26 +6095,26 @@ const ComingOutline = struct {
     closed_share: f32,
     opacity: f32,
 
-    /// How far out an outline is now that sets out `start_reach_share` beyond the gap (`outline_gap_share`), as a
-    /// share of its note's half-size: all of it as it appears, none - the gap alone - as the chord arrives.
+    /// How far out an outline is now that sets out `start_reach_share` beyond the gap (`params.outline.gap_share`), as
+    /// a share of its note's half-size: all of it as it appears, none - the gap alone - as the chord arrives.
     fn reachShare(coming: ComingOutline, start_reach_share: f32) f32 {
-        return outline_gap_share + start_reach_share * (1 - coming.closed_share);
+        return params.outline.gap_share + start_reach_share * (1 - coming.closed_share);
     }
 };
 
 /// The coming chord's outlines now (`ComingOutline`); null without a track, and over the bar's first half, before
-/// they appear (`coming_outline_shown_share`).
+/// they appear (`params.outline.coming_shown_share`).
 fn comingOutline(f: *z.Frame, s: *const State) ?ComingOutline {
     if (!hasTrack(s)) {
         return null;
     }
-    const chords_gone: f64 = s.progression_beat / beats_per_progression_chord;
+    const chords_gone: f64 = s.progression_beat / params.progression.beats_per_chord;
     const travelled_share: f32 = @floatCast(chords_gone - @floor(chords_gone));
-    const appearing_share: f32 = 1 - coming_outline_shown_share;
+    const appearing_share: f32 = 1 - params.outline.coming_shown_share;
     if (travelled_share < appearing_share) {
         return null;
     }
-    const closed_share: f32 = (travelled_share - appearing_share) / coming_outline_shown_share;
+    const closed_share: f32 = (travelled_share - appearing_share) / params.outline.coming_shown_share;
     const pulse: f32 = outlinePulse(f, s);
     return .{
         .chord = trackChord(s, @trunc(chords_gone)),
@@ -6007,8 +6145,8 @@ fn drawNoteOutline(
 /// The chord chosen and the chord coming, outlined on the star - so that a chord chosen on the left, by a finger or by
 /// the track, shows where its notes are, the star turning or not, and the track's next chord shows before it comes:
 ///   the chord chosen: each of its notes in a thick outline, the color of its part in the chord - root, third, fifth
-///     (`role_outline_colors`) - its own white outline black (`drawNote`), and its own button in a white one; not
-///     while fingers hold two or more of the left diagrams' chords, whose notes then sound together;
+///     (`params.colors.role_outlines`) - its own white outline black (`drawNote`), and its own button in a white one;
+///     not while fingers hold two or more of the left diagrams' chords, whose notes then sound together;
 ///   the chord coming, while a progression is followed: each of its notes in a thinner outline of its part's color,
 ///     and its button in a white outline twice as thick from five times as far - appearing at the bar's middle, out
 ///     from them and faint, closing in and brightening, on them when the chord arrives (`comingOutline`). A note of
@@ -6018,15 +6156,17 @@ fn drawNoteOutline(
 fn drawChordOutlines(f: *z.Frame, s: *State, star: StarLayout) void {
     const pulse: f32 = outlinePulse(f, s);
     if (comingOutline(f, s)) |coming| {
-        const reach_share: f32 = coming.reachShare(coming_outline_reach_share);
-        const thickness_share: f32 = coming_outline_share * (1 + 0.6 * pulse);
-        for (coming.chord.degrees(), role_outline_colors) |degree, role_color| {
+        const reach_share: f32 = coming.reachShare(params.outline.coming_reach_share);
+        const thickness_share: f32 = params.outline.coming_share * (1 + 0.6 * pulse);
+        for (coming.chord.degrees(), params.colors.role_outlines) |degree, role_color| {
             const color: Color = withOpacity(role_color, coming.opacity);
             drawNoteOutline(f, s, star, degree, reach_share, thickness_share, color);
         }
         // Its button on the star too - the button on its root, where a borrowed chord's is its root's - in a white
         // outline twice as thick, closing in from five times as far.
-        const button_reach_share: f32 = coming.reachShare(coming_button_reach_factor * coming_outline_reach_share);
+        const button_reach_share: f32 = coming.reachShare(
+            params.outline.coming_button_reach_factor * params.outline.coming_reach_share,
+        );
         const coming_triplet: ChordTriplet = .ofChord(star, coming.chord);
         const coming_half_size: f32 = coming_triplet.half_size * starChordWaitingScale(f, s, coming.chord);
         const coming_transparent: Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
@@ -6036,23 +6176,23 @@ fn drawChordOutlines(f: *z.Frame, s: *State, star: StarLayout) void {
             coming_triplet.shapes[0],
             coming_half_size * (1 + button_reach_share),
             coming_transparent,
-            coming_button_thickness_factor * thickness_share * coming_half_size,
-            withOpacity(outline_color, coming.opacity),
+            params.outline.coming_button_thickness_factor * thickness_share * coming_half_size,
+            withOpacity(params.colors.outline, coming.opacity),
         );
     }
     if (heldLeftChordCount(s) >= 2) {
         return;
     }
     const chosen_chord: ScaleChord = s.scale.chords[s.chosen_chord_index];
-    const thickness_share: f32 = chosen_outline_share * (1 + 0.6 * pulse);
-    for (chosen_chord.degrees(), role_outline_colors) |degree, role_color| {
-        drawNoteOutline(f, s, star, degree, outline_gap_share, thickness_share, role_color);
+    const thickness_share: f32 = params.outline.chosen_share * (1 + 0.6 * pulse);
+    for (chosen_chord.degrees(), params.colors.role_outlines) |degree, role_color| {
+        drawNoteOutline(f, s, star, degree, params.outline.gap_share, thickness_share, role_color);
     }
     // The chosen chord's own button, the front of its triplet, in white.
     const triplet: ChordTriplet = .ofChord(star, chosen_chord);
     const transparent: Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
     const chosen_half_size: f32 = triplet.half_size * starChordWaitingScale(f, s, chosen_chord);
-    const button_outline_half_size: f32 = chosen_half_size * (1 + outline_gap_share);
+    const button_outline_half_size: f32 = chosen_half_size * (1 + params.outline.gap_share);
     const button_thickness: f32 = thickness_share * chosen_half_size;
     const button_shape: Shape = triplet.shapes[0];
     drawShape(
@@ -6062,7 +6202,7 @@ fn drawChordOutlines(f: *z.Frame, s: *State, star: StarLayout) void {
         button_outline_half_size,
         transparent,
         button_thickness,
-        outline_color,
+        params.colors.outline,
     );
 }
 
@@ -6071,9 +6211,6 @@ const OutlinedKey = struct {
     rectangle: z.Rectangle,
     degree: u8,
 };
-
-/// The most keys the keyboard has with a degree: nine white keys and six black ones.
-const most_outlined_keys: usize = 15;
 
 /// The chosen chord's and the coming chord's notes outlined on the keyboard's keys, as on the star
 /// (`drawChordOutlines`): every key of a note of the chord in an outline of the note's part's colour round the key -
@@ -6089,9 +6226,9 @@ fn drawKeyOutlines(
     const half_size: f32 = 0.5 * keyboard_height;
     const pulse: f32 = outlinePulse(f, s);
     if (comingOutline(f, s)) |coming| {
-        const thickness: f32 = @max(1, coming_outline_share * (1 + 0.6 * pulse) * half_size);
-        const reach: f32 = coming.reachShare(coming_outline_reach_share) * half_size;
-        for (coming.chord.degrees(), role_outline_colors) |degree, role_color| {
+        const thickness: f32 = @max(1, params.outline.coming_share * (1 + 0.6 * pulse) * half_size);
+        const reach: f32 = coming.reachShare(params.outline.coming_reach_share) * half_size;
+        for (coming.chord.degrees(), params.colors.role_outlines) |degree, role_color| {
             for (keys) |key| {
                 if (key.degree == degree) {
                     const outline: z.Rectangle = insetRectangle(key.rectangle, -(reach + thickness));
@@ -6104,9 +6241,9 @@ fn drawKeyOutlines(
         return;
     }
     const chosen_chord: ScaleChord = s.scale.chords[s.chosen_chord_index];
-    const thickness: f32 = chosen_outline_share * (1 + 0.6 * pulse) * half_size;
-    const gap: f32 = outline_gap_share * half_size;
-    for (chosen_chord.degrees(), role_outline_colors) |degree, role_color| {
+    const thickness: f32 = params.outline.chosen_share * (1 + 0.6 * pulse) * half_size;
+    const gap: f32 = params.outline.gap_share * half_size;
+    for (chosen_chord.degrees(), params.colors.role_outlines) |degree, role_color| {
         for (keys) |key| {
             if (key.degree == degree) {
                 const outline: z.Rectangle = insetRectangle(key.rectangle, -(gap + thickness));
@@ -6128,9 +6265,9 @@ fn drawNoteShapeOutlines(
     const pulse: f32 = outlinePulse(f, s);
     const transparent: Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
     if (comingOutline(f, s)) |coming| {
-        const reach_share: f32 = coming.reachShare(coming_outline_reach_share);
-        const thickness_share: f32 = coming_outline_share * (1 + 0.6 * pulse);
-        for (coming.chord.degrees(), role_outline_colors) |degree, role_color| {
+        const reach_share: f32 = coming.reachShare(params.outline.coming_reach_share);
+        const thickness_share: f32 = params.outline.coming_share * (1 + 0.6 * pulse);
+        for (coming.chord.degrees(), params.colors.role_outlines) |degree, role_color| {
             const half_size: f32 = half_sizes[degree - 1];
             const shape: Shape = shapeOfDegree(&s.scale, degree);
             const color: Color = withOpacity(role_color, coming.opacity);
@@ -6142,21 +6279,15 @@ fn drawNoteShapeOutlines(
         return;
     }
     const chosen_chord: ScaleChord = s.scale.chords[s.chosen_chord_index];
-    const thickness_share: f32 = chosen_outline_share * (1 + 0.6 * pulse);
-    for (chosen_chord.degrees(), role_outline_colors) |degree, role_color| {
+    const thickness_share: f32 = params.outline.chosen_share * (1 + 0.6 * pulse);
+    for (chosen_chord.degrees(), params.colors.role_outlines) |degree, role_color| {
         const half_size: f32 = half_sizes[degree - 1];
         const shape: Shape = shapeOfDegree(&s.scale, degree);
-        const outline_half_size: f32 = half_size * (1 + outline_gap_share);
+        const outline_half_size: f32 = half_size * (1 + params.outline.gap_share);
         const thickness: f32 = thickness_share * half_size;
         drawShape(f, places[degree - 1], shape, outline_half_size, transparent, thickness, role_color);
     }
 }
-
-/// A black key of the keyboard: a little lighter than the background, so that it reads as a key against it.
-const black_key_color: Color = .{ .r = 0, .g = 0, .b = 0, .a = 255 };
-
-/// How many times a second the dots of a line between pitch neighbours move on by one dot's spacing.
-const dots_per_second: f32 = 3;
 
 /// A line of dots from `start` to `end`, moving toward `end`: one every `spacing`, the first `phase` of a spacing from
 /// `start` - `phase` grows with time and wraps at 1, so that the dots flow - each colored between `start_color` and
@@ -6205,7 +6336,7 @@ fn drawChordNumeral(f: *z.Frame, s: *State, room: z.Rectangle) void {
     const stroke_shift: f32 = 0.03 * text_size;
     const shifts = [4]Vec2{ .{ 0, 0 }, .{ stroke_shift, 0 }, .{ 0, stroke_shift }, .{ stroke_shift, stroke_shift } };
     for (shifts) |shift| {
-        drawCentredText(f, s, room_centre + shift, chord_name, text_size, text_color);
+        drawCentredText(f, s, room_centre + shift, chord_name, text_size, params.colors.text);
     }
 }
 
@@ -6261,12 +6392,8 @@ fn drawFunctionName(f: *z.Frame, s: *State, band: z.Rectangle) void {
     const name: []const u8 = functionNameOfDegree(&s.scale, degree);
     const band_centre: Vec2 = .{ band.x + 0.5 * band.width, band.y + 0.5 * band.height };
     const text_size: f32 = fittedTextSize(s, name, 0.7 * band.height, 0.95 * band.width);
-    drawCentredText(f, s, band_centre, name, text_size, text_color);
+    drawCentredText(f, s, band_centre, name, text_size, params.colors.text);
 }
-
-/// The sounding box's bottom band, where the function's name is written under the figure, as a share of its height:
-/// 20%.
-const function_name_band_share: f32 = 0.2;
 
 /// One end of a line of dots between two buttons - notes or chords: the button's centre, shape and half-size, the
 /// dots starting a little outside its edge, and the colour they have there.
@@ -6294,12 +6421,6 @@ fn drawStepDots(
     const end: Vec2 = shapeEdgeToward(to.centre, to.shape, 1.1 * to.half_size, from.centre);
     drawMovingDots(f, start, end, from.color, to.color, spacing, phase);
 }
-
-/// How far a sounding key rises above the keyboard, as a share of its height: 30%.
-const sounding_key_rise_share: f32 = 0.3;
-
-/// A white key the scale does not use: grey, a little lighter than the boxes' lines.
-const unused_white_key_color: Color = .{ .r = 92, .g = 96, .b = 108, .a = 255 };
 
 /// A key's names, centred at `middle_x`: its degree's number with its top near `number_y`, and below it its note's
 /// name as the scale spells it, each sized from the keyboard's height.
@@ -6331,13 +6452,13 @@ fn drawKeyboard(f: *z.Frame, s: *State, keyboard: z.Rectangle) void {
     const layout: PianoLayout = .ofScale(scale);
     const white_width: f32 = keyboard.width / float(layout.white_count);
     // The keys with a degree, to outline over every key once all are drawn (`drawKeyOutlines`).
-    var outlined_keys: [most_outlined_keys]OutlinedKey = undefined;
+    var outlined_keys: [params.limits.most_outlined_keys]OutlinedKey = undefined;
     var outlined_count: usize = 0;
     for (0..layout.white_count) |white_index| {
         const degree: ?u8 = layout.degreeAt(scale, layout.whiteSemitones(white_index));
         const is_sounding: bool = if (degree) |key_degree| isDegreeSounding(s, key_degree) else false;
         // A key sounding rises above the others, into the margin above the keyboard.
-        const rise: f32 = if (is_sounding) sounding_key_rise_share * keyboard.height else 0;
+        const rise: f32 = if (is_sounding) params.keyboard.sounding_key_rise_share * keyboard.height else 0;
         const key: z.Rectangle = .{
             .x = keyboard.x + float(white_index) * white_width,
             .y = keyboard.y - rise,
@@ -6347,19 +6468,19 @@ fn drawKeyboard(f: *z.Frame, s: *State, keyboard: z.Rectangle) void {
         const key_color: Color = if (degree) |key_degree|
             colorOfDegree(key_degree, is_sounding)
         else
-            unused_white_key_color;
+            params.colors.unused_white_key;
         f.gl.rect(key, .{ .color = key_color });
-        f.gl.rect(key, .{ .color = background, .outline = 1 });
+        f.gl.rect(key, .{ .color = params.colors.background, .outline = 1 });
         // Its names in its middle, which the black keys over its edges leave clear from top to bottom.
         const key_degree: u8 = degree orelse continue;
         outlined_keys[outlined_count] = .{ .rectangle = key, .degree = key_degree };
         outlined_count += 1;
         const key_middle_x: f32 = key.x + 0.5 * white_width;
-        const label_color: Color = if (is_sounding) lit_text_color else text_color;
+        const label_color: Color = if (is_sounding) params.colors.lit_text else params.colors.text;
         drawKeyNames(f, s, key_degree, key_middle_x, keyboard.y + 0.3 * keyboard.height, keyboard, label_color);
     }
-    const black_width: f32 = black_key_width_share * white_width;
-    const most_rise: f32 = sounding_key_rise_share * keyboard.height;
+    const black_width: f32 = params.keyboard.black_key_width_share * white_width;
+    const most_rise: f32 = params.keyboard.sounding_key_rise_share * keyboard.height;
     for (0..layout.white_count) |white_index| {
         if (!layout.hasBlackAfter(white_index)) {
             continue;
@@ -6371,15 +6492,18 @@ fn drawKeyboard(f: *z.Frame, s: *State, keyboard: z.Rectangle) void {
             .x = boundary_x - 0.5 * black_width,
             .y = keyboard.y - most_rise,
             .width = black_width,
-            .height = black_key_height_share * keyboard.height + most_rise,
+            .height = params.keyboard.black_key_height_share * keyboard.height + most_rise,
         };
-        const key_color: Color = if (degree) |key_degree| colorOfDegree(key_degree, is_sounding) else black_key_color;
+        const key_color: Color = if (degree) |key_degree|
+            colorOfDegree(key_degree, is_sounding)
+        else
+            params.colors.black_key;
         f.gl.rect(black_key, .{ .color = key_color });
         const key_degree: u8 = degree orelse continue;
         outlined_keys[outlined_count] = .{ .rectangle = black_key, .degree = key_degree };
         outlined_count += 1;
-        f.gl.rect(black_key, .{ .color = background, .outline = 1 });
-        const label_color: Color = if (is_sounding) lit_text_color else text_color;
+        f.gl.rect(black_key, .{ .color = params.colors.background, .outline = 1 });
+        const label_color: Color = if (is_sounding) params.colors.lit_text else params.colors.text;
         drawKeyNames(f, s, key_degree, boundary_x, keyboard.y + 0.05 * keyboard.height, keyboard, label_color);
     }
     drawKeyOutlines(f, s, outlined_keys[0..outlined_count], keyboard.height);
@@ -6390,7 +6514,7 @@ fn drawKeyboard(f: *z.Frame, s: *State, keyboard: z.Rectangle) void {
 fn colorOfSoundingNotes(s: *const State, name: ?ChordName) Color {
     const root_pitch_class: ?u4 = if (name) |chord_name| chord_name.root else null;
     const root_degree: ?u8 = if (root_pitch_class) |root| s.scale.degreeOfPitchClass(root) else null;
-    return if (root_degree) |degree| degree_colors[degree - 1] else outline_color;
+    return if (root_degree) |degree| params.colors.degrees[degree - 1] else params.colors.outline;
 }
 
 /// The chord the notes sounding make, if one does (`matchedChord`): from the chosen chord's root when several fit.
@@ -6442,7 +6566,7 @@ fn drawSoundingPolygon(
     is_outlined: bool,
 ) void {
     const corner_count: usize = corners.len;
-    const fill_color: Color = color.lerp(background, 0.7);
+    const fill_color: Color = color.lerp(params.colors.background, 0.7);
     if (corner_count >= 3) {
         var corner_sum: Vec2 = @splat(0);
         for (corners) |corner| {
@@ -6479,7 +6603,7 @@ fn drawChromaticCircle(f: *z.Frame, s: *State, area: z.Rectangle) void {
     const note_half_size: f32 = chromatic.note_half_size;
     const sharp_dot_radius: f32 = 0.3 * note_half_size;
     const stroke: f32 = @max(1, 0.06 * note_half_size);
-    f.gl.circle(centre, radius, .{ .color = note_path_color, .outline = 1 });
+    f.gl.circle(centre, radius, .{ .color = params.colors.note_path, .outline = 1 });
     var places: [12]Vec2 = undefined;
     for (&places, 0..) |*place, pitch_class| {
         place.* = chromatic.placeOf(&s.scale, @intCast(pitch_class));
@@ -6511,7 +6635,7 @@ fn drawChromaticCircle(f: *z.Frame, s: *State, area: z.Rectangle) void {
     var note_half_sizes: [7]f32 = undefined;
     for (places, 0..) |place, pitch_class| {
         const degree: u8 = s.scale.degreeOfPitchClass(@intCast(pitch_class)) orelse {
-            f.gl.circle(place, sharp_dot_radius, .{ .color = dim_text_color });
+            f.gl.circle(place, sharp_dot_radius, .{ .color = params.colors.dim_text });
             continue;
         };
         const is_lit: bool = isDegreeSounding(s, degree);
@@ -6521,8 +6645,16 @@ fn drawChromaticCircle(f: *z.Frame, s: *State, area: z.Rectangle) void {
         const shown_half_size: f32 = if (is_lit) note_half_size else resting_half_size;
         note_places[degree - 1] = place;
         note_half_sizes[degree - 1] = shown_half_size;
-        drawShape(f, place, shapeOfDegree(&s.scale, degree), shown_half_size, fill_color, stroke, outline_color);
-        const letter_color: Color = if (is_lit) lit_text_color else text_color;
+        drawShape(
+            f,
+            place,
+            shapeOfDegree(&s.scale, degree),
+            shown_half_size,
+            fill_color,
+            stroke,
+            params.colors.outline,
+        );
+        const letter_color: Color = if (is_lit) params.colors.lit_text else params.colors.text;
         drawCentredText(f, s, place, s.scale.noteName(degree), 1.1 * shown_half_size, letter_color);
     }
     drawNoteShapeOutlines(f, s, &note_places, &note_half_sizes);
@@ -6530,10 +6662,10 @@ fn drawChromaticCircle(f: *z.Frame, s: *State, area: z.Rectangle) void {
     const symbol_size: f32 = 0.42 * radius;
     const description_size: f32 = 0.16 * radius;
     const symbol_centre: Vec2 = centre - @as(Vec2, .{ 0, 0.08 * radius });
-    drawCentredText(f, s, symbol_centre, chord_name.symbol(), symbol_size, text_color);
+    drawCentredText(f, s, symbol_centre, chord_name.symbol(), symbol_size, params.colors.text);
     if (chord_name.description.len > 0) {
         const description_centre: Vec2 = centre + @as(Vec2, .{ 0, 0.3 * radius });
-        drawCentredText(f, s, description_centre, chord_name.description, description_size, dim_text_color);
+        drawCentredText(f, s, description_centre, chord_name.description, description_size, params.colors.dim_text);
     }
 }
 
@@ -6583,8 +6715,8 @@ fn drawChordButton(
 ) void {
     const fill_color: Color = colorOfDegree(chord.root_degree, is_chosen);
     const stroke: f32 = @max(1.5, 0.07 * size_unit);
-    drawShape(f, centre, shapeOfChord(chord), half_size, fill_color, stroke, chord_outline_color);
-    const name_color: Color = if (is_chosen) lit_text_color else text_color;
+    drawShape(f, centre, shapeOfChord(chord), half_size, fill_color, stroke, params.colors.chord_outline);
+    const name_color: Color = if (is_chosen) params.colors.lit_text else params.colors.text;
     const numeral_centre: Vec2 = centre - @as(Vec2, .{ 0, 0.27 * half_size });
     const letters_centre: Vec2 = centre + @as(Vec2, .{ 0, 0.45 * half_size });
     drawCentredText(f, s, numeral_centre, chord.numeral(), 0.7 * half_size, name_color);
@@ -6596,7 +6728,7 @@ fn drawChordButton(
 /// The borrowed chords' buttons (`offeredBorrowedChords`), on the chooser and on the key's window: each the chooser's
 /// button for the borrowed chord, smaller, beside its root's chord, lit while held.
 fn drawBorrowedButtons(f: *z.Frame, s: *State, window_layout: WindowLayout) void {
-    var offered_buffer: [most_offered_borrowed_chords]ScaleChord = undefined;
+    var offered_buffer: [params.limits.most_offered_borrowed_chords]ScaleChord = undefined;
     const offered: []const ScaleChord = offeredBorrowedChords(s, &offered_buffer);
     const chooser: ChooserLayout = window_layout.chooser;
     for (offered) |chord| {
@@ -6624,12 +6756,9 @@ fn drawChooserChord(
     drawChordButton(f, s, centre, half_size, chord, is_chosen, chooser.size_unit);
 }
 
-/// How far toward the background a column star's dots are drawn while neither of their notes sounds: 20%.
-const column_dots_resting_dimming: f32 = 0.2;
-
 /// One end of a column star's dots (`drawColumnStar`): the button of the chord on `degree`, at its corner and of its
-/// half-size, in full colour while `is_lit`, and a little dimmed otherwise (`column_dots_resting_dimming`) - less
-/// than a resting button, so that the steps read clearly between the buttons.
+/// half-size, in full colour while `is_lit`, and a little dimmed otherwise (`params.column_dots.resting_dimming`) -
+/// less than a resting button, so that the steps read clearly between the buttons.
 fn columnDotsEnd(
     s: *const State,
     corner_centres: *const [7]Vec2,
@@ -6638,12 +6767,15 @@ fn columnDotsEnd(
     is_lit: bool,
 ) DotsEnd {
     const chord: ScaleChord = s.scale.chords[degree - 1];
-    const whole_color: Color = degree_colors[degree - 1];
+    const whole_color: Color = params.colors.degrees[degree - 1];
     return .{
         .centre = corner_centres[degree - 1],
         .shape = shapeOfChord(chord),
         .half_size = corner_half_sizes[degree - 1],
-        .color = if (is_lit) whole_color else whole_color.lerp(background, column_dots_resting_dimming),
+        .color = if (is_lit)
+            whole_color
+        else
+            whole_color.lerp(params.colors.background, params.column_dots.resting_dimming),
     };
 }
 
@@ -6662,8 +6794,8 @@ fn drawColumnStar(
     corner_centres: *const [7]Vec2,
     corner_half_sizes: *const [7]f32,
 ) void {
-    const phase: f32 = @mod(f.time.time * dots_per_second, 1);
-    const spacing: f32 = column_dots_spacing_units * chooser.size_unit;
+    const phase: f32 = @mod(f.time.time * params.column_dots.dots_per_second, 1);
+    const spacing: f32 = params.column_dots.spacing_units * chooser.size_unit;
     for (all_degrees) |degree| {
         const next_degree: u8 = degreeAbove(degree, 1);
         const is_lit: bool = isDegreeSounding(s, degree) or isDegreeSounding(s, next_degree);
@@ -6672,12 +6804,6 @@ fn drawColumnStar(
         drawStepDots(f, from_end, to_end, spacing, phase);
     }
 }
-
-/// How much larger a chart's own notes are drawn than a plain dot: 30%, whole, even where they overlap.
-const chart_note_scale: f32 = 1.3;
-
-/// The light gray of a chart's strings and frets.
-const guitar_line_color: Color = .{ .r = 196, .g = 200, .b = 210, .a = 255 };
 
 /// Where a chart's places are (`drawGuitarChord`): its grid, its marks' row, its spacings, its window's first fret,
 /// and a dot's radius.
@@ -6721,9 +6847,10 @@ fn drawSoundingPlaces(
         return;
     }
     const transparent: Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
+    const window_end: u8 = places.window_start + params.guitar.window_frets;
     for (0..6) |string_index| {
         var fret: u8 = 0;
-        while (fret < places.window_start + guitar_window_frets) : (fret += if (fret == 0) places.window_start else 1) {
+        while (fret < window_end) : (fret += if (fret == 0) places.window_start else 1) {
             if (guitar_chord.frets[string_index] == fret) {
                 continue;
             }
@@ -6733,7 +6860,10 @@ fn drawSoundingPlaces(
                 continue;
             }
             const degree: ?u8 = s.scale.degreeOfPitchClass(pitch_class);
-            const note_color: Color = if (degree) |chord_degree| colorOfDegree(chord_degree, true) else text_color;
+            const note_color: Color = if (degree) |chord_degree|
+                colorOfDegree(chord_degree, true)
+            else
+                params.colors.text;
             const ring_radius: f32 = if (fret == 0) 0.32 * places.marks_height else places.dot_radius;
             drawShape(f, places.fretPlace(string_index, fret), .circle, ring_radius, transparent, 1.5, note_color);
         }
@@ -6741,15 +6871,15 @@ fn drawSoundingPlaces(
 }
 
 /// A guitar chord's diagram in `box`, as chord charts draw one: the strings upright, the lowest at the left, across a
-/// window of four frets, the nut along the top when the window starts at the first fret, else the window's first
-/// fret's number at its left; over each string, an x for a string not played, or a ring for an open one; on it, a
-/// dot for the fret pressed, in the color of the note it sounds - so that the fingering shows the chord's root, third
-/// and fifth as the app colors them everywhere - and a barre as a bar across the strings it covers. The chord's own
-/// notes are drawn whole and large (`chart_note_scale`), sounding or not, overlapping where they meet - the chord's
-/// shape reads at a glance - each ringed in white while it sounds; the lines brighten while the whole chord sounds
-/// (`is_lit`). And every other note sounding that the window could play - on any string, at any fret of
-/// the window or open - is shown where it could be pressed, as a ring in its color (`drawSoundingPlaces`): a chord
-/// played elsewhere, Am7 on the keyboard, shows over the Am chart where its G could go.
+/// window of four frets, the nut along the top when the window starts at the first fret, else the window's first fret's
+/// number at its left; over each string, an x for a string not played, or a ring for an open one; on it, a dot for the
+/// fret pressed, in the color of the note it sounds - so that the fingering shows the chord's root, third and fifth as
+/// the app colors them everywhere - and a barre as a bar across the strings it covers. The chord's own notes are drawn
+/// whole and large (`params.guitar.chart_note_scale`), sounding or not, overlapping where they meet - the chord's shape
+/// reads at a glance - each ringed in white while it sounds; the lines brighten while the whole chord sounds
+/// (`is_lit`). And every other note sounding that the window could play - on any string, at any fret of the window or
+/// open - is shown where it could be pressed, as a ring in its color (`drawSoundingPlaces`): a chord played elsewhere,
+/// Am7 on the keyboard, shows over the Am chart where its G could go.
 fn drawGuitarChord(
     f: *z.Frame,
     s: *State,
@@ -6766,14 +6896,14 @@ fn drawGuitarChord(
         .height = box.height - marks_height - 0.04 * box.height,
     };
     const string_spacing: f32 = grid.width / 5;
-    const fret_spacing: f32 = grid.height / float(guitar_window_frets);
-    const line_color: Color = if (is_lit) text_color else guitar_line_color;
+    const fret_spacing: f32 = grid.height / float(params.guitar.window_frets);
+    const line_color: Color = if (is_lit) params.colors.text else params.colors.guitar_line;
     for (0..6) |string_index| {
         const string_x: f32 = grid.x + float(string_index) * string_spacing;
         const string_bottom: Vec2 = .{ string_x, grid.y + grid.height };
         f.gl.line(.{ string_x, grid.y }, string_bottom, .{ .color = line_color, .thickness = 1 });
     }
-    for (0..guitar_window_frets + 1) |fret_line| {
+    for (0..params.guitar.window_frets + 1) |fret_line| {
         const fret_y: f32 = grid.y + float(fret_line) * fret_spacing;
         const is_nut: bool = fret_line == 0 and guitar_chord.window_start == 1;
         const thickness: f32 = if (is_nut) 3 else 1;
@@ -6813,20 +6943,20 @@ fn drawGuitarChord(
         // The chord's own notes whole and large, sounding or not, each ringed in white while it sounds.
         const degree: ?u8 = s.scale.degreeOfPitchClass(guitarPitchClass(string_index, fret));
         const is_sounding: bool = if (degree) |chord_degree| isDegreeSounding(s, chord_degree) else false;
-        const note_color: Color = if (degree) |chord_degree| colorOfDegree(chord_degree, true) else text_color;
+        const note_color: Color = if (degree) |chord_degree| colorOfDegree(chord_degree, true) else params.colors.text;
         const place: Vec2 = places.fretPlace(string_index, fret);
         const transparent: Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
         const radius: f32 = if (fret == 0)
-            chart_note_scale * 0.32 * marks_height
+            params.guitar.chart_note_scale * 0.32 * marks_height
         else
-            chart_note_scale * places.dot_radius;
+            params.guitar.chart_note_scale * places.dot_radius;
         if (fret == 0) {
             drawShape(f, place, .circle, radius, transparent, 2, note_color);
         } else {
             f.gl.circle(place, radius, .{ .color = note_color });
         }
         if (is_sounding) {
-            drawShape(f, place, .circle, radius + 1.5, transparent, 1.5, text_color);
+            drawShape(f, place, .circle, radius + 1.5, transparent, 1.5, params.colors.text);
         }
     }
     drawSoundingPlaces(f, s, places, guitar_chord);
@@ -6836,7 +6966,12 @@ fn drawGuitarChord(
 /// (`drawColumnStar`), then each chord as its shape - a square for a major chord, a circle for the others - filled
 /// dark over the dots, faintly in the chord's color while it sounds, and outlined in the chord's color, bright and
 /// thicker while chosen; in it, the chord as fingered on a guitar (`drawGuitarChord`); above it, its name.
-fn drawFifths(f: *z.Frame, s: *State, fifths: FifthsLayout, chooser: ChooserLayout) void {
+fn drawFifths(
+    f: *z.Frame,
+    s: *State,
+    fifths: FifthsLayout,
+    chooser: ChooserLayout,
+) void {
     const half_size: f32 = fifths.shapeHalfSize();
     var corner_centres: [7]Vec2 = undefined;
     for (&corner_centres, all_degrees) |*corner_centre, degree| {
@@ -6848,8 +6983,11 @@ fn drawFifths(f: *z.Frame, s: *State, fifths: FifthsLayout, chooser: ChooserLayo
         const chord: ScaleChord = s.scale.chords[cell.degree - 1];
         const is_chosen: bool = cell.degree - 1 == s.chosen_chord_index;
         const is_lit: bool = isChordSounding(s, chord);
-        const root_color: Color = degree_colors[cell.degree - 1];
-        const fill_color: Color = if (is_lit) root_color.lerp(background, 0.75) else background;
+        const root_color: Color = params.colors.degrees[cell.degree - 1];
+        const fill_color: Color = if (is_lit)
+            root_color.lerp(params.colors.background, 0.75)
+        else
+            params.colors.background;
         const edge_color: Color = colorOfDegree(cell.degree, is_chosen or is_lit);
         const edge_thickness: f32 = if (is_chosen) 3.5 else 2;
         const shape: Shape = shapeOfChord(chord);
@@ -6897,10 +7035,10 @@ fn drawFadedChordButton(
     const alpha: u8 = @trunc(255 * clamp(opacity, 0, 1));
     var fill_color: Color = colorOfDegree(chord.root_degree, true);
     fill_color.a = alpha;
-    var outline: Color = chord_outline_color;
+    var outline: Color = params.colors.chord_outline;
     outline.a = alpha;
     drawShape(f, centre, shapeOfChord(chord), half_size, fill_color, @max(1, 0.05 * half_size), outline);
-    var name_color: Color = lit_text_color;
+    var name_color: Color = params.colors.lit_text;
     name_color.a = alpha;
     drawCentredText(f, s, centre - @as(Vec2, .{ 0, 0.2 * half_size }), chord.numeral(), 0.6 * half_size, name_color);
 }
@@ -6927,7 +7065,7 @@ fn progressionChordButton(
 }
 
 /// The chosen progression's track, in the chooser's middle - a picture to learn it by, which plays nothing and
-/// presses nothing. The progression's chords come one a bar (`beats_per_progression_chord`), over and over: each
+/// presses nothing. The progression's chords come one a bar (`params.progression.beats_per_chord`), over and over: each
 /// appears at the chooser's centre a bar before its turn, a small faint ghost of its button, and travels out along
 /// the line to its button, growing and filling in, to reach it on the bar's first beat - when it is the chord to
 /// play. The first chord has the first bar to come in: chord k arrives at beat 4 (k + 1). While a chord is the one to
@@ -6935,7 +7073,7 @@ fn progressionChordButton(
 /// (`progression_waits_for_player`), a chord that reaches its button waits there, pulsing, ringed, until it is played;
 /// played before it gets there, it starts at once (`takeProgressionChord`).
 fn drawProgressionTrack(f: *z.Frame, s: *State, chooser: ChooserLayout) void {
-    const chords_gone: f64 = s.progression_beat / beats_per_progression_chord;
+    const chords_gone: f64 = s.progression_beat / params.progression.beats_per_chord;
     const whole_chords_gone: f64 = @floor(chords_gone);
     const travelled_share: f32 = @floatCast(chords_gone - whole_chords_gone);
     const arriving_chord: usize = @trunc(whole_chords_gone);
@@ -6959,7 +7097,7 @@ fn drawProgressionTrack(f: *z.Frame, s: *State, chooser: ChooserLayout) void {
     const arriving_opacity: f32 = if (is_waiting) 0.55 + 0.4 * waiting_pulse else 0.25 + 0.65 * travelled_share;
     drawFadedChordButton(f, s, arriving_centre, arriving_half_size, arriving_chord_of_scale, arriving_opacity);
     if (is_waiting) {
-        var waiting_ring_color: Color = degree_colors[arriving_degree - 1];
+        var waiting_ring_color: Color = params.colors.degrees[arriving_degree - 1];
         waiting_ring_color.a = @trunc(255 * (0.4 + 0.6 * waiting_pulse));
         const waiting_ring_half_size: f32 = full_half_size * (1.25 + 0.15 * waiting_pulse);
         const transparent: Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
@@ -6978,16 +7116,13 @@ fn drawProgressionTrack(f: *z.Frame, s: *State, chooser: ChooserLayout) void {
     const beat_share: f32 = @floatCast(s.progression_beat - @floor(s.progression_beat));
     const swell: f32 = 1 - beat_share;
     const ring_half_size: f32 = playing_button.half_size * (1.2 + 0.25 * swell * swell);
-    var ring_color: Color = degree_colors[playing_degree - 1];
+    var ring_color: Color = params.colors.degrees[playing_degree - 1];
     ring_color.a = @trunc(255 * (0.5 + 0.5 * swell));
     const transparent: Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
     const ring_thickness: f32 = @max(2, 0.15 * chooser.size_unit);
     const ring_shape: Shape = shapeOfChord(playing_chord);
     drawShape(f, playing_button.centre, ring_shape, ring_half_size, transparent, ring_thickness, ring_color);
 }
-
-/// The playhead's width, in pixels (`drawProgressionEditor`).
-const playhead_width: f32 = 2;
 
 /// A carried chord over one of the editor's boxes: the box, and the chord it would take.
 const CarriedOverBox = struct {
@@ -7031,7 +7166,7 @@ fn drawProgressionEditor(
     const carried: ?CarriedOverBox = carriedOverBox(s, parts);
     for (0..box_count) |box_index| {
         const box: z.Rectangle = parts.editorBox(box_count, box_index);
-        f.gl.rect(box, .{ .color = left_diagram_box_color, .outline = 1 });
+        f.gl.rect(box, .{ .color = params.colors.left_diagram_box, .outline = 1 });
         const is_playing: bool = playing_box == box_index;
         const is_carried_over: bool = carried != null and carried.?.box_index == box_index;
         const shown_chord: ?ScaleChord = if (is_carried_over) carried.?.chord else s.progression_boxes[box_index];
@@ -7043,22 +7178,22 @@ fn drawProgressionEditor(
         }
         if (is_playing) {
             const thickness: f32 = 2 + 2 * pulse;
-            f.gl.rect(insetRectangle(box, -thickness), .{ .color = outline_color, .outline = thickness });
+            f.gl.rect(insetRectangle(box, -thickness), .{ .color = params.colors.outline, .outline = thickness });
             // The playhead: a thin white line across the box, from its left edge as its bar begins to its right edge
             // as the bar ends - held there while the track waits for the player.
-            const bars: f64 = s.progression_beat / beats_per_progression_chord;
+            const bars: f64 = s.progression_beat / params.progression.beats_per_chord;
             const bar_share: f32 = @floatCast(bars - @floor(bars));
             const playhead_x: f32 = box.x + bar_share * box.width;
             const playhead: z.Rectangle = .{
-                .x = playhead_x - 0.5 * playhead_width,
+                .x = playhead_x - 0.5 * params.progression.playhead_width,
                 .y = box.y,
-                .width = playhead_width,
+                .width = params.progression.playhead_width,
                 .height = box.height,
             };
-            f.gl.rect(playhead, .{ .color = outline_color });
+            f.gl.rect(playhead, .{ .color = params.colors.outline });
         }
         if (is_carried_over) {
-            const chord_color: Color = degree_colors[carried.?.chord.root_degree - 1];
+            const chord_color: Color = params.colors.degrees[carried.?.chord.root_degree - 1];
             f.gl.rect(insetRectangle(box, -3), .{ .color = chord_color, .outline = 3 });
         }
     }
@@ -7087,13 +7222,16 @@ fn draw(f: *z.Frame, s: *State, window_layout: WindowLayout) void {
     const parts: WindowParts = window_layout.parts;
     const boxed_parts = [4]z.Rectangle{ parts.fifths, parts.chooser, parts.chromatic, parts.sounding };
     for (boxed_parts) |part| {
-        f.gl.rect(insetRectangle(part, left_diagram_box_inset), .{ .color = left_diagram_box_color, .outline = 1 });
+        f.gl.rect(
+            insetRectangle(part, params.window.left_diagram_box_inset),
+            .{ .color = params.colors.left_diagram_box, .outline = 1 },
+        );
     }
     drawFifths(f, s, window_layout.fifths, window_layout.chooser);
-    drawChromaticCircle(f, s, insetRectangle(parts.chromatic, left_diagram_padding));
+    drawChromaticCircle(f, s, insetRectangle(parts.chromatic, params.window.left_diagram_padding));
     // What sounds: its figure, its name over it, and under them, in the box's bottom band, its function in the key.
-    const sounding_room: z.Rectangle = insetRectangle(parts.sounding, left_diagram_padding);
-    const name_band_height: f32 = function_name_band_share * sounding_room.height;
+    const sounding_room: z.Rectangle = insetRectangle(parts.sounding, params.window.left_diagram_padding);
+    const name_band_height: f32 = params.sounding.function_name_band_share * sounding_room.height;
     var figure_room: z.Rectangle = sounding_room;
     figure_room.height -= name_band_height;
     var name_band: z.Rectangle = sounding_room;
@@ -7171,8 +7309,8 @@ fn windowLayoutOf(f: *z.Frame, s: *State) WindowLayout {
     // Laid out by the chosen scale: a borrowed chord held, which alters the scale sounding, moves nothing.
     const star: StarLayout = .ofRoom(parts.star, parts.button_corner, s.chosen_scale);
     // The left hand's two diagrams inside their boxes, each filling its own.
-    const chooser_room: z.Rectangle = insetRectangle(parts.chooser, left_diagram_padding);
-    const fifths_room: z.Rectangle = insetRectangle(parts.fifths, left_diagram_padding);
+    const chooser_room: z.Rectangle = insetRectangle(parts.chooser, params.window.left_diagram_padding);
+    const fifths_room: z.Rectangle = insetRectangle(parts.fifths, params.window.left_diagram_padding);
     const chooser: ChooserLayout = .ofRoom(chooser_room, star.rotation_turns, s.chosen_scale);
     const window_layout: WindowLayout = .{
         .parts = parts,
@@ -7214,7 +7352,7 @@ fn update(f: *z.Frame, s: *State) void {
     if (z.showAudioStartScreen(f, &s.font)) {
         return;
     }
-    z.clearViewport(f, background);
+    z.clearViewport(f, params.colors.background);
     const ui: z.ui_real.Ui = s.ui_host.begin(f);
     const is_ui_capturing: bool = buildOptions(f, s, ui);
     advanceProgression(f, s);

@@ -6698,7 +6698,11 @@ const ZimrBoot = struct {
         return if (g.overlay_ta.visible) 1 else 0;
     }
     /// Sets the overlay text area's text and caret, as `domSetOverlayInputText` does the input's.
-    fn domSetOverlayTextareaText(text_ptr: Handle, text_len: Handle, caret: Handle) void {
+    fn domSetOverlayTextareaText(
+        text_ptr: Handle,
+        text_len: Handle,
+        caret: Handle,
+    ) void {
         if (g.overlay_ta.el.h == 0) {
             return;
         }

@@ -523,6 +523,11 @@ The migration of `platform_api.md` (section 8), each step leaving both platforms
   `texture_views` (no shader of its own; built for the web and for Windows) replaces `pipeline_mipmap` and
   `pipeline_array`; the catalog has 298 examples, and `windows_pending` lists only networking and file saving.
   Tutorial 8.6 gained the layer view and how the GPU picks a level.
+  **Oct 18: `pipeline_sampler`, the eighth, which this triage missed** (it still embedded WGSL, so `all-examples` on
+  Windows failed `native_wgsl_check`), converted the same way: its pattern is computed on the CPU and uploaded once,
+  and its four cells are drawn by the 2D renderer through four views of the one texture, each with its own sampler -
+  the renderer keeps one material per VIEW, so a second sampler on one view would be silently ignored. No shader of
+  its own; built for the web and for Windows.
   Testing stays manual (Simon, Oct 7): the gallery starts each example for him to try, with no automatic closing
   or sweep. Remaining: the four conversions; then the pending facilities (a WebSocket client, file saving) under C3
   and C4.

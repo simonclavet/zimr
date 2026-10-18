@@ -34,17 +34,19 @@
 //!
 //! Two modes:
 //!
-//!     zig build doc-folds          --fix    rewrite every block from the source (you run this)
-//!     zig build gate               --fix with the default -Dautofix, like `zig fmt`
-//!     zig build gate -Dautofix=false  --check  fail on any difference, touch nothing (CI)
+//!     zig build doc-folds   --fix    rewrite every block from the source, printing each page's diff
+//!     zig build fix         --fix    the same, after the linter's fixes - the one step that rewrites sources
+//!     zig build gate        --check  fail on any difference, touch nothing - so does `check`
 //!
-//! The workflow that falls out of it: change the code however you like, run `zig build
-//! doc-folds` (or just the gate), and the page follows. The only thing left to keep in sync by
-//! hand is the prose around the code - which is exactly the part a tool can't write for you.
+//! The workflow that falls out of it: change the code however you like, run `zig build fix`
+//! (or `zig build doc-folds`), and the page follows - every regenerated block printed as a diff,
+//! as `zig build fix` prints every file it rewrites. The only thing left to keep in sync by hand
+//! is the prose around the code - which is exactly the part a tool can't write for you.
 
 const std = @import("std");
 const ArenaAllocator = std.heap.ArenaAllocator;
 const cli = @import("cli");
+const line_diff = @import("line_diff.zig");
 const Allocator = std.mem.Allocator;
 const eql = std.mem.eql;
 const indexOf = std.mem.indexOf;
@@ -469,21 +471,34 @@ pub fn main(init: std.process.Init) !void {
     const args: FoldArgs = cli.args(&init, FoldArgs, fold_cli);
     const mode: Mode = if (args.@"--fix") .fix else .check;
 
+    var out_buffer: [4096]u8 = undefined;
+    var out_writer: File.Writer = File.stdout().writer(io, &out_buffer);
+    const out: *Io.Writer = &out_writer.interface;
     var failed: bool = false;
     for (args.pages) |page| {
         var rep: Report = .{};
         const text: []u8 = try Dir.cwd().readFileAlloc(io, page, gpa, read_limit);
         const updated: []u8 = try processPage(gpa, io, page, text, &rep);
-        if (mode == .fix and !eql(u8, text, updated)) {
-            try Dir.cwd().writeFile(io, .{ .sub_path = page, .data = updated });
-        }
+        const changed: bool = !eql(u8, text, updated);
         const verb: []const u8 = if (mode == .fix) "regenerated" else "stale";
-        const msg: []u8 = try allocPrint(
-            gpa,
-            "{s}: {d} code block(s), {d} {s}, {d} reference region(s), {d} error(s)\n",
-            .{ page, rep.blocks, if (mode == .fix) rep.regenerated else rep.stale, verb, rep.references, rep.errors },
-        );
-        try File.stdout().writeStreamingAll(io, msg);
+        // A check reports every page; a fix only the pages it rewrote or could not - `zig build fix` prints what
+        // changed, and a page it left alone is nothing to read.
+        if (mode == .check or changed or rep.errors > 0) {
+            try out.print("{s}: {d} code block(s), {d} {s}, {d} reference region(s), {d} error(s)\n", .{
+                page,
+                rep.blocks,
+                if (mode == .fix) rep.regenerated else rep.stale,
+                verb,
+                rep.references,
+                rep.errors,
+            });
+        }
+        if (mode == .fix and changed) {
+            try Dir.cwd().writeFile(io, .{ .sub_path = page, .data = updated });
+            // What changed, as it changes - as `zig build fix` shows every file it rewrites.
+            try line_diff.print(gpa, out, page, text, updated);
+        }
+        try out.flush();
         if (rep.errors > 0 or (mode == .check and rep.stale > 0)) {
             failed = true;
         }
@@ -491,8 +506,8 @@ pub fn main(init: std.process.Init) !void {
     if (failed) {
         const tail: []const u8 =
             "doc-folds FAILED: the tutorial's code no longer matches the source.\n" ++
-            "Run `zig build doc-folds` to regenerate it; fix any block whose data-decl no longer\n" ++
-            "finds its declaration (renamed? add data-in= to disambiguate).\n";
+            "Run `zig build fix` (or `zig build doc-folds`) to regenerate it; fix any block whose data-decl\n" ++
+            "no longer finds its declaration (renamed? add data-in= to disambiguate).\n";
         try File.stderr().writeStreamingAll(io, tail);
         std.process.exit(1);
     }

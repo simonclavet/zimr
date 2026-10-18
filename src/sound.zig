@@ -1086,7 +1086,11 @@ pub const mixer = struct {
 
         /// A ring over `samples`, which the caller owns and keeps until no voice reads it: its length a power of two
         /// frames of `channels` samples, made at `frames_per_second`.
-        pub fn initOver(samples: []f32, channels: u8, frames_per_second: u32) StreamRing {
+        pub fn initOver(
+            samples: []f32,
+            channels: u8,
+            frames_per_second: u32,
+        ) StreamRing {
             assert(channels != 0, @src());
             const capacity_frames: usize = samples.len / channels;
             const is_power_of_two: bool = capacity_frames != 0 and (capacity_frames & (capacity_frames - 1)) == 0;
@@ -6268,6 +6272,9 @@ pub const mixer = struct {
         engine_mixer.mixFrame();
         try expect(ring.reading_side.read_frames.load(.monotonic) > replay_first_frame);
         // The same ring a second time, while it plays: refused - a ring has one reader.
+        const saved_log_level: std.log.Level = std.testing.log_level;
+        std.testing.log_level = .err; // the refusal's warning IS the behaviour; keep a passing test silent
+        defer std.testing.log_level = saved_log_level;
         try expectEqual(Voice.none, engine_mixer.play(.{ .stream = .{ .ring = &ring } }, .{}));
     }
 

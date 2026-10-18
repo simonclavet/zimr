@@ -3912,13 +3912,23 @@ fn divideBy(
 ///
 /// So there are four here too - `divFloor`, `divTrunc`, `divCeil`, `divExact` - plus the two
 /// remainders that pair with the first two.
-pub fn divFloor(comptime T: type, out: Tensor(T), a: Tensor(T), b: Tensor(T)) Error!void {
+pub fn divFloor(
+    comptime T: type,
+    out: Tensor(T),
+    a: Tensor(T),
+    b: Tensor(T),
+) Error!void {
     comptime requireInt(T);
     return divideBy(T, out, a, b, .floor);
 }
 
 /// Division rounding toward zero: `-7 / 2` is `-3`. See `divFloor` for the other one.
-pub fn divTrunc(comptime T: type, out: Tensor(T), a: Tensor(T), b: Tensor(T)) Error!void {
+pub fn divTrunc(
+    comptime T: type,
+    out: Tensor(T),
+    a: Tensor(T),
+    b: Tensor(T),
+) Error!void {
     comptime requireInt(T);
     return divideBy(T, out, a, b, .trunc);
 }
@@ -3942,7 +3952,12 @@ pub fn divCeil(comptime T: type, out: Tensor(T), a: Tensor(T), b: Tensor(T)) Err
 ///
 /// Here an inexact division is a `DomainError`, so the assumption is checked at the moment it
 /// would have been violated instead of some distance downstream.
-pub fn divExact(comptime T: type, out: Tensor(T), a: Tensor(T), b: Tensor(T)) Error!void {
+pub fn divExact(
+    comptime T: type,
+    out: Tensor(T),
+    a: Tensor(T),
+    b: Tensor(T),
+) Error!void {
     comptime requireInt(T);
     return divideBy(T, out, a, b, .exact);
 }
@@ -4120,7 +4135,11 @@ pub fn logicalXor(
 ///     answer, and rounding would silently drop an element
 ///
 /// A shape with no `-1` passes through, so a caller can use one function for both cases.
-pub fn resolveInferredShape(count: usize, dims: []const isize, out: []usize) Error!usize {
+pub fn resolveInferredShape(
+    count: usize,
+    dims: []const isize,
+    out: []usize,
+) Error!usize {
     if (dims.len > max_rank or out.len < dims.len) {
         return Error.UnsupportedShape;
     }
@@ -9719,7 +9738,12 @@ pub fn inverse(
 /// answer, but a transposed VIEW makes the inner loop stride across memory; naming the variant
 /// lets the loop read both operands the way they are stored. The test asserts it against the
 /// materialised form, which is what makes the name safe to reach for.
-pub fn matmulNT(comptime T: type, out: Tensor(T), a: Tensor(T), b: Tensor(T)) Error!void {
+pub fn matmulNT(
+    comptime T: type,
+    out: Tensor(T),
+    a: Tensor(T),
+    b: Tensor(T),
+) Error!void {
     comptime requireFloat(T);
     if (a.rank != 2 or b.rank != 2 or out.rank != 2) {
         return Error.UnsupportedShape;
@@ -9742,7 +9766,12 @@ pub fn matmulNT(comptime T: type, out: Tensor(T), a: Tensor(T), b: Tensor(T)) Er
 }
 
 /// `out = aT * b`.
-pub fn matmulTN(comptime T: type, out: Tensor(T), a: Tensor(T), b: Tensor(T)) Error!void {
+pub fn matmulTN(
+    comptime T: type,
+    out: Tensor(T),
+    a: Tensor(T),
+    b: Tensor(T),
+) Error!void {
     comptime requireFloat(T);
     if (a.rank != 2 or b.rank != 2 or out.rank != 2) {
         return Error.UnsupportedShape;
@@ -14493,7 +14522,11 @@ pub fn Params(comptime T: type) type {
 // exactly what the backward pass is told to ignore. So its answers are exact statements instead.)
 
 /// A tensor owning a copy of `values`, allocated in `arena` - for building the tests' inputs in one line.
-fn ownedTensor(arena: Allocator, values: []const f64, shape: []const usize) !Tensor(f64) {
+fn ownedTensor(
+    arena: Allocator,
+    values: []const f64,
+    shape: []const usize,
+) !Tensor(f64) {
     return Tensor(f64).fromSlice(try arena.dupe(f64, values), shape);
 }
 
@@ -16148,7 +16181,12 @@ pub fn BatchNorm(comptime T: type) type {
         /// The normalisation goes through `layerNormRows` on the TRANSPOSE, because batch norm is
         /// layer norm transposed and the pair already has a tested gradient. The two transposes
         /// are views, not copies, so the cost is the strided access rather than a materialise.
-        pub fn attach(self: Self, graph: *Graph(T), input: Var, use: Use) Error!Attached {
+        pub fn attach(
+            self: Self,
+            graph: *Graph(T),
+            input: Var,
+            use: Use,
+        ) Error!Attached {
             const x: Tensor(T) = graph.valueOf(input);
             if (x.rank != 2 or x.shape[1] != self.gain.shape[1]) {
                 return Error.ShapeMismatch;
@@ -16885,7 +16923,11 @@ pub fn Mlp(comptime T: type) type {
 
         /// This architecture over `given`'s tensors (a `params().clone()`): the TARGET network, to be attached
         /// `.frozen` and moved by `given.follow`. The layers' storage comes from `allocator`; the tensors are shared.
-        pub fn withParams(self: Self, given: Params(T), allocator: Allocator) Error!Self {
+        pub fn withParams(
+            self: Self,
+            given: Params(T),
+            allocator: Allocator,
+        ) Error!Self {
             if (given.tensors.len != self.tensorCount()) {
                 return Error.ShapeMismatch;
             }
@@ -18007,7 +18049,12 @@ test "zn rl: the discrete evaluation action is the argmax, and ties are decided"
 ///
 /// M = 2 of N = 10 is the paper's setting, and with it REDQ reaches a much higher update-to-data
 /// ratio than SAC without the Q values running away.
-pub fn randomSubset(gpa: Allocator, count: usize, subset: usize, rng: Rng) Error![]usize {
+pub fn randomSubset(
+    gpa: Allocator,
+    count: usize,
+    subset: usize,
+    rng: Rng,
+) Error![]usize {
     if (subset == 0 or subset > count) {
         return Error.DomainError;
     }

@@ -62,16 +62,19 @@ pub fn build(b: *std.Build) void {
         // .vscode/ and .zed/ hold a debug config for every app, written by `zig build editor-configs` as zimr writes
         // its own; `check` fails when an app was added without rerunning it.
         .editor_configs = true,
-        // zimr's linter over src/: `zig build lint`, and part of `check` and of every app's step. Every rule is
-        // opt-in, and this project enables them all, as zimr does for itself: in zimr a lint finding is a compile
-        // error, and an explained `// lint:off <rule>: <why>` is how code says a rule does not apply where it
-        // stands. When zimr gains a rule, add it here (`zig build lint -- --list-rules` prints them all).
-        // The list is the configuration - each rule by name, its title beside it.
+        // zimr's linter over src/: `zig build lint`, and part of `check` and of every app's step - beside the
+        // compile, never in front of it - with the layout checked too, as `zig_fmt`. It never edits a file: a
+        // fixable finding ends `autofix: zig build fix`, and `zig build fix` applies the fixes, printing the diff of
+        // every file it rewrites. Every rule is opt-in, and this project enables them all, as zimr does for itself:
+        // in zimr a lint finding is a compile error, and an explained `// lint:off <rule>: <why>` is how code says a
+        // rule does not apply where it stands. When zimr gains a rule, add it here (`zig build lint --
+        // --list-rules` prints them all). The list is the configuration - each rule by name, its title beside it.
         .lint = .{
             .enable = &.{
                 .import_cycle, // files must not import each other, directly or through others
                 .raw_pass_state_bind, // bind pipeline/bind-groups through the PassState cache
                 .parse_error, // file failed to parse, AST checks skipped
+                .zig_fmt, // the file is laid out as `zig fmt` lays it out
                 .fn_args_multiline, // Rule 1 - fn signatures: 5+ args multiline; 3-4 args one-line only if <=90 cols
                 .untyped_local, // Rule 2 - locals: write the type even when Zig can deduce it
                 .branch_braces, // Rule 3 - braces required on every if/else/while/for body

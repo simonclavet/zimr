@@ -924,7 +924,11 @@ pub const script = struct {
         }
 
         /// A line that could not run: reported with its number, counted, and skipped - a session survives it.
-        fn fail(session: *Session, comptime format: []const u8, arguments: anytype) void {
+        fn fail(
+            session: *Session,
+            comptime format: []const u8,
+            arguments: anytype,
+        ) void {
             session.outcome.failed_line_count += 1;
             var message_buffer: [line_room + 128]u8 = undefined;
             const message: []const u8 = bufPrint(&message_buffer, format, arguments) catch "(a message too long)";

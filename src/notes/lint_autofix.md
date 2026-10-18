@@ -40,7 +40,14 @@ Verified on fixtures: doc-commented unused decl, multi-line `blk:` decl, cascade
 `inline fn`→`fn`; dry-run leaves bytes intact; re-fix is a no-op; results
 re-check clean and `zig ast-check` passes.
 
-## P2 — build integration (turn 447, SHIPPED)
+## P2 — build integration (turn 447, SHIPPED; WITHDRAWN Oct 18)
+
+> **Superseded (Simon, Oct 18): no build applies a fix any more.** `-Dautofix` and `-Dgate` are gone. Builds
+> CHECK - layout included, as the `zig-fmt` rule - and every fixable finding ends `autofix: zig build fix`, the
+> summary printing that command on its own line. `zig build fix` is the one step that rewrites, and it prints the
+> diff of every file it writes (`tools/line_diff.zig`), then what is left in it for a person. Why: a build that
+> rewrites files raced the editing - one reformatted a file between reading it and an exact-text edit of it, and
+> one deleted a declaration whose first use had not been written yet. The account below is the history.
 
 The "LINT-FIRST GATE" in build.zig already ran lint + `zig fmt --check` before
 every compile. Added `-Dautofix` (default **true**) that flips that gate from

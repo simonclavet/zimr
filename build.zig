@@ -174,6 +174,7 @@ pub const LintRule = enum {
     import_cycle, // files must not import each other, directly or through others
     raw_pass_state_bind, // bind pipeline/bind-groups through the PassState cache
     parse_error, // file failed to parse, AST checks skipped
+    zig_fmt, // the file is laid out as `zig fmt` lays it out
     fn_args_multiline, // Rule 1 - fn signatures: 5+ args multiline; 3-4 args one-line only if <=90 cols
     untyped_local, // Rule 2 - locals: write the type even when Zig can deduce it
     branch_braces, // Rule 3 - braces required on every if/else/while/for body
@@ -239,6 +240,7 @@ const zimr_lint_rules = [_]LintRule{
     .import_cycle,
     .raw_pass_state_bind,
     .parse_error,
+    .zig_fmt,
     .fn_args_multiline,
     .untyped_local,
     .branch_braces,
@@ -313,6 +315,20 @@ pub fn lintEnableArg(b: *std.Build, rules: []const LintRule) []const u8 {
         }
     }
     return arg.items;
+}
+
+/// `rules`, with `zig_fmt` added when it is not among them: what `zig build fix` runs, so a fix always lays the files
+/// out as `zig fmt` does - as the `zig fmt` run it replaced did - whether or not the checks hold the files to it.
+fn withZigFmt(b: *std.Build, rules: []const LintRule) []const LintRule {
+    for (rules) |rule| {
+        if (rule == .zig_fmt) {
+            return rules;
+        }
+    }
+    const extended: []LintRule = b.allocator.alloc(LintRule, rules.len + 1) catch @panic("OOM");
+    @memcpy(extended[0..rules.len], rules);
+    extended[rules.len] = .zig_fmt;
+    return extended;
 }
 
 pub const LintOptions = struct {
@@ -2198,8 +2214,6 @@ const WindowsPending = struct {
 /// the reason. Each reason names what is missing; the platforms plan has the step that writes it.
 const windows_pending = [_]WindowsPending{
     .{ .name = "net_rtc_smoke", .reason = "WebRTC exists only in the browser" },
-    // The last example with hand-written WGSL (the Vulkan plan's list of eight): the native host runs SPIR-V only.
-    .{ .name = "pipeline_sampler", .reason = "its two shaders are WGSL written by hand, not yet Zig shaders" },
 };
 
 /// The reason `name` has no native build yet, or null when it has one.
@@ -2497,29 +2511,6 @@ fn addWindowsApp(
     own_frame: bool,
 ) *Step.InstallArtifact {
     return installWindowsApp(ctx.b, ctx, nativeAppExe(ctx, app_mod, name, own_frame));
-}
-
-/// What a `zig fmt` run does: report unformatted files and fail (`--check`), or rewrite them.
-const ZigFmtMode = enum { check, rewrite };
-
-/// A `zig fmt` run over `paths`, then `extra_paths`, relative to the build root.
-fn addZigFmt(
-    b: *std.Build,
-    mode: ZigFmtMode,
-    paths: []const []const u8,
-    extra_paths: []const []const u8,
-) *Run {
-    const run: *Run = b.addSystemCommand(&.{ b.graph.zig_exe, "fmt" });
-    if (mode == .check) {
-        run.addArg("--check");
-    }
-    for (paths) |path| {
-        run.addArg(path);
-    }
-    for (extra_paths) |path| {
-        run.addArg(path);
-    }
-    return run;
 }
 
 /// The row of `apps` named `name`; a name with no row is a mistake in this file.
@@ -3308,17 +3299,14 @@ pub const Project = struct {
             lint_step.dependOn(&addLint(b, dep, lint_options).step);
             p.check_step.dependOn(lint_step);
             p.lint_step = lint_step;
-            // `zig build fix` - what every fixable finding points to: the autofixes, then zig fmt over the same
-            // directories (a fix makes the minimal edit, like one comma, and leaves the layout to fmt).
+            // `zig build fix` - what every fixable finding points to, and the one step that rewrites a source: the
+            // autofixes, each file written once and laid out as `zig fmt` lays it out (whether or not the project's
+            // rules check layout), and the diff of every file printed as it is written.
             var fix_options: LintOptions = lint_options;
             fix_options.fix = true;
-            const fmt_after_fix: *Run = b.addSystemCommand(&.{ b.graph.zig_exe, "fmt" });
-            for (lint.dirs) |dir| {
-                fmt_after_fix.addArg(dir);
-            }
-            fmt_after_fix.step.dependOn(&addLint(b, dep, fix_options).step);
-            const fix_step: *Step = b.step("fix", "Rewrite sources: lint --fix, then zig fmt");
-            fix_step.dependOn(&fmt_after_fix.step);
+            fix_options.enable = withZigFmt(b, lint.enable);
+            const fix_step: *Step = b.step("fix", "Rewrite sources: lint autofixes, zig fmt layout, each diff shown");
+            fix_step.dependOn(&addLint(b, dep, fix_options).step);
         }
         return p;
     }
@@ -5009,6 +4997,9 @@ pub fn build(b: *std.Build) void {
     });
     bridge_import_check_exe.root_module.addImport("cli", cli_mod);
 
+    // The headless trainer's Windows install (`geno-trainer-windows`, below). The training lab starts runs with the
+    // trainer beside its own executable, so the lab's Windows build installs it too.
+    var geno_trainer_windows_install: ?*Step = null;
     // ---- vk-host-test: the Vulkan host headless, driven through `wgpu.zig` as the engine drives it, with the
     // validation layer on; plus `native_os.zig`'s tests. Built for the build machine and run on its Vulkan driver - a
     // GPU, or Mesa's software driver (lavapipe) on a machine without one. Needs the validation layer.
@@ -5074,6 +5065,7 @@ pub fn build(b: *std.Build) void {
             "Build zig-out/windows/geno_trainer.exe, the headless trainer, for a Windows machine's GPU",
         );
         windows_trainer_step.dependOn(&windows_trainer_install.step);
+        geno_trainer_windows_install = &windows_trainer_install.step;
     }
 
     // ---- The example build context, shared with projects that depend on zimr.
@@ -6857,6 +6849,7 @@ pub fn build(b: *std.Build) void {
         "ui_full_showcase",
         "zimrphysics_demo",
         "zimrphysics2d_demo",
+        "physics_sidebyside",
         "mpc_cartpole",
         "mandel_sidebyside",
         "rt_sidebyside",
@@ -6875,6 +6868,7 @@ pub fn build(b: *std.Build) void {
         "fps_playground",
         "starfield",
         "shader_effects",
+        "audio_scale_star",
         "quadruped",
         "gallery_all",
     };
@@ -7107,6 +7101,10 @@ pub fn build(b: *std.Build) void {
             const app_build: *Step = appBuildFor(b, platform, name, &web_builds, &windows_builds);
             const app_step: *Step = b.step(dash_name, b.fmt("Build {s} for -Dplatform (web or windows)", .{name}));
             app_step.dependOn(app_build);
+            const is_lab_for_windows: bool = eql(u8, name, "geno_lab") and platform == .windows;
+            if (is_lab_for_windows) {
+                app_step.dependOn(geno_trainer_windows_install.?);
+            }
             // `all-examples` builds the apps the platform has; one it lacks (the gallery on the web, an app still
             // pending natively) is left out, and its own step says why. With no platform at all every app's step
             // fails naming the choices, and `all-examples` fails with them.
@@ -8020,6 +8018,24 @@ pub fn build(b: *std.Build) void {
     });
     bridge_import_check_test.root_module.addImport("cli", cli_mod);
     tools_test_step.dependOn(&b.addRunArtifact(bridge_import_check_test).step);
+    // `zig build lint-test`: the linter's own tests - every rule's fires/clean pairs, the fix loop, and through its
+    // import `line_diff.zig`'s - with zbuild's (which lines are findings) and doc_folds'. In `gate`, not `check`:
+    // zimrlint is the biggest tool, and its test build is the slow one.
+    const lint_test_step: *Step = b.step("lint-test", "Test zimrlint (with line_diff), zbuild and doc_folds");
+    for ([_][]const u8{ "tools/zimrlint.zig", "tools/zbuild.zig", "tools/doc_folds.zig" }) |tool_root| {
+        const tool_test: *Compile = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(tool_root),
+                .target = host_target,
+                .optimize = .ReleaseSafe,
+            }),
+        });
+        // zbuild is the one of the three that reads no command line through std's cli.
+        if (!eql(u8, tool_root, "tools/zbuild.zig")) {
+            tool_test.root_module.addImport("cli", cli_mod);
+        }
+        lint_test_step.dependOn(&b.addRunArtifact(tool_test).step);
+    }
     wgpu_check.dependOn(tools_test_step);
 
     // `zig build external-check`: build webtests/external_project/, a project that
@@ -8698,20 +8714,16 @@ pub fn build(b: *std.Build) void {
     // Default scan (no args): every *.zig under the scan roots below.
     // Specific files: `-Dlint-files=a.zig,b.zig`.
     // Mode: hard gate (turn 379).  `zig build lint` exits non-zero
-    // on any issue; `zig build lint-check` chains fmt-check + lint
-    // for use as a CI gate.
+    // on any issue - the layout included, as the `zig-fmt` rule - and
+    // `zig build lint-check` adds the template's layout, for use as a CI gate.
     //
     // Every rule is opt-in (`LintRule`); zimr turns its own set on through
-    // `zimr_lint_rules` - the same argument on all
-    // three runs below, so check, gate and fix agree on what a violation is.
-    // `zimrlint --list-rules` prints the catalog.
+    // `zimr_lint_rules` - the same argument on the check and on the fix below,
+    // so the two agree on what a violation is. `zimrlint --list-rules` prints the catalog.
     const lint_enable: []const u8 = lintEnableArg(b, &zimr_lint_rules);
-    // Every file the lint runs cover, as the walk below finds them: the `zig fmt` runs take the same list, so a
-    // file the lint fixes is a file fmt formats (and checks). Template files are added to fmt separately.
-    var lint_paths: ArrayList([]const u8) = .empty;
     const lint_run: *Run = b.addRunArtifact(zimrlint_exe);
     lint_run.addArg(lint_enable);
-    // Every fixable finding names the step that fixes it.
+    // Every fixable finding names the step that fixes it, and the summary prints it on a line of its own.
     lint_run.addArgs(&.{ "--fix-command", "zig build fix" });
     // -- THE LINT RATCHET --
     //
@@ -8728,24 +8740,16 @@ pub fn build(b: *std.Build) void {
     lint_run.addArg("--baseline");
     lint_run.addFileArg(b.path("tools/lint_baseline.tsv"));
 
-    // Install-path twin of `lint_run`.  Default `zig build` lints via
-    // THIS Run so the lint can be gated behind a green compile (wired at
-    // the end of build()) without forcing the standalone `lint` /
-    // `lint-check` steps - which share `lint_run` - to build the whole
-    // project first.  Same file set; only the dependencies differ.
-    const lint_run_install: *Run = b.addRunArtifact(zimrlint_exe);
-    lint_run_install.addArg(lint_enable);
-    lint_run_install.addArgs(&.{ "--fix-command", "zig build fix" });
-    lint_run_install.addArg("--baseline");
-    lint_run_install.addFileArg(b.path("tools/lint_baseline.tsv"));
-    // The `fix` step's lint: the same files and baseline, always in `--fix` mode, run when `zig build fix` is asked
-    // for by name. It is not the only run that rewrites sources: while autofix is on (the default), every build
-    // applies the same fixes and `zig fmt` before checking (`lint_run_install`, `fmt_apply_gate`); `-Dautofix=false`
-    // makes the gate read-only.
+    // The `fix` step's lint: the same files, rules and baseline, in `--fix` mode - the ONE run that rewrites sources,
+    // and only when `zig build fix` is asked for by name. Each file it rewrites is written once, laid out as `zig fmt`
+    // lays it out (`zig-fmt` is one of the rules), and its diff is printed the moment it is written.
     const lint_fix: *Run = b.addRunArtifact(zimrlint_exe);
     lint_fix.addArg(lint_enable);
     lint_fix.addArg("--baseline");
     lint_fix.addFileArg(b.path("tools/lint_baseline.tsv"));
+    // `zig build fmt`: the layout alone - `zig-fmt` by itself, in `--fix` mode - over the same files.
+    const fmt_fix: *Run = b.addRunArtifact(zimrlint_exe);
+    fmt_fix.addArgs(&.{ "--enable=zig-fmt", "--fix" });
     // The coverage guard (L4d): every tracked node of every linted file must be walked - a node the walk misses is
     // code no rule can see. `--coverage` lists the outermost unwalked nodes and fails. The same files as `lint`; the
     // gate runs it (one more walk of the whole tree), `check` does not.
@@ -8801,53 +8805,20 @@ pub fn build(b: *std.Build) void {
         "lint-files",
         "Comma-separated Zig files to lint instead of the default full-tree scan.",
     );
-    // `-Dautofix` (default true - the linter dogfooded on every build): the LINT-FIRST GATE
-    // APPLIES the mechanical lint fixes (`--fix`) + `zig fmt` in place, then CHECKS what is
-    // left - `lint`, `lint-check`, `check` and every gated compile see the fixed tree, and a
-    // finding a person must fix still fails. Confidence comes from the linter's guards (a fix
-    // that would break the file is refused) plus the compile right after, which catches any
-    // wrong edit at once. `-Dautofix=false` gives a strict, non-mutating gate (CI,
-    // verification). (The default was `false` until Oct 3 while this comment said `true`.)
-    const autofix: bool = b.option(
-        bool,
-        "autofix",
-        "Apply the mechanical lint fixes + zig fmt in place before checking and compiling (default true).",
-    ) orelse true;
-    // `-Dgate` (default true): whether the lint/fmt gate precedes every wasm compile at all.
+    // -- *** LINT AND FMT ARE CHECKED, NEVER APPLIED BY A BUILD, AND NEVER IN A COMPILE'S WAY (Simon, Oct 18) --
     //
-    // -- *** WHY THIS EXISTS, AND WHY THE DEFAULT STAYS AGGRESSIVE --
+    // No build writes a source file. `lint` and `lint-check` CHECK - the layout too, as the `zig-fmt` rule - and
+    // list every finding; a fixable one ends `autofix: zig build fix`, and the summary prints that command on a line
+    // of its own. `zig build fix` is the one step that rewrites: the linter's autofixes and `zig fmt`'s layout, then
+    // the tutorials' generated code blocks - each file's diff printed the moment it is written.
     //
-    // The gate is right for a normal build: it catches style drift at the moment it is written,
-    // when the fix is obvious and free. It is WRONG in the middle of an iteration loop, where a
-    // half-finished edit fails on a line-length rule before the compiler has said whether the
-    // change even makes sense - and the linter's message is then the only thing on screen, hiding
-    // the type error that actually matters.
+    // Where style is required - every app's step, `all-examples`, `dist`, `check`, and in `-Dmode=ship` the
+    // install - the step depends on `lint-check`, which runs BESIDE the compile, not before it: a compile error and
+    // a lint finding are reported by the same build, and neither hides the other.
     //
-    // ** SO THE DEFAULT IS UNCHANGED. `-Dgate=false` is a deliberate thing to type, per command,
-    // and it prints a warning every time it is used so it cannot be forgotten silently. The
-    // discipline it buys is: iterate with the gate off, then run `zig build check` with NO flag
-    // before ending a turn - `check` reaches lint and `zig fmt --check` through its wasm compiles,
-    // so one command still covers everything.
-    //
-    // * It does NOT disable the `lint` or `fmt` STEPS. `zig build lint` and `zig fmt` are always
-    // available and always run; this only removes the implicit dependency edge.
-    //
-    // -- *** CHANGED (Simon, Sep 25): BUILDING IS NOT GATED; ARTIFACTS AND THE END OF A TURN ARE --
-    //
-    // A gate on every compile - worse, an autofixing one that rewrote files mid-iteration - cost more
-    // than it caught: a page build reformatted a file between reading it and the next exact-text edit.
-    // So an ordinary build (tests, smoke tests, release pages) neither checks nor touches style. Lint
-    // and fmt stay MANDATORY where it matters, and always as CHECKS that never rewrite anything:
-    //   - every `*-standalone` page, `dist`, and `check` depend on `lint-check` (fmt --check + lint);
-    //   - `-Dmode=ship` turns the per-compile gate back on for everything it builds;
-    //   - `zig build check` is the end-of-turn command;
-    //   - `zig build fix` is the ONE step that rewrites sources (lint --fix, then zig fmt) - by name only.
-    // `-Dgate=true` still gates every wasm compile on demand.
-    const gate: bool = b.option(
-        bool,
-        "gate",
-        "Gate every wasm compile on lint + fmt --check (default: only in -Dmode=ship).",
-    ) orelse (mode == .ship);
+    // Gone with it, Oct 18: `-Dautofix`, which rewrote files in every build (one reformatted a file between reading
+    // it and an exact-text edit of it; another deleted a declaration whose first use had not been written yet), and
+    // `-Dgate`, which put the lint ahead of every wasm compile, so a line-length finding hid the type error behind it.
     const has_file_arg: bool = lint_files_opt != null;
     // Dependency-safe: this scan walks zimr's own tree via cwd-relative paths,
     // which only resolve when zimr is the ROOT project. When zimr is consumed as
@@ -8986,10 +8957,9 @@ pub fn build(b: *std.Build) void {
                     continue;
                 }
                 lint_run.addFileArg(b.path(path));
-                lint_run_install.addFileArg(b.path(path));
                 lint_fix.addFileArg(b.path(path));
+                fmt_fix.addFileArg(b.path(path));
                 lint_coverage.addFileArg(b.path(path));
-                lint_paths.append(b.allocator, path) catch @panic("OOM");
             }
         }
         // Top-level build.zig is included.  It uses build-helper
@@ -8997,10 +8967,9 @@ pub fn build(b: *std.Build) void {
         // keep the type annotations short - see the alias block
         // near the top of build.zig and src/shader_codegen.zig.
         lint_run.addFileArg(b.path("build.zig"));
-        lint_run_install.addFileArg(b.path("build.zig"));
         lint_fix.addFileArg(b.path("build.zig"));
+        fmt_fix.addFileArg(b.path("build.zig"));
         lint_coverage.addFileArg(b.path("build.zig"));
-        lint_paths.append(b.allocator, "build.zig") catch @panic("OOM");
     }
     // Explicit file subset (from -Dlint-files) when the default scan
     // was skipped above.
@@ -9008,26 +8977,17 @@ pub fn build(b: *std.Build) void {
         var it = std.mem.tokenizeScalar(u8, csv, ',');
         while (it.next()) |f| {
             lint_run.addFileArg(b.path(f));
-            lint_run_install.addFileArg(b.path(f));
             lint_fix.addFileArg(b.path(f));
+            fmt_fix.addFileArg(b.path(f));
             lint_coverage.addFileArg(b.path(f));
-            lint_paths.append(b.allocator, f) catch @panic("OOM");
         }
     }
     // Forward any remaining flags (e.g. `-- --enable=decl-order`) to the
     // lint exe.  Passthru args are no longer observable by build.zig
     // (configurer/maker split), which is fine: only the exe parses them.
     lint_run.addPassthruArgs();
-    lint_run_install.addPassthruArgs();
     lint_fix.addPassthruArgs();
     lint_fix.addArg("--fix");
-    // Autofix: the install-path lint Run runs in `--fix` mode, so a default build repairs the
-    // mechanical findings in place rather than failing on them; `lint_run` (check mode) then
-    // runs AFTER it and `zig fmt` (wired below), and is what every gated compile, `lint` and
-    // `lint-check` wait on. With `-Dautofix=false` nothing mutates: CI and verification.
-    if (autofix) {
-        lint_run_install.addArg("--fix");
-    }
     const lint_step: *Step = b.step("lint", "Run AST-based style linter on Zig sources");
     lint_step.dependOn(&lint_run.step);
     const lint_coverage_step: *Step = b.step(
@@ -9037,55 +8997,37 @@ pub fn build(b: *std.Build) void {
     lint_coverage_step.dependOn(&lint_coverage.step);
 
     // ============================================================================
-    // `zig build fmt` / `zig build lint-check`
+    // `zig build fmt` / `zig build lint-check` - the layout, and the style gate
     // ============================================================================
-    // Convention (turn 343): the default `zig build` (== install) does
-    // NOT auto-run style checks.  Iterative dev should be fast.  Two
-    // separate commands cover the style surface:
+    // `zig-fmt` is a lint rule, so the layout is checked with every other rule and its finding names the command
+    // that fixes it - `zig fmt --check` named a file and said nothing more. `zig build fmt` lays the files out and
+    // does nothing else, printing each diff; `zig build fix` does that and every other autofix. `lint-check` is the
+    // style gate the artifact steps and `check` depend on.
     //
-    //   `zig build fmt`         - APPLIES zig fmt.  Mutates files.
-    //                             Convenience.  Never fails.
-    //   `zig build lint-check`  - The composite style gate.  Runs
-    //                             zig-fmt-check + lint together.
-    //                             Fails if either does.  Use in CI,
-    //                             audit scripts, pre-push hooks, etc.
-    //
-    // If you want to check ONLY formatting (no lint), use the zig CLI
-    // directly: `zig fmt --check src/ examples/ build.zig tools/`.
-    // Not exposed as a build step - `lint-check` is the canonical gate
-    // and a one-purpose `fmt-check` step was redundant with it.
-    //
-    // Rationale (turn 342): putting fmt+lint on the install path made
-    // every `zig build` run lint (~26s cold), and during multi-turn
-    // cleanup with intentionally-dirty lint state, `zig build` became
-    // unusable.  Explicit gate beats implicit gate.
-    //
-    // Note: we list `tools/` files individually instead of `"tools"`
-    // because zig fmt would otherwise walk into the bundled stdlib
-    // at `tools/zig-x86_64-linux-0.16.0/lib/std/`, adding ~0.6s of
-    // pointless work per check.  Discovered turn 382.
-    // template/ is listed by its parts for a similar reason: a `zig build` inside it leaves
-    // .zig-cache/ and zig-out/ there, and nothing in them is source. It is in the fmt,
-    // lint-check and fix lists but not the two that gate zimr's own compiles, so a template
-    // formatting slip fails `check` without blocking an example build.
-    // NOTE(zig-0.17): run `zig fmt` via addSystemCommand instead of b.addFmt.
-    // The dev.639 configurer segfaults while serializing a Fmt step's LazyPath
-    // `paths` (minimal repro confirmed - file upstream for 0.17.1).  A system
-    // command takes plain string args, sidestepping the broken path; the readme
-    // already documents `zig fmt ...` from the CLI as equivalent.  See
-    // src/notes/zig17_migration.md B8.
-    // The template project: formatted with the repository, though its own `Project` lint config checks it.
-    const template_fmt_paths = [_][]const u8{ "template/build.zig", "template/src" };
-    const fmt_apply: *Run = addZigFmt(b, .rewrite, lint_paths.items, &template_fmt_paths);
-    const fmt_apply_step: *Step = b.step("fmt", "Apply zig fmt to every linted file, and to template/");
-    fmt_apply_step.dependOn(&fmt_apply.step);
+    // The template project is laid out with the repository - its build.zig and every file under template/src, not
+    // template/ whole (a `zig build` inside it leaves .zig-cache/ and zig-out/ there) - though its own `Project` lint
+    // config holds it to the rules; here it is held to `zig-fmt` alone. A template layout slip fails `check` without
+    // blocking an example build. Only in zimr's own checkout: a project depending on zimr has no template/.
+    var template_files: ArrayList(LazyPath) = .empty;
+    if (b.pkg_hash.len == 0) {
+        template_files.append(b.allocator, b.path("template/build.zig")) catch @panic("OOM");
+        template_files.appendSlice(b.allocator, zigFilesUnder(b, &.{"template/src"})) catch @panic("OOM");
+    }
+    const template_fmt_check: *Run = b.addRunArtifact(zimrlint_exe);
+    template_fmt_check.addArgs(&.{ "--enable=zig-fmt", "--fix-command", "zig build fix" });
+    const template_fmt_fix: *Run = b.addRunArtifact(zimrlint_exe);
+    template_fmt_fix.addArgs(&.{ "--enable=zig-fmt", "--fix" });
+    for (template_files.items) |file| {
+        template_fmt_check.addFileArg(file);
+        template_fmt_fix.addFileArg(file);
+        fmt_fix.addFileArg(file);
+    }
+    const fmt_step: *Step = b.step("fmt", "Lay out the linted files and template/ as zig fmt does, each diff printed");
+    fmt_step.dependOn(&fmt_fix.step);
 
-    // Internal fmt-check feeds `lint-check`; not registered as a top-level step.
-    const fmt_check: *Run = addZigFmt(b, .check, lint_paths.items, &template_fmt_paths);
-
-    const lint_check_step: *Step = b.step("lint-check", "Style gate: zig fmt --check + zig build lint");
-    lint_check_step.dependOn(&fmt_check.step);
+    const lint_check_step: *Step = b.step("lint-check", "Style gate: every lint rule, the layout (zig-fmt) included");
     lint_check_step.dependOn(&lint_run.step);
+    lint_check_step.dependOn(&template_fmt_check.step);
 
     // -- *** `zig build gate` - EVERYTHING, so nobody has to remember the list ---------
     //
@@ -9105,6 +9047,7 @@ pub fn build(b: *std.Build) void {
     );
     gate_step.dependOn(lint_check_step);
     gate_step.dependOn(lint_coverage_step);
+    gate_step.dependOn(lint_test_step);
     gate_step.dependOn(test_fast_step);
     gate_step.dependOn(wgpu_check);
     // The audio worklet's program against a real mixer's commands: nothing in a browser-free sandbox runs it otherwise.
@@ -9123,17 +9066,16 @@ pub fn build(b: *std.Build) void {
     // aggregate step ran is how zimr_template drifted.
     gate_step.dependOn(external_check);
     gate_step.dependOn(template_check);
-    // The tutorials can't drift from the code. First their code blocks are regenerated from the
-    // source (in place with the default -Dautofix, like `zig fmt`; strictly checked with
-    // -Dautofix=false), then every quoted line is checked to exist in the source (doc-sync).
+    // The tutorials can't drift from the code. First their code blocks are checked against the source - regenerated
+    // only by `zig build fix` or `zig build doc-folds`, which print each page's diff - then every quoted line is
+    // checked to exist in the source (doc-sync).
     const gate_doc_folds: *Run = b.addRunArtifact(doc_folds_exe);
     gate_doc_folds.setCwd(b.path("."));
     gate_doc_folds.has_side_effects = true;
-    gate_doc_folds.addArg(if (autofix) "--fix" else "--check");
+    gate_doc_folds.addArg("--check");
     gate_doc_folds.addArgs(&doc_folds_pages);
-    // `check` too, which runs every turn: a fold once sat stale for days while only `gate` looked. Read-only here
-    // whatever -Dautofix says - `check` never edits a file - and always run, since the sources the folds quote are
-    // files the build cannot see.
+    // `check` too, which runs every turn: a fold once sat stale for days while only `gate` looked. Always run, since
+    // the sources the folds quote are files the build cannot see.
     const check_doc_folds: *Run = b.addRunArtifact(doc_folds_exe);
     check_doc_folds.setCwd(b.path("."));
     check_doc_folds.has_side_effects = true;
@@ -9150,42 +9092,10 @@ pub fn build(b: *std.Build) void {
     // full audit including them is `tier-a-check`; this step is the fast one that should run
     // before every ship.
 
-    // Install-path twin of `fmt_check` (see `lint_run_install`): default
-    // `zig build` fmt-checks via THIS Run so it can be gated behind a
-    // green compile without dragging the shared `lint-check` step into a
-    // full project build.
-    const fmt_check_install: *Run = addZigFmt(b, .check, lint_paths.items, &.{});
-
-    // Gate-only fmt Run (distinct from the `zig build fmt` step's `fmt_apply`)
-    // so wiring the lint->fmt ordering here doesn't change what `zig build fmt`
-    // does. Under `-Dautofix` it depends on `lint_run_install` (the `--fix`
-    // Run), serialising the two mutating steps - lint-fix first, then fmt tidies
-    // the blank line a deletion can leave - ahead of every compile so they never
-    // race on the same files.
-    const fmt_apply_gate: *Run = addZigFmt(b, .rewrite, lint_paths.items, &.{});
-    if (autofix) {
-        // The fix first, then the format, then the CHECKS: `--fix` exits 0 whatever is left (it rewrites, it does
-        // not gate), so `lint` and `fmt --check` run after it - a finding a person must fix still fails the build.
-        fmt_apply_gate.step.dependOn(&lint_run_install.step);
-        lint_run.step.dependOn(&fmt_apply_gate.step);
-        fmt_check.step.dependOn(&fmt_apply_gate.step);
-    }
-
-    // LINT-FIRST GATE.  Every Zig compile in the build depends on the style
-    // checks, so `lint` + `zig fmt --check` must pass BEFORE anything is
-    // compiled: a semantic compile error never surfaces until the tree is
-    // lint-clean.  (Parse/AST errors DO still surface - from the linter and
-    // fmt themselves, which need a parseable AST; that's intended and fine.)
-    //
-    // Cycle-free: the lint binary is produced by `tools_subbuild` (a Run /
-    // nested build), NOT an in-graph Compile, so no Compile is upstream of
-    // the lint Runs - gating Compiles behind them cannot form a loop.
-    //
-    // We walk every top-level step's transitive deps and gate each Compile
-    // (`step.id == .compile`).  This covers bare `zig build` AND every
-    // example / standalone step, not just the install path.  The standalone
-    // `lint` / `lint-check` steps use the ungated `lint_run` / `fmt_check`,
-    // so they stay fast and run on not-yet-compiling code.
+    // The graph walk: every top-level step's transitive dependencies, once each, to collect what no step names
+    // directly - the wasm installs `all-examples` and `test` build, and the pages beside them. No compile waits on
+    // the lint (Oct 18): the steps that require a clean tree depend on `lint-check` beside their compile, wired
+    // after this walk, so a compile error and a lint finding come out of one build.
     {
         var seen: AutoHashMapUnmanaged(*Step, void) = .empty;
         defer seen.deinit(b.allocator);
@@ -9201,39 +9111,6 @@ pub fn build(b: *std.Build) void {
             seen.put(b.allocator, s, {}) catch @panic("oom");
             for (s.dependencies.items) |dep| {
                 stack.append(b.allocator, dep) catch @panic("oom");
-            }
-            // The lint tool is now an in-graph Compile (was a sub-build). Its
-            // own compile is upstream of the lint Runs, so gating it behind them
-            // would form a cycle - exclude it. Every other Compile is downstream
-            // of lint and gates normally. Only gate when zimr is the ROOT project
-            // - a consumer depending on zimr must not be forced through zimr's
-            // dev-only lint/fmt checks (they scan root-relative paths like
-            // `examples/` that don't exist in the dependency).
-            if (b.pkg_hash.len == 0 and s.tag == .compile and s != &zimrlint_exe.step) {
-                // Gate ONLY the wasm app compiles (examples + runtime), NOT the
-                // native build tools (spv2wgsl, c2js, gen_shader_externs...).
-                // Gating the tools bought no correctness - lint scans every file
-                // and fails the build regardless of order - but it made every
-                // tool compile, and the entire shader fan-out that runs through
-                // them (dozens of spv2wgsl Runs per example), transitively
-                // depend on lint. One lint failure then detonated into ~100
-                // "transitive failure" lines that buried the real error (the
-                // whole reason `tools/zbuild.zig` had to exist). Left ungated,
-                // the tools and shader translations still succeed, so a lint (or
-                // app compile) failure surfaces only the small app-compile
-                // subtree - the actual error is right there.
-                const comp: *Compile = s.cast(Compile).?;
-                if (gate and comp.rootModuleTarget().cpu.arch == .wasm32) {
-                    if (autofix) {
-                        // lint --fix -> fmt -> lint (check) -> compile. The two
-                        // mutating steps run in sequence (never racing), and the
-                        // check after them still fails on whatever needs a person.
-                        s.dependOn(&lint_run.step);
-                    } else {
-                        s.dependOn(&lint_run_install.step);
-                        s.dependOn(&fmt_check_install.step);
-                    }
-                }
             }
             // `all-examples` must build the WHOLE gallery (its stated job -
             // serve / dist / a full-tree compile check all hang off it).
@@ -9284,13 +9161,13 @@ pub fn build(b: *std.Build) void {
     // Bare `zig build` (install) is mostly a JS bundle + static files with no
     // Compile of its own, so depend on the gates directly too - otherwise a
     // compile-less install would skip the style check entirely.
-    if (gate) {
-        b.getInstallStep().dependOn(&fmt_check_install.step);
-        b.getInstallStep().dependOn(&lint_run_install.step);
+    // A ship build's bare `zig build` holds the tree to the style too (its artifacts already do, below).
+    if (mode == .ship) {
+        b.getInstallStep().dependOn(lint_check_step);
     }
     // ARTIFACTS REQUIRE A CLEAN TREE: every app's step, `all-examples`, `dist` and `check` depend on the
-    // non-mutating `lint-check` (fmt --check + lint). The compile may run beside it; the step fails
-    // unless both pass - fix with `zig build fix`.
+    // non-mutating `lint-check` (every rule, the layout included). The compile runs beside it, never after it; the
+    // step fails unless both pass, and every fixable finding names `zig build fix`.
     for (artifact_step_names.items) |name| {
         b.top_level_steps.get(name).?.step.dependOn(lint_check_step);
     }
@@ -9300,15 +9177,23 @@ pub fn build(b: *std.Build) void {
             tls.step.dependOn(lint_check_step);
         }
     }
-    // `zig build fix`: lint's mechanical fixes, then zig fmt tidies what they leave - on demand. (While autofix is
-    // on, the default, every build does the same first: `lint_run_install` and `fmt_apply_gate`.)
-    const fmt_after_fix: *Run = addZigFmt(b, .rewrite, lint_paths.items, &template_fmt_paths);
-    fmt_after_fix.step.dependOn(&lint_fix.step);
+    // `zig build fix` - the ONE step that rewrites sources, and the command every fixable finding names: the linter's
+    // autofixes and `zig fmt`'s layout (`zig-fmt`), the template's layout, then the tutorials' code blocks regenerated
+    // from the fixed source. Every rewritten file's diff is printed the moment it is written, and whatever is left
+    // for a person is listed under its file.
+    const fix_doc_folds: *Run = b.addRunArtifact(doc_folds_exe);
+    fix_doc_folds.setCwd(b.path("."));
+    fix_doc_folds.has_side_effects = true;
+    fix_doc_folds.addArg("--fix");
+    fix_doc_folds.addArgs(&doc_folds_pages);
+    fix_doc_folds.step.dependOn(&lint_fix.step);
     const fix_step: *Step = b.step(
         "fix",
-        "Rewrite sources: lint --fix, then zig fmt (every build does this first while -Dautofix is on, the default)",
+        "Rewrite sources: lint autofixes, zig fmt layout, tutorial code blocks - every change printed as a diff",
     );
-    fix_step.dependOn(&fmt_after_fix.step);
+    fix_step.dependOn(&lint_fix.step);
+    fix_step.dependOn(&template_fmt_fix.step);
+    fix_step.dependOn(&fix_doc_folds.step);
 
     // LAST, once every step exists: `zig build tools` compiles every tool, and `gate` includes it.
     gateEveryTool(b, gate_step);

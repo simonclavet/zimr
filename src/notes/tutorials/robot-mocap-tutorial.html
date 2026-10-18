@@ -14,9 +14,9 @@
 
       zig build doc-folds
 
-  which fills in every block, and the reference in chapter 16, from the source. The gate does the
-  same, or refuses to pass with -Dautofix=false, so the page cannot drift from the code. What is
-  left to keep in sync by hand is the prose around the code.
+  which fills in every block, and the reference in chapter 16, from the source (`zig build fix` does
+  it too, after the linter's fixes). `check` and the gate refuse to pass on a stale block, so the
+  page cannot drift from the code. What is left to keep in sync by hand is the prose around the code.
 -->
 </head>
 <body>
@@ -1423,7 +1423,7 @@ pub fn buildPointSamples(
                 if (vecLength(side) &lt; 0.1) {
                     side = crossVec(normalize3(bone), vec(1, 0, 0));
                 }
-                side = normalize3(side) * @as(Vec, @splat(0.06));
+                side = normalize3(side) * splat(0.06);
                 const hb: usize = @intCast(in.human_of_body[b]);
                 const in_human: Vec = zm.rotate(
                     conjugate(in.rest_rotations[hb]),
@@ -1495,7 +1495,7 @@ pub fn buildPointSamples(
             }
             if (vecLength(m.geom_pos[g]) &gt; far_length) {
                 far_length = vecLength(m.geom_pos[g]);
-                far = m.geom_pos[g] * @as(Vec, @splat(2.0));
+                far = m.geom_pos[g] * splat(2.0);
             }
         }
         // -- ** A SPHERE HAS NO DIRECTION - and an ARBITRARY axis is not a substitute --
@@ -1889,8 +1889,8 @@ pub fn solvePointCloud(
                     "solvePointCloud: sample {d} targets body {d} but retargeted holds {d}",
                     .{ i, target_body, opts.retargeted.len },
                 );
-                target = opts.retargeted[target_body] * @as(Vec, @splat(1.0 - opts.position_pull)) +
-                    opts.positions[sample.human] * @as(Vec, @splat(opts.position_pull));
+                target = opts.retargeted[target_body] * splat(1.0 - opts.position_pull) +
+                    opts.positions[sample.human] * splat(opts.position_pull);
             }
         }
         if (sample.human_parent) |parent_joint| {
@@ -1905,7 +1905,7 @@ pub fn solvePointCloud(
             const bone_has_direction: bool = vecLength(bone) &gt; 1.0e-5;
             if (bone_has_direction) {
                 target = opts.positions[parent_joint] +
-                    normalize3(bone) * @as(Vec, @splat(sample.own_length));
+                    normalize3(bone) * splat(sample.own_length);
             }
         }
         const target_is_relative: bool = sample.relative_local != null and sample.human_parent != null;
@@ -5121,7 +5121,7 @@ fn train(
         if (is_checkpoint_due) {
             try saveCheckpoint(gpa, arena, io, folder, trainer, progress);
         }
-        reportProgress(io, report_interval_ms, trainer, progress, stats);
+        reportProgress(io, report_interval_ms, folder, trainer, progress, stats);
     }
 }</code></pre></details>
 

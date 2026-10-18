@@ -107,8 +107,8 @@ pub export fn runnerShutdown() void {
     zimr_app.pipeline_cache.deinit();
 
     // The engine depth target (created lazily by gpu_frame.ensureDepth, sized to
-    // the surface, one live texture+view at a time). ensureDepth destroys the old
-    // texture on resize but not the old view, so free both here explicitly.
+    // the surface, one live texture+view at a time; ensureDepth frees the old pair
+    // on resize). The last pair is freed here.
     if (zimr_app.gpu_frame.depth_view != .invalid) {
         z.wgpu.destroyTextureView(zimr_app.gpu_frame.depth_view);
         zimr_app.gpu_frame.depth_view = .invalid;

@@ -21,9 +21,11 @@
 //! zig-out/bin instead: `zig-out/bin/zbuild check`.
 //! It passes the build's output through as it comes - whole lines, each stream's, so neither splits the other's -
 //! and announces each finding the moment the build prints it, on a line of its own beginning `zbuild: found:`: a
-//! compile error, or a lint finding. A file the linter's autofix rewrote is announced too, `zbuild: fixed: <file>:
-//! <rule> x<count>`, as a notice rather than a finding - the build goes on to check it - so that whoever edits that
-//! file next reads it again first. A finding of a lint rule still in progress (`[rule, work in progress]`), which
+//! compile error, or a lint finding - a line that starts with its position, `path:line:col: error:` or
+//! `path:line:col: [rule]`, and no other line, so source text in a diff `zig build fix` prints is never taken for one.
+//! A file that fix rewrote is announced too, `zbuild: fixed: <file>: <rule> x<count>`, as a notice rather than a
+//! finding, so that whoever edits that file next reads it again first. A finding of a lint rule still in progress
+//! (`[rule, work in progress]`), which
 //! never fails a run, is announced as `zbuild: work in progress:` and changes nothing else. When the build fails it
 //! ENDS with only the roots - so
 //! the answer is the last thing on screen. Both streams come through pipes, which cannot be written positionally, so
@@ -93,6 +95,44 @@ const Kind = enum {
     other,
 };
 
+/// The text after a diagnostic's position when `line` begins with one - `<path>:<line>:<col>: `, how the compiler and
+/// the linter both print a finding - or null. Asking for the position, not just `: error:` or `: [` somewhere in the
+/// line, is what keeps source text out: `zig build fix` prints the diff of every file it rewrites, and a diff line
+/// like `+    var buffer: [16]u8 = undefined;` holds a `: [` too. A diff line starts with ` `, `+`, `-` or `@`, so no
+/// line starting with those is a diagnostic; nor is an indented one (a snippet, a fix run's list of what is left).
+fn diagnosticText(line: []const u8) ?[]const u8 {
+    if (line.len == 0) {
+        return null;
+    }
+    const first: u8 = line[0];
+    if (first == ' ' or first == '\t' or first == '+' or first == '-' or first == '@') {
+        return null;
+    }
+    // The first `:<digits>:<digits>: ` after a non-empty path - a Windows path's `C:` is not followed by digits.
+    var search_from: usize = 1;
+    while (indexOfPos(u8, line, search_from, ":")) |colon| {
+        search_from = colon + 1;
+        var cursor: usize = colon + 1;
+        const line_number_start: usize = cursor;
+        while (cursor < line.len and line[cursor] >= '0' and line[cursor] <= '9') {
+            cursor += 1;
+        }
+        if (cursor == line_number_start or cursor >= line.len or line[cursor] != ':') {
+            continue;
+        }
+        cursor += 1;
+        const column_start: usize = cursor;
+        while (cursor < line.len and line[cursor] >= '0' and line[cursor] <= '9') {
+            cursor += 1;
+        }
+        const has_column: bool = cursor > column_start;
+        if (has_column and cursor + 1 < line.len and line[cursor] == ':' and line[cursor + 1] == ' ') {
+            return line[cursor + 2 ..];
+        }
+    }
+    return null;
+}
+
 /// Classify a single log line. Order matters: noise patterns are tested before
 /// the diagnostic patterns so a DAG line that happens to contain "error" (e.g.
 /// "compile exe X ... 1 errors") is dropped, not surfaced.
@@ -132,21 +172,22 @@ fn classify(line: []const u8) Kind {
         return .dag;
     }
 
-    // ---- diagnostics (the roots we want) ----
-    if (contains(line, ": error:")) {
-        return .err;
-    }
-    if (contains(line, ": note:")) {
-        return .note;
-    }
-    // Lint rule line: "path:line:col: [rule-name] message". By here it isn't a
-    // DAG/error/note line, so a "`: [`" is the lint format - of a rule still in progress when its brackets say so,
-    // which the linter prints but never fails a run for.
-    if (contains(line, ": [") and contains(line, ", work in progress] ")) {
-        return .work_in_progress;
-    }
-    if (contains(line, ": [")) {
-        return .lint;
+    // ---- diagnostics (the roots we want): a line that starts with its position ----
+    if (diagnosticText(line)) |text| {
+        if (startsWith(u8, text, "error:")) {
+            return .err;
+        }
+        if (startsWith(u8, text, "note:")) {
+            return .note;
+        }
+        // Lint rule line: "path:line:col: [rule-name] message" - of a rule still in progress when its brackets say
+        // so, which the linter prints but never fails a run for.
+        if (startsWith(u8, text, "[")) {
+            if (contains(text, ", work in progress] ")) {
+                return .work_in_progress;
+            }
+            return .lint;
+        }
     }
 
     if (startsWith(u8, t, "Build Summary:")) {
@@ -677,4 +718,16 @@ test "fixedFileReport: the linter's line for a file it fixed, and no other line"
     );
     try expect(fixedFileReport("zimrlint: 1 left in ./tools/x.zig for a person") == null);
     try expect(fixedFileReport("./tools/x.zig:3:1: [line-length] 129 cols, max 120 (rule 10)") == null);
+}
+
+test "a diff that `zig build fix` prints is never a finding, though its source text holds `: [` and `: error:`" {
+    try expect(!isFinding("+    var buffer: [16]u8 = undefined;"));
+    try expect(!isFinding("-    // note: error: what a comment can say"));
+    try expect(!isFinding("     const corner: [4]f32 = .{ 0, 0, 0, 0 };"));
+    try expect(!isFinding("@@ -12,7 +12,7 @@"));
+    // A fix run's list of what is left: indented, so a fix is not stopped before every file is done.
+    try expect(!isFinding("    ./src/a.zig:9:1: [line-length] 125 cols, max 120 (rule 10)"));
+    try expect(isFinding("./src/a.zig:9:1: [line-length] 125 cols, max 120 (rule 10)"));
+    try expect(isFinding(".\\src\\a.zig:1:1: [zig-fmt] not laid out as `zig fmt` lays it out"));
+    try expect(isFinding("C:\\dev\\zimr\\src\\a.zig:3:5: error: expected type 'u32', found 'bool'"));
 }

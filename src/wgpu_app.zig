@@ -4043,6 +4043,11 @@ pub const CpuFramebuffer = struct {
             return;
         }
         const app: *App = appOf(gl);
+        // Staged geometry may still sample the old texture through its bind
+        // group, which the registry update below destroys: draw it first.
+        if (self.registered and app.drawing_active) {
+            gl.flushBeforeMaterialSwap();
+        }
         self.tex.deinit(); // free the old texture's handle + view + sampler
         self.tex = WgpuTexture.createFromPixels(app.gpu_frame.device, app.gpu_frame.queue, .{
             .width = width,

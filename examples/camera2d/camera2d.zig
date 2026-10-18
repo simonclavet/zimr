@@ -10,9 +10,13 @@ const zm = @import("zm");
 const float = zm.float;
 const Color = zm.Color;
 const Camera2D = zm.Camera2D;
+const radFromDeg = zm.radFromDeg;
+const degFromRad = zm.degFromRad;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const c = Color;
+/// How fast the camera turns. `Camera2D.rotation` is in radians, so the angle is converted where it is set.
+const rotation_degrees_per_second: f32 = 10.0;
 
 const State = struct {
     font: z.Font,
@@ -56,7 +60,7 @@ fn update(f: *z.Frame, s: *State) void {
     const cam: Camera2D = .{
         .target = .{ @cos(t * 0.3) * 120.0, @sin(t * 0.4) * 120.0 },
         .offset = .{ w * 0.5, h * 0.5 },
-        .rotation = t * 10.0,
+        .rotation = radFromDeg(t * rotation_degrees_per_second),
         .zoom = 1.0 + @sin(t * 0.5) * 0.35,
     };
 
@@ -68,7 +72,7 @@ fn update(f: *z.Frame, s: *State) void {
     f.gl.textf(
         .{ 12, 12 },
         "Camera2D  zoom {d:.2}  rot {d:.0}",
-        .{ cam.zoom, @mod(cam.rotation, 360.0) },
+        .{ cam.zoom, @mod(degFromRad(cam.rotation), 360.0) },
         .{ .size = 16, .color = c.init(210, 214, 224, 230), .font = &s.font },
     );
     z.endDrawing(f.gl);

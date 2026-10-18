@@ -325,11 +325,26 @@ fn loadObjMesh(gpa: Allocator, source: []const u8) !z.Mesh {
 /// * THE CEILING IS WHAT MAKES MASS MATTER, and without it the demo would show nothing.
 /// Computed torque asks the mass matrix for whatever acceleration it wants and gets it, so an
 /// unlimited arm pushes a 200 kg block exactly as easily as a 1 kg one. A real motor has a
-/// rating it cannot exceed to win an argument. 25 N*m is deliberately feeble for a KUKA -
-/// enough to hold itself up and shove a light box, not enough to move a heavy one.
+/// rating it cannot exceed to win an argument.
+///
+/// ** BUT IT MUST HOLD THE ARM UP FIRST. This was 25 N*m, "enough to hold itself up", and it
+/// was not: holding "wind up" costs `lbr_iiwa_joint_2` **46.7 N*m** of gravity alone
+/// (`bias_force`, which agrees with a finite difference of the potential energy). At 25 the
+/// shoulder saturated from the first frame and the arm sagged 1.2 rad onto the tower, so every
+/// sweep started from a collapse. At 100 it held "wind up" exactly and tracked the sweep to
+/// 0.003 rad, no joint at the limit in any quarter-second sample. The slider still goes down
+/// to 3 N*m.
 const crate_mass_default: f32 = 0.8;
 
-const motor_limit_default: f32 = 25.0;
+const motor_limit_default: f32 = 100.0;
+
+/// The base and the first moving link, as tree indices. Body 0 is the world, so spec body `k`
+/// is tree body `k + 1` - the same offset `crateBody` uses. See `initState` for why they must
+/// not collide.
+const base_and_first_link: [1][2]u32 = .{.{
+    1 + @backingInt(kuka.Model.Body.lbr_iiwa_link_0),
+    1 + @backingInt(kuka.Model.Body.lbr_iiwa_link_1),
+}};
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22);
@@ -358,7 +373,16 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .model = try (scene_mod.Scene{
             .robots = &.{kuka.spec},
             .free_bodies = &sceneCrates(),
-            .options = .{ .timestep = timestep, .max_contacts = 64 },
+            .options = .{
+                .timestep = timestep,
+                .max_contacts = 64,
+                // ** NEWTON, BECAUSE PGS CANNOT HOLD A TOWER. The default `.pgs` sweeps rows one
+                // contact at a time, so a five-high stack never feels the floor at its top: with
+                // the arm perfectly still the crates slid apart at 1.4 m/s inside 1.5 s, at the
+                // 60-iteration cap every step. Newton held them at 0.000 m/s in 1-3 iterations.
+                // `robot_physics`'s "Newton holds a stack that PGS drops" is the same finding.
+                .solver = .{ .algorithm = .newton, .max_iterations = 50 },
+            },
         }).build(gpa),
         .data = undefined,
         .font = font,
@@ -399,6 +423,22 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .kv = 16, // 2 zeta omega for zeta = 1
     };
     s.model.opt.timestep = timestep;
+    // *** THE BASE MUST NOT COLLIDE WITH THE LINK IT CARRIES, and nothing filters it for us.
+    //
+    // `link_0` has no joint, so its weld is the WORLD - and the bridge's adjacency filter will
+    // not filter against the world, because that is what keeps floor contacts alive (MuJoCo's
+    // `filterBodyPair` has the same rule). So the base's hull and `link_1`'s, which share
+    // `lbr_iiwa_joint_1` and overlap by 3.2 cm at rest, became a contact from step zero.
+    //
+    // Its normal points straight up, along the axis `link_1` spins about, so almost nothing can
+    // move along it and the soft constraint answered with 40 MN. The friction rows CAN turn
+    // `lbr_iiwa_joint_1`, and passed that on: 100 rad/s - the velocity cap - one step later.
+    // That was the arm swinging wildly. MuJoCo models carry a `<contact><exclude>` for this
+    // pair; this is it.
+    //
+    // * SET BEFORE THE BRIDGE IS BUILT: `Bridge.init` takes the model's slice then and never
+    // looks again. The slice is a file-scope constant, so the model's arena never frees it.
+    s.model.exclude_pairs = &base_and_first_link;
     s.data = try rbt.Data.init(gpa, &s.model);
     s.desired_acc = try gpa.alloc(f32, s.model.nv);
     s.actuation = try ctl.Actuation.init(gpa, &s.model);

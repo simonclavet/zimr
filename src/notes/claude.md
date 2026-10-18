@@ -615,14 +615,17 @@ compiler's cache moves each result into place the same way. A finding of a rule 
 `[rule, work in progress]`; zbuild announces it as `zbuild: work in progress:`, and it neither stops the build nor
 fails it. No enabled rule is in progress today: in zimr a lint finding is a compile error.
 
-**Autofix and editing (Oct 17).** Every gated build runs the linter's `--fix` over the sources before checking, so a
-build may rewrite files: an alias for a `std.` call, a decl literal, parameters one per line, an unused declaration
-removed. Each rewritten file is announced, `zbuild: fixed: <file>: <rule> x<count>` (a notice, never a finding), and is
-written once, already laid out by `zig fmt`'s own renderer - nothing that stops a build can leave a fix unformatted.
-What the fixer cannot fix it only counts (`zimrlint: N left in <file>`); the check after it lists it. So: after any
-build, RE-READ a file announced as fixed before an exact-text edit of it (`grep -n`/`sed -n` of the region); after
-writing a file, run `zbuild fix` (or any build) at once and read the result once, rather than letting a later build
-rewrite it between two edits; and write in the house style from the start - most fixes are style slips.
+**No build rewrites a source (Simon, Oct 18).** Builds CHECK lint and layout and never apply them: every finding is
+listed, a fixable one ends `autofix: zig build fix`, and the summary prints that command on a line of its own. The
+layout is the `zig-fmt` lint rule (`zig fmt --check` inside the linter, with the same hint). `zig build fix` is the ONE
+step that writes: the linter's autofixes and the layout, then the tutorials' generated code blocks - and it prints
+the DIFF of every file the moment it writes it (`tools/line_diff.zig`), then lists, indented under the file, what is
+left there for a person. zbuild announces each rewritten file, `zbuild: fixed: <file>: <rule> x<count>` (a notice,
+never a finding); only a line that starts with its position, `path:line:col:`, is a finding to it, so the diff's
+source text is never taken for one. So: after writing a file, run `zbuild fix` and READ THE DIFF it prints - it is
+the exact change, and nothing else will touch the file until the next fix - and write in the house style from the
+start: most fixes are style slips. (Until Oct 18 every build ran `--fix` first: one reformatted a file between
+reading it and an exact-text edit of it, another deleted a declaration whose first use had not been written yet.)
 
 `zbuild --complete <step> [args]` (first argument only) runs the build to its end instead. Use it for:
 
@@ -645,9 +648,8 @@ build passes straight through; the build's own failure report, on standard error
 build run as `zig build ... > /dev/null 2> log` keeps the report and throws away the findings - which is how a whole
 session read "failed command: zimrlint" and re-ran the linter by hand to see why.
 
-**A build rewrites sources.** With autofix on (the default), every build applies the linter's fixes and `zig fmt`
-before checking - `std.mem.eql` becomes the file's `eql` alias, a long signature is split. Read a file again after a
-build before editing it by exact text: the text matched before the build may no longer be there.
+**Only `zig build fix` rewrites sources** (and `zig build fmt` / `doc-folds`, for the layout or the tutorials alone).
+Read a file again after one of those before editing it by exact text - the diff it printed says what moved.
 
 ## Disk and the zig cache
 
@@ -659,8 +661,8 @@ space".
 **Use `-Dfocus` for the inner loop.** It narrows example typechecking without skipping the host
 unit tests — verified by planting a failure in one and watching the focused build go red:
 
-    zig build test -Dautofix=false -Dfocus=<example> -j1     # ~565 MB of cache
-    zig build test -Dautofix=false -j1                       # ~8 GB
+    zig build test -Dfocus=<example> -j1     # ~565 MB of cache
+    zig build test -j1                       # ~8 GB
 
 **When space runs short, in this order:**
 
@@ -1018,9 +1020,9 @@ minutes. Total under 4 minutes when nothing is wrong:
     tar -xJf <upload> -C tools/ && . ./.zenv.sh          # 8s
     zig fmt --check src examples build.zig tools/zimrlint.zig   # 1s   tier 2
     <c2js name sweep, below>                             # 4s   tier 3, static
-    zig build c2js-canary -Dautofix=false -j1            # 32s  tier 3, dynamic
-    zig build hello-world -Dplatform=web -Dmode=release -Dautofix=false -j1   # 82s
-    zig build launcher    -Dplatform=web -Dmode=release -Dautofix=false -j1   # 90s
+    zig build c2js-canary -j1            # 32s  tier 3, dynamic
+    zig build hello-world -Dplatform=web -Dmode=release -j1   # 82s
+    zig build launcher    -Dplatform=web -Dmode=release -j1   # 90s
 
 (Every app has one step since Oct 2026, built for `-Dplatform`; a web build makes the served page and the
 single-file page together. The step names in the measurements below are the old `-standalone` ones.)
@@ -1046,12 +1048,13 @@ Ground rules for every call:
   850s in S2 alone. On 1902 the longest single round measured is 104s, so a 170s window mostly
   risks orphaning a step that was about to finish. Raise it and the retry loop disappears.
 - `-j1` always (1 core, ~3.9GB RAM).
-- **LINT AND FMT (Sep 25, Simon): building is NOT gated.** Tests, smoke tests and release pages neither
-  check nor rewrite style - no more `-Dgate=false` / `-Dautofix=false`, and no build ever reformats a file
-  under an edit. Style is required where it matters, always as a non-mutating CHECK: every
-  `*-standalone` page, `dist`, `check`, and anything in `-Dmode=ship` fail unless `lint-check` (fmt --check +
-  lint) passes. `zig build fix` is the ONE step that rewrites (lint --fix, then zig fmt). **End every turn
-  with `zig build fix` (if anything needs it) then `zig build check`.**
+- **LINT AND FMT (Sep 25, and again Oct 18, Simon): no build rewrites style, and no compile waits on it.**
+  Tests and smoke tests neither check nor touch style. Style is required where it matters, always as a
+  non-mutating CHECK that runs BESIDE the compile: every app's step, `all-examples`, `dist`, `check`, and the
+  `-Dmode=ship` install fail unless `lint-check` passes (every rule, the layout included as `zig-fmt`).
+  `-Dautofix` and `-Dgate` are gone (Oct 18). `zig build fix` is the ONE step that rewrites (lint autofixes,
+  layout, tutorial code blocks), printing each file's diff. **End every turn with `zig build fix` (if
+  anything needs it - read its diff) then `zig build check`.**
 - **NEVER the full `zig build test` inside a turn (Sep 25):** it outlasts a turn - one died mid-run, its finished work
   unreported. Run the modules touched (`test-<stem>`), or the main module's tests with `-Dfocus=<example>
   -Dtest-filter=<name>` (113 s for the timer tests), DETACHED if long. The full suite is Simon's, or a detached run.
@@ -1079,12 +1082,12 @@ Ground rules for every call:
 The steps, **one tool call each**:
 1. **Warm the linter** (it gates every compile, and its own rebuild is the
    usual cold-cache time sink):
-   `timeout 250 $ZIG build lint -Dautofix=false -j1`
+   `timeout 250 $ZIG build lint -j1`
    A cold first run may exit non-zero with only a "maker command exited" tail —
    that was the tool finishing its own compile. Run it AGAIN; now read real
    violations via `grep ': \['`.
 2. **Build the example**, looping until green:
-   `timeout 250 $ZIG build <dash-name>-standalone -Dmode=release -Dautofix=false -j1 2>/tmp/b.log 1>&2; echo rc=$?`
+   `timeout 250 $ZIG build <dash-name>-standalone -Dmode=release -j1 2>/tmp/b.log 1>&2; echo rc=$?`
    Interpret the exit:
    - `rc=124` → timed out mid-chain. **Rerun the same command.** From cold
      expect 2–4 rounds (tool compiles ~60–90s each, wasm ~40–80s).
@@ -1095,10 +1098,10 @@ The steps, **one tool call each**:
      self-heals. Do NOT take the hint.
    - The failed-command tail names which step died (`zimrlint <450 files>`,
      `spv2wgsl`, `c2js`): that is a TOOL rebuild, not your code.
-3. **Smoke it**: `timeout 250 $ZIG build smoke-test -Dfocus=<snake_name> -Dautofix=false -j1`
+3. **Smoke it**: `timeout 250 $ZIG build smoke-test -Dfocus=<snake_name> -j1`
    (first run may also time out while the smoke wasm builds — same retry rule).
    Green includes the per-frame call profile AND the ClobberScan.
-4. **Gate**: `timeout 250 $ZIG build check -Dautofix=false -j1` → green =
+4. **Gate**: `timeout 250 $ZIG build check -j1` → green =
    `✓ WGSL corpus: no regressions` + `✓ wgpu_smoke PASSED`.
 5. **If a shader's interface or spv2wgsl's output changed on purpose** (the corpus says
    which, and says so): `timeout 250 $ZIG build corpus-refresh -j1`, then commit
@@ -1680,12 +1683,12 @@ half that is `zig build test`; for zimrnum/zimrmath/robot/codecs/physics it is
 ★★ **FOR ZIMRNUM WORK, SKIP THE BUILD GRAPH ENTIRELY.** `zimrnum.zig` imports `std` and
 `zm` and nothing else, so it can be its own test root:
 
-    zig build test-<stem> -Dgate=false [-Dtest-filter=…]
+    zig build test-<stem> [-Dtest-filter=…]
 
 There is one per fast-test root - `test-zimrnum`, `test-zimrmath`, `test-robot`, and nine more.
 Measured after a real edit to zimrnum: **21 s filtered, 71 s for all of its tests, ~1 s when
-nothing changed**, against `test-fast`'s 71-212 s for all six modules. `-Dgate=false` skips
-the lint/fmt pass that otherwise precedes every compile.
+nothing changed**, against `test-fast`'s 71-212 s for all six modules. (No lint runs on the way: tests are
+never gated on style.)
 
 ★ Finding these required adding them: `zig build` REFUSED TO CONFIGURE with a duplicate step
 name, which is how it came out that `zimrmath.zig` and `zimrnum.zig` were each listed TWICE
@@ -2444,37 +2447,23 @@ correct doctype, valid HTML, runs in Chrome — and a viewer still refuses. When
 somewhere and not here", measure its SHAPE (longest line, nesting depth, blob count), not just
 its validity.
 
-## ★★★ THE TURN LOOP: `-Dgate=false` WHILE ITERATING, `zig build check` BEFORE FINISHING
+## ★★★ THE TURN LOOP: ITERATE ON ANY TARGET, `zig build fix` THEN `zig build check` BEFORE FINISHING
 
-`-Dgate` (default **true**) controls whether the lint/fmt gate precedes every wasm compile.
+No compile waits on the lint (Oct 18), so there is nothing to switch off while iterating:
 
-    iterate:   zig build <target> -Dgate=false     ~1s   no lint, no fmt
-    finish:    zig build check                     ~8s   lint + fmt-check + corpus + smoke
+    iterate:   zig build <target>            the compile, with lint-check beside it on an app's step
+    fix:       zig build fix                 the autofixes and the layout, every file's diff printed
+    finish:    zig build check               lint + layout + corpus + smoke
 
-★★★ **MEASURED 8s → 1s** on `zimrnum-field-standalone` after touching one file. The gate is right
-for a normal build and wrong inside an iteration loop: a half-finished edit fails on a
-line-length rule *before the compiler has said whether the change makes sense*, and the linter's
-message is then the only thing on screen, hiding the type error that actually matters. That
-happened repeatedly during the zimrnum port.
+★★★ **WHY THE GATE CAME OFF THE COMPILE.** A lint gate in front of every compile made a half-finished edit
+fail on a line-length rule *before the compiler had said whether the change made sense*, and the linter's
+message was then the only thing on screen, hiding the type error that mattered - repeatedly, during the zimrnum
+port. `-Dgate=false` was the escape (8 s -> 1 s on `zimrnum-field-standalone`); now an app's step runs
+`lint-check` BESIDE its compile, so both kinds of finding come out of one build, and `-Dgate` is gone.
 
-★★ **THE DEFAULT DOES NOT CHANGE.** `-Dgate=false` must be typed per command, and build.zig
-prints a warning every time it is used:
-
-    zimr: -Dgate=false - lint and fmt are NOT running. Run `zig build check` (no flags) before finishing.
-
-★★★ **PROVEN SAFE BY NEGATIVE CONTROL, not by argument.** An over-long line was added, then:
-
-    zig build <target> -Dgate=false   rc=0   (skipped, as designed)
-    zig build check                   rc=1   [line-length] on the exact line
-
-`check` reaches lint and `zig fmt --check` through its wasm compiles, so **one unflagged command
-still covers everything**. The discipline is therefore a single rule: **never pass `-Dgate=false`
-to `check`.** If that rule is ever broken the whole scheme is unsafe, which is why the control
-above is worth re-running whenever the gate wiring is touched.
-
-★ `-Dgate=false` does NOT disable the `lint` or `fmt` STEPS — `zig build lint` and `zig fmt` are
-always available. It removes only the implicit dependency edge. And it is orthogonal to
-`-Dautofix`: that one chooses *fix* versus *check* when the gate runs at all.
+★★ **`check` is still the one command that covers everything**, and it never edits a file. A fixable finding
+ends `autofix: zig build fix`, and the summary prints that command on its own line - run it, read the diff it
+prints, then run `check` again.
 
 ## ★★★ BEFORE DELETING A FILE, GREP ITS BASENAME — NOT ITS PATH
 
@@ -2619,10 +2608,10 @@ initializers.**
 **Tier 2 — the `zig fmt` gate (loud, but looks unrelated).** `zig fmt` ships
 automatic migrations for renamed BUILTINS: 1676 rewrote `@enumFromInt` →
 `@fromBackingInt(@intCast(x))` and `@intFromEnum` → `@backingInt` across 45 files
-(~700 sites). Since every Compile `dependsOn` `zig fmt --check`, this is MANDATORY
-before anything builds, and it presents as a bare "process exited with code 1"
-naming no file. **Run `$ZIG fmt src examples build.zig tools/zimrlint.zig` early and
-read the rewrite as a migration, not as formatting.** Expect fallout: the expanded
+(~700 sites). Since `check` and every app's step hold the tree to the `zig-fmt` rule, this is MANDATORY
+before any of them passes - it shows as a `[zig-fmt]` finding on every file the migration touches (it was a bare
+"process exited with code 1" naming no file, until Oct 18). **Run `zig build fix` early and read its diffs as a
+migration, not as formatting.** Expect fallout: the expanded
 forms are longer, so a handful of lines blow the 120-col lint cap (7 last time) —
 fix them the way rule 10 says (lift to a named local), don't reflow blindly.
 
@@ -3537,7 +3526,8 @@ Iterate with focus; **land nothing on it**. The gate is the full `zig build test
 disagree precisely where it matters most.
 
 ## Lint — hard gate at 0
-Any new lint issue blocks `zig build`. Scope is `src/` + `examples/` + `tools/`
+Any new lint issue fails `check`, `dist`, every app's step and a `-Dmode=ship` build - beside their compile,
+never in front of it. Scope is `src/` + `examples/` + `tools/`
 recursive, minus path-prefix carve-outs and a `deletion_skip` full-path list
 (condemned files only — never add live code to dodge a fix).
 - Write lint-clean on the first pass; apply the rules as you write.
@@ -3692,8 +3682,9 @@ update the `//!` doc in the same turn, like a test.
 - **`std.log.err` inside a test FAILS the test STEP** even if assertions pass;
   `std.log.warn` doesn't. A guard expected to fire in a test must return its error
   without logging, or log at warn.
-- **The build enforces `zig fmt`** — non-conforming looks like a compile error. Run
-  `zig fmt <file>` after any `.zig` edit (python-regex edits especially).
+- **The build checks `zig fmt`'s layout** as the `zig-fmt` lint rule - a finding at the first line that differs,
+  with `autofix: zig build fix`. Run `zig build fix` after any `.zig` edit (python-regex edits especially) and
+  read the diff it prints.
 - **Test aggregators must compile or they don't run** — a green `zig build` of demos
   does NOT prove `src/tests.zig` compiles (demos don't instantiate every path). Run
   `zig build test` after toolchain-sensitive changes. `refAllDecls` is a partial net
@@ -4274,7 +4265,7 @@ EMPTY log each time — that emptiness is the tell, because a build making progr
 
 ★ THE FIX IS TO DETACH, not to retry:
 
-    nohup setsid $ZIG build test -Dfocus=tier-a -Dautofix=false -j1 \
+    nohup setsid $ZIG build test -Dfocus=tier-a -j1 \
       >/tmp/bg.log 2>&1 < /dev/null &
     # then poll across turns: pgrep -x zig, and watch /tmp/bg.log
 

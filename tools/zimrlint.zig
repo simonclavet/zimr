@@ -20,9 +20,10 @@
 //! HOW TO RUN IT
 //!   zimrlint --enable=<tag>,<tag> <file.zig> ...   check these rules; exits non-zero on any issue
 //!   zimrlint --fix --enable=<tag>,... <file.zig>   apply the autofixes those rules marked safe: each fixed file
-//!                                           written once, laid out as `zig fmt` lays it out, with a line naming
-//!                                           what was fixed (`zimrlint: fixed <file>: <rule> x<count>, ...`) and
-//!                                           a count of what is left for a person (`zimrlint: N left in <file>`)
+//!                                           written once, laid out as `zig fmt` lays it out, then a line naming
+//!                                           what was fixed (`zimrlint: fixed <file>: <rule> x<count>, ...`), the
+//!                                           file's diff (`line_diff.zig`), and what is left in it for a person.
+//!                                           `zig build fix` runs this; no other step writes a source file.
 //!   zimrlint --list-rules                   every tag (those in progress marked)
 //!   zimrlint --cache-dir <dir> ...          where the per-file clean stamps go
 //!   Built as a ReleaseSafe exe (NOT ReleaseFast -- this dev Zig miscompiles it in
@@ -52,7 +53,8 @@
 //!                   shader-safe, sampler-in-branch, sampler-in-helper
 //!     gpu safety  : raw-pass-state-bind
 //!     meta        : parse-error (file didn't parse -> AST rules skipped for it),
-//!                   unknown-lint-tag (a `lint:off` naming no rule)
+//!                   unknown-lint-tag (a `lint:off` naming no rule),
+//!                   zig-fmt (the file is not laid out as `zig fmt` lays it out)
 //!
 //! HOW THE FILE IS LAID OUT  (chapters are marked by `====` dividers -- search a title)
 //!   1. Data model           Fix / Issue / Ctx -- the diagnostic, the fix, and the
@@ -91,6 +93,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const line_diff = @import("line_diff.zig");
 const ArrayList = std.ArrayList;
 const allocPrint = std.fmt.allocPrint;
 const bufPrint = std.fmt.bufPrint;
@@ -776,6 +779,22 @@ const rule_notes = [_]RuleNote{
         \\`zig ast-check <file>` for the full error list.  Until
         \\this is cleared, the lint total is undercounting that
         \\file's real issues.
+        ,
+    },
+    .{
+        .tag = "zig-fmt",
+        .title = "zig-fmt - the file is laid out as `zig fmt` lays it out",
+        .body =
+        \\`zig fmt --check`, inside the linter. The file is rendered by `zig fmt`'s own
+        \\renderer (`std.zig.Ast.render`, from the std this linter was built with - the
+        \\Zig that builds the project) and compared with the file on disk; the finding
+        \\points at the first line that differs. `// zig fmt: off` regions are left
+        \\alone, as `zig fmt` leaves them.
+        \\
+        \\It is a rule rather than a separate `zig fmt --check` so that layout reports
+        \\like every other finding: in the same list, with the same `autofix:` hint.
+        \\`zig fmt --check` named a file and said nothing about what to run. The fix -
+        \\`zig build fix` - writes the formatted file and prints its diff.
         ,
     },
     .{
@@ -2964,10 +2983,28 @@ fn isAcceptableBranchBody(ast: *const Ast, body: Index) bool {
     };
 }
 
+/// Whether `node`, made a statement, ends with a block of its own and so takes no `;` after it: a block, a switch,
+/// or a `for` / `while` / `if` whose last branch does. `for (xs) |x| { ... }` is a whole statement as it stands;
+/// `total += x` and `x = S{}` need their `;`.
+fn statementEndsInBlock(ast: *const Ast, node: Index) bool {
+    if (ast.fullFor(node)) |for_node| {
+        return statementEndsInBlock(ast, for_node.ast.else_expr.unwrap() orelse for_node.ast.then_expr);
+    }
+    if (ast.fullWhile(node)) |while_node| {
+        return statementEndsInBlock(ast, while_node.ast.else_expr.unwrap() orelse while_node.ast.then_expr);
+    }
+    if (ast.fullIf(node)) |if_node| {
+        return statementEndsInBlock(ast, if_node.ast.else_expr.unwrap() orelse if_node.ast.then_expr);
+    }
+    return isAcceptableBranchBody(ast, node);
+}
+
 /// branch-braces' report and its fix: the body wrapped in a block, `{ body; }`, its text kept byte for byte -
 /// comments and all. When the body ends the statement - a `;` follows - the block swallows that `;`: a block-bodied
-/// `if` / `while` / `for` takes none, and `if (c) { ... };` would not parse. Before an `else`, or a `,` closing a
-/// switch prong, the rest stays as it is. zig fmt lays the block out afterwards: `zig build fix` is `--fix`, then fmt.
+/// `if` / `while` / `for` takes none, and `if (c) { ... };` would not parse. A body that ends in a block of its own
+/// (`if (c) for (xs) |x| { ... };`) gets no `;` inside the new block either - `{ for ... { ... }; }` would not parse,
+/// and the guard refused that fix until Oct 18. Before an `else`, or a `,` closing a switch prong, the rest stays as
+/// it is. `--fix` lays the block out afterwards, as `zig fmt` does.
 fn emitBranchBraces(
     ctx: Ctx,
     report_token: u32,
@@ -2982,7 +3019,11 @@ fn emitBranchBraces(
     const after_body: u32 = last_token + 1;
     const ends_statement: bool = ast.tokenTag(after_body) == .semicolon;
     const span_end: u32 = if (ends_statement) @intCast(ast.tokenStart(after_body) + 1) else body_end;
-    const replacement: []u8 = try allocPrint(ctx.alloc, "{{ {s}; }}", .{ctx.source[body_start..body_end]});
+    const body_text: []const u8 = ctx.source[body_start..body_end];
+    const replacement: []u8 = if (statementEndsInBlock(ast, body))
+        try allocPrint(ctx.alloc, "{{ {s} }}", .{body_text})
+    else
+        try allocPrint(ctx.alloc, "{{ {s}; }}", .{body_text});
     defer ctx.alloc.free(replacement);
     const fix: Fix = .{ .start = body_start, .end = span_end, .replacement = replacement };
     try ctx.emitFix(report_token, "branch-braces", 3, fix, "{s} body should be a block", .{branch_name});
@@ -8445,6 +8486,38 @@ fn parseArgs(gpa: Allocator, arena: Allocator, argv: []const [:0]const u8) !Args
     return a;
 }
 
+/// `zig-fmt`: the file as `zig fmt` writes it (`Ast.render`) against the file as it is, reported at the first line
+/// that differs. Its fix is the whole file, formatted - which overlaps every other rule's fix, so the fix loop leaves
+/// it out (`collectFixes`) and `--fix` formats the file once, after every other fix has landed.
+fn checkZigFmt(ctx: Ctx) !void {
+    const formatted: []u8 = try ctx.ast.renderAlloc(ctx.alloc);
+    defer ctx.alloc.free(formatted);
+    const source: []const u8 = ctx.source;
+    if (eql(u8, formatted, source)) {
+        return;
+    }
+    const common_length: usize = @min(formatted.len, source.len);
+    var first_difference: usize = 0;
+    while (first_difference < common_length and formatted[first_difference] == source[first_difference]) {
+        first_difference += 1;
+    }
+    var line: u32 = 1;
+    for (source[0..first_difference]) |byte| {
+        if (byte == '\n') {
+            line += 1;
+        }
+    }
+    try ctx.emitFixLC(
+        line,
+        1,
+        "zig-fmt",
+        0,
+        .{ .start = 0, .end = @intCast(source.len), .replacement = formatted },
+        "not laid out as `zig fmt` lays it out - this is the first line that differs",
+        .{},
+    );
+}
+
 /// `analyzeSource` before the enabled-rules filter: every check, every rule.
 fn analyzeSourceAllRules(
     gpa: Allocator,
@@ -8510,6 +8583,11 @@ fn analyzeSourceAllRules(
         .aliases = args.aliases,
     };
     try runChecks(ctx);
+    // Only when enabled, unlike the checks above: rendering the whole file is the one check that costs as much as the
+    // parse.
+    if (args.enabled[ruleIndex("zig-fmt").?]) {
+        try checkZigFmt(ctx);
+    }
     return false;
 }
 
@@ -8588,18 +8666,55 @@ fn applyFixes(gpa: Allocator, source: []const u8, fixes: []const Fix) ![]u8 {
     return out.toOwnedSlice(gpa);
 }
 
+/// A fix the fix loop's guard refused (`applyFixesGuarded`), as the loop remembers it: where it was and what it would
+/// have written. A later pass leaves the same fix out, so the fixes it overlapped - which `collectFixes` held back
+/// behind it - get their turn. Before Oct 18 a pass that applied nothing ended the loop, and a fix inside a refused
+/// one's span was never tried at all.
+const RefusedFix = struct {
+    start: u32,
+    end: u32,
+    replacement_hash: u64,
+
+    fn of(fix: Fix) RefusedFix {
+        return .{ .start = fix.start, .end = fix.end, .replacement_hash = std.hash.Wyhash.hash(0, fix.replacement) };
+    }
+
+    fn isAmong(fix: Fix, refused: []const RefusedFix) bool {
+        const fingerprint: RefusedFix = .of(fix);
+        for (refused) |earlier| {
+            const same: bool = earlier.start == fingerprint.start and earlier.end == fingerprint.end and
+                earlier.replacement_hash == fingerprint.replacement_hash;
+            if (same) {
+                return true;
+            }
+        }
+        return false;
+    }
+};
+
 /// Gather the `Fix`es carried by `issues` into `out`, sorted ascending by start
-/// with overlapping edits dropped (deferred to a later pass).
-fn collectFixes(gpa: Allocator, issues: []const Issue, out: *ArrayList(Fix)) !void {
+/// with overlapping edits dropped (deferred to a later pass), and without the
+/// fixes the guard already refused (`refused`).
+fn collectFixes(
+    gpa: Allocator,
+    issues: []const Issue,
+    refused: []const RefusedFix,
+    out: *ArrayList(Fix),
+) !void {
     out.clearRetainingCapacity();
     // * Deleting an unused declaration waits for a pass with nothing else to do. Another fix in
     // the same pass may be about to USE it - `float-from-int` writes `float(x)` against the
     // `const float = zm.float;` that `unused-global` wants gone - and applying both broke the
     // file, so the parse guard discarded the whole pass and neither fix ever landed. The fix loop
     // re-analyses after every pass, so a declaration that is still unused goes one pass later.
+    // * `zig-fmt`'s fix is never collected: it is the whole file, formatted, so it would overlap every other fix -
+    // and it is not "pending" either, or it would hold back that deletion forever. `--fix` formats the file once, at
+    // the end. A fix the guard refused is neither collected nor pending, for the same two reasons.
     var other_fixes_pending: bool = false;
     for (issues) |is| {
-        const is_other_fix: bool = is.fix != null and !eql(u8, is.tag, "unused-global");
+        const fix: Fix = is.fix orelse continue;
+        const is_other_fix: bool = !eql(u8, is.tag, "unused-global") and !eql(u8, is.tag, "zig-fmt") and
+            !RefusedFix.isAmong(fix, refused);
         if (is_other_fix) {
             other_fixes_pending = true;
             break;
@@ -8608,7 +8723,7 @@ fn collectFixes(gpa: Allocator, issues: []const Issue, out: *ArrayList(Fix)) !vo
     for (issues) |is| {
         if (is.fix) |fx| {
             const deferred: bool = other_fixes_pending and eql(u8, is.tag, "unused-global");
-            if (deferred) {
+            if (deferred or eql(u8, is.tag, "zig-fmt") or RefusedFix.isAmong(fx, refused)) {
                 continue;
             }
             try out.append(gpa, fx);
@@ -8684,6 +8799,9 @@ const FixOutcome = struct {
     /// Some fixes were refused: applied, they would have broken the file (`applyFixesGuarded`). The findings they
     /// belong to stay, marked for a human.
     refused_any: bool,
+    /// The file as read was not laid out as `zig fmt` lays it out (`zig-fmt`, when enabled): `--fix` formats it even
+    /// when no other rule fixed anything, and counts that as `zig-fmt`'s fix.
+    unformatted: bool,
 };
 
 /// What `applyFixesGuarded` did: the result (owned), and how many fixes it kept and refused.
@@ -8696,14 +8814,17 @@ const GuardedOutcome = struct {
 /// `fixes` applied to `source` ONE AT A TIME - from the last, so each one's offsets still hold - keeping each that
 /// leaves the file clean (`compilesClean`) and refusing the others. What the fix loop falls back to when a pass,
 /// applied all at once, breaks the file: one bad fix, or two that only clash together, must not cost the file all
-/// the good ones. `fixes` are sorted ascending and do not overlap (`collectFixes`).
+/// the good ones. `fixes` are sorted ascending and do not overlap (`collectFixes`). Each refused fix is added to
+/// `refused_out`, for the next pass to leave out.
 fn applyFixesGuarded(
     gpa: Allocator,
     source: []const u8,
     fixes: []const Fix,
     tally: *FixTally,
+    refused_out: *ArrayList(RefusedFix),
 ) !GuardedOutcome {
     var current: []u8 = try gpa.dupe(u8, source);
+    errdefer gpa.free(current);
     var applied: usize = 0;
     var refused: usize = 0;
     var index: usize = fixes.len;
@@ -8718,6 +8839,7 @@ fn applyFixesGuarded(
         } else {
             gpa.free(candidate);
             refused += 1;
+            try refused_out.append(gpa, .of(fixes[index]));
         }
     }
     return .{ .bytes = current, .applied = applied, .refused = refused };
@@ -8739,10 +8861,16 @@ fn zigFormatted(gpa: Allocator, source: []const u8) ![]u8 {
     return tree.renderAlloc(gpa);
 }
 
-/// One line for a file a fix run rewrote: `zimrlint: fixed <path>: <rule> x<count>, ...`, the rules in the order
-/// they first applied a fix - what a person, or a program editing the file, needs to know to read it again.
-fn printFixTally(out: *Io.Writer, path: []const u8, tally: FixTally) !void {
-    try out.print("zimrlint: fixed {s}:", .{path});
+/// One line for a file a fix run rewrote: `zimrlint: fixed <path>: <rule> x<count>, ...` (`would fix` in a dry run),
+/// the rules in the order they first applied a fix - what a person, or a program editing the file, needs to know to
+/// read it again. Its diff follows it (`line_diff.print`).
+fn printFixTally(
+    out: *Io.Writer,
+    verb: []const u8,
+    path: []const u8,
+    tally: FixTally,
+) !void {
+    try out.print("zimrlint: {s} {s}:", .{ verb, path });
     for (tally.rule_counts.items, 0..) |rule_count, index| {
         const separator: []const u8 = if (index == 0) " " else ", ";
         try out.print("{s}{s} x{d}", .{ separator, rule_count.tag, rule_count.count });
@@ -8758,8 +8886,12 @@ fn runFixLoop(gpa: Allocator, path: []const u8, original: []const u8, args: *con
     var cur: []u8 = try gpa.dupe(u8, original);
     var total_edits: usize = 0;
     var refused_any: bool = false;
+    var unformatted: bool = false;
     var tally: FixTally = .{};
     errdefer tally.deinit(gpa);
+    // The fixes the guard refused so far, left out of every later pass (`RefusedFix`).
+    var refused_fixes: ArrayList(RefusedFix) = .empty;
+    defer refused_fixes.deinit(gpa);
     var pass: usize = 0;
     while (pass < 5) : (pass += 1) {
         const cur_z: [:0]u8 = try gpa.allocSentinel(u8, cur.len, 0);
@@ -8778,10 +8910,17 @@ fn runFixLoop(gpa: Allocator, path: []const u8, original: []const u8, args: *con
         // lint:off catch-suppression: deliberate - see above
         _ = analyzeSource(gpa, path, cur_z, args, &issues) catch {};
         gpa.free(cur_z);
+        if (pass == 0) {
+            for (issues.items) |first_pass_issue| {
+                if (eql(u8, first_pass_issue.tag, "zig-fmt")) {
+                    unformatted = true;
+                }
+            }
+        }
 
         var fixes: ArrayList(Fix) = .empty;
         defer fixes.deinit(gpa);
-        try collectFixes(gpa, issues.items, &fixes);
+        try collectFixes(gpa, issues.items, refused_fixes.items, &fixes);
         if (fixes.items.len == 0) {
             break;
         }
@@ -8791,15 +8930,13 @@ fn runFixLoop(gpa: Allocator, path: []const u8, original: []const u8, args: *con
         if (before_ok and !after_ok) {
             // Together these edits break a clean file. Keep the ones that do not, one at a time; refuse the rest.
             gpa.free(next);
-            const guarded: GuardedOutcome = try applyFixesGuarded(gpa, cur, fixes.items, &tally);
+            const guarded: GuardedOutcome = try applyFixesGuarded(gpa, cur, fixes.items, &tally, &refused_fixes);
             gpa.free(cur);
             cur = guarded.bytes;
             total_edits += guarded.applied;
             refused_any = refused_any or guarded.refused > 0;
-            // Nothing applied: only refused fixes are left, and the next pass would propose the same ones.
-            if (guarded.applied == 0) {
-                break;
-            }
+            // On, even when nothing applied: the next pass leaves the refused fixes out, so the ones they overlapped
+            // get their turn; with none left, it finds nothing to do and the loop ends.
             continue;
         }
         gpa.free(cur);
@@ -8809,7 +8946,13 @@ fn runFixLoop(gpa: Allocator, path: []const u8, original: []const u8, args: *con
             try tally.add(gpa, applied_fix.tag);
         }
     }
-    return .{ .bytes = cur, .edits_applied = total_edits, .tally = tally, .refused_any = refused_any };
+    return .{
+        .bytes = cur,
+        .edits_applied = total_edits,
+        .tally = tally,
+        .refused_any = refused_any,
+        .unformatted = unformatted,
+    };
 }
 
 // ==== --reorder-decls: move declarations above their first use (the hoist strategy) ====
@@ -9341,19 +9484,24 @@ fn runReorderDecls(
 }
 
 /// What to run to apply the autofixes when the caller did not say (`--fix-command`): the same command line, plus
-/// `--fix`. zimr's build and a project's pass `zig build fix` instead - the step that runs `--fix`, then zig fmt.
+/// `--fix`. zimr's build and a project's pass `zig build fix` instead - the step that runs `--fix` and prints the diff
+/// of every file it rewrites.
 const fix_command_default: []const u8 = "rerun this command with --fix";
+
+/// What a `--fix` run says of a finding it left with a fix it could not apply: refused (applied, it broke the file) or
+/// not reached in the fix loop's passes. Rerunning the same fix will not apply it.
+const unapplied_fix_note: []const u8 = "its autofix could not be applied: fix it by hand";
 
 /// Sort + print a file's issues (with first-hit rule notes), shared by the
 /// check path and the fix path's residual report. A finding with a mechanical
-/// fix ends with how to apply it - ` - autofix: <fix_command>` - the same for
-/// every rule, decided by the finding's `fix`, never by a rule's wording.
+/// fix ends with ` - <fixable_note>` - in a check, `autofix: <fix command>`, the
+/// same for every rule, decided by the finding's `fix`, never by a rule's wording.
 /// Returns how many fixable findings it printed, for the summary.
 fn printIssues(
     out: *Io.Writer,
     seen_tags: *StringHashMap(void),
     issues: []Issue,
-    fix_command: []const u8,
+    fixable_note: []const u8,
 ) !usize {
     sortSlice(Issue, issues, {}, struct {
         fn lt(_: void, a: Issue, b: Issue) bool {
@@ -9386,11 +9534,40 @@ fn printIssues(
         }
         if (is.fix != null) {
             fixable_count += 1;
-            try out.print(" - autofix: {s}", .{fix_command});
+            try out.print(" - {s}", .{fixable_note});
         }
         try out.writeAll("\n");
     }
     return fixable_count;
+}
+
+/// A `--fix` run's account of what it could not fix in one file, under the file's diff: a count, then each finding
+/// indented. Indented, so that a build watcher stopping at the first finding (zbuild) does not stop the fix run
+/// before the other files are fixed - the check after it (`zig build lint`, an app's build) lists them as findings.
+/// Returns how many of them still carry a fix (`unapplied_fix_note`).
+fn printLeftForPerson(out: *Io.Writer, path: []const u8, issues: []Issue) !usize {
+    if (issues.len == 0) {
+        return 0;
+    }
+    sortSlice(Issue, issues, {}, struct {
+        fn lt(_: void, a: Issue, b: Issue) bool {
+            if (a.line != b.line) {
+                return a.line < b.line;
+            }
+            return a.col < b.col;
+        }
+    }.lt);
+    try out.print("zimrlint: {d} left in {s} for a person:\n", .{ issues.len, path });
+    var unapplied: usize = 0;
+    for (issues) |is| {
+        try out.print("    {s}:{d}:{d}: [{s}] {s}", .{ is.file, is.line, is.col, is.tag, is.message });
+        if (is.fix != null) {
+            unapplied += 1;
+            try out.print(" - {s}", .{unapplied_fix_note});
+        }
+        try out.writeAll("\n");
+    }
+    return unapplied;
 }
 
 /// One `@import("x.zig")` between two files of this run, and where it is written.
@@ -9634,6 +9811,11 @@ pub fn main(init: std.process.Init) !u8 {
     // Fixes `--fix` refused because applying them would have broken their file - left for a human.
     var total_refused: usize = 0;
     const fix_command: []const u8 = args.fix_command orelse fix_command_default;
+    // What every fixable finding of a check ends with.
+    const autofix_note: []const u8 = try allocPrint(arena, "autofix: {s}", .{fix_command});
+    // Under --fix: the files rewritten, and the findings left in them for a person (listed as each file is done).
+    var files_fixed: usize = 0;
+    var total_left: usize = 0;
     // Reports from rules still in progress: printed, counted here, never in the exit code.
     var total_work_in_progress: usize = 0;
     // Inputs that could not be read (or, under --fix, written back). Each one fails
@@ -9724,33 +9906,36 @@ pub fn main(init: std.process.Init) !u8 {
 
             var outcome: FixOutcome = try runFixLoop(gpa, path, source_bytes, &args);
             defer outcome.tally.deinit(gpa);
-            // The fixed file is written formatted (`zigFormatted`); a file nothing fixed is left exactly as it was.
-            if (outcome.edits_applied > 0) {
+            // The fixed file is written formatted (`zigFormatted`): a fix makes the smallest edit and leaves the layout
+            // to the renderer. A file `zig-fmt` found unformatted is formatted even when no other rule fixed anything;
+            // any other file nothing fixed is left exactly as it was.
+            if (outcome.edits_applied > 0 or outcome.unformatted) {
                 const formatted_bytes: []u8 = try zigFormatted(gpa, outcome.bytes);
                 gpa.free(outcome.bytes);
                 outcome.bytes = formatted_bytes;
             }
             defer gpa.free(outcome.bytes);
-
-            if (outcome.refused_any) {
-                try out.print("{s}: some autofixes were refused - applied, they would break the file; " ++
-                    "their findings are marked below, for a human\n", .{path});
+            if (outcome.unformatted) {
+                try outcome.tally.add(gpa, "zig-fmt");
             }
-            if (outcome.edits_applied > 0) {
-                if (args.dry_run) {
-                    try out.print("would fix {d} in {s}\n", .{ outcome.edits_applied, path });
-                } else {
+
+            // Every change shown the moment it is made: the rules that made it, then the diff, then the file is done.
+            const changed: bool = !eql(u8, outcome.bytes, source_bytes);
+            if (changed) {
+                if (!args.dry_run) {
                     writeFileWhole(io, path, outcome.bytes) catch |e| {
                         std.debug.print("error writing {s}: {s}\n", .{ path, @errorName(e) });
                         io_failures += 1;
                         continue;
                     };
-                    try printFixTally(out, path, outcome.tally);
                 }
+                files_fixed += 1;
+                try printFixTally(out, if (args.dry_run) "would fix" else "fixed", path, outcome.tally);
+                try line_diff.print(gpa, out, path, source_bytes, outcome.bytes);
             }
 
-            // Residual report: re-analyze the (fixed) bytes so anything the
-            // autofixer can't handle still surfaces and still fails CI.
+            // What is left for a person, listed under the file's diff: whoever ran the fix wants to know what it
+            // could not do. A finding that still carries a fix had it refused, or not reached in the passes.
             const final_z: [:0]u8 = try gpa.allocSentinel(u8, outcome.bytes.len, 0);
             @memcpy(final_z, outcome.bytes);
             defer gpa.free(final_z);
@@ -9762,30 +9947,18 @@ pub fn main(init: std.process.Init) !u8 {
                 fix_issues.deinit(gpa);
             }
             _ = try analyzeSource(gpa, path, final_z, &args, &fix_issues);
-            // What is left is counted, not listed: the check that runs after the fix and the format lists it, where it
-            // can fail the build. Listed here, its lines would read as findings to a build watcher that stops at the
-            // first one - between the fix and the format, leaving the edit unformatted.
-            var residual_fixable: usize = 0;
-            for (fix_issues.items) |residual| {
-                if (residual.fix != null) {
-                    residual_fixable += 1;
-                }
-            }
-            if (fix_issues.items.len > 0) {
-                try out.print("zimrlint: {d} left in {s} for a person - `zig build lint` lists them\n", .{
-                    fix_issues.items.len,
-                    path,
-                });
-            }
+            const residual_fixable: usize = try printLeftForPerson(out, path, fix_issues.items);
+            total_left += fix_issues.items.len;
             if (outcome.refused_any) {
                 total_refused += residual_fixable;
             }
+            try out.flush();
 
             // Stamp clean when the file is fully resolved (no residual, no
             // rollback, real write). Re-stat after a write so the stamp records
             // the post-fix mtime; an untouched clean file keeps `fix_mtime_ns`.
             if (!args.dry_run and !outcome.refused_any and fix_issues.items.len == 0) {
-                const stamp_mtime_ns: i128 = if (outcome.edits_applied == 0) fix_mtime_ns else blk: {
+                const stamp_mtime_ns: i128 = if (!changed) fix_mtime_ns else blk: {
                     const stat: Io.Dir.Stat = Io.Dir.cwd().statFile(io, path, .{}) catch break :blk 0;
                     break :blk stat.mtime.nanoseconds;
                 };
@@ -9880,7 +10053,7 @@ pub fn main(init: std.process.Init) !u8 {
             try kept.appendSlice(gpa, issues.items);
         }
 
-        total_fixable += try printIssues(out, &seen_tags, kept.items, fix_command);
+        total_fixable += try printIssues(out, &seen_tags, kept.items, autofix_note);
         // Reports of rules in progress are printed with the rest but counted apart: they never fail the run.
         const failing: usize = failingCount(kept.items);
         total_issues += failing;
@@ -9918,7 +10091,7 @@ pub fn main(init: std.process.Init) !u8 {
             cycle_issues.deinit(gpa);
         }
         try checkImportCycles(gpa, io, args.files.items, &cycle_issues);
-        total_fixable += try printIssues(out, &seen_tags, cycle_issues.items, fix_command);
+        total_fixable += try printIssues(out, &seen_tags, cycle_issues.items, autofix_note);
         total_issues += cycle_issues.items.len;
     }
 
@@ -9934,11 +10107,37 @@ pub fn main(init: std.process.Init) !u8 {
             .{ total_issues, args.files.items.len },
         );
     }
+    // The way out, spelled exactly: the command that applies the fixes, on a line of its own to copy.
     if (total_fixable > 0) {
-        try out.print("{d} of the findings can be fixed automatically: {s}\n", .{ total_fixable, fix_command });
+        if (args.fix_command) |command| {
+            try out.print(
+                "{d} of the findings above can be fixed automatically - the fix prints every change it makes. Run:" ++
+                    "\n\n    {s}\n\n",
+                .{ total_fixable, command },
+            );
+        } else {
+            try out.print("{d} of the findings above can be fixed automatically: {s}\n", .{
+                total_fixable,
+                fix_command_default,
+            });
+        }
+    }
+    // A fix run's last word, only when it has one: a run that found nothing to do says nothing, as `zig fmt` does
+    // (`zig build fix` runs several of them - the tree, the template's layout - and an empty one is noise).
+    if (args.fix and (files_fixed > 0 or total_left > 0)) {
+        if (files_fixed > 0) {
+            const verb: []const u8 = if (args.dry_run) "would rewrite" else "rewrote";
+            try out.print("zimrlint: {s} {d} file(s) - the diff of each is printed above", .{ verb, files_fixed });
+        } else {
+            try out.writeAll("zimrlint: nothing here could be fixed automatically");
+        }
+        if (total_left > 0) {
+            try out.print("; {d} finding(s) left for a person, listed under their files", .{total_left});
+        }
+        try out.writeAll("\n");
     }
     if (total_refused > 0) {
-        try out.print("{d} autofixes were refused - applied, they would break their file: fix those by hand\n", .{
+        try out.print("{d} autofix(es) refused - applied, they would break their file: fix those by hand\n", .{
             total_refused,
         });
     }
@@ -9947,8 +10146,9 @@ pub fn main(init: std.process.Init) !u8 {
     }
     try out.flush();
 
-    // `--fix` rewrites; it does not gate. What it could not fix is counted above (`zimrlint: N left in <file>`), and
-    // `zig build lint` / `check` list it and fail on it. Only an input it could not read or write fails a fix run.
+    // `--fix` rewrites; it does not gate. What it could not fix is listed under each file's diff, and the next
+    // check - `zig build lint`, `check`, an app's build - fails on it. Only an input it could not read or write fails
+    // a fix run.
     if (args.fix) {
         return if (io_failures > 0) 1 else 0;
     }
@@ -10426,6 +10626,7 @@ test "tags asserted by the harness are documented in rule_notes" {
         "state-uninit",
         "float-from-int",
         "prefer-splat",
+        "zig-fmt",
         "unknown-lint-tag",
     };
     for (tested) |tag| {
@@ -11143,7 +11344,7 @@ test "a fix run's report names each rule once, with its count, in the order the 
     try tally.add(alloc, "std-alias");
     try tally.add(alloc, "fn-args-multiline");
     var report: Io.Writer.Allocating = .init(alloc);
-    try printFixTally(&report.writer, "tools/x.zig", tally);
+    try printFixTally(&report.writer, "fixed", "tools/x.zig", tally);
     try expectEqualStrings("zimrlint: fixed tools/x.zig: fn-args-multiline x2, std-alias x1\n", report.written());
 }
 
@@ -11160,10 +11361,12 @@ test "applyFixesGuarded keeps each fix that leaves the file clean and refuses th
     };
     try expect(!compilesClean(alloc, try applyFixes(alloc, source, &fixes)));
     var tally: FixTally = .{};
-    const guarded: GuardedOutcome = try applyFixesGuarded(alloc, source, &fixes, &tally);
+    var refused: ArrayList(RefusedFix) = .empty;
+    const guarded: GuardedOutcome = try applyFixesGuarded(alloc, source, &fixes, &tally, &refused);
     try expect(guarded.applied == 1 and guarded.refused == 1);
-    // Only the applied fix is counted, under its rule.
+    // Only the applied fix is counted, under its rule; the refused one is remembered, for the next pass to leave out.
     try expect(tally.rule_counts.items.len == 1 and tally.rule_counts.items[0].count == 1);
+    try expect(refused.items.len == 1);
     try expect(compilesClean(alloc, guarded.bytes));
 }
 
@@ -11186,11 +11389,49 @@ test "collectFixes keeps ONE of each binding when two names' insertions at one s
         };
     }
     var fixes: ArrayList(Fix) = .empty;
-    try collectFixes(alloc, &issues, &fixes);
+    try collectFixes(alloc, &issues, &.{}, &fixes);
     try expect(fixes.items.len == 2);
     // Sorted by text at the one spot - the same on every run.
     try expect(eql(u8, fixes.items[0].replacement, first_binding));
     try expect(eql(u8, fixes.items[1].replacement, second_binding));
+}
+
+test "collectFixes leaves out a fix the guard refused, so the fix inside its span gets its turn" {
+    var arena: ArenaAllocator = .init(testing_allocator);
+    defer arena.deinit();
+    const alloc: Allocator = arena.allocator();
+    // A block wrapped around a body (branch-braces), and a `zm.` dropped inside that body (no-qualified-zm).
+    const outer_text: []const u8 = try alloc.dupe(u8, "{ body }");
+    const outer: Fix = .{ .start = 0, .end = 40, .replacement = outer_text, .tag = "branch-braces" };
+    const inner: Fix = .{ .start = 12, .end = 15, .replacement = try alloc.dupe(u8, ""), .tag = "no-qualified-zm" };
+    const issues = [_]Issue{
+        .{
+            .file = "a.zig",
+            .line = 1,
+            .col = 1,
+            .tag = "branch-braces",
+            .message = try alloc.dupe(u8, "if"),
+            .rule = 3,
+            .fix = outer,
+        },
+        .{
+            .file = "a.zig",
+            .line = 1,
+            .col = 13,
+            .tag = "no-qualified-zm",
+            .message = try alloc.dupe(u8, "zm"),
+            .rule = 0,
+            .fix = inner,
+        },
+    };
+    var fixes: ArrayList(Fix) = .empty;
+    // First pass: the inner fix overlaps the outer one, and waits behind it.
+    try collectFixes(alloc, &issues, &.{}, &fixes);
+    try expect(fixes.items.len == 1 and fixes.items[0].start == 0);
+    // The outer one refused: the next pass takes the inner one.
+    const refused = [_]RefusedFix{.of(outer)};
+    try collectFixes(alloc, &issues, &refused, &fixes);
+    try expect(fixes.items.len == 1 and fixes.items[0].start == 12);
 }
 
 test "a fixable finding ends with the command that fixes it; the others do not; printIssues counts them" {
@@ -11218,7 +11459,7 @@ test "a fixable finding ends with the command that fixes it; the others do not; 
     };
     var seen_tags: StringHashMap(void) = .init(alloc);
     var written: Io.Writer.Allocating = .init(alloc);
-    const fixable: usize = try printIssues(&written.writer, &seen_tags, &issues, "zig build fix");
+    const fixable: usize = try printIssues(&written.writer, &seen_tags, &issues, "autofix: zig build fix");
     try expect(fixable == 1);
     const text: []const u8 = written.written();
     const fixable_line: []const u8 = "a.zig:2:5: [branch-braces] if body should be a block (rule 3)" ++
@@ -11392,6 +11633,39 @@ test "prefer-splat --fix in a file that binds no helper: `zm.splat`, then the bi
             "const splat = zm.splat;\nconst splat3 = zm.splat3;\n\n" ++
             "pub fn f(v: Vec, s: f32) Vec {\n    return v * splat(s);\n}\n" ++
             "pub fn g(p: Vec3, s: f32) Vec3 {\n    return p * splat3(s);\n}\n",
+    );
+}
+
+test "zig-fmt fires where `zig fmt` would change the file, at the first line that differs; its fix is that file" {
+    var arena: ArenaAllocator = .init(testing_allocator);
+    defer arena.deinit();
+    const formatted: []const u8 = "pub fn f() u32 {\n    return 1;\n}\n";
+    try expectClean(formatted, "zig-fmt");
+    const unformatted: []const u8 = "pub fn f() u32 {\n  return 1;\n}\n";
+    const issues: []Issue = try issuesTagged(arena.allocator(), unformatted, "zig-fmt");
+    try expect(issues.len == 1);
+    try expect(issues[0].line == 2);
+    try expectEqualStrings(formatted, issues[0].fix.?.replacement);
+    // A file that does not parse is parse-error's, not this rule's.
+    try expectClean("pub fn f( {\n", "zig-fmt");
+}
+
+test "branch-braces --fix: a body that ends in a block of its own gets no `;` inside the new block" {
+    // `if (c) for (xs) |x| { ... };` - robot_control.zig's shape, whose fix the guard refused before Oct 18.
+    try expectFixedTo(
+        "pub fn f(c: bool, xs: []const u32) u32 {\n    var total: u32 = 0;\n" ++
+            "    if (c) for (xs) |x| {\n        total += x;\n    };\n    return total;\n}\n",
+        "pub fn f(c: bool, xs: []const u32) u32 {\n    var total: u32 = 0;\n" ++
+            "    if (c) { for (xs) |x| {\n        total += x;\n    } }\n    return total;\n}\n",
+    );
+}
+
+test "zig-fmt's whole-file fix stays out of the fix loop, and does not hold back an unused declaration's deletion" {
+    // Unformatted (a two-space indent) AND carrying an unused private constant: the loop deletes the constant and
+    // leaves the layout alone - `--fix` formats once, after the loop (`main`).
+    try expectFixedTo(
+        "const unused: u32 = 1;\n\npub fn f() u32 {\n  return 2;\n}\n",
+        "\npub fn f() u32 {\n  return 2;\n}\n",
     );
 }
 

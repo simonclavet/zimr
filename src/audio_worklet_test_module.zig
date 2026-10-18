@@ -386,7 +386,11 @@ fn testMessages() callconv(.c) usize {
 
 /// Writes the sine generator's own `frame_count` frames at `frequency`, from frame `first_frame`, and returns their
 /// address: interleaved stereo.
-fn testSineFrames(frequency: f32, first_frame: u32, frame_count: u32) callconv(.c) usize {
+fn testSineFrames(
+    frequency: f32,
+    first_frame: u32,
+    frame_count: u32,
+) callconv(.c) usize {
     var sine_state: f32 = frequency;
     const sample_count: usize = @as(usize, frame_count) * mixer.channel_count;
     const sine_frames: []f32 = main_side_state.sine_frames[0..sample_count];

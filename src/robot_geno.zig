@@ -1285,7 +1285,11 @@ fn bodyAbove(pose: Posed, i: usize) ?usize {
 /// tip - the middle finger, the top of the skull, the end of the toes).
 ///
 /// The caller owns the returned slice. Names point into `body_names`.
-pub fn measureRanges(gpa: Allocator, rest: Posed, captures: []const []const u8) ![]Range {
+pub fn measureRanges(
+    gpa: Allocator,
+    rest: Posed,
+    captures: []const []const u8,
+) ![]Range {
     assertf(eql(u8, body_names[0], "Hips"), @src(), "measureRanges: the root must come first", .{});
     const measured: []const []const u8 = body_names[1..];
     const count: usize = measured.len;
@@ -7649,6 +7653,32 @@ pub const RunFile = enum {
         }
         const digits: []const u8 = name[checkpoint_prefix.len..];
         return parseInt(u64, digits, 10) catch null;
+    }
+};
+
+/// How the trainer (`tools/geno_trainer.zig`) ends, as its exit code tells whoever started it - a person's shell, or
+/// the training lab.
+pub const TrainerExit = enum(u8) {
+    /// The run ended as asked: its `stop` file, or its limits.
+    finished = 0,
+    /// The run was refused before training: no folder named, an unreadable or out-of-range `run.zon`, weights that
+    /// do not fit.
+    refused = 1,
+    /// The run failed: the GPU or the robot could not be set up, or a file could not be written.
+    failed = 2,
+
+    pub fn code(exit: TrainerExit) u8 {
+        return @backingInt(exit);
+    }
+
+    /// The exit an exit code means, or null for a code the trainer never gives - a program ended from outside.
+    pub fn fromCode(exit_code: u32) ?TrainerExit {
+        return switch (exit_code) {
+            0 => .finished,
+            1 => .refused,
+            2 => .failed,
+            else => null,
+        };
     }
 };
 

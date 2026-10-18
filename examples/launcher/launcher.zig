@@ -25,9 +25,9 @@ const Color = zm.Color;
 const vec2 = zm.vec2;
 
 // The flagship roster. Order = switch order. A broad tour of the engine: 3D PBR,
-// full UI, physics, robot dynamics with a live MPC planner, two CPU-vs-GPU
-// side-by-sides, 2D/3D plots, two GPU fluids, a warp starfield, switchable 2D
-// post-fx, and fractals.
+// full UI, physics (2D and 3D, alone and side by side), robot dynamics with a
+// live MPC planner, two CPU-vs-GPU side-by-sides, 2D/3D plots, two GPU fluids,
+// a warp starfield, switchable 2D post-fx, a playable scale star, and fractals.
 const flagships = [_]z.AppVtable{
     z.eraseApp(@import("ex_helmet_sw").app), // CPU vs GPU PBR helmet
     z.eraseApp(@import("ex_bone_socket").app), // rigged character, skeletal animation + socketed sword
@@ -41,6 +41,7 @@ const flagships = [_]z.AppVtable{
     z.eraseApp(@import("ex_ui_full_showcase").app), // full imgui-style UI
     z.eraseApp(@import("ex_zimrphysics_demo").app), // Jolt physics scenes
     z.eraseApp(@import("ex_zimrphysics2d_demo").app), // box2d 2D physics scenes
+    z.eraseApp(@import("ex_physics_sidebyside").app), // 2D | 3D physics: the same falling boxes in both engines
     z.eraseApp(@import("ex_mpc_cartpole").app), // MPC: a cartpole planning its own swing-up
     z.eraseApp(@import("ex_mandel_sidebyside").app), // CPU vs GPU mandelbrot
     z.eraseApp(@import("ex_rt_sidebyside").app), // CPU vs GPU ray tracer
@@ -59,6 +60,7 @@ const flagships = [_]z.AppVtable{
     z.eraseApp(@import("ex_fps_playground").app), // first-person physics: walk + jump on cubes
     z.eraseApp(@import("ex_starfield").app), // warp-speed starfield
     z.eraseApp(@import("ex_shader_effects").app), // switchable 2D post-fx
+    z.eraseApp(@import("ex_audio_scale_star").app), // the major scale in thirds, played with Shepard tones
     // * A Go1 with a procedurally spliced arm: the torso weaves through three incommensurate
     // frequencies while the gripper holds a point that travels with the feet. Reports its own
     // attitude error, gripper drift, foot slip and friction-cone occupancy.

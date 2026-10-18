@@ -3349,13 +3349,17 @@ fn createComputePipeline(
 /// error when the device and instance are destroyed - after this returns, the counts are final).
 pub fn shutdown() MessageCounts {
     const self: *Host = host orelse return .{};
-    // The screen's texture and view are the host's: released here, with everything else the app released.
+    // The screen's texture and view, and the kept frame's buffer, are the host's: released here, with everything
+    // else the app released.
     if (self.screen) |screen| {
         if (screen.view != 0) {
             releaseTextureView(self, screen.view, .app);
             releaseTexture(self, screen.texture);
         }
     }
+    // lint:off decl-order: the kept frame's buffer is released as the app releases its own, with the commands below
+    bufferDestroy(self.kept_frame.buffer);
+    self.kept_frame.buffer = 0;
     if (self.device != .null_handle) {
         // The GPU's work done. The result is not needed: a device that was lost is torn down just the same.
         _ = self.device_dispatch.deviceWaitIdle(self.device);

@@ -5919,7 +5919,11 @@ pub const requests = [_]Request{
     // into them.
     .{ .name = "showWindow", .signature = fn (show: WindowShow) void },
     .{ .name = "focusWindow", .signature = fn () void },
-    .{ .name = "setWindowPosition", .signature = fn (monitor: u32, x: f32, y: f32) void },
+    .{ .name = "setWindowPosition", .signature = fn (
+        monitor: u32,
+        x: f32,
+        y: f32,
+    ) void },
     .{ .name = "setWindowSizeLimits", .signature = fn (limits: SizeLimits) void },
     // A key's label in the person's current layout, as UTF-8 written into `buffer`: for a letter key, the letter it
     // types there - the key at the US Q is "A" on a French keyboard - and for the others the layout's own name for

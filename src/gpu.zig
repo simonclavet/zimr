@@ -760,8 +760,12 @@ pub const GpuFrame = struct {
         if (is_match) {
             return;
         }
-        // Size changed (or first frame): drop the old depth texture and make a
-        // new one matching the surface.
+        // Size changed (or first frame): drop the old depth view and texture and
+        // make new ones matching the surface.
+        if (self.depth_view != .invalid) {
+            wgpu.destroyTextureView(self.depth_view);
+            self.depth_view = .invalid;
+        }
         if (self.depth_texture != .invalid) {
             wgpu.destroyTexture(self.depth_texture);
         }

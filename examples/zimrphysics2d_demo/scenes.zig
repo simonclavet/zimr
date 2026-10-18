@@ -79,7 +79,11 @@ pub const Scene = struct {
     update_s: ?*const fn (world: *phys.World, st: *SceneState) void = null,
     /// Interactive per-frame hook: like `update_s` but also receives player input. Runs once
     /// per frame (not per sub-step) so impulse actions like jump fire once per press.
-    control: ?*const fn (world: *phys.World, st: *SceneState, in: SceneInput) void = null,
+    control: ?*const fn (
+        world: *phys.World,
+        st: *SceneState,
+        in: SceneInput,
+    ) void = null,
     /// Collision-lab visualiser: queries the world and draws, with the pointer as a probe.
     lab: ?*const fn (ctx: *render.LabCtx) void = null,
     /// Drive the world snapshot/restore demo: the host captures a checkpoint a little way in

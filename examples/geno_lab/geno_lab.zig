@@ -10,6 +10,7 @@
 //! Run folders are files by path, which a page does not have: in a web build the list is left out.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const z = @import("zimr");
 const zm = @import("zm");
 const ui = z.ui;
@@ -46,9 +47,11 @@ const bufPrint = std.fmt.bufPrint;
 const lessThan = std.mem.lessThan;
 const sortSlice = std.mem.sort;
 const eql = std.mem.eql;
+const isAlphanumeric = std.ascii.isAlphanumeric;
 
 const Trainer = ppo_track.Trainer(zn_mlp);
 const is_browser: bool = z.host.is_browser;
+const log = std.log.scoped(.lab);
 
 const dance_zclip = @embedFile("geno_dance_zclip");
 const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
@@ -59,6 +62,8 @@ const Look = struct {
     character: Color = .{ .r = 120, .g = 170, .b = 225, .a = 255 },
     reference: Color = .{ .r = 86, .g = 92, .b = 104, .a = 255 },
     floor: Color = .{ .r = 74, .g = 80, .b = 92, .a = 255 },
+    /// What stops a new run from starting, in its form.
+    problem: Color = .{ .r = 235, .g = 120, .b = 110, .a = 255 },
     /// The runs' colours on the curves, in the list's order, round again after the last.
     runs: [6]Color = .{
         .{ .r = 120, .g = 170, .b = 225, .a = 255 },
@@ -97,6 +102,36 @@ const Floor = struct {
     side: f32 = 16,
     thickness: f32 = 0.2,
     top: f32 = -0.005,
+};
+
+/// The new training's form (`drawNewRunWindow`): the run's parameters as its `run.zon` will hold them, the name of
+/// its folder, and whether the form is open.
+const NewRunForm = struct {
+    is_open: bool = false,
+    run: geno.PpoRun = .{},
+    name_buffer: [64]u8 = @splat(0),
+    name_length: usize = 0,
+
+    fn name(form: *const NewRunForm) []const u8 {
+        return form.name_buffer[0..form.name_length];
+    }
+};
+
+/// A trainer this lab started (`startRun`): its run's folder name and the program. The program's watcher thread
+/// keeps the program's address, so a started trainer never moves: `State.started` is a fixed array, and a slot is
+/// taken again only once its trainer has ended.
+const StartedTrainer = struct {
+    run_name: z.Str(64) = .{},
+    program: native_os.ChildProgram = .{},
+    /// The program's state when the console was last told it (`watchStartedTrainers`): each change is told once.
+    told_state: native_os.ChildState = .idle,
+
+    /// How many trainers one lab starts and watches at once.
+    const most: usize = 8;
+
+    fn isRunning(started: *const StartedTrainer) bool {
+        return started.program.currentState() == .running;
+    }
 };
 
 /// Every kernel of `M`, with the WGSL the build made of it.
@@ -142,6 +177,58 @@ fn listRuns(gpa: Allocator, io: Io, runs_folder: []const u8) ![]native_os.Folder
         }
     }.byName);
     return runs;
+}
+
+/// The trainer's executable (`tools/geno_trainer.zig`), beside the lab's own - where the lab's build installs it -,
+/// written into `buffer`.
+fn trainerPath(io: Io, buffer: []u8) ?[]const u8 {
+    var executable_buffer: [1024]u8 = undefined;
+    const executable_folder: []const u8 = native_os.executableFolder(io, &executable_buffer) orelse return null;
+    const trainer_file_name: []const u8 = if (builtin.os.tag == .windows) "geno_trainer.exe" else "geno_trainer";
+    return pathIn(executable_folder, trainer_file_name, buffer);
+}
+
+/// The index of the run named `name` in `runs`, or null when none has that name.
+fn runIndexNamed(runs: []const native_os.FolderEntry, name: []const u8) ?usize {
+    for (runs, 0..) |run, index| {
+        if (eql(u8, run.name, name)) {
+            return index;
+        }
+    }
+    return null;
+}
+
+/// Whether `name` can name a run's folder: not empty, and only letters, digits, '-' and '_' - nothing a path reads
+/// as a separator or as a folder above.
+fn isRunNameFit(name: []const u8) bool {
+    if (name.len == 0) {
+        return false;
+    }
+    for (name) |character| {
+        const is_letter_or_digit: bool = isAlphanumeric(character);
+        const is_dash_or_underscore: bool = character == '-' or character == '_';
+        if (!is_letter_or_digit and !is_dash_or_underscore) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// A name no listed run has, for a new run of `motion`: its label and the first free number - `dance-1`,
+/// `dance-2` - written into `buffer`.
+fn freeRunName(
+    runs: []const native_os.FolderEntry,
+    motion: geno.PpoMotion,
+    buffer: []u8,
+) []const u8 {
+    var number: u32 = 1;
+    while (true) : (number += 1) {
+        const name: []const u8 = bufPrint(buffer, "{s}-{d}", .{ motion.label(), number }) catch return "";
+        const is_taken: bool = runIndexNamed(runs, name) != null;
+        if (!is_taken) {
+            return name;
+        }
+    }
 }
 
 /// A run's parameters, from the `run.zon` in `run_folder`.
@@ -450,10 +537,28 @@ const State = struct {
     look: Look,
     floor: Floor,
     pacing: ppo_track.ShowPacing,
+    new_run: NewRunForm,
+    started: [StartedTrainer.most]StartedTrainer,
 };
 
 fn runsFolderOf(s: *const State) []const u8 {
     return s.runs_folder_buffer[0..s.runs_folder_length];
+}
+
+/// Says what the lab just did, or why it could not: on the panel's status line, and as a line on the console the
+/// lab was started from.
+fn tell(
+    s: *State,
+    comptime level: std.log.Level,
+    comptime format: []const u8,
+    arguments: anytype,
+) void {
+    s.status = .print(format, arguments);
+    switch (level) {
+        .err => log.err(format, arguments),
+        .warn => log.warn(format, arguments),
+        .info, .debug => log.info(format, arguments),
+    }
 }
 
 /// Reads every watched run again (`readRunWatch`).
@@ -480,21 +585,20 @@ fn refreshRuns(s: *State, io: Io) void {
     native_os.freeFolderEntries(s.gpa, s.runs);
     s.runs = &.{};
     s.runs = listRuns(s.gpa, io, runsFolderOf(s)) catch |err| list: {
-        s.status = .print("cannot list {s}: {s}", .{ runsFolderOf(s), @errorName(err) });
+        tell(s, .err, "cannot list the runs: {s}", .{@errorName(err)});
         break :list &.{};
     };
+    log.info("{d} runs in {s}", .{ s.runs.len, runsFolderOf(s) });
     s.watches = s.gpa.alloc(RunWatch, s.runs.len) catch &.{};
     for (s.watches) |*watch| {
         watch.* = .{};
     }
     readRuns(s, io);
-    s.selected_run = null;
-    const shown: *const ShownRun = if (s.shown) |*loaded| loaded else return;
-    for (s.runs, 0..) |run, index| {
-        if (eql(u8, run.name, shown.name())) {
-            s.selected_run = index;
-        }
-    }
+    const shown: *const ShownRun = if (s.shown) |*loaded| loaded else {
+        s.selected_run = null;
+        return;
+    };
+    s.selected_run = runIndexNamed(s.runs, shown.name());
 }
 
 /// Shows the run at `index` of the list with the weights file `weights_name`, in place of the one shown.
@@ -513,11 +617,11 @@ fn showRunWith(
     const name: []const u8 = s.runs[index].name;
     const run_folder: []const u8 = pathIn(runsFolderOf(s), name, &path_buffer) orelse return;
     const shown: ShownRun = loadRun(s.gpa, io, &s.pipe, &s.imported, &s.clip, run_folder, weights_name) catch |err| {
-        s.status = .print("{s}: {s}", .{ name, @errorName(err) });
+        tell(s, .warn, "{s}: cannot show it: {s}", .{ name, @errorName(err) });
         return;
     };
     s.shown = shown;
-    s.status = .print("{s}: {s}, batch {d}", .{ name, weights_name, shown.trainer.iterations });
+    tell(s, .info, "showing {s}: {s}, batch {d}", .{ name, weights_name, shown.trainer.iterations });
 }
 
 /// Shows the run at `index` of the list with its newest weights, in place of the one shown.
@@ -533,10 +637,193 @@ fn reloadShownRun(s: *State, io: Io) void {
     const run_folder: []const u8 = pathIn(runsFolderOf(s), name, &path_buffer) orelse return;
     const newest_name: []const u8 = geno.RunFile.weights.fileName();
     const batch: u64 = readWeights(s.gpa, io, run_folder, newest_name, shown.trainer) catch |err| {
-        s.status = .print("{s}: {s}", .{ name, @errorName(err) });
+        tell(s, .warn, "{s}: cannot reload: {s}", .{ name, @errorName(err) });
         return;
     };
-    s.status = .print("{s}: batch {d}", .{ name, batch });
+    tell(s, .info, "reloaded {s}: batch {d}", .{ name, batch });
+}
+
+// ---- Starting and stopping runs ----
+
+/// Opens the new training's form: its parameters the shown run's - so trying a variation of a run is changing one
+/// field - or the defaults when no run is shown, and a name no run has.
+fn openNewRunForm(s: *State) void {
+    const form: *NewRunForm = &s.new_run;
+    form.run = if (s.shown) |*shown| shown.parameters else .{};
+    const name: []const u8 = freeRunName(s.runs, form.run.motion, &form.name_buffer);
+    form.name_length = name.len;
+    form.is_open = true;
+    const source: []const u8 = if (s.shown) |*shown| shown.name() else "the defaults";
+    log.info("new training: parameters from {s}, named {s}", .{ source, name });
+}
+
+/// Why the form's run cannot start, or null when it can: a name unfit for a folder or already a run's, or a
+/// parameter the trainer would refuse (`PpoRun.problem`).
+fn newRunProblem(form: *const NewRunForm, runs: []const native_os.FolderEntry) ?[]const u8 {
+    const name: []const u8 = form.name();
+    if (!isRunNameFit(name)) {
+        return "name: letters, digits, - and _ only";
+    }
+    const is_taken: bool = runIndexNamed(runs, name) != null;
+    if (is_taken) {
+        return "name: a run of that name exists";
+    }
+    return form.run.problem();
+}
+
+/// A slot of `started` free for another trainer: one never used, or whose trainer has ended. Null when every slot's
+/// trainer still runs.
+fn freeStartedSlot(started: []StartedTrainer) ?*StartedTrainer {
+    for (started) |*slot| {
+        if (!slot.isRunning()) {
+            return slot;
+        }
+    }
+    return null;
+}
+
+/// Starts the form's run: its folder made, its `run.zon` written, and the trainer beside the lab started on it,
+/// in a slot of `State.started` that watches it. Each step is told on the console; a step that fails stops there,
+/// saying why.
+fn startRun(s: *State, io: Io) void {
+    const name: []const u8 = s.new_run.name();
+    const slot: *StartedTrainer = freeStartedSlot(&s.started) orelse {
+        tell(s, .warn, "{d} trainers already run: stop one first", .{StartedTrainer.most});
+        return;
+    };
+    var trainer_path_buffer: [1200]u8 = undefined;
+    const trainer_path: []const u8 = trainerPath(io, &trainer_path_buffer) orelse {
+        tell(s, .err, "cannot find the lab's own folder", .{});
+        return;
+    };
+    if (!native_os.fileExists(io, trainer_path)) {
+        tell(s, .err, "no trainer beside the lab: see the console", .{});
+        log.err("no trainer at {s}: build it with `zig build geno-lab -Dplatform=windows`", .{trainer_path});
+        return;
+    }
+    var folder_buffer: [1200]u8 = undefined;
+    const folder: []const u8 = pathIn(runsFolderOf(s), name, &folder_buffer) orelse return;
+    native_os.makeFolder(io, folder) catch |err| {
+        tell(s, .err, "{s}: cannot make its folder: {s}", .{ name, @errorName(err) });
+        return;
+    };
+    log.info("{s}: made {s}", .{ name, folder });
+
+    // The parameters, written as the trainer will read them.
+    var text: Io.Writer.Allocating = .init(s.gpa);
+    defer text.deinit();
+    s.new_run.run.write(&text.writer) catch {
+        tell(s, .err, "{s}: out of memory writing run.zon", .{name});
+        return;
+    };
+    text.writer.writeAll("\n") catch {
+        tell(s, .err, "{s}: out of memory writing run.zon", .{name});
+        return;
+    };
+    var run_file_buffer: [1300]u8 = undefined;
+    const run_file_name: []const u8 = geno.RunFile.parameters.fileName();
+    const run_file_path: []const u8 = pathIn(folder, run_file_name, &run_file_buffer) orelse return;
+    native_os.writeWhole(s.gpa, io, run_file_path, text.written()) catch |err| {
+        tell(s, .err, "{s}: cannot write run.zon: {s}", .{ name, @errorName(err) });
+        return;
+    };
+    log.info("{s}: wrote {s}:\n{s}", .{ name, run_file_path, text.written() });
+
+    var run_argument_buffer: [1300]u8 = undefined;
+    const run_argument: []const u8 = bufPrint(&run_argument_buffer, "--run={s}", .{folder}) catch return;
+    const argv: [2][]const u8 = .{ trainer_path, run_argument };
+    log.info("{s}: starting {s} {s}", .{ name, trainer_path, run_argument });
+    slot.run_name = .print("{s}", .{name});
+    slot.told_state = .idle;
+    slot.program.start(io, &argv);
+    s.new_run.is_open = false;
+    // The new folder joins the list at once; its line fills in once the trainer writes its first status.
+    refreshRuns(s, io);
+}
+
+/// Asks the run named `name` to stop: its `stop` file written, which the trainer reads after its batch - it saves
+/// its weights, log and status, and exits.
+fn requestStop(s: *State, io: Io, name: []const u8) void {
+    var folder_buffer: [1200]u8 = undefined;
+    const folder: []const u8 = pathIn(runsFolderOf(s), name, &folder_buffer) orelse return;
+    var stop_buffer: [1300]u8 = undefined;
+    const stop_file_name: []const u8 = geno.RunFile.stop.fileName();
+    const stop_path: []const u8 = pathIn(folder, stop_file_name, &stop_buffer) orelse return;
+    native_os.writeWhole(s.gpa, io, stop_path, "") catch |err| {
+        tell(s, .err, "{s}: cannot write its stop file: {s}", .{ name, @errorName(err) });
+        return;
+    };
+    tell(s, .info, "{s}: asked to stop - it saves, then exits", .{name});
+}
+
+/// What a trainer's end means, from its exit code (`geno.TrainerExit`).
+fn trainerEndMeaning(exit_code: u32) []const u8 {
+    const exit: geno.TrainerExit = geno.TrainerExit.fromCode(exit_code) orelse return "ended from outside";
+    return switch (exit) {
+        .finished => "finished or stopped, everything saved",
+        .refused => "refused the run - its reason is above",
+        .failed => "failed - its reason is above",
+    };
+}
+
+/// Tells the console each change of a started trainer's state: running, ended and how, or not started at all.
+fn watchStartedTrainers(s: *State) void {
+    for (&s.started) |*started| {
+        const state: native_os.ChildState = started.program.currentState();
+        if (state == started.told_state) {
+            continue;
+        }
+        started.told_state = state;
+        const name: []const u8 = started.run_name.slice();
+        const exit_code: u32 = started.program.exit_code;
+        switch (state) {
+            .idle => {},
+            .running => log.info("{s}: trainer running, process {d}", .{ name, started.program.process_id }),
+            .closed, .failed => {
+                const level_is_error: bool = state == .failed;
+                const meaning: []const u8 = trainerEndMeaning(exit_code);
+                if (level_is_error) {
+                    tell(s, .err, "{s}: trainer exit {d}: {s}", .{ name, exit_code, meaning });
+                } else {
+                    tell(s, .info, "{s}: trainer exit {d}: {s}", .{ name, exit_code, meaning });
+                }
+            },
+            .not_started => tell(s, .err, "{s}: the trainer did not start", .{name}),
+        }
+    }
+}
+
+/// The new training's form, while it is open: the run's name, every parameter of `PpoRun` (`ui.editStruct`), what
+/// stops it from starting, and start, defaults and cancel.
+fn drawNewRunWindow(s: *State, u: ui.Ui, io: Io) void {
+    const form: *NewRunForm = &s.new_run;
+    if (!form.is_open) {
+        return;
+    }
+    const window_options: ui.WindowOpts = .{ .initial_pos = .{ 392, 4 }, .initial_size = .{ 420, 520 } };
+    const window: ui.WindowHandle = u.window("new training", window_options) orelse return;
+    defer window.close();
+    _ = u.inputText("name", &form.name_buffer, &form.name_length, .{});
+    _ = u.editStruct(&form.run);
+    const problem: ?[]const u8 = newRunProblem(form, s.runs);
+    if (problem) |why| {
+        u.textColored(s.look.problem, "{s}", .{why});
+    }
+    if (u.button("start", .{})) {
+        if (problem) |why| {
+            tell(s, .warn, "not started: {s}", .{why});
+        } else {
+            startRun(s, io);
+        }
+    }
+    u.sameLine(.{});
+    if (u.button("defaults", .{})) {
+        form.run = .{};
+    }
+    u.sameLine(.{});
+    if (u.button("cancel", .{})) {
+        form.is_open = false;
+    }
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
@@ -578,6 +865,8 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.curves_refresh = .{};
     s.curve_plot = .{};
     s.since_runs_read_seconds = 0;
+    s.new_run = .{};
+    s.started = @splat(.{});
     if (comptime !is_browser) {
         // An app has no `main` to receive an `Io`; the engine's services hold one for it.
         const io: Io = native_os.servicesIo();
@@ -592,6 +881,17 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 }
 
 fn deinit(gpa: Allocator, s: *State) void {
+    // Trainers keep running without the lab: their runs carry on, and a lab started later shows them.
+    if (comptime !is_browser) {
+        for (&s.started) |*started| {
+            if (started.isRunning()) {
+                log.info("{s}: keeps training after the lab closes - stop it with its stop file", .{
+                    started.run_name.slice(),
+                });
+            }
+            started.program.deinit();
+        }
+    }
     if (s.shown) |*shown| {
         unloadRun(gpa, shown);
     }
@@ -757,10 +1057,25 @@ fn drawPanel(s: *State, f: *z.Frame) bool {
         const io: Io = native_os.servicesIo();
         const now_seconds: i64 = native_os.wallClockSeconds(io);
         u.text("runs in {s}", .{runsFolderOf(s)});
+        if (u.button("start new training", .{})) {
+            openNewRunForm(s);
+        }
         for (s.runs, s.watches, 0..) |run, *watch, index| {
+            // Each row's own id: every row has a "stop" button.
+            u.pushIdInt(@intCast(index));
+            defer u.popId();
             const is_selected: bool = s.selected_run == index;
             if (u.selectable(run.name, is_selected, .{})) {
                 showRun(s, io, index);
+            }
+            // A training run's line starts with its "stop" button, where the panel's width cannot push it out of view.
+            const state: ?geno.RunState = if (watch.status) |status| status.state else null;
+            const is_training: bool = state == .training or state == .measuring_servo;
+            if (is_training) {
+                if (u.button("stop", .{})) {
+                    requestStop(s, io, run.name);
+                }
+                u.sameLine(.{});
             }
             drawRunLine(u, watch, s.look.runColor(index), now_seconds);
         }
@@ -785,6 +1100,9 @@ fn drawPanel(s: *State, f: *z.Frame) bool {
         }
         u.text("{s}", .{s.status.slice()});
     }
+    if (comptime !is_browser) {
+        drawNewRunWindow(s, u, native_os.servicesIo());
+    }
     return captured;
 }
 
@@ -799,6 +1117,7 @@ fn update(f: *z.Frame, s: *State) void {
         if (is_read_due) {
             readRuns(s, native_os.servicesIo());
         }
+        watchStartedTrainers(s);
     }
     // The character moves evenly, whatever the frame rate (`stepShowForFrame`).
     if (s.shown) |*shown| {

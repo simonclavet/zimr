@@ -800,10 +800,10 @@ pub const Renderer2D = struct {
     /// callers' `setTexture(id)` keeps working).  This is what makes a
     /// resizable `CpuFramebuffer` possible - recreate the texture at the
     /// new size, then update the registration instead of consuming a new
-    /// slot per resize.  The OLD bind-group handle is dropped without a
-    /// destroy (the JS bridge has no bind-group destroy yet - see
-    /// audit_cleanup_notes.md); one handle per resize, bounded by how
-    /// often the user rotates the device.  No-op on id 0 / unregistered.
+    /// slot per resize.  The OLD bind group is destroyed - it holds the old
+    /// view and sampler, which would otherwise outlive the old texture - so,
+    /// as with `setTextureFilterById`, callers must flush any pending batch
+    /// first.  No-op on id 0 / unregistered.
     pub fn updateRegisteredTexture(self: *Renderer2D, id: u32, tex: WgpuTexture) void {
         if (id == 0 or id >= self.registered_count) {
             return;
@@ -814,8 +814,13 @@ pub const Renderer2D = struct {
             self.resources.bg_layouts[1],
             tex,
         ) catch return;
+        if (self.registered_bind_groups[id] != .invalid) {
+            wgpu.destroyBindGroup(self.registered_bind_groups[id]);
+        }
         self.registered_textures[id] = tex;
         self.registered_bind_groups[id] = bg;
+        // Invalidate the staged-material dedup (it may hold the destroyed group).
+        self.shapes_batch.current_texture_bind_group = self.resources.bind_groups[1];
     }
 
     /// Return a material bind group for `tex`, caching by texture HANDLE. If the

@@ -646,7 +646,12 @@ test "robot_ppo_track: a sliced batch, and weights that travel as bytes" {
 
 /// One chunk of a long training run: resume, learn for `seconds`, save, and append the learning
 /// curve to a CSV beside the checkpoint so the run's history survives every restart.
-fn trainChunk(clip_path: []const u8, first: usize, name: []const u8, seconds: f32) !void {
+fn trainChunk(
+    clip_path: []const u8,
+    first: usize,
+    name: []const u8,
+    seconds: f32,
+) !void {
     const gpa: Allocator = testing_allocator;
     var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();

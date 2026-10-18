@@ -14180,7 +14180,11 @@ pub fn computeTwistOffset(
 ///
 /// * Chains must be walked PARENT TO CHILD so `parent_twist` is the one computed for this
 /// joint's actual parent, not whichever body happened to come before it in index order.
-pub fn applyTwist(source_local_rotation: Quat, parent_twist: Quat, own_twist: Quat) Quat {
+pub fn applyTwist(
+    source_local_rotation: Quat,
+    parent_twist: Quat,
+    own_twist: Quat,
+) Quat {
     return qmul(qmul(conjugate(parent_twist), source_local_rotation), own_twist);
 }
 
