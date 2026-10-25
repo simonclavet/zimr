@@ -320,7 +320,7 @@ the record's setup: no moves, no ko point, no captures yet - the panel says so, 
    (`-Dplatform=web|windows`), `run-goban`, `goban-headless`, the smoke test and a gallery shot.
 2. `src/web/manifest.json`: the gallery card.
 3. `zig build editor-configs` (`generate_editor_configs.bat`) regenerates the VS Code and Zed launch files, including
-   the LLDB entry for `zig-out/windows/goban.exe`; `zig build check` fails until it is run.
+   the LLDB entry for `zig-out/windows/goban.exe`; `zig build tripwires` fails until it is run.
 4. `src/notes/examples_catalog.md`: a row under "2D simulation and games", and the counts.
 5. `zig build files-md`: the per-file atlas.
 6. A `test-goban` step: a test artifact from the example's own module, for the host (8.1).
@@ -764,7 +764,7 @@ and runs, and sends screenshots.
 | E1 | engine: `z.requestQuit` (8.6) - contract, Windows, headless, the web's refusal, readme | a test app's Quit closes the Windows build cleanly (no leak report); the web build still compiles |
 | S11 | main menu, pause, victory; Escape, H, side button; Atari Go end to end; Quit on native | goforest's full flow; Quit closes the Windows build; the web build has no Quit button |
 | S12 | debug panel: inspector, move log, verify toggle, timeline, copy / paste diagram; forest view | every tool of D2 works |
-| S13 | manifest card, editor configs, catalog, files-md, `check.script`, gallery shot; the launcher (D8) | `goban-headless` frames read and right; `smoke-test -Dfocus=goban`, `zig build platforms-check` and `zig build check` green; goban in the launcher on desktop and phone, Undo clear of the switch pill |
+| S13 | manifest card, editor configs, catalog, files-md, `check.script`, gallery shot; the launcher (D8) | `goban-headless` frames read and right; `smoke-test -Dfocus=goban`, `zig build platforms-check` and `zig build tripwires` green; goban in the launcher on desktop and phone, Undo clear of the switch pill |
 | S14 | the opponent's section (8.8): the nodes in one array, UCB1, one iteration, light playouts, the most visited move; its tests (a capture in one found, a defence found, visits and wins adding up through the tree, the same seed giving the same move, the root position untouched) | `zig build test-goban` green; each test watched failing on a planted fault |
 | S15 | heavy playouts (capture, then rescue, then random) with the switch to light; the tree as bytes and back; the search continued (`continueSearch`); the subtree taken up after two moves; their tests (a search of n iterations the same as n cut into slices; the subtree's visits kept; a tree that does not fit not taken up) | test-goban green |
 | S16 | the app: `kernels.zig` and the build row; the main menu's three kinds of game (and the person's colour), Atari Go locked on with a computer; a move as one job on a worker, or frame-sized slices inline; the tree kept between moves; the board closed and a word while the computer thinks; Undo to before the person's last move (the job cancelled if running), off between two computers; a second's pace between two computers; Continue Playing for two players only; headless games against the computer and between two | whole games of each kind, desktop and phone (and in the Claude app's preview, inline), the frame rate held; the budget tuned to about a second on the phone |
@@ -1361,7 +1361,7 @@ A tutorial built on the port could start from this table: the same program, thre
   flow (unchanged at 900 x 900): 0 validation errors. Tests 37. Seen and left for Simon: in a window that short the
   pill still crosses the menu - over Start Game - since the pill covers any app's bottom centre; a safe-area band the
   launcher reports to its apps would be the engine's way. Not yet run: flagships-check, platforms-check, smoke-test,
-  zig build check, the gallery shot.
+  zig build tripwires, the gallery shot.
 - Oct 19: **two fingers are no touch** (Simon: two fingers felt strange). The web bridge sends every pointer to the
   mouse channel, so two fingers made the mouse jump between them, and the first to lift released the button and
   played a stone. `FingerGesture` (section 9): a second finger down cancels the gesture - the stone held put back, the

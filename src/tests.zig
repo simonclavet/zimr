@@ -58,7 +58,7 @@ comptime {
     // `ulimit -s unlimited`.  Coverage tradeoff (accepted zimr1233): the
     // 181-fixture Tint corpus regression now runs ONLY via the separate
     // `zig build naga-tint` step (scripts/naga-validate-tint.sh, needs
-    // naga); the routine `check` gate carries the spv2wgsl corpus
+    // naga); the routine `tripwires` gate carries the spv2wgsl corpus
     // (tools/wgsl_corpus.zig, every graphics shader) plus fixture + smoke.
     // If the full corpus regression is wanted back in-process, wrap it in
     // a `std.Thread.spawn(.{ .stack_size = ... })` rather than the global
@@ -137,6 +137,7 @@ test {
     refAllDecls(@import("raster_pixel.zig"));
     refAllDecls(@import("raster_shader.zig"));
     refAllDecls(@import("runtime.zig"));
+    refAllDecls(@import("FramePacer.zig"));
     refAllDecls(@import("shader_runtime_wgpu.zig").shader_compile);
     refAllDecls(@import("shader_connect.zig"));
     // shader_interface + zimrmath are NAMED MODULES on the test target

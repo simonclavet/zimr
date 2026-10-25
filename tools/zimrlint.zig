@@ -23,7 +23,7 @@
 //!                                           written once, laid out as `zig fmt` lays it out, then a line naming
 //!                                           what was fixed (`zimrlint: fixed <file>: <rule> x<count>, ...`), the
 //!                                           file's diff (`line_diff.zig`), and what is left in it for a person.
-//!                                           `zig build fix` runs this; no other step writes a source file.
+//!                                           `zig build lint-fix` runs this; no other step writes a source file.
 //!   zimrlint --list-rules                   every tag (those in progress marked)
 //!   zimrlint --cache-dir <dir> ...          where the per-file clean stamps go
 //!   Built as a ReleaseSafe exe (NOT ReleaseFast -- this dev Zig miscompiles it in
@@ -797,7 +797,7 @@ const rule_notes = [_]RuleNote{
         \\It is a rule rather than a separate `zig fmt --check` so that layout reports
         \\like every other finding: in the same list, with the same `autofix:` hint.
         \\`zig fmt --check` named a file and said nothing about what to run. The fix -
-        \\`zig build fix` - writes the formatted file and prints its diff.
+        \\`zig build lint-fix` - writes the formatted file and prints its diff.
         ,
     },
     .{
@@ -4944,7 +4944,7 @@ fn checkFnArgsMultiline(
                 return;
             }
             // The fix: one comma right before the parameter list's closing parenthesis. A trailing comma is zig
-            // fmt's signal to lay a list out one item per line, so `zig build fix` - `--fix`, then fmt - ends with
+            // fmt's signal to lay a list out one item per line, so `zig build lint-fix` - `--fix`, then fmt - ends with
             // exactly the layout this rule asks for. A trailing comma already there means fmt has not run yet: fmt
             // alone is the fix, there is nothing to insert.
             const closing: u32 = closingParen(ast, proto.lparen);
@@ -8252,7 +8252,7 @@ const Args = struct {
     reorder_decls: bool = false,
     /// `--coverage`: report where the rule walk is blind (`runCoverage`) instead of linting.
     coverage: bool = false,
-    /// `--fix-command`: what a reader runs to apply the autofixes - `zig build fix` from zimr's build and from a
+    /// `--fix-command`: what a reader runs to apply the autofixes - `zig build lint-fix` from zimr's build and from a
     /// project's. Null: the linter's own advice, `fix_command_default`.
     fix_command: ?[]const u8 = null,
     /// `--fix` applies the mechanical autofixes in place (mirrors `zig fmt`'s
@@ -8422,7 +8422,7 @@ const LintCli = struct {
 
 const lint_cli: cli.Config(LintCli) = .{
     .prog = "zimrlint",
-    .description = "zimr's linter: the house rules over the files given (`zig build check` runs it on the tree). " ++
+    .description = "zimr's linter: the house rules over the files given (`zig build lint` runs it on the tree). " ++
         "Exit 1: findings. Exit 2: a bad command line.",
     .args = .{
         .@"--enable" = .{ .description = "the rules to check, comma-separated; repeatable (see --list-rules)" },
@@ -9487,8 +9487,8 @@ fn runReorderDecls(
 }
 
 /// What to run to apply the autofixes when the caller did not say (`--fix-command`): the same command line, plus
-/// `--fix`. zimr's build and a project's pass `zig build fix` instead - the step that runs `--fix` and prints the diff
-/// of every file it rewrites.
+/// `--fix`. zimr's build and a project's pass `zig build lint-fix` instead - the step that runs `--fix` and prints the
+/// diff of every file it rewrites.
 const fix_command_default: []const u8 = "rerun this command with --fix";
 
 /// What a `--fix` run says of a finding it left with a fix it could not apply: refused (applied, it broke the file) or
@@ -10126,7 +10126,7 @@ pub fn main(init: std.process.Init) !u8 {
         }
     }
     // A fix run's last word, only when it has one: a run that found nothing to do says nothing, as `zig fmt` does
-    // (`zig build fix` runs several of them - the tree, the template's layout - and an empty one is noise).
+    // (`zig build lint-fix` runs several of them - the tree, the template's layout - and an empty one is noise).
     if (args.fix and (files_fixed > 0 or total_left > 0)) {
         if (files_fixed > 0) {
             const verb: []const u8 = if (args.dry_run) "would rewrite" else "rewrote";
@@ -11462,11 +11462,11 @@ test "a fixable finding ends with the command that fixes it; the others do not; 
     };
     var seen_tags: StringHashMap(void) = .init(alloc);
     var written: Io.Writer.Allocating = .init(alloc);
-    const fixable: usize = try printIssues(&written.writer, &seen_tags, &issues, "autofix: zig build fix");
+    const fixable: usize = try printIssues(&written.writer, &seen_tags, &issues, "autofix: zig build lint-fix");
     try expect(fixable == 1);
     const text: []const u8 = written.written();
     const fixable_line: []const u8 = "a.zig:2:5: [branch-braces] if body should be a block (rule 3)" ++
-        " - autofix: zig build fix\n";
+        " - autofix: zig build lint-fix\n";
     try expect(indexOf(u8, text, fixable_line) != null);
     try expect(indexOf(u8, text, "a.zig:4:1: [untyped-local]") == null);
     try expect(indexOf(u8, text, "a.zig:4:5: [untyped-local] local 'x' lacks a type annotation (rule 2)\n") != null);

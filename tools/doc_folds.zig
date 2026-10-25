@@ -35,12 +35,12 @@
 //! Two modes:
 //!
 //!     zig build doc-folds   --fix    rewrite every block from the source, printing each page's diff
-//!     zig build fix         --fix    the same, after the linter's fixes - the one step that rewrites sources
-//!     zig build gate        --check  fail on any difference, touch nothing - so does `check`
+//!     zig build lint-fix    --fix    the same, after the linter's fixes - the one step that rewrites sources
+//!     zig build gate        --check  fail on any difference, touch nothing - so does `tripwires`
 //!
-//! The workflow that falls out of it: change the code however you like, run `zig build fix`
+//! The workflow that falls out of it: change the code however you like, run `zig build lint-fix`
 //! (or `zig build doc-folds`), and the page follows - every regenerated block printed as a diff,
-//! as `zig build fix` prints every file it rewrites. The only thing left to keep in sync by hand
+//! as `zig build lint-fix` prints every file it rewrites. The only thing left to keep in sync by hand
 //! is the prose around the code - which is exactly the part a tool can't write for you.
 
 const std = @import("std");
@@ -481,7 +481,7 @@ pub fn main(init: std.process.Init) !void {
         const updated: []u8 = try processPage(gpa, io, page, text, &rep);
         const changed: bool = !eql(u8, text, updated);
         const verb: []const u8 = if (mode == .fix) "regenerated" else "stale";
-        // A check reports every page; a fix only the pages it rewrote or could not - `zig build fix` prints what
+        // A check reports every page; a fix only the pages it rewrote or could not - `zig build lint-fix` prints what
         // changed, and a page it left alone is nothing to read.
         if (mode == .check or changed or rep.errors > 0) {
             try out.print("{s}: {d} code block(s), {d} {s}, {d} reference region(s), {d} error(s)\n", .{
@@ -495,7 +495,7 @@ pub fn main(init: std.process.Init) !void {
         }
         if (mode == .fix and changed) {
             try Dir.cwd().writeFile(io, .{ .sub_path = page, .data = updated });
-            // What changed, as it changes - as `zig build fix` shows every file it rewrites.
+            // What changed, as it changes - as `zig build lint-fix` shows every file it rewrites.
             try line_diff.print(gpa, out, page, text, updated);
         }
         try out.flush();
@@ -506,7 +506,7 @@ pub fn main(init: std.process.Init) !void {
     if (failed) {
         const tail: []const u8 =
             "doc-folds FAILED: the tutorial's code no longer matches the source.\n" ++
-            "Run `zig build fix` (or `zig build doc-folds`) to regenerate it; fix any block whose data-decl\n" ++
+            "Run `zig build lint-fix` (or `zig build doc-folds`) to regenerate it; fix any block whose data-decl\n" ++
             "no longer finds its declaration (renamed? add data-in= to disambiguate).\n";
         try File.stderr().writeStreamingAll(io, tail);
         std.process.exit(1);

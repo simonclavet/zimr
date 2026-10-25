@@ -10539,6 +10539,7 @@ const C2jsArgs = struct {
     @"--html": bool = false,
     @"--title": ?[]const u8 = null,
     @"--fullscreen-landscape": bool = false,
+    @"--no-fullscreen-button": bool = false,
     @"--wasm-url": ?[]const u8 = null,
     @"--wasm-embed": ?[]const u8 = null,
     @"--kernel-wasm-embed": ?[]const u8 = null,
@@ -10557,6 +10558,7 @@ const c2js_cli: cli.Config(C2jsArgs) = .{
         .@"--html" = .{ .description = "wrap the JS in a minimal HTML page" },
         .@"--title" = .{ .description = "the page's <title> (with --html)" },
         .@"--fullscreen-landscape" = .{ .description = "a full-canvas page with the fullscreen-toggle button" },
+        .@"--no-fullscreen-button" = .{ .description = "with --fullscreen-landscape: the full-canvas page, no button" },
         .@"--wasm-url" = .{ .description = "set window.WASM_URL, so the page fetches a sibling .wasm" },
         .@"--wasm-embed" = .{ .description = "base64-inline this .wasm into the page (self-contained)" },
         .@"--kernel-wasm-embed" = .{ .description = "base64-inline the compute kernels' .wasm too" },
@@ -10583,6 +10585,7 @@ pub fn main(init: std.process.Init) !void {
     const safe_heap: bool = args.@"--safe";
     const html_out: bool = args.@"--html";
     const fullscreen_landscape: bool = args.@"--fullscreen-landscape";
+    const fullscreen_button: bool = !args.@"--no-fullscreen-button";
     const title_opt: ?[]const u8 = args.@"--title";
     const wasm_url_opt: ?[]const u8 = args.@"--wasm-url";
     const wasm_embed_opt: ?[]const u8 = args.@"--wasm-embed";
@@ -10853,8 +10856,9 @@ pub fn main(init: std.process.Init) !void {
         // `apple-mobile-web-app-capable`; since iOS 26 every page so added). Opened that way the button has nothing
         // to do, and hides. A request refused - by promise, or by the prefixed API's `webkitfullscreenerror` - is
         // shown with its reason, and logged. The button sits inside the screen's safe area, clear of a home
-        // indicator or a notch.
-        const fs_js: []const u8 = if (fullscreen_landscape)
+        // indicator or a notch. A page without it (`--no-fullscreen-button`, from `App.fullscreen_button`) is still
+        // the full-canvas page.
+        const fs_js: []const u8 = if (fullscreen_landscape and fullscreen_button)
             \\<style>
             \\  html,body{margin:0;height:100%;background:#000;overflow:hidden}
             \\  #fsbtn{position:fixed;right:10px;bottom:10px;z-index:99998;
@@ -10918,6 +10922,10 @@ pub fn main(init: std.process.Init) !void {
             \\  button.addEventListener("click", toggle);
             \\})();
             \\</script>
+        else if (fullscreen_landscape)
+            \\<style>
+            \\  html,body{margin:0;height:100%;background:#000;overflow:hidden}
+            \\</style>
         else
             "";
         // On-page log overlay: mirrors console.{log,warn,error} to a bounded

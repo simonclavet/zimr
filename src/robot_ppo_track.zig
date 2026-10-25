@@ -122,55 +122,90 @@ pub fn secondsToFailure(
     return steps_per_failure / physics_steps_per_second;
 }
 
-/// How a show keeps up with the frames that draw it (`showStepsForFrame`).
-pub const ShowPacing = struct {
-    /// The most physics steps one frame takes: after a long frame - a window dragged, a run loaded - the show
-    /// resumes rather than racing through what it missed.
+/// A show's clock (`stepsForFrame`): the frames' real time, taken as whole physics steps of the show's timestep - the
+/// one its policy was trained on - so that the show moves at real time at any frame rate, and never faster. The time
+/// a frame brings short of a whole step is carried to the next: at 144 frames a second a step every two or three
+/// frames, at 60 one a frame, at 30 two. A frame owed more than `most_steps_per_frame` steps - a slow device, a long
+/// hitch - takes that many and drops the rest: the show falls behind into slow motion rather than catching up in a
+/// burst, and its physics never takes a longer step.
+pub const ShowClock = struct {
+    /// The most physics steps a frame takes: at 60 steps a second, real time down to 15 frames a second.
     most_steps_per_frame: u32 = 4,
-    /// How far short of a whole step a frame may be and still take it: a quarter of a step. The pacer's frames
-    /// jitter by a millisecond or two around their beat, and a frame a hair short of a step would otherwise take none.
-    step_tolerance: f32 = 0.25,
+    /// Real time owed to the show and not yet taken as steps, in seconds - less than a step, between frames. Null
+    /// before the first frame with time, and after a frame that dropped a backlog: the next frame starts afresh.
+    owed_seconds: ?f32 = null,
+
+    /// The physics steps of `timestep` seconds a frame of `dt` seconds takes.
+    ///
+    /// Started afresh, the clock owes the show half a frame - half a step, for frames longer than a step - so that
+    /// steps fall due midway between frames, where a millisecond or two of a frame's jitter cannot move a step into
+    /// the frame before or after: one step every frame at 60 frames a second, one every other frame at 120. A display
+    /// a hair off 60 a second moves the steps slowly across the frames, and now and then a frame takes two, or none:
+    /// what keeping to real time costs.
+    pub fn stepsForFrame(clock: *ShowClock, dt: f32, timestep: f32) u32 {
+        assertf(timestep > 0, @src(), "ShowClock: a timestep of {d} s", .{timestep});
+        assertf(clock.most_steps_per_frame > 0, @src(), "ShowClock: no steps allowed a frame", .{});
+        const has_time: bool = dt > 0;
+        if (!has_time) {
+            return 0;
+        }
+        const fresh_start_seconds: f32 = 0.5 * @min(dt, timestep);
+        const owed_now_seconds: f32 = (clock.owed_seconds orelse fresh_start_seconds) + dt;
+        const owed_steps: f32 = @floor(owed_now_seconds / timestep);
+        const is_behind: bool = owed_steps > float(clock.most_steps_per_frame);
+        if (is_behind) {
+            clock.owed_seconds = null;
+            return clock.most_steps_per_frame;
+        }
+        clock.owed_seconds = @max(owed_now_seconds - owed_steps * timestep, 0);
+        const steps_taken: u32 = @trunc(owed_steps);
+        return steps_taken;
+    }
 };
 
-/// The physics steps a frame of `dt` seconds takes, at `timestep` seconds a step: the frame's duration in steps,
-/// rounded down unless within `step_tolerance` of the next whole step, at least one and at most
-/// `most_steps_per_frame`. One step a frame at 60 frames a second, two at 30.
-///
-/// Nothing is carried from frame to frame. Physics keeps its fixed step - the one the policy was trained on - and
-/// each frame advances it by whole steps, so the motion stays even: a device that cannot keep up shows the motion in
-/// slight slow motion (at 50 frames a second, five sixths of real time) rather than in jumps, and never faster than
-/// real time by more than the tolerance allows. It assumes frames no faster than the physics, as the engine's pacer
-/// gives them (60 a second at most).
-///
-///     frames a second    steps in a frame    + tolerance    steps taken    the show's speed
-///          60               1.00               1.25            1             real time
-///          50               1.20               1.45            1             0.83
-///          40               1.50               1.75            1             0.67
-///          30               2.00               2.25            2             real time
-pub fn showStepsForFrame(dt: f32, timestep: f32, pacing: ShowPacing) u32 {
-    const steps_in_frame: f32 = dt / timestep;
-    const steps_with_tolerance: f32 = steps_in_frame + pacing.step_tolerance;
-    const steps_allowed: f32 = float(pacing.most_steps_per_frame);
-    const steps_kept: f32 = clamp(steps_with_tolerance, 1.0, steps_allowed);
-    return @floor(steps_kept);
+test "ShowClock: real time at every frame rate, never faster" {
+    const timestep: f32 = 1.0 / 60.0;
+    const seconds: f32 = 10;
+    const real_time_steps: u32 = 600;
+    const frame_rates = [_]f32{ 15, 24, 30, 50, 60, 90, 120, 144, 165, 240 };
+    for (frame_rates) |frames_per_second| {
+        var clock: ShowClock = .{};
+        const dt: f32 = 1.0 / frames_per_second;
+        const frame_count: u32 = @round(seconds * frames_per_second);
+        var steps_taken: u32 = 0;
+        for (0..frame_count) |_| {
+            steps_taken += clock.stepsForFrame(dt, timestep);
+        }
+        try expectEqual(real_time_steps, steps_taken);
+    }
 }
 
-test "showStepsForFrame: one step a frame at 60 frames a second, jitter or not; whole steps when slower" {
+test "ShowClock: a step a frame at 60 a second, every other frame at 120, through a millisecond of jitter" {
     const timestep: f32 = 1.0 / 60.0;
-    const pacing: ShowPacing = .{};
-    const millisecond: f32 = 0.001;
-    try expectEqual(@as(u32, 1), showStepsForFrame(timestep, timestep, pacing));
-    try expectEqual(@as(u32, 1), showStepsForFrame(timestep - 2 * millisecond, timestep, pacing));
-    try expectEqual(@as(u32, 1), showStepsForFrame(timestep + 2 * millisecond, timestep, pacing));
-    try expectEqual(@as(u32, 1), showStepsForFrame(1.0 / 50.0, timestep, pacing));
-    try expectEqual(@as(u32, 1), showStepsForFrame(1.0 / 40.0, timestep, pacing));
-    try expectEqual(@as(u32, 2), showStepsForFrame(1.0 / 30.0, timestep, pacing));
-    try expectEqual(@as(u32, 2), showStepsForFrame(1.0 / 31.0, timestep, pacing));
-    try expectEqual(@as(u32, 2), showStepsForFrame(1.0 / 29.0, timestep, pacing));
-    try expectEqual(@as(u32, 3), showStepsForFrame(1.0 / 20.0, timestep, pacing));
-    // A long frame takes the most, and a frame of no time - the first, a paused clock - still one.
-    try expectEqual(@as(u32, 4), showStepsForFrame(1.0, timestep, pacing));
-    try expectEqual(@as(u32, 1), showStepsForFrame(0.0, timestep, pacing));
+    const jitter_seconds: f32 = 0.001;
+    var clock_at_60: ShowClock = .{};
+    var clock_at_120: ShowClock = .{};
+    for (0..240) |frame| {
+        // Each frame a millisecond long or short, in turn: the durations jitter, their sum keeps the display's pace.
+        const is_long: bool = frame % 2 == 0;
+        const jitter: f32 = if (is_long) jitter_seconds else -jitter_seconds;
+        try expectEqual(@as(u32, 1), clock_at_60.stepsForFrame(timestep + jitter, timestep));
+        const is_step_frame: bool = frame % 2 == 1;
+        const expected_steps_at_120: u32 = if (is_step_frame) 1 else 0;
+        try expectEqual(expected_steps_at_120, clock_at_120.stepsForFrame(0.5 * timestep + jitter, timestep));
+    }
+}
+
+test "ShowClock: a long frame takes the most steps a frame may and drops the rest; a frame of no time takes none" {
+    const timestep: f32 = 1.0 / 60.0;
+    var clock: ShowClock = .{};
+    try expectEqual(@as(u32, 0), clock.stepsForFrame(0.0, timestep));
+    try expectEqual(@as(u32, 1), clock.stepsForFrame(timestep, timestep));
+    // A tenth of a second - the longest frame the engine's frame clock gives - owes six steps: four are taken, the
+    // rest dropped, and the clock starts afresh.
+    try expectEqual(@as(u32, 4), clock.stepsForFrame(0.1, timestep));
+    try expectEqual(null, clock.owed_seconds);
+    try expectEqual(@as(u32, 1), clock.stepsForFrame(timestep, timestep));
 }
 
 pub const Stats = struct {

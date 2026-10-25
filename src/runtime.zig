@@ -64,36 +64,6 @@ fn platformMilliseconds() f64 {
 // ============================================================================
 
 pub const core = struct {
-    /// Which of the display's frames an app draws, to hold it to a highest rate (`Config.max_frames_per_second`):
-    /// a browser asks for a frame at the display's own rate - 120 a second on many phones - and an app drawing each
-    /// one does twice the work of one drawn at 60, on a phone that heats and slows, its audio thread among the work's
-    /// neighbours. Frames are due on a beat, one period apart: a frame runs when the display's frame comes at most
-    /// `early_allowance_ms` before the next beat, and the beat moves on by one period from where it was, not from
-    /// when the frame came - so a 120 Hz display draws every other frame, and a 90 Hz one two frames in three, both
-    /// 60 a second on average. A frame later than a whole period past its beat - a stall, a hidden tab, the first
-    /// frame - starts the beat again from itself, so that the frames missed are not run in a burst to catch up.
-    pub const FramePacer = struct {
-        next_due_ms: f64 = 0,
-
-        /// How early a display frame may come and still be taken for the beat: 2 ms. Display frames come with some
-        /// jitter, and one a hair before the beat would otherwise wait a whole display frame more.
-        pub const early_allowance_ms: f64 = 2;
-
-        /// Whether the display's frame at `now_ms` is drawn, at `frames_per_second` at most; when it is, the beat
-        /// moves on.
-        pub fn shouldRun(pacer: *FramePacer, now_ms: f64, frames_per_second: f32) bool {
-            const period_ms: f64 = 1000.0 / @as(f64, frames_per_second);
-            const is_too_early: bool = now_ms + early_allowance_ms < pacer.next_due_ms;
-            if (is_too_early) {
-                return false;
-            }
-            const next_on_beat_ms: f64 = pacer.next_due_ms + period_ms;
-            const has_fallen_behind: bool = next_on_beat_ms < now_ms;
-            pacer.next_due_ms = if (has_fallen_behind) now_ms + period_ms else next_on_beat_ms;
-            return true;
-        }
-    };
-
     /// The frame clock's filter: from each frame's measured duration, the duration animation advances by. A display
     /// shows frames at an even pace - once per refresh - but the moments a program measures between them jitter by a
     /// millisecond or two, as the system schedules it; animation advanced by the measured durations moves unevenly

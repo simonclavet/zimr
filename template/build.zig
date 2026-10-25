@@ -5,16 +5,20 @@
 //   zig build -Dplatform=web       -- every app for the browser: zig-out/web/<name>/ (served) and
 //                                     zig-out/standalone/<name>.html (one file, opens from disk)
 //   zig build -Dplatform=windows   -- every app as a Windows program: zig-out/windows/<name>.exe
+//   zig build -Dplatform=android   -- every app as an Android app: zig-out/android/<name>.apk, its single-file page
+//                                     in a full-screen WebView (needs the Android SDK and a JDK; Android Studio
+//                                     installs both)
 //   zig build -Dmode=release       -- ReleaseSmall with zimr's asserts kept (share this one)
 //   zig build -Dmode=ship          -- ReleaseSmall, asserts and profiler stripped
 //   zig build serve -Dplatform=web -- build everything for the web, serve it on http://127.0.0.1:8081/
 //   zig build <name>               -- build one app for the platform
 //   zig build run-<name>           -- build one app, then run it: the program, or with -Dplatform=web its page in
-//                                     a browser (a server already running reloads the tabs showing it instead)
+//                                     a browser (a server already running reloads the tabs showing it instead), or
+//                                     with -Dplatform=android its app on the phone plugged in
 //   zig build run                  -- run-<name> of the first app added below
 //   zig build test                -- pure-CPU host unit tests (see below)
 //   zig build lint                -- zimr's linter over src/ (rules: see `.lint` below)
-//   zig build fix                 -- the linter's autofixes over src/, then zig fmt
+//   zig build lint-fix            -- the linter's autofixes over src/, then zig fmt
 //   zig build check               -- lint + host tests + every app, and the editor configs current
 //   zig build editor-configs      -- write .vscode/ and .zed/: a debug config for every app, on the web and as a
 //                                    Windows program, each with the task that builds the app first
@@ -41,6 +45,11 @@
 //   .engine_wgsl = true               embed zimr's engine shaders ("pbr_fs.wgsl", ...)
 //   .own_frame = true                 the app's file is the program's root: its own `main`, its own
 //                                     frames (src/myproject3.zig; README "Owning your main")
+//   .android_app_id = "com.you.game"  the Android app's ID, fixed once published (default org.zimr.<name>)
+//   .android_label = "My game"        the name under its icon (default: the title)
+//   .android_icon = .{ .foreground = "art/icon.png", .background = .{ .color = "#204060" } }
+//                                     its icon: a picture, kept whole in the middle, on a color or a picture
+//                                     (`.background = .{ .picture = "art/back.png" }`), white by default
 // An app with kernels gets its own directory: src/myname/myname.zig is found by name too.
 // Assets and extra imports go on the module `addApp` returns:
 //   const game = project.addApp(.{ .name = "game", .title = "Game" });
@@ -64,10 +73,10 @@ pub fn build(b: *std.Build) void {
         .editor_configs = true,
         // zimr's linter over src/: `zig build lint`, and part of `check` and of every app's step - beside the
         // compile, never in front of it - with the layout checked too, as `zig_fmt`. It never edits a file: a
-        // fixable finding ends `autofix: zig build fix`, and `zig build fix` applies the fixes, printing the diff of
-        // every file it rewrites. Every rule is opt-in, and this project enables them all, as zimr does for itself:
-        // in zimr a lint finding is a compile error, and an explained `// lint:off <rule>: <why>` is how code says a
-        // rule does not apply where it stands. When zimr gains a rule, add it here (`zig build lint --
+        // fixable finding ends `autofix: zig build lint-fix`, and `zig build lint-fix` applies the fixes, printing the
+        // diff of every file it rewrites. Every rule is opt-in, and this project enables them all, as zimr does for
+        // itself: in zimr a lint finding is a compile error, and an explained `// lint:off <rule>: <why>` is how code
+        // says a rule does not apply where it stands. When zimr gains a rule, add it here (`zig build lint --
         // --list-rules` prints them all). The list is the configuration - each rule by name, its title beside it.
         .lint = .{
             .enable = &.{

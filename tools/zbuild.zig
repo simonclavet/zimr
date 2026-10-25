@@ -15,15 +15,15 @@
 //!
 //! Usage - in place of `zig build`, same arguments, from the repository root:
 //!     zig build zbuild                                  once: installs it into tools/zig-out/bin
-//!     tools/zig-out/bin/zbuild check -j1                runs `zig build check -j1`
+//!     tools/zig-out/bin/zbuild tripwires -j1            runs `zig build tripwires -j1`
 //!     tools/zig-out/bin/zbuild --log=/tmp/b.log         distills a log captured earlier
 //! A project built on zimr (`zimr.Project`) has the same `zig build zbuild`, which installs it into the project's
 //! zig-out/bin instead: `zig-out/bin/zbuild check`.
 //! It passes the build's output through as it comes - whole lines, each stream's, so neither splits the other's -
 //! and announces each finding the moment the build prints it, on a line of its own beginning `zbuild: found:`: a
 //! compile error, or a lint finding - a line that starts with its position, `path:line:col: error:` or
-//! `path:line:col: [rule]`, and no other line, so source text in a diff `zig build fix` prints is never taken for one.
-//! A file that fix rewrote is announced too, `zbuild: fixed: <file>: <rule> x<count>`, as a notice rather than a
+//! `path:line:col: [rule]`, and no other line, so source text in a diff `zig build lint-fix` prints is never taken for
+//! one. A file that fix rewrote is announced too, `zbuild: fixed: <file>: <rule> x<count>`, as a notice rather than a
 //! finding, so that whoever edits that file next reads it again first. A finding of a lint rule still in progress
 //! (`[rule, work in progress]`), which
 //! never fails a run, is announced as `zbuild: work in progress:` and changes nothing else. When the build fails it
@@ -97,7 +97,7 @@ const Kind = enum {
 
 /// The text after a diagnostic's position when `line` begins with one - `<path>:<line>:<col>: `, how the compiler and
 /// the linter both print a finding - or null. Asking for the position, not just `: error:` or `: [` somewhere in the
-/// line, is what keeps source text out: `zig build fix` prints the diff of every file it rewrites, and a diff line
+/// line, is what keeps source text out: `zig build lint-fix` prints the diff of every file it rewrites, and a diff line
 /// like `+    var buffer: [16]u8 = undefined;` holds a `: [` too. A diff line starts with ` `, `+`, `-` or `@`, so no
 /// line starting with those is a diagnostic; nor is an indented one (a snippet, a fix run's list of what is left).
 fn diagnosticText(line: []const u8) ?[]const u8 {
@@ -720,7 +720,7 @@ test "fixedFileReport: the linter's line for a file it fixed, and no other line"
     try expect(fixedFileReport("./tools/x.zig:3:1: [line-length] 129 cols, max 120 (rule 10)") == null);
 }
 
-test "a diff that `zig build fix` prints is never a finding, though its source text holds `: [` and `: error:`" {
+test "a diff that `zig build lint-fix` prints is never a finding, though its source text holds `: [` and `: error:`" {
     try expect(!isFinding("+    var buffer: [16]u8 = undefined;"));
     try expect(!isFinding("-    // note: error: what a comment can say"));
     try expect(!isFinding("     const corner: [4]f32 = .{ 0, 0, 0, 0 };"));

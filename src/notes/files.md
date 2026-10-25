@@ -1392,7 +1392,7 @@ Host test aggregator and the refAllDecls policy artifact: every live source file
 
 ### `src/assets/sample.ogg`
 
-Ogg fixture EMBEDDED BY src/codecs.zig via a relative `@embedFile`. Byte-identical to assets/sample.ogg and NOT redundant: `@embedFile` resolves relative to the importing file, so codecs cannot reach the repo-root copy. Deleting this breaks `zig build test` while `zig build check` stays green.
+Ogg fixture EMBEDDED BY src/codecs.zig via a relative `@embedFile`. Byte-identical to assets/sample.ogg and NOT redundant: `@embedFile` resolves relative to the importing file, so codecs cannot reach the repo-root copy. Deleting this breaks `zig build test` while `zig build tripwires` stays green.
 
 *19,742 lines*  
 **Deps:** —  

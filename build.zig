@@ -12,9 +12,12 @@
 //                                      machine's).  web: zig-out/web/<app_name>/ and
 //                                      zig-out/standalone/<app_name>.html
 //                                      (`hello-world` -> web/hello_world/); windows:
-//                                      the program in zig-out/windows/.
+//                                      the program in zig-out/windows/; android: the
+//                                      single-file page in an app, zig-out/android/
+//                                      <app_name>.apk (needs the Android SDK and a JDK).
 //   zig build run-<app-step>        -- builds one app the same way, then runs it.
-//                                      windows: the program.  web: its page, through
+//                                      android: installs it on the phone adb sees and
+//                                      starts it.  windows: the program.  web: its page, through
 //                                      the dev server, in the default browser; when a
 //                                      server already runs, it reloads the tabs showing
 //                                      the page instead (opening one if none does) and
@@ -317,8 +320,8 @@ pub fn lintEnableArg(b: *std.Build, rules: []const LintRule) []const u8 {
     return arg.items;
 }
 
-/// `rules`, with `zig_fmt` added when it is not among them: what `zig build fix` runs, so a fix always lays the files
-/// out as `zig fmt` does - as the `zig fmt` run it replaced did - whether or not the checks hold the files to it.
+/// `rules`, with `zig_fmt` added when it is not among them: what `zig build lint-fix` runs, so a fix always lays the
+/// files out as `zig fmt` does - as the `zig fmt` run it replaced did - whether or not the checks hold the files to it.
 fn withZigFmt(b: *std.Build, rules: []const LintRule) []const LintRule {
     for (rules) |rule| {
         if (rule == .zig_fmt) {
@@ -339,7 +342,7 @@ pub const LintOptions = struct {
     /// Apply the mechanical autofixes in place (`--fix`) instead of only reporting.
     fix: bool = false,
     /// The command that applies the autofixes, printed beside every fixable finding and in the summary - a
-    /// project's `zig build fix`. Null: the linter's own advice (rerun with `--fix`).
+    /// project's `zig build lint-fix`. Null: the linter's own advice (rerun with `--fix`).
     fix_command: ?[]const u8 = null,
 };
 
@@ -397,6 +400,7 @@ const Tools = struct {
     doc_gate: *Compile,
     example_source: *Compile,
     zbuild: *Compile,
+    android_apk: *Compile,
 };
 
 /// Gives a host tool's own codecs module its build options: no platform (`host = "none"`), so the platform it logs
@@ -429,7 +433,7 @@ fn buildTools(
     spv2wgsl_tool_exe.root_module.addImport("spv2wgsl", spv2wgsl_lib_mod);
     spv2wgsl_tool_exe.root_module.addImport("cli", cli_mod);
     // The binding/structural WGSL validator - same spv2wgsl lib, run over the
-    // corpus by `check` as a build-time tripwire (duplicate @group@binding etc.).
+    // corpus by `tripwires` as a build-time tripwire (duplicate @group@binding etc.).
     const spv2wgsl_check_exe: *Compile = b.addExecutable(.{
         .name = "spv2wgsl_check",
         .root_module = b.createModule(.{
@@ -763,6 +767,17 @@ fn buildTools(
         }),
     });
     example_source_exe.root_module.addImport("cli", cli_mod);
+    // android_apk: an app's single-file page packed into a signed Android app, and installed on a phone
+    // (`-Dplatform=android`: `zig build <app>`, `run-<app>`). It only runs the Android SDK's and a JDK's tools.
+    const android_apk_exe: *Compile = b.addExecutable(.{
+        .name = "android_apk",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/android_apk.zig"),
+            .target = host_target,
+            .optimize = .Debug,
+        }),
+    });
+    android_apk_exe.root_module.addImport("cli", cli_mod);
     return .{
         .spv2wgsl = spv2wgsl_tool_exe,
         .spv2wgsl_check = spv2wgsl_check_exe,
@@ -781,6 +796,7 @@ fn buildTools(
         .doc_gate = doc_gate_exe,
         .example_source = example_source_exe,
         .zbuild = zbuild_exe,
+        .android_apk = android_apk_exe,
     };
 }
 
@@ -1087,7 +1103,7 @@ fn buildNativeExamples(
 /// (`addAnonymousImport` of a run's output): the build records that edge while it runs, after this walk. Such a
 /// tool gets a step of its own (mesh_bake has one). Nor are the three robot tools in `src/` (st_bench, robot_bench,
 /// clip_bake): optimised builds of the robot family's code, which `test-fast` compiles already - gated, every robot
-/// change would recompile them for minutes. `gate` depends on it; `check`, run every turn, does not.
+/// change would recompile them for minutes. `gate` depends on it; `tripwires`, run every turn, does not.
 fn gateEveryTool(b: *std.Build, gate_step: *Step) void {
     const tools_step: *Step = b.step("tools", "Compile every tool the build knows, run none - so none rots unseen");
     var visited: AutoHashMapUnmanaged(*Step, void) = .empty;
@@ -1550,6 +1566,8 @@ fn bridgePage(
     /// the page as `window.ZIMR_KERNEL_WASM` - c2js refuses to inline it if its import
     /// section is non-empty, which is how kernel purity is enforced.
     kernel_wasm: ?LazyPath,
+    /// `App.fullscreen_button`.
+    fullscreen_button: bool,
 ) LazyPath {
     const to_c: *Run = b.addSystemCommand(&.{
         b.graph.zig_exe,       "build-obj",
@@ -1559,9 +1577,12 @@ fn bridgePage(
     addBridgeSource(b, to_c);
     const bridge_c: LazyPath = to_c.addPrefixedOutputFileArg("-femit-bin=", "bridge.c");
     const to_html: *Run = b.addRunArtifact(c2js_exe);
-    // Full-canvas interactive demo on every page: the fullscreen-toggle button,
+    // Full-canvas interactive demo on every page: the fullscreen-toggle button, unless the app leaves it out,
     // no orientation lock (portrait works exactly like landscape).
     to_html.addArgs(&.{ "--html", "--title", title, "--fullscreen-landscape" });
+    if (!fullscreen_button) {
+        to_html.addArg("--no-fullscreen-button");
+    }
     if (streaming) {
         // The SERVED gallery page: STREAM the sibling .wasm (--wasm-url) and share
         // the ONE web/zimr.js runtime (--external-js, one dir up from web/<name>/)
@@ -1602,22 +1623,24 @@ fn addWgpuStandalone(
     out_basename: []const u8,
     title: []const u8,
     kernel_wasm: ?LazyPath,
+    fullscreen_button: bool,
 ) *std.Build.Step {
     // ZIG_BRIDGE Phase 4a: the standalone IS the bridge page now - the
     // wasm embedded into a single-file HTML whose entire runtime was born
     // as Zig (src/bridge.zig -> C -> c2js). The TS bundle path (buildaux
     // wgpu-standalone + bun-bundled bridge JS) is superseded; its
     // params stay until the deletion sweep retires the bundle Runs.
-    const page: LazyPath = bridgePage(b, c2js_exe, exe, title, false, kernel_wasm); // embed
+    const page: LazyPath = bridgePage(b, c2js_exe, exe, title, false, kernel_wasm, fullscreen_button); // embed
     const out_path: []const u8 = b.fmt("standalone/{s}", .{out_basename});
     const inst: *InstallFile = b.addInstallFile(page, out_path);
     return &inst.step;
 }
 
 /// Where a build's apps run (`-Dplatform`): in a browser - the wasm, as a served page and as a single
-/// self-contained HTML file, both from one compile - or natively, as a program with a window. Every app has one step,
-/// `zig build <app>`, which builds it for the chosen platform.
-pub const Platform = enum { web, windows };
+/// self-contained HTML file, both from one compile - natively, as a program with a window, or on an Android phone, as
+/// the single-file page in an app of its own (`addAndroidBuild`). Every app has one step, `zig build <app>`, which
+/// builds it for the chosen platform, and `run-<app>`, which builds it and runs it there.
+pub const Platform = enum { web, windows, android };
 
 /// The platform of the machine running the build, when zimr has one for it: the default for `-Dplatform`. Null
 /// elsewhere, where each app's step fails with a message naming the choices instead of guessing.
@@ -1676,6 +1699,8 @@ fn finishWgpuApp(
     /// Set from `App.job_kernels`. Compiles examples/<name>/kernels.zig into a separate,
     /// zero-import wasm for the Web Workers, and inlines it into the page.
     kernel_wasm: ?LazyPath,
+    /// `App.fullscreen_button`.
+    fullscreen_button: bool,
     /// The example's web/<name>/source.json install (`installExampleSource`), so
     /// building the example alone also refreshes what the gallery's code pane shows.
     source_install: *Step,
@@ -1715,7 +1740,7 @@ fn finishWgpuApp(
     // shared runtime from ../zimr.js and streams <name>.wasm from its own directory.
     // Installed as web/<name>/index.html (the underscored name), the URL the gallery
     // links to and the editor debug configs open (http://localhost:8080/<name>/).
-    const page: LazyPath = bridgePage(b, c2js_exe, exe, title, true, kernel_wasm); // streaming
+    const page: LazyPath = bridgePage(b, c2js_exe, exe, title, true, kernel_wasm, fullscreen_button); // streaming
     const index_install: *InstallFile = b.addInstallFileWithDir(
         page,
         install_dir,
@@ -1726,7 +1751,8 @@ fn finishWgpuApp(
     web_build.dependOn(&install_art.step);
     web_build.dependOn(&index_install.step);
     web_build.dependOn(source_install);
-    web_build.dependOn(addWgpuStandalone(b, c2js_exe, exe, b.fmt("{s}.html", .{under}), title, kernel_wasm));
+    const standalone_basename: []const u8 = b.fmt("{s}.html", .{under});
+    web_build.dependOn(addWgpuStandalone(b, c2js_exe, exe, standalone_basename, title, kernel_wasm, fullscreen_button));
     web_build.dependOn(&addBridgeImportCheck(b, bridge_import_check_exe, b.path("src/bridge.zig"), exe).step);
     web_builds.put(name, web_build) catch @panic("oom");
     _ = buildaux_exe;
@@ -1918,6 +1944,24 @@ pub const ComputeKernel = struct {
     source_path: ?[]const u8 = null,
 };
 
+/// An Android app's icon (`App.android_icon`, `-Dplatform=android`): a picture on a background, which each phone's
+/// launcher cuts to the one shape it gives every icon - a circle, a rounded square. Paths are from the build root:
+/// PNG, JPEG (.jpg) or WebP. An app without one shows Android's default icon.
+pub const AndroidIcon = struct {
+    /// Drawn in the middle of the icon, shrunk into the circle every launcher's shape keeps whole: round art, or art
+    /// whose corners are empty, always shows complete.
+    foreground: []const u8,
+    /// Fills the icon behind it, edge to edge, before the launcher's cut.
+    background: Background = .{ .color = "#FFFFFF" },
+
+    pub const Background = union(enum) {
+        /// `#RRGGBB`.
+        color: []const u8,
+        /// A picture, stretched to the square.
+        picture: []const u8,
+    };
+};
+
 /// A servable wgpu example: a user source module turned into a wasm reactor
 /// exe + served page + standalone HTML. `shaders` (basenames like "julia_fs")
 /// wires each compiled WGSL + its IO module into the example; an empty list
@@ -1967,9 +2011,84 @@ pub const App = struct {
     /// Other examples this one imports, each as the module of its name rooted at `examples/<name>/<name>.zig` - as
     /// go_puzzles_hero imports goban. The gallery's code pane shows each one's file beside the example's own.
     app_deps: []const []const u8 = &.{},
+    /// The page's fullscreen-toggle button, in its bottom-right corner. false for an example whose own interface
+    /// sits there, or that has no use for it; the page stays full-canvas either way.
+    fullscreen_button: bool = true,
+    /// The Android app's ID (`-Dplatform=android`): who the app is to a phone and to the Play Store, so it never
+    /// changes once the app is published. null: `org.zimr.<name>` (`defaultAndroidAppId`).
+    android_app_id: ?[]const u8 = null,
+    /// The name under the Android app's icon. null: the title.
+    android_label: ?[]const u8 = null,
+    /// The Android app's icon, from zimr's root. null: Android's default icon.
+    android_icon: ?AndroidIcon = null,
     // lint:off decl-order: AppContext.buildAppModule takes the App this hook belongs to - a cycle
     configure: ?*const fn (AppContext, *Module) void = null,
 };
+
+/// What an app's Android build packs (`addAndroidBuild`): its page - the single file, without the fullscreen button,
+/// since the app is already full screen and a WebView has no page fullscreen - its ID, the name under its icon, and
+/// the icon, its paths from the root of the build that adds the app.
+const AndroidPage = struct {
+    page: LazyPath,
+    app_id: []const u8,
+    label: []const u8,
+    icon: ?AndroidIcon,
+};
+
+/// An app's Android build (`addAndroidBuild`): its APK's install into zig-out/android/ - what `zig build <app>` builds
+/// under `-Dplatform=android` - and the run that puts the APK on the phone adb sees and starts it, which `run-<app>`
+/// runs once `<app>` has built it.
+const AndroidBuild = struct {
+    install: *Step,
+    phone_run: *Run,
+};
+
+/// An app's Android ID when its row gives none (`App.android_app_id`): `org.zimr.` and its name. A name is already a
+/// valid ID part - lowercase letters, digits, underscores - unless it starts with a digit (`3d_probe`), which an ID
+/// part cannot.
+fn defaultAndroidAppId(b: *std.Build, name: []const u8) []const u8 {
+    const starts_with_digit: bool = name.len > 0 and std.ascii.isDigit(name[0]);
+    const part_prefix: []const u8 = if (starts_with_digit) "app_" else "";
+    return b.fmt("org.zimr.{s}{s}", .{ part_prefix, name });
+}
+
+/// `android_page` in an Android app, zig-out/android/<file_name>.apk: one full-screen WebView
+/// (src/android/WebViewActivity.java), packed and signed by tools/android_apk.zig with the Android SDK and a JDK - the
+/// only part of the build that needs either, and only under `-Dplatform=android`. `zimr_b` resolves the activity's
+/// source; the APK, and the icon's paths, belong to `b` (zimr's builder for its examples, the project's for a `Project`
+/// app).
+fn addAndroidBuild(
+    b: *std.Build,
+    zimr_b: *std.Build,
+    android_apk_exe: *Compile,
+    file_name: []const u8,
+    android_page: AndroidPage,
+) AndroidBuild {
+    const package_run: *Run = b.addRunArtifact(android_apk_exe);
+    package_run.addArg("package");
+    package_run.addPrefixedFileArg("--html=", android_page.page);
+    package_run.addPrefixedFileArg("--java=", zimr_b.path("src/android/WebViewActivity.java"));
+    package_run.addArg(b.fmt("--app-id={s}", .{android_page.app_id}));
+    package_run.addArg(b.fmt("--label={s}", .{android_page.label}));
+    if (android_page.icon) |icon| {
+        package_run.addPrefixedFileArg("--icon-foreground=", b.path(icon.foreground));
+        switch (icon.background) {
+            .color => |color| package_run.addArg(b.fmt("--icon-background-color={s}", .{color})),
+            .picture => |picture| package_run.addPrefixedFileArg("--icon-background=", b.path(picture)),
+        }
+    }
+    // Scratch space for the tool: nothing in the build reads what it leaves there.
+    _ = package_run.addPrefixedOutputDirectoryArg("--work=", "work");
+    const apk: LazyPath = package_run.addPrefixedOutputFileArg("--out=", b.fmt("{s}.apk", .{file_name}));
+    const apk_install: *InstallFile = b.addInstallFile(apk, b.fmt("android/{s}.apk", .{file_name}));
+
+    const phone_run: *Run = b.addRunArtifact(android_apk_exe);
+    phone_run.addArg("install");
+    phone_run.addPrefixedFileArg("--apk=", apk);
+    phone_run.addArg(b.fmt("--app-id={s}", .{android_page.app_id}));
+    phone_run.has_side_effects = true;
+    return .{ .install = &apk_install.step, .phone_run = phone_run };
+}
 
 /// A shader's deduplicated modules, cached per basename so a shader used by
 /// several examples (e.g. `trivial_vs`) is wired ONCE. Putting the same
@@ -2250,19 +2369,20 @@ fn windowsPendingReason(name: []const u8) ?[]const u8 {
     return null;
 }
 
-/// What `zig build <app>` builds for `platform`: the app's web build, its native program, or - when there is none -
-/// a step that fails naming the reason: no zimr platform for this machine, a native build still pending, or an app
-/// that exists only natively (the gallery) or only on the web.
+/// What `zig build <app>` builds for `platform`: the app's web build, its native program, its Android app, or - when
+/// there is none - a step that fails naming the reason: no zimr platform for this machine, a native build still
+/// pending, or an app that exists only natively (the gallery) or only on the web.
 fn appBuildFor(
     b: *std.Build,
     platform: ?Platform,
     name: []const u8,
     web_builds: *const StringHashMap(*Step),
     windows_builds: *const StringHashMap(*Step.InstallArtifact),
+    android_builds: *const StringHashMap(AndroidBuild),
 ) *Step {
     const chosen: Platform = platform orelse {
         const message: []const u8 = b.fmt("zimr has no platform for this machine yet: build {s} with " ++
-            "-Dplatform=web or -Dplatform=windows", .{name});
+            "-Dplatform=web, -Dplatform=windows or -Dplatform=android", .{name});
         return &b.addFail(message).step;
     };
     switch (chosen) {
@@ -2272,9 +2392,12 @@ fn appBuildFor(
         .windows => if (windows_builds.get(name)) |install| {
             return &install.step;
         },
+        .android => if (android_builds.get(name)) |android_build| {
+            return android_build.install;
+        },
     }
     const reason: []const u8 = switch (chosen) {
-        .web => "it runs only natively",
+        .web, .android => "it runs only natively",
         .windows => windowsPendingReason(name) orelse "it runs only on the web",
     };
     return &b.addFail(b.fmt("{s} has no {s} build: {s}", .{ name, @tagName(chosen), reason })).step;
@@ -2303,9 +2426,9 @@ fn addServeRun(
 }
 
 /// What `zig build run-<app>` does for `platform`, once `app_step` - the app's `zig build <app>` - has built it: runs
-/// the installed program (installed, so the native gallery finds the examples beside it), or shows the app's page
-/// through the dev server (`addServeRun`). An app with no build for the platform has none to run either: `app_step`
-/// already fails saying why, and running is that failure.
+/// the installed program (installed, so the native gallery finds the examples beside it), shows the app's page
+/// through the dev server (`addServeRun`), or puts its Android app on the phone and starts it. An app with no build for
+/// the platform has none to run either: `app_step` already fails saying why, and running is that failure.
 fn appRunFor(
     b: *std.Build,
     platform: ?Platform,
@@ -2314,6 +2437,7 @@ fn appRunFor(
     serve_exe: *Compile,
     web_builds: *const StringHashMap(*Step),
     windows_builds: *const StringHashMap(*Step.InstallArtifact),
+    android_builds: *const StringHashMap(AndroidBuild),
 ) *Step {
     const chosen: Platform = platform orelse return app_step;
     switch (chosen) {
@@ -2322,6 +2446,11 @@ fn appRunFor(
             const program_run: *Run = b.addRunArtifact(install.artifact);
             program_run.step.dependOn(app_step);
             return &program_run.step;
+        },
+        .android => {
+            const android_build: AndroidBuild = android_builds.get(name) orelse return app_step;
+            android_build.phone_run.step.dependOn(app_step);
+            return &android_build.phone_run.step;
         },
         .web => {
             if (!web_builds.contains(name)) {
@@ -3067,9 +3196,9 @@ fn configureGltfTextured(ctx: AppContext, mod: *Module) void {
 //
 // That gives `zig build` (every app into zig-out/web/), `zig build serve`,
 // `zig build <name>`, `zig build run-<name>` (build it, then run it: the program,
-// or its page in a browser), `zig build run` (the first app's run-<name>),
-// `zig build <name>-standalone`, `zig build test` and `zig build check`, and the
-// `-Dmode=debug|release|ship` option.
+// its page in a browser, or with -Dplatform=android its app on the phone),
+// `zig build run` (the first app's run-<name>), `zig build <name>-standalone`,
+// `zig build test` and `zig build check`, and the `-Dmode=debug|release|ship` option.
 //
 // A project's build.zig runs AFTER zimr's `build()` has configured the engine as a
 // dependency - every module, tool and the shader pipeline - and `Project` REUSES
@@ -3099,6 +3228,8 @@ const PublishedEngine = struct {
     /// The editor-config writer (`tools/gen_editor_configs.zig`), which a project runs over its own apps
     /// (`Project.Config.editor_configs`).
     editor_configs_exe: *Compile,
+    /// The APK packer (`tools/android_apk.zig`), which packs a project's pages under `-Dplatform=android`.
+    android_apk_exe: *Compile,
 };
 
 /// One entry per configured zimr instance (in practice one). A file-scope `var`
@@ -3129,6 +3260,7 @@ fn publishEngine(
     serve_exe: *Compile,
     zbuild_exe: *Compile,
     editor_configs_exe: *Compile,
+    android_apk_exe: *Compile,
 ) void {
     const pipeline: *ShaderPipeline = b.allocator.create(ShaderPipeline) catch @panic("OOM");
     pipeline.* = ctx.shader_pipeline.*;
@@ -3145,6 +3277,7 @@ fn publishEngine(
         .serve_exe = serve_exe,
         .zbuild_exe = zbuild_exe,
         .editor_configs_exe = editor_configs_exe,
+        .android_apk_exe = android_apk_exe,
     }) catch @panic("OOM");
 }
 
@@ -3207,6 +3340,8 @@ pub const Project = struct {
     /// The dev server, and the port it serves on (`Config.port`): `serve`, and each web app's `run-<name>`.
     serve_exe: *Compile,
     port: []const u8,
+    /// zimr's APK packer, for each app under `-Dplatform=android` (`addAndroidBuild`).
+    android_apk_exe: *Compile,
     /// `zig build run`: the first app's `run-<name>`, which `addApp` wires in.
     run_step: *Step,
     /// Whether an app is wired into `run_step` yet.
@@ -3268,6 +3403,15 @@ pub const Project = struct {
         /// it declares `main` (which calls `App.run`) and opens and closes each frame itself. Such an app is not a
         /// descriptor, so no launcher can host it.
         own_frame: bool = false,
+        /// The page's fullscreen-toggle button, in its bottom-right corner; the page stays full-canvas without it.
+        fullscreen_button: bool = true,
+        /// The Android app's ID (`-Dplatform=android`): who the app is to a phone and to the Play Store, so it never
+        /// changes once the app is published - give it your own before then. null: `org.zimr.<name>`.
+        android_app_id: ?[]const u8 = null,
+        /// The name under the Android app's icon. null: the title.
+        android_label: ?[]const u8 = null,
+        /// The Android app's icon (`zimr.AndroidIcon`), its paths from the project's root. null: Android's default.
+        android_icon: ?AndroidIcon = null,
     };
 
     pub const AppBuild = struct {
@@ -3288,7 +3432,7 @@ pub const Project = struct {
         const platform: ?Platform = b.option(
             Platform,
             "platform",
-            "web | windows (default: this machine's platform, when zimr has one)",
+            "web | windows | android (default: this machine's platform, when zimr has one)",
         ) orelse hostPlatform();
         var web_ctx: AppContext = engine.ctx;
         web_ctx.shader_cache = newShaderCache(b);
@@ -3315,6 +3459,7 @@ pub const Project = struct {
             .site_step = gatheringStep(b, "the site's shared files"),
             .serve_exe = engine.serve_exe,
             .port = config.port,
+            .android_apk_exe = engine.android_apk_exe,
             .run_step = b.step("run", "Build the first app for -Dplatform and run it (as its run-<name> does)"),
             .has_run_app = false,
             .editor_configs_runs = &.{},
@@ -3387,19 +3532,23 @@ pub const Project = struct {
             const lint_options: LintOptions = .{
                 .files = lint_files,
                 .enable = lint.enable,
-                .fix_command = "zig build fix",
+                .fix_command = "zig build lint-fix",
             };
             lint_step.dependOn(&addLint(b, dep, lint_options).step);
             p.check_step.dependOn(lint_step);
             p.lint_step = lint_step;
-            // `zig build fix` - what every fixable finding points to, and the one step that rewrites a source: the
-            // autofixes, each file written once and laid out as `zig fmt` lays it out (whether or not the project's
-            // rules check layout), and the diff of every file printed as it is written.
+            // `zig build lint-fix` - what every fixable finding points to, and the one step that rewrites a source:
+            // the autofixes, each file written once and laid out as `zig fmt` lays it out (whether or not the
+            // project's rules check layout), and the diff of every file printed as it is written. Named beside
+            // `lint` so it says what it fixes: a bare `fix` read as fixing whatever failed.
             var fix_options: LintOptions = lint_options;
             fix_options.fix = true;
             fix_options.enable = withZigFmt(b, lint.enable);
-            const fix_step: *Step = b.step("fix", "Rewrite sources: lint autofixes, zig fmt layout, each diff shown");
-            fix_step.dependOn(&addLint(b, dep, fix_options).step);
+            const lint_fix_step: *Step = b.step(
+                "lint-fix",
+                "Rewrite sources: lint autofixes, zig fmt layout, each diff shown",
+            );
+            lint_fix_step.dependOn(&addLint(b, dep, fix_options).step);
         }
         return p;
     }
@@ -3413,29 +3562,44 @@ pub const Project = struct {
         return run;
     }
 
-    /// What an app's `run-<name>` does once `app_step` has built the app: runs the installed `program`, or - an app
-    /// with none, built for the web - shows its page through the dev server (`addServeRun`). On a machine zimr has no
+    /// How an app's `run-<name>` runs it once built (`appRun`): the installed Windows program, its page through the dev
+    /// server, or the run that puts its Android app on the phone and starts it (`AndroidBuild.phone_run`).
+    const AppRunner = union(enum) {
+        program: *Compile,
+        page,
+        phone: *Run,
+    };
+
+    /// What an app's `run-<name>` does once `app_step` has built the app, as `runner` says. On a machine zimr has no
     /// platform for, `app_step` fails naming the choices, and running is that failure.
     fn appRun(
         p: *Project,
         name: []const u8,
         app_step: *Step,
-        program: ?*Compile,
+        runner: AppRunner,
     ) *Step {
         const b: *std.Build = p.b;
         if (p.platform == null) {
             return app_step;
         }
-        if (program) |exe| {
-            const program_run: *Run = b.addRunArtifact(exe);
-            program_run.step.dependOn(app_step);
-            return &program_run.step;
+        switch (runner) {
+            .program => |exe| {
+                const program_run: *Run = b.addRunArtifact(exe);
+                program_run.step.dependOn(app_step);
+                return &program_run.step;
+            },
+            .phone => |phone_run| {
+                phone_run.step.dependOn(app_step);
+                return &phone_run.step;
+            },
+            .page => {
+                const page_run: *Run = addServeRun(b, p.serve_exe, p.port, b.fmt("/{s}/", .{name}));
+                page_run.step.dependOn(app_step);
+                // The page loads ../zimr.js, one of the site's shared files.
+                page_run.step.dependOn(p.site_step);
+                return &page_run.step;
+            },
         }
-        const page_run: *Run = addServeRun(b, p.serve_exe, p.port, b.fmt("/{s}/", .{name}));
-        page_run.step.dependOn(app_step);
-        // The page loads ../zimr.js, one of the site's shared files.
-        page_run.step.dependOn(p.site_step);
-        return &page_run.step;
     }
 
     /// The app's `run-<name>` step (`appRun`). The first app's is also `zig build run`.
@@ -3443,13 +3607,13 @@ pub const Project = struct {
         p: *Project,
         name: []const u8,
         app_step: *Step,
-        program: ?*Compile,
+        runner: AppRunner,
     ) void {
         const b: *std.Build = p.b;
-        const app_run: *Step = p.appRun(name, app_step, program);
+        const app_run: *Step = p.appRun(name, app_step, runner);
         const run_app_step: *Step = b.step(
             b.fmt("run-{s}", .{name}),
-            b.fmt("Build {s} for -Dplatform and run it: the program, or its page in a browser", .{name}),
+            b.fmt("Build {s} for -Dplatform and run it: the program, its page in a browser, or on the phone", .{name}),
         );
         run_app_step.dependOn(app_run);
         if (!p.has_run_app) {
@@ -3478,8 +3642,9 @@ pub const Project = struct {
             wireEngineShaders(ctx, user_mod);
         }
         const app_step: *Step = b.step(app.name, b.fmt(
-            "Build {s} for -Dplatform: zig-out/web/{s}/ and zig-out/standalone/{s}.html, or zig-out/windows/{s}.exe",
-            .{ app.name, app.name, app.name, app.name },
+            "Build {s} for -Dplatform: zig-out/web/{s}/ and zig-out/standalone/{s}.html, zig-out/windows/{s}.exe or " ++
+                "zig-out/android/{s}.apk",
+            .{ app.name, app.name, app.name, app.name, app.name },
         ));
         if (p.lint_step) |lint_step| {
             app_step.dependOn(lint_step);
@@ -3494,7 +3659,7 @@ pub const Project = struct {
             const windows_install: *InstallArtifact = installWindowsApp(b, ctx, windows_exe);
             b.getInstallStep().dependOn(&windows_install.step);
             app_step.dependOn(&windows_install.step);
-            p.addAppRun(app.name, app_step, windows_exe);
+            p.addAppRun(app.name, app_step, .{ .program = windows_exe });
             return .{ .exe = windows_exe, .module = user_mod };
         }
         const kernel_wasm: ?LazyPath = if (app.job_kernels)
@@ -3521,27 +3686,60 @@ pub const Project = struct {
             ctx.zimrmath_mod,
             ctx.shader_interface_mod,
         );
+        // On Android the app is its single-file page in an APK of its own, which the app's step and the default install
+        // build instead of the web's files.
+        if (p.platform == .android) {
+            const android_build: AndroidBuild = addAndroidBuild(b, ctx.b, p.android_apk_exe, app.name, .{
+                .page = bridgePage(ctx.b, ctx.c2js_exe, exe, app.title, false, kernel_wasm, false),
+                .app_id = app.android_app_id orelse defaultAndroidAppId(b, app.name),
+                .label = app.android_label orelse app.title,
+                .icon = app.android_icon,
+            });
+            b.getInstallStep().dependOn(android_build.install);
+            app_step.dependOn(android_build.install);
+            if (ctx.bridge_import_check) |check_exe| {
+                app_step.dependOn(&addBridgeImportCheck(b, check_exe, ctx.b.path("src/bridge.zig"), exe).step);
+            }
+            p.addAppRun(app.name, app_step, .{ .phone = android_build.phone_run });
+            return .{ .exe = exe, .module = user_mod };
+        }
 
         // Served: web/<name>/index.html streams the <name>.wasm beside it and loads ../zimr.js.
         const app_install_dir: std.Build.InstallDir = .{ .custom = b.fmt("web/{s}", .{app.name}) };
         const wasm_install: *InstallArtifact = b.addInstallArtifact(exe, .{
             .dest_dir = .{ .override = app_install_dir },
         });
-        const page: LazyPath = bridgePage(ctx.b, ctx.c2js_exe, exe, app.title, true, kernel_wasm);
+        const page: LazyPath = bridgePage(
+            ctx.b,
+            ctx.c2js_exe,
+            exe,
+            app.title,
+            true,
+            kernel_wasm,
+            app.fullscreen_button,
+        );
         const page_install: *InstallFile = b.addInstallFileWithDir(page, app_install_dir, "index.html");
         b.getInstallStep().dependOn(&wasm_install.step);
         b.getInstallStep().dependOn(&page_install.step);
 
         // Standalone: the wasm and the runtime inlined into one file that opens from file://.
-        const standalone: LazyPath = bridgePage(ctx.b, ctx.c2js_exe, exe, app.title, false, kernel_wasm);
+        const standalone: LazyPath = bridgePage(
+            ctx.b,
+            ctx.c2js_exe,
+            exe,
+            app.title,
+            false,
+            kernel_wasm,
+            app.fullscreen_button,
+        );
         const standalone_path: []const u8 = b.fmt("standalone/{s}.html", .{app.name});
         const standalone_install: *InstallFile = b.addInstallFile(standalone, standalone_path);
         // A machine zimr has no platform for builds nothing it would have to guess at.
         if (p.platform == null) {
             const message: []const u8 = b.fmt("zimr has no platform for this machine yet: build {s} with " ++
-                "-Dplatform=web or -Dplatform=windows", .{app.name});
+                "-Dplatform=web, -Dplatform=windows or -Dplatform=android", .{app.name});
             app_step.dependOn(&b.addFail(message).step);
-            p.addAppRun(app.name, app_step, null);
+            p.addAppRun(app.name, app_step, .page);
             return .{ .exe = exe, .module = user_mod };
         }
         app_step.dependOn(&wasm_install.step);
@@ -3550,7 +3748,7 @@ pub const Project = struct {
         if (ctx.bridge_import_check) |check_exe| {
             app_step.dependOn(&addBridgeImportCheck(b, check_exe, ctx.b.path("src/bridge.zig"), exe).step);
         }
-        p.addAppRun(app.name, app_step, null);
+        p.addAppRun(app.name, app_step, .page);
         return .{ .exe = exe, .module = user_mod };
     }
 
@@ -3709,6 +3907,106 @@ fn robotTestsMembers(b: *std.Build) []const []const u8 {
         members.append(b.allocator, b.fmt("src/{s}", .{target})) catch @panic("OOM");
     }
     return members.toOwnedSlice(b.allocator) catch @panic("OOM");
+}
+
+/// `zig build check`: compiles the build already has, compiled again with nothing asked of them - no install, no
+/// run - so Zig passes `-fno-emit-bin` and stops after semantic analysis. ZLS's build-on-save runs the step named
+/// `check` on every save and shows its compile errors in the editor, so this is what the squiggles come from:
+///
+///   * every test compile - `src/tests.zig`, the fast roots, the native and Vulkan host tests, an example's own
+///     tests, the tools' tests - so a test body is checked as well as the code it reaches;
+///   * every tool under tools/;
+///   * the web build of the examples `-Dfocus` names, and of `launcher` alone without it: the launcher compiles every
+///     flagship in one program, the most code for one compile. Pass `-Dfocus` through ZLS's `build_on_save_args`.
+///
+/// Found by walking the graph, as `gateEveryTool` finds the tools, so a test added anywhere joins it. Twins - one
+/// root, one name, one target - are checked once, and the robot family once, through `src/robot_tests.zig`: each of
+/// its members also has a test compile of its own (its `test-<stem>` step), and checking those as well would analyse
+/// the family's closure once per member, on every save. Nothing here lints, links or runs: `tripwires` and `test`
+/// do that.
+fn addCompileCheck(b: *std.Build, focus: []const u8) void {
+    const examples_focus: []const u8 = if (focus.len == 0) "launcher" else focus;
+    const robot_tests_members: []const []const u8 = robotTestsMembers(b);
+    const Original = struct {
+        compile: *Compile,
+        root_path: []const u8,
+    };
+    var originals: ArrayList(Original) = .empty;
+    var checked: StringHashMap(void) = .init(b.allocator);
+    var visited: AutoHashMapUnmanaged(*Step, void) = .empty;
+    var pending: ArrayList(*Step) = .empty;
+    for (b.top_level_steps.values()) |top| {
+        pending.append(b.allocator, &top.step) catch @panic("OOM");
+    }
+    while (pending.pop()) |step| {
+        const gop: AutoHashMapUnmanaged(*Step, void).GetOrPutResult =
+            visited.getOrPut(b.allocator, step) catch @panic("OOM");
+        if (gop.found_existing) {
+            continue;
+        }
+        pending.appendSlice(b.allocator, step.dependencies.items) catch @panic("OOM");
+        const compile: *Compile = step.cast(Compile) orelse continue;
+        const source: LazyPath = compile.root_module.root_source_file orelse continue;
+        const root_path: []const u8 = switch (source) {
+            .src_path => |src| src.sub_path,
+            else => continue,
+        };
+        const target: std.Target = compile.rootModuleTarget();
+        var is_robot_tests_member: bool = false;
+        for (robot_tests_members) |member| {
+            if (eql(u8, member, root_path)) {
+                is_robot_tests_member = true;
+            }
+        }
+        const is_test: bool = compile.kind == .@"test" and !is_robot_tests_member;
+        const is_tool: bool = compile.kind == .exe and startsWith(u8, root_path, "tools/");
+        // An example's page: its wasm, rooted at the runner (or at the example itself when it runs its own frames).
+        const is_example_page: bool = compile.kind == .exe and target.cpu.arch == .wasm32 and
+            (eql(u8, root_path, "src/wgpu_runner.zig") or startsWith(u8, root_path, "examples/"));
+        const is_focused_example: bool = is_example_page and matchesFocus(compile.name, examples_focus);
+        if (!is_test and !is_tool and !is_focused_example) {
+            continue;
+        }
+        const twin_key: []const u8 = b.fmt("{t} {s} {s} {t}-{t}", .{
+            compile.kind,
+            compile.name,
+            root_path,
+            target.cpu.arch,
+            target.os.tag,
+        });
+        if (checked.contains(twin_key)) {
+            continue;
+        }
+        checked.put(twin_key, {}) catch @panic("OOM");
+        originals.append(b.allocator, .{ .compile = compile, .root_path = root_path }) catch @panic("OOM");
+    }
+
+    const check_step: *Step = b.step(
+        "check",
+        "Compile-only, no binaries: every test, every tool and the -Dfocus examples (ZLS runs it on save)",
+    );
+    for (originals.items) |original| {
+        const from: *Compile = original.compile;
+        // A test is named after its root file: most are called "test", which would say nothing in the build's output.
+        const is_test: bool = from.kind == .@"test";
+        const twin_name: []const u8 = if (is_test) std.fs.path.stem(original.root_path) else from.name;
+        const twin: *Compile = if (is_test)
+            b.addTest(.{
+                .name = twin_name,
+                .root_module = from.root_module,
+                .test_runner = from.test_runner,
+            })
+        else
+            b.addExecutable(.{
+                .name = twin_name,
+                .root_module = from.root_module,
+            });
+        // What decides the program's start code: a page has no `main`, and without these it would be asked for one.
+        twin.entry = from.entry;
+        twin.wasi_exec_model = from.wasi_exec_model;
+        twin.rdynamic = from.rdynamic;
+        check_step.dependOn(&twin.step);
+    }
 }
 
 /// `@floatFromInt` to f64. The lint prefers `zm.float64`, but build.zig is the
@@ -4009,7 +4307,7 @@ pub fn build(b: *std.Build) void {
     const platform: ?Platform = b.option(
         Platform,
         "platform",
-        "web | windows (default: this machine's platform, when zimr has one)",
+        "web | windows | android (default: this machine's platform, when zimr has one)",
     ) orelse hostPlatform();
     const wasm_optimize: std.builtin.OptimizeMode = switch (mode) {
         .debug => .Debug,
@@ -4980,6 +5278,8 @@ pub fn build(b: *std.Build) void {
         });
         platform_mod.addImport("zm", zimrmath_mod);
         platform_mod.addImport("shader_interface", shader_interface_mod);
+        // src/host.zig reads the host's kind from `build_options`: a host test runs on no platform (`none`).
+        addToolHostOptions(b, platform_mod);
         const platform_tests: *Step.Compile = b.addTest(.{ .root_module = platform_mod });
         const platform_step: *Step = b.step("platform-contract-test", "Run the platform contract's tests");
         platform_step.dependOn(&b.addRunArtifact(platform_tests).step);
@@ -5258,7 +5558,15 @@ pub fn build(b: *std.Build) void {
     // A project's build.zig (see `Project`) runs after this function has returned,
     // and reaches the engine through this handle - so it is published ABOVE the
     // phase split, the last point a dependency's build() gets to.
-    publishEngine(b, wgpu_app_ctx, windows_app_ctx, serve_exe, tools.zbuild, tools.editor_configs);
+    publishEngine(
+        b,
+        wgpu_app_ctx,
+        windows_app_ctx,
+        serve_exe,
+        tools.zbuild,
+        tools.editor_configs,
+        tools.android_apk,
+    );
 
     // ========================================================================
     // PHASE SPLIT - everything above is what a CONSUMER needs: the exposed
@@ -5581,7 +5889,7 @@ pub fn build(b: *std.Build) void {
     addWgpuSmoke(b, c2js_exe, wgpu_smoke_install, smoke_focus, wgpu_bringup_exe, "wgpu_bringup");
 
     // Install the demo's index.html alongside the wasm + js.
-    const wgpu_page: LazyPath = bridgePage(b, c2js_exe, wgpu_bringup_exe, "zimr - WebGPU - 2D demo", false, null);
+    const wgpu_page: LazyPath = bridgePage(b, c2js_exe, wgpu_bringup_exe, "zimr - WebGPU - 2D demo", false, null, true);
     const wgpu_index_install: *InstallFile = b.addInstallFileWithDir(
         wgpu_page,
         wgpu_install,
@@ -5695,6 +6003,7 @@ pub fn build(b: *std.Build) void {
         "wgpu_bringup.html",
         "zimr · WebGPU · 2D demo",
         null,
+        true,
     ));
 
     // ---- wgpu-shapes: the first 2D drawing demo on WebGPU (N5a gate) ----
@@ -6092,6 +6401,15 @@ pub fn build(b: *std.Build) void {
             .job_kernels = true,
             .kernel_deps = &.{"goban"},
             .app_deps = &.{"goban"},
+            .fullscreen_button = false,
+            // The ID Android Studio's first build had, so the APK installs over it and keeps the player's progress.
+            .android_app_id = "com.bofstudios.gopuzzleshero",
+            .android_label = "Go Puzzles Hero",
+            // goban's own black stone on goban's own board.
+            .android_icon = .{
+                .foreground = "examples/goban/black_stone.png",
+                .background = .{ .picture = "examples/goban/wood.png" },
+            },
         },
         .{ .name = "snake", .title = "zimr - WebGPU - snake" },
         .{ .name = "fps_playground", .title = "zimr - WebGPU - fps playground" },
@@ -6785,6 +7103,9 @@ pub fn build(b: *std.Build) void {
     // `run-<app>` step runs.
     var web_builds: StringHashMap(*Step) = .init(b.allocator);
     var windows_builds: StringHashMap(*Step.InstallArtifact) = .init(b.allocator);
+    // Under `-Dplatform=android`, each web app's Android build, by app name: its page in an APK. Nothing of it exists
+    // under another platform, so no other build looks for the Android SDK.
+    var android_builds: StringHashMap(AndroidBuild) = .init(b.allocator);
     for (wgpu_apps) |wgpu_app| {
         const m: *Module = wgpu_app_ctx.buildAppModule(wgpu_app);
         const source_install: *InstallFile = installExampleSource(
@@ -6811,7 +7132,7 @@ pub fn build(b: *std.Build) void {
             )
         else
             null;
-        _ = finishWgpuApp(
+        const app_exe: *Compile = finishWgpuApp(
             b,
             c2js_exe,
             wgpu_smoke_install,
@@ -6827,10 +7148,19 @@ pub fn build(b: *std.Build) void {
             wgpu_app.title,
             wgpu_app.own_frame,
             kernel_wasm,
+            wgpu_app.fullscreen_button,
             &source_install.step,
             &web_builds,
             bridge_import_check_exe,
         );
+        if (platform == .android) {
+            android_builds.put(wgpu_app.name, addAndroidBuild(b, b, tools.android_apk, wgpu_app.name, .{
+                .page = bridgePage(b, c2js_exe, app_exe, wgpu_app.title, false, kernel_wasm, false),
+                .app_id = wgpu_app.android_app_id orelse defaultAndroidAppId(b, wgpu_app.name),
+                .label = wgpu_app.android_label orelse wgpu_app.title,
+                .icon = wgpu_app.android_icon,
+            })) catch @panic("oom");
+        }
         app_mods.put(wgpu_app.name, m) catch @panic("oom");
     }
 
@@ -7170,7 +7500,7 @@ pub fn build(b: *std.Build) void {
             &.{},
         );
         example_sources_step.dependOn(&launcher_source.step);
-        _ = finishWgpuApp(
+        const launcher_exe: *Compile = finishWgpuApp(
             b,
             c2js_exe,
             wgpu_smoke_install,
@@ -7186,10 +7516,19 @@ pub fn build(b: *std.Build) void {
             "zimr - launcher",
             false,
             launcher_kernels,
+            true,
             &launcher_source.step,
             &web_builds,
             bridge_import_check_exe,
         );
+        if (platform == .android) {
+            android_builds.put("launcher", addAndroidBuild(b, b, tools.android_apk, "launcher", .{
+                .page = bridgePage(b, c2js_exe, launcher_exe, "zimr - launcher", false, launcher_kernels, false),
+                .app_id = defaultAndroidAppId(b, "launcher"),
+                .label = "zimr - launcher",
+                .icon = null,
+            })) catch @panic("oom");
+        }
     }
 
     // ---- One step per app: `zig build <app>` builds it for `-Dplatform` - the web build (served page and single
@@ -7217,9 +7556,10 @@ pub fn build(b: *std.Build) void {
         }.lessThan);
         const all_examples_step: *Step = b.step(
             "all-examples",
-            "Build every example for -Dplatform: the web's pages, or each program and the native gallery",
+            "Build every example for -Dplatform: the web's pages, each program and the native gallery, or each APK",
         );
         var gallery_step: ?*Step = null;
+        var launcher_run_step: ?*Step = null;
         for (app_names.items) |name| {
             // `serve`, `dist` and `test-all-examples` build every web page whatever `-Dplatform` says. The graph walk
             // below finds the wasm installs only through some top-level step, and natively no app step reaches them.
@@ -7231,8 +7571,10 @@ pub fn build(b: *std.Build) void {
                 }
             }
             const dash_name: []const u8 = std.mem.replaceOwned(u8, b.allocator, name, "_", "-") catch @panic("oom");
-            const app_build: *Step = appBuildFor(b, platform, name, &web_builds, &windows_builds);
-            const app_step: *Step = b.step(dash_name, b.fmt("Build {s} for -Dplatform (web or windows)", .{name}));
+            const app_build: *Step = appBuildFor(b, platform, name, &web_builds, &windows_builds, &android_builds);
+            const app_step: *Step = b.step(dash_name, b.fmt("Build {s} for -Dplatform (web, windows or android)", .{
+                name,
+            }));
             app_step.dependOn(app_build);
             const is_lab_for_windows: bool = eql(u8, name, "geno_lab") and platform == .windows;
             if (is_lab_for_windows) {
@@ -7244,6 +7586,7 @@ pub fn build(b: *std.Build) void {
             const in_all_examples: bool = if (platform) |chosen| switch (chosen) {
                 .web => web_builds.contains(name),
                 .windows => windows_builds.contains(name),
+                .android => android_builds.contains(name),
             } else true;
             if (in_all_examples) {
                 all_examples_step.dependOn(app_build);
@@ -7252,26 +7595,44 @@ pub fn build(b: *std.Build) void {
             // `run-<app>` builds it as `<app>` does - lint gate included - then runs it.
             const run_step: *Step = b.step(
                 b.fmt("run-{s}", .{dash_name}),
-                b.fmt("Build {s} for -Dplatform and run it: the program, or its page in a browser", .{name}),
+                b.fmt("Build {s} for -Dplatform and run it: the program, its page in a browser, or on the phone", .{
+                    name,
+                }),
             );
-            run_step.dependOn(appRunFor(b, platform, name, app_step, serve_exe, &web_builds, &windows_builds));
+            run_step.dependOn(appRunFor(
+                b,
+                platform,
+                name,
+                app_step,
+                serve_exe,
+                &web_builds,
+                &windows_builds,
+                &android_builds,
+            ));
             if (eql(u8, name, "zimr_gallery")) {
                 gallery_step = app_step;
+            }
+            if (eql(u8, name, "launcher")) {
+                launcher_run_step = run_step;
             }
         }
         artifact_step_names.append(b.allocator, "all-examples") catch @panic("oom");
 
         // `zig build run`: the gallery, for the platform - natively the program that starts each example, so every
-        // example is built first; on the web the gallery page, beside every example's page, as `serve` builds them.
+        // example is built first; on the web the gallery page, beside every example's page, as `serve` builds them. On
+        // a phone, where one app is one page, the launcher: the flagship examples in one app.
         const run_gallery_step: *Step = b.step(
             "run",
-            "Build every example for -Dplatform and run the gallery: the native program, or the web page in a browser",
+            "Build every example for -Dplatform and run the gallery: the native program, the web page in a browser, " ++
+                "or the launcher on the phone",
         );
         const gallery_build: *Step = gallery_step orelse @panic("zimr_gallery has no app step");
         if (platform == .web) {
             const gallery_page_run: *Run = addServeRun(b, serve_exe, null, "/");
             gallery_page_run.step.dependOn(web_examples_step);
             run_gallery_step.dependOn(&gallery_page_run.step);
+        } else if (platform == .android) {
+            run_gallery_step.dependOn(launcher_run_step orelse @panic("launcher has no run step"));
         } else if (platform == null) {
             // No platform for this machine: the gallery's step fails naming the choices.
             run_gallery_step.dependOn(gallery_build);
@@ -7284,6 +7645,7 @@ pub fn build(b: *std.Build) void {
                 serve_exe,
                 &web_builds,
                 &windows_builds,
+                &android_builds,
             );
             gallery_run.dependOn(all_examples_step);
             run_gallery_step.dependOn(gallery_run);
@@ -7941,7 +8303,7 @@ pub fn build(b: *std.Build) void {
     //
     // `tier-a-check` is the canonical per-turn audit gate for arcs
     // that touch cross-cutting code (drawing, ui, math, shader pipe).
-    // For wgpu-only arcs, `wgpu-check` is faster.
+    // For wgpu-only arcs, `tripwires` is faster.
     // Structure-plan S0 (t1177): DAG-ness is a build gate.  A cycle in
     // src/*.zig fails the audit.  Ported from scripts/check_dag.py to
     // tools/dag_check.zig (t-now): tokenizer-based @import scan (no regex
@@ -7957,7 +8319,7 @@ pub fn build(b: *std.Build) void {
     // debug scenario for every app with a Windows program. The names come from the registries (`web_builds`,
     // `windows_builds`), not from a list kept by hand beside them, so no app can be missing from the editors and no
     // config can name an app that is not there. What can still go stale is the four checked-in files - an app added
-    // and the configs never regenerated - and `check` runs the same tool with `--check` for that.
+    // and the configs never regenerated - and `tripwires` runs the same tool with `--check` for that.
     // The tool sorts the apps itself, so the maps' order does not matter here.
     var editor_config_apps: ArrayList([]const u8) = .empty;
     var web_app_names: StringHashMap(*Step).KeyIterator = web_builds.keyIterator();
@@ -8023,33 +8385,27 @@ pub fn build(b: *std.Build) void {
     tier_a_check_step.dependOn(&wgpu_smoke_cmd.step);
     tier_a_check_step.dependOn(&wgsl_corpus_cmd.step);
 
-    // ---- wgpu-check: the minimal wgpu-migration audit gate. ----------
-    // Runs the test surface that matters for changes touching
-    // `src/spv2wgsl.zig`, `src/wgpu.zig`, `tools/gen_shader_externs.zig`, the
-    // engine shapes shader, or anything else in the wgpu plan.  Skips
-    // the ~100-example gallery rebuild that `zig build test` triggers.
-    //
-    // Includes:
-    //   - The host-side fixture WGSL check (compiles tests/fixture_fs.zig
-    //     through Zig->SPIR-V->spv2wgsl, validates non-empty + clean) -
-    //     same FixtureWgslCheck wired into `zig build test`, bundled
-    //     here for convenience.  Wired further below where the fixture
-    //     step itself is constructed (declaration ordering - both
-    //     sides of the dependency can't be near each other).
-    //   - The spv2wgsl corpus: every graphics shader held to tests/fixtures/wgsl_corpus.txt.
-    //   - The wgpu_bringup build + Node smoke (no real GPU needed).
-    //
-    // See `src/notes/webgpu-migration-plan.md` for the migration plan.
-    // Per-turn default during the wgpu arc.
-    const wgpu_check: *Step = b.step(
-        "check",
-        "Run the minimal wgpu-migration audit (fixture + corpus + wgpu_bringup smoke).",
+    // ---- `zig build tripwires`: the cheap invariants, run before every snapshot ----------
+    // Each one guards something a compile alone cannot see, and none of them compiles `src/`, the test roots or the
+    // examples - `zig build test` and the app steps do that. Wired here and further down, beside what each checks:
+    //   - the spv2wgsl corpus: every graphics shader held to tests/fixtures/wgsl_corpus.txt;
+    //   - the fixture WGSL check: tests/fixture_fs.zig through Zig -> SPIR-V -> spv2wgsl (`test` runs it too);
+    //   - the binding tripwire over the corpus (spv2wgsl_check: no two resources on one @group/@binding);
+    //   - zimrmath's and zimrnum's GPU branches compiled for SPIR-V (`zm-gpu`, `zn-rl-gpu`);
+    //   - the wgpu_bringup build and its Node smoke (no real GPU needed);
+    //   - the doc gate, the tutorials' folds and the checked-in editor configs;
+    //   - `tools-test`, and `lint-check` (every rule, the layout included).
+    // `gate` runs all of it and much more. `check` is the other half (`addCompileCheck`): every test, every tool and
+    // the focused examples compiled with no binaries and nothing run - the step ZLS's build-on-save runs.
+    const tripwires_step: *Step = b.step(
+        "tripwires",
+        "Cheap invariants, not a compile: shader corpus and bindings, SPIR-V probes, smoke, docs, configs, lint",
     );
-    wgpu_check.dependOn(&wgsl_corpus_cmd.step);
-    wgpu_check.dependOn(&wgpu_smoke_cmd.step);
+    tripwires_step.dependOn(&wgsl_corpus_cmd.step);
+    tripwires_step.dependOn(&wgpu_smoke_cmd.step);
     // The checked-in VS Code and Zed configs cover every web app, and Zed's every Windows app (`editor-configs`
     // writes them).
-    wgpu_check.dependOn(&editor_configs_check.step);
+    tripwires_step.dependOn(&editor_configs_check.step);
 
     // -- zm's GPU branch, actually verified rather than asserted --
     //
@@ -8083,7 +8439,7 @@ pub fn build(b: *std.Build) void {
     zm_gpu_probe.step.name = "zm-gpu (zimrmath compiles for SPIR-V, on vectors)";
     const zm_gpu_step: *Step = b.step("zm-gpu", "Compile zimrmath for SPIR-V through a probe shader");
     zm_gpu_step.dependOn(&zm_gpu_probe.step);
-    wgpu_check.dependOn(&zm_gpu_probe.step);
+    tripwires_step.dependOn(&zm_gpu_probe.step);
 
     // ---- THE SAME TRIPWIRE FOR ZIMRNUM'S RL ARITHMETIC ----
     //
@@ -8131,12 +8487,12 @@ pub fn build(b: *std.Build) void {
         "Compile zimrnum's RL scalar arithmetic for SPIR-V through a probe shader",
     );
     zn_rl_gpu_step.dependOn(&zn_rl_gpu_probe.step);
-    wgpu_check.dependOn(&zn_rl_gpu_probe.step);
+    tripwires_step.dependOn(&zn_rl_gpu_probe.step);
     // Doc style tripwire: every published page keeps one shared stylesheet, no
     // <script>, no webfont fetch. Cheap (four greps over eleven files), and it
     // is the only thing standing between the uniform docs and the five palettes
     // they came from - see `src/notes/docs_style_plan.md`.
-    wgpu_check.dependOn(&doc_gate_run.step);
+    tripwires_step.dependOn(&doc_gate_run.step);
     // Binding/structural WGSL tripwire: run the validator over every shader in
     // the corpus. Depends on wgpu_smoke_cmd so the shaders are compiled into
     // .zig-cache first (the tool walks the cache).
@@ -8146,7 +8502,7 @@ pub fn build(b: *std.Build) void {
     spv_bind_check_run.addArg("our-corpus");
     spv_bind_check_run.has_side_effects = true; // reads .zig-cache; never cache the result
     spv_bind_check_run.step.dependOn(&wgpu_smoke_cmd.step);
-    wgpu_check.dependOn(&spv_bind_check_run.step);
+    tripwires_step.dependOn(&spv_bind_check_run.step);
     // fixture_wgsl_check.step dependency wired further below at the
     // fixture's declaration site (line ~1641).
 
@@ -8188,9 +8544,12 @@ pub fn build(b: *std.Build) void {
     // `zig build tools-test`: the gallery tools' own tests - the dev server (an idle
     // browser socket must not stall other requests; the test is the measurement in
     // tools/serve.zig's header) and example_source (no highlighted span crosses a
-    // newline). In `check`: both compile in seconds and run in well under one.
+    // newline). In `tripwires`: both compile in seconds and run in well under one.
     // And docfmt: its stylesheet's CSS escapes (a doubled backslash once printed "\25b8" in every fold's title).
-    const tools_test_step: *Step = b.step("tools-test", "Test the dev server, example_source, docfmt and the doc gate");
+    const tools_test_step: *Step = b.step(
+        "tools-test",
+        "Test the dev server, example_source, docfmt, the doc gate and android_apk",
+    );
     for ([_][]const u8{ "tools/serve.zig", "tools/example_source.zig", "tools/docfmt.zig" }) |tool_root| {
         const tool_test: *Compile = b.addTest(.{
             .root_module = b.createModule(.{
@@ -8211,6 +8570,17 @@ pub fn build(b: *std.Build) void {
     });
     doc_gate_test.root_module.addImport("cli", cli_mod);
     tools_test_step.dependOn(&b.addRunArtifact(doc_gate_test).step);
+    // android_apk's choices that need no SDK: which build-tools and platform are newest, an app ID's shape, the
+    // label's escaping in the manifest.
+    const android_apk_test: *Compile = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/android_apk.zig"),
+            .target = host_target,
+            .optimize = .ReleaseSafe,
+        }),
+    });
+    android_apk_test.root_module.addImport("cli", cli_mod);
+    tools_test_step.dependOn(&b.addRunArtifact(android_apk_test).step);
     const native_wgsl_check_test: *Compile = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("tools/native_wgsl_check.zig"),
@@ -8239,7 +8609,7 @@ pub fn build(b: *std.Build) void {
     bridge_import_check_test.root_module.addImport("cli", cli_mod);
     tools_test_step.dependOn(&b.addRunArtifact(bridge_import_check_test).step);
     // `zig build lint-test`: the linter's own tests - every rule's fires/clean pairs, the fix loop, and through its
-    // import `line_diff.zig`'s - with zbuild's (which lines are findings) and doc_folds'. In `gate`, not `check`:
+    // import `line_diff.zig`'s - with zbuild's (which lines are findings) and doc_folds'. In `gate`, not `tripwires`:
     // zimrlint is the biggest tool, and its test build is the slow one.
     const lint_test_step: *Step = b.step("lint-test", "Test zimrlint (with line_diff), zbuild and doc_folds");
     for ([_][]const u8{ "tools/zimrlint.zig", "tools/zbuild.zig", "tools/doc_folds.zig" }) |tool_root| {
@@ -8256,7 +8626,7 @@ pub fn build(b: *std.Build) void {
         }
         lint_test_step.dependOn(&b.addRunArtifact(tool_test).step);
     }
-    wgpu_check.dependOn(tools_test_step);
+    tripwires_step.dependOn(tools_test_step);
 
     // `zig build external-check`: build webtests/external_project/, a project that
     // depends on THIS checkout through `Project` - the way template/ does - so
@@ -8953,7 +9323,7 @@ pub fn build(b: *std.Build) void {
     const lint_run: *Run = b.addRunArtifact(zimrlint_exe);
     lint_run.addArg(lint_enable);
     // Every fixable finding names the step that fixes it, and the summary prints it on a line of its own.
-    lint_run.addArgs(&.{ "--fix-command", "zig build fix" });
+    lint_run.addArgs(&.{ "--fix-command", "zig build lint-fix" });
     // -- THE LINT RATCHET --
     //
     // `childNodes` returned no children for `.assign` and `.while_cont`, so every rule in
@@ -8969,9 +9339,9 @@ pub fn build(b: *std.Build) void {
     lint_run.addArg("--baseline");
     lint_run.addFileArg(b.path("tools/lint_baseline.tsv"));
 
-    // The `fix` step's lint: the same files, rules and baseline, in `--fix` mode - the ONE run that rewrites sources,
-    // and only when `zig build fix` is asked for by name. Each file it rewrites is written once, laid out as `zig fmt`
-    // lays it out (`zig-fmt` is one of the rules), and its diff is printed the moment it is written.
+    // The `lint-fix` step's lint: the same files, rules and baseline, in `--fix` mode - the ONE run that rewrites
+    // sources, and only when `zig build lint-fix` is asked for by name. Each file it rewrites is written once, laid out
+    // as `zig fmt` lays it out (`zig-fmt` is one of the rules), and its diff is printed the moment it is written.
     const lint_fix: *Run = b.addRunArtifact(zimrlint_exe);
     lint_fix.addArg(lint_enable);
     lint_fix.addArg("--baseline");
@@ -8981,7 +9351,7 @@ pub fn build(b: *std.Build) void {
     fmt_fix.addArgs(&.{ "--enable=zig-fmt", "--fix" });
     // The coverage guard (L4d): every tracked node of every linted file must be walked - a node the walk misses is
     // code no rule can see. `--coverage` lists the outermost unwalked nodes and fails. The same files as `lint`; the
-    // gate runs it (one more walk of the whole tree), `check` does not.
+    // gate runs it (one more walk of the whole tree), `tripwires` does not.
     const lint_coverage: *Run = b.addRunArtifact(zimrlint_exe);
     lint_coverage.addArg("--coverage");
 
@@ -9017,9 +9387,9 @@ pub fn build(b: *std.Build) void {
     fixture_wgsl_check.addFileArg(fixture_wgsl);
     fixture_wgsl_check.expectExitCode(0);
     test_step.dependOn(&fixture_wgsl_check.step);
-    // wgpu-check (declared earlier) also depends on this; wire here
+    // `tripwires` (declared earlier) also depends on this; wire here
     // because the step exists above and the check is constructed here.
-    wgpu_check.dependOn(&fixture_wgsl_check.step);
+    tripwires_step.dependOn(&fixture_wgsl_check.step);
 
     // (GLSL math-pipeline check removed - the GLSL path is retiring. zm is verified
     // through the WGSL/compute path (turn ~979) and host math tests instead.)
@@ -9037,11 +9407,12 @@ pub fn build(b: *std.Build) void {
     // -- *** LINT AND FMT ARE CHECKED, NEVER APPLIED BY A BUILD, AND NEVER IN A COMPILE'S WAY (Simon, Oct 18) --
     //
     // No build writes a source file. `lint` and `lint-check` CHECK - the layout too, as the `zig-fmt` rule - and
-    // list every finding; a fixable one ends `autofix: zig build fix`, and the summary prints that command on a line
-    // of its own. `zig build fix` is the one step that rewrites: the linter's autofixes and `zig fmt`'s layout, then
-    // the tutorials' generated code blocks - each file's diff printed the moment it is written.
+    // list every finding; a fixable one ends `autofix: zig build lint-fix`, and the summary prints that command on a
+    // line of its own. `zig build lint-fix` is the one step that rewrites: the linter's autofixes and `zig fmt`'s
+    // layout, then the tutorials' generated code blocks - each file's diff printed the moment it is written. It was
+    // `zig build fix` until Oct 25: a bare `fix` read as fixing whatever failed, compile errors included.
     //
-    // Where style is required - every app's step, `all-examples`, `dist`, `check`, and in `-Dmode=ship` the
+    // Where style is required - every app's step, `all-examples`, `dist`, `tripwires`, and in `-Dmode=ship` the
     // install - the step depends on `lint-check`, which runs BESIDE the compile, not before it: a compile error and
     // a lint finding are reported by the same build, and neither hides the other.
     //
@@ -9230,20 +9601,20 @@ pub fn build(b: *std.Build) void {
     // ============================================================================
     // `zig-fmt` is a lint rule, so the layout is checked with every other rule and its finding names the command
     // that fixes it - `zig fmt --check` named a file and said nothing more. `zig build fmt` lays the files out and
-    // does nothing else, printing each diff; `zig build fix` does that and every other autofix. `lint-check` is the
-    // style gate the artifact steps and `check` depend on.
+    // does nothing else, printing each diff; `zig build lint-fix` does that and every other autofix. `lint-check` is
+    // the style gate the artifact steps and `tripwires` depend on.
     //
     // The template project is laid out with the repository - its build.zig and every file under template/src, not
     // template/ whole (a `zig build` inside it leaves .zig-cache/ and zig-out/ there) - though its own `Project` lint
-    // config holds it to the rules; here it is held to `zig-fmt` alone. A template layout slip fails `check` without
-    // blocking an example build. Only in zimr's own checkout: a project depending on zimr has no template/.
+    // config holds it to the rules; here it is held to `zig-fmt` alone. A template layout slip fails `tripwires`
+    // without blocking an example build. Only in zimr's own checkout: a project depending on zimr has no template/.
     var template_files: ArrayList(LazyPath) = .empty;
     if (b.pkg_hash.len == 0) {
         template_files.append(b.allocator, b.path("template/build.zig")) catch @panic("OOM");
         template_files.appendSlice(b.allocator, zigFilesUnder(b, &.{"template/src"})) catch @panic("OOM");
     }
     const template_fmt_check: *Run = b.addRunArtifact(zimrlint_exe);
-    template_fmt_check.addArgs(&.{ "--enable=zig-fmt", "--fix-command", "zig build fix" });
+    template_fmt_check.addArgs(&.{ "--enable=zig-fmt", "--fix-command", "zig build lint-fix" });
     const template_fmt_fix: *Run = b.addRunArtifact(zimrlint_exe);
     template_fmt_fix.addArgs(&.{ "--enable=zig-fmt", "--fix" });
     for (template_files.items) |file| {
@@ -9272,13 +9643,13 @@ pub fn build(b: *std.Build) void {
     // `test-fast` now includes both numerics modules, so this step is their home too.
     const gate_step: *Step = b.step(
         "gate",
-        "The full per-turn gate: lint + fmt + check + fast tests + consumer builds. Run this before shipping.",
+        "The full per-turn gate: lint + fmt + tripwires + fast tests + consumer builds. Run this before shipping.",
     );
     gate_step.dependOn(lint_check_step);
     gate_step.dependOn(lint_coverage_step);
     gate_step.dependOn(lint_test_step);
     gate_step.dependOn(test_fast_step);
-    gate_step.dependOn(wgpu_check);
+    gate_step.dependOn(tripwires_step);
     // The audio worklet's program against a real mixer's commands: nothing in a browser-free sandbox runs it otherwise.
     gate_step.dependOn(audio_worklet_test_step);
     // The page's side of it, against a stand-in browser as strict as Chrome.
@@ -9291,26 +9662,26 @@ pub fn build(b: *std.Build) void {
     // unwritten platform - so that code compiling only for one system fails on the day it is written.
     gate_step.dependOn(platforms_check_step);
     // The two projects that depend on this checkout the way a user's does. Neither is in
-    // `check` (about a minute cold, too slow for the turn loop), and a consumer build no
+    // `tripwires` (about a minute cold, too slow for the turn loop), and a consumer build no
     // aggregate step ran is how zimr_template drifted.
     gate_step.dependOn(external_check);
     gate_step.dependOn(template_check);
     // The tutorials can't drift from the code. First their code blocks are checked against the source - regenerated
-    // only by `zig build fix` or `zig build doc-folds`, which print each page's diff - then every quoted line is
+    // only by `zig build lint-fix` or `zig build doc-folds`, which print each page's diff - then every quoted line is
     // checked to exist in the source (doc-sync).
     const gate_doc_folds: *Run = b.addRunArtifact(doc_folds_exe);
     gate_doc_folds.setCwd(b.path("."));
     gate_doc_folds.has_side_effects = true;
     gate_doc_folds.addArg("--check");
     gate_doc_folds.addArgs(&doc_folds_pages);
-    // `check` too, which runs every turn: a fold once sat stale for days while only `gate` looked. Always run, since
-    // the sources the folds quote are files the build cannot see.
+    // `tripwires` too, which runs every turn: a fold once sat stale for days while only `gate` looked. Always run,
+    // since the sources the folds quote are files the build cannot see.
     const check_doc_folds: *Run = b.addRunArtifact(doc_folds_exe);
     check_doc_folds.setCwd(b.path("."));
     check_doc_folds.has_side_effects = true;
     check_doc_folds.addArg("--check");
     check_doc_folds.addArgs(&doc_folds_pages);
-    wgpu_check.dependOn(&check_doc_folds.step);
+    tripwires_step.dependOn(&check_doc_folds.step);
     const gate_doc_sync: *Run = b.addRunArtifact(doc_sync_exe);
     gate_doc_sync.setCwd(b.path("."));
     gate_doc_sync.has_side_effects = true;
@@ -9394,36 +9765,38 @@ pub fn build(b: *std.Build) void {
     if (mode == .ship) {
         b.getInstallStep().dependOn(lint_check_step);
     }
-    // ARTIFACTS REQUIRE A CLEAN TREE: every app's step, `all-examples`, `dist` and `check` depend on the
+    // ARTIFACTS REQUIRE A CLEAN TREE: every app's step, `all-examples`, `dist` and `tripwires` depend on the
     // non-mutating `lint-check` (every rule, the layout included). The compile runs beside it, never after it; the
-    // step fails unless both pass, and every fixable finding names `zig build fix`.
+    // step fails unless both pass, and every fixable finding names `zig build lint-fix`.
     for (artifact_step_names.items) |name| {
         b.top_level_steps.get(name).?.step.dependOn(lint_check_step);
     }
     for (b.top_level_steps.values()) |tls| {
         const name: []const u8 = tls.step.name;
-        if (eql(u8, name, "dist") or eql(u8, name, "check")) {
+        if (eql(u8, name, "dist") or eql(u8, name, "tripwires")) {
             tls.step.dependOn(lint_check_step);
         }
     }
-    // `zig build fix` - the ONE step that rewrites sources, and the command every fixable finding names: the linter's
-    // autofixes and `zig fmt`'s layout (`zig-fmt`), the template's layout, then the tutorials' code blocks regenerated
-    // from the fixed source. Every rewritten file's diff is printed the moment it is written, and whatever is left
-    // for a person is listed under its file.
+    // `zig build lint-fix` - the ONE step that rewrites sources, and the command every fixable finding names: the
+    // linter's autofixes and `zig fmt`'s layout (`zig-fmt`), the template's layout, then the tutorials' code blocks
+    // regenerated from the fixed source. Every rewritten file's diff is printed the moment it is written, and whatever
+    // is left for a person is listed under its file.
     const fix_doc_folds: *Run = b.addRunArtifact(doc_folds_exe);
     fix_doc_folds.setCwd(b.path("."));
     fix_doc_folds.has_side_effects = true;
     fix_doc_folds.addArg("--fix");
     fix_doc_folds.addArgs(&doc_folds_pages);
     fix_doc_folds.step.dependOn(&lint_fix.step);
-    const fix_step: *Step = b.step(
-        "fix",
+    const lint_fix_step: *Step = b.step(
+        "lint-fix",
         "Rewrite sources: lint autofixes, zig fmt layout, tutorial code blocks - every change printed as a diff",
     );
-    fix_step.dependOn(&lint_fix.step);
-    fix_step.dependOn(&template_fmt_fix.step);
-    fix_step.dependOn(&fix_doc_folds.step);
+    lint_fix_step.dependOn(&lint_fix.step);
+    lint_fix_step.dependOn(&template_fmt_fix.step);
+    lint_fix_step.dependOn(&fix_doc_folds.step);
 
     // LAST, once every step exists: `zig build tools` compiles every tool, and `gate` includes it.
     gateEveryTool(b, gate_step);
+    // And after that walk, so `tools` never picks up a compile-only twin: `zig build check`, what ZLS runs on save.
+    addCompileCheck(b, smoke_focus);
 }

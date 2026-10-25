@@ -77,12 +77,16 @@ fn update(f: *z.Frame, s: *State) void {
 }
 
 pub const app: z.AppSpec(State) = .{
-    .config = .{ .window = .{
-        .title = "zimr - WebGPU - textures sprite explosion",
-        .width = 800,
-        .height = 450,
-        .scale_mode = .responsive,
-    } },
+    .config = .{
+        .window = .{
+            .title = "zimr - WebGPU - textures sprite explosion",
+            .width = 800,
+            .height = 450,
+            .scale_mode = .responsive,
+        },
+        // It counts frames to time the explosion, as raylib's SetTargetFPS(60) lets it: held to 60 natively too.
+        .max_frames_per_second = 60,
+    },
     .init = initState,
     .memory = .managed,
     .deinit = deinit,

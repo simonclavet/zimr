@@ -8457,13 +8457,17 @@ const HeroState = struct {
     /// one (`Paywall`, `HeroProgress`); the password box's text.
     session_games: u32 = 0,
     unlocked: bool = false,
-    /// Whether the debug lines are shown (`heroDebugLines`), and the target marked: a tap on the count of wins.
+    /// Whether the debug lines are shown (`heroDebugLines`), and the target marked: shown at the `debug_taps_to_show`th
+    /// tap on the level, so that a stray tap does not, and hidden at the next; the taps towards showing them so far.
     debug_shown: bool = false,
+    debug_taps: u8 = 0,
     password_buffer: [32]u8 = undefined,
     password_length: usize = 0,
 
     /// More steps than any ladder has.
     const max_steps: usize = 16;
+    /// The taps on the level that show the debug lines.
+    const debug_taps_to_show: u8 = 3;
 };
 
 /// How a puzzle of go puzzles hero's ended, for its ladder.
@@ -8920,7 +8924,7 @@ fn fixedTapArea(u: ui.Ui, window_id: []const u8, top_left_px: Vec2, size_px: Vec
 const HeroPresses = struct {
     hint: bool = false,
     next: bool = false,
-    /// A tap on the count of wins: the debug lines shown or hidden.
+    /// A tap on the level: one towards showing the debug lines, or the lines hidden (`HeroState.debug_shown`).
     debug_toggle: bool = false,
 };
 
@@ -8959,7 +8963,7 @@ fn submitHeroButtons(
     const headline_px: f32 = controls.headline_scale * font_size_px;
     const stroke_px: f32 = controls.headline_stroke_fonts * headline_px;
     fixedHeadline(u, .{ "hero wins", "hero wins bold" }, label, .{ gap_px, gap_px }, headline_px, stroke_px);
-    // The level, tapped, shows or hides the debug lines, drawn under it.
+    // The level, tapped, counts towards showing the debug lines - drawn under it - or hides them.
     const count_size_px: Vec2 = .{ controls.label_glyph_fonts * headline_px * 4, headline_px };
     const debug_toggled: bool = fixedTapArea(u, "hero wins tap", .{ gap_px, gap_px }, count_size_px);
     const debug_ids = [_][]const u8{
@@ -10458,8 +10462,17 @@ fn updateHeroButtons(
         top_line,
         debug_lines,
     );
+    // The level tapped: the debug lines hidden, or shown at the third tap.
     if (hero_presses.debug_toggle) {
-        s.hero.debug_shown = !s.hero.debug_shown;
+        if (s.hero.debug_shown) {
+            s.hero.debug_shown = false;
+        } else {
+            s.hero.debug_taps +|= 1;
+            if (s.hero.debug_taps >= HeroState.debug_taps_to_show) {
+                s.hero.debug_shown = true;
+                s.hero.debug_taps = 0;
+            }
+        }
     }
     if (hero_presses.hint) {
         s.hero.hint_point = heroHintMove(s);

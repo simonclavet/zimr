@@ -1,5 +1,5 @@
 //! tests/fixture_fs.zig - minimal smoke shader for the shader build path.
-//! `zig build check` compiles it to SPIR-V and translates it, so it proves the
+//! `zig build tripwires` compiles it to SPIR-V and translates it, so it proves the
 //! zimrmath helpers a shader leans on still lower on the SPIR-V backend:
 //!
 //!   - Vec2/Vec3/Vec types

@@ -4703,3 +4703,16 @@ row, for good. Pictures are lazy: only the rows scrolled into view cost a reques
 `dist` ships it. Checked in the browser on a copy of the page with the stylesheet injected as docfmt does: desktop,
 1280-wide and phone (375, no sideways scroll), search, click, arrow keys. Not built here: `zig build` and the step
 itself, Simon's.
+
+**Oct 25 - native frames held to `max_frames_per_second` when the app asks (Simon: "examples should be able to decide
+how to cap, if they want to ... Examples without physics that run today at 144 on windows should continue to run at
+144").** The Oct 14 cap was the browser's alone - natively the window's pace held, 144 a second on Simon's laptop - so
+an app moving by frames ran 2.4 times fast there: textures_sprite_animation and textures_sprite_explosion count
+frames, logo_raylib and following_eyes add 0.016 s a frame, yaw_pitch_roll's keys turn a fixed angle a frame,
+writing_anim types by frames. `Config.max_frames_per_second` is now the app's choice on every host: left alone, 60 in
+a browser and null natively (every frame the display gives, as before); set, the native window holds it too -
+`native_loop.waitForBeat` sleeps to the beat before the frame's wait, on the window's messages and the high-resolution
+timer together, so that input, and `on_input`, still arrive as they come. One beat for both hosts: `FramePacer` left
+runtime.zig for a leaf file of its own (`src/FramePacer.zig`, with `millisecondsUntilDue` for the sleep and two
+tests), because native_loop cannot import runtime.zig (runtime -> platform -> platform/windows -> native_loop). The six
+examples ask for 60. A script, headless or in a window, still draws exactly its frames. Not built here: Simon's.

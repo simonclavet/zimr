@@ -1,6 +1,6 @@
 //! line_diff - what changed between two versions of a text, printed as a unified diff.
 //!
-//! The tools that rewrite sources - `zimrlint --fix` (what `zig build fix` runs) and `doc_folds --fix` - print the
+//! The tools that rewrite sources - `zimrlint --fix` (what `zig build lint-fix` runs) and `doc_folds --fix` - print the
 //! diff of every file they rewrite, the moment they write it. A fix that moves code without showing how is a fix
 //! nobody reviewed; with the diff in the console, the person who ran it sees exactly what changed, in the form
 //! `git diff` and `git apply` use (`--- a/<path>`, `+++ b/<path>`, `@@ -l,n +l,n @@` hunks with three lines of

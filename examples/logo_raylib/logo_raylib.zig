@@ -73,6 +73,8 @@ pub const app: z.AppSpec(State) = .{
             .height = 450,
             .scale_mode = .responsive,
         },
+        // Its clock moves 0.016 s a frame, as raylib's SetTargetFPS(60) lets it: held to 60 natively too.
+        .max_frames_per_second = 60,
     },
     .init = initState,
     .memory = .managed,

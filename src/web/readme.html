@@ -83,6 +83,17 @@
                 native Windows programs (<code>-Dplatform=windows</code>), their
                 shaders embedded as SPIR-V and drawn through Vulkan &mdash; see
                 <a href="backends-tutorial.html">graphics backends</a>.
+                With <code>-Dplatform=android</code> an app's single-file page
+                becomes an Android app: <code>zig build &lt;app&gt;</code> makes
+                <code>zig-out/android/&lt;app&gt;.apk</code>, one full-screen
+                WebView showing the page, under the icon its row names
+                (<code>android_icon</code>: a picture on a color or a picture),
+                and <code>zig build run-&lt;app&gt;</code> installs it on the
+                phone plugged in and starts it. That platform
+                is the only one that needs more than Zig: the Android SDK and a
+                JDK (Android Studio installs both), driven by
+                <code>tools/android_apk.zig</code>, and the WebView's one Java
+                class, <code>src/android/WebViewActivity.java</code>.
             </p>
 
             <p>

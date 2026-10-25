@@ -1,7 +1,7 @@
 # The spv2wgsl corpus (tools/wgsl_corpus.zig). For every graphics shader the build compiles: what it shows
 # the host (`interface`), and the WGSL spv2wgsl wrote for each SPIR-V it was given (`output <spirv md5>
 # <wgsl md5>`, the newest first). `transpiler` is the MD5 of the spv2wgsl source those outputs came from.
-# `zig build corpus-refresh` writes this file; `zig build corpus` (and `zig build check`) holds every shader
+# `zig build corpus-refresh` writes this file; `zig build corpus` (and `zig build tripwires`) holds every shader
 # to it. Commit it with the change that moved it.
 transpiler aac7d2a9f7897389c1f022b6a2126dc7
 

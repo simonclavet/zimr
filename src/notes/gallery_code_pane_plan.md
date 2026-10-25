@@ -256,7 +256,7 @@ already written (Appendix A). They use only the existing tokens (`--rule`, `--pa
 - The header's "One connection at a time is fine" goes, replaced by the reason from §2.4.
 - A regression test: factor the loop so a test can run it on port 0 in a thread, open a silent
   socket, request `/` on a second socket, and expect a response within a second. That is §2.4's A/B
-  in Zig. Prove it red on the old loop first. It needs a small step, wired into `check` if it stays
+  in Zig. Prove it red on the old loop first. It needs a small step, wired into `tripwires` if it stays
   under a second.
 
 ### 4.4 What does NOT change

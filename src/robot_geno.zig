@@ -6579,11 +6579,17 @@ const train_clip_frames: usize = 600;
 
 const train_clip_path: []const u8 = "examples/geno_train/dance.zclip";
 
-test "robot_geno: geno_train's clip - the dance from 5 s to 15 s, lifted onto the floor, baked" {
+/// The training lab's clip (geno_ppo, geno_lab, geno_trainer): the dance from the same 5 s, for twice as long - 20 s.
+const lab_clip_frames: usize = 2 * train_clip_frames;
+
+const lab_clip_path: []const u8 = "examples/geno_ppo/dance.zclip";
+
+test "robot_geno: the pages' clips - the dance from 5 s, for 10 s and for 20 s, lifted onto the floor, baked" {
     // The GPU page trains SuperTrack on Geno over the stretch where the servo alone falls within a second or so
-    // (its first 5 s it already keeps up with) - so learning has room to show. Copied, cut, lifted onto the
-    // floor frame by frame, and baked as the page embeds it. Held byte-equal like the model fixture: when
-    // missing or stale it is rewritten here and the test fails once, so a changed clip arrives as a diff.
+    // (its first 5 s it already keeps up with) - so learning has room to show; the training lab trains PPO from
+    // the same moment, for twice as long. Copied, cut, lifted onto the floor frame by frame, and baked as the
+    // pages embed them. Held byte-equal like the model fixture: when missing or stale a clip is rewritten here
+    // and the test fails once, so a changed clip arrives as a diff.
     const gpa: Allocator = testing_allocator;
     var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
@@ -6609,45 +6615,36 @@ test "robot_geno: geno_train's clip - the dance from 5 s to 15 s, lifted onto th
     defer capture.deinit();
     var whole: dance.Clip = try copyClip(gpa, &imported, bind, capture);
     defer whole.deinit();
-    // The cut: frames [first, first + count).
-    const first: usize = train_clip_first;
-    const count: usize = train_clip_frames;
-    const nq: usize = whole.nq;
-    const targets: []f32 = try gpa.alloc(f32, count * nq);
-    @memcpy(targets, whole.targets[first * nq ..][0 .. count * nq]);
-    const residual: []f32 = try gpa.alloc(f32, count);
-    @memcpy(residual, whole.residual[first..][0..count]);
-    const residual_body: []u32 = try gpa.alloc(u32, count);
-    @memcpy(residual_body, whole.residual_body[first..][0..count]);
-    var cut: dance.Clip = .{
-        .gpa = gpa,
-        .frame_count = count,
-        .frame_time = whole.frame_time,
-        .nq = nq,
-        .targets = targets,
-        .residual = residual,
-        .residual_body = residual_body,
-    };
-    defer cut.deinit();
     var probe: rbt.Data = try .init(gpa, m);
     defer probe.deinit();
-    _ = restClipOnFloor(m, &probe, &cut, 0.001);
-    const baked: []u8 = try cut.toBytes(gpa);
-    defer gpa.free(baked);
-    const stored: ?[]u8 = readAsset(gpa, threaded.io(), train_clip_path) catch null;
-    defer if (stored) |bytes| gpa.free(bytes);
-    const current: bool = if (stored) |bytes| eql(u8, bytes, baked) else false;
-    if (!current) {
-        const file: Io.File = try Io.Dir.cwd().createFile(threaded.io(), train_clip_path, .{});
-        defer file.close(threaded.io());
-        try file.writeStreamingAll(threaded.io(), baked);
-        report.print("\n  {s} was {s} - rebaked ({d} bytes); review the diff and run again\n", .{
-            train_clip_path,
-            if (stored == null) "missing" else "stale",
-            baked.len,
-        });
+    // Each cut: frames [first, first + count), and the file it is baked to.
+    const cuts = [_]struct { first: usize, count: usize, path: []const u8 }{
+        .{ .first = train_clip_first, .count = train_clip_frames, .path = train_clip_path },
+        .{ .first = train_clip_first, .count = lab_clip_frames, .path = lab_clip_path },
+    };
+    var all_current: bool = true;
+    for (cuts) |cut_spec| {
+        var cut: dance.Clip = try whole.window(cut_spec.first, cut_spec.count);
+        defer cut.deinit();
+        _ = restClipOnFloor(m, &probe, &cut, 0.001);
+        const baked: []u8 = try cut.toBytes(gpa);
+        defer gpa.free(baked);
+        const stored: ?[]u8 = readAsset(gpa, threaded.io(), cut_spec.path) catch null;
+        defer if (stored) |bytes| gpa.free(bytes);
+        const current: bool = if (stored) |bytes| eql(u8, bytes, baked) else false;
+        if (!current) {
+            const file: Io.File = try Io.Dir.cwd().createFile(threaded.io(), cut_spec.path, .{});
+            defer file.close(threaded.io());
+            try file.writeStreamingAll(threaded.io(), baked);
+            report.print("\n  {s} was {s} - rebaked ({d} bytes); review the diff and run again\n", .{
+                cut_spec.path,
+                if (stored == null) "missing" else "stale",
+                baked.len,
+            });
+        }
+        all_current = all_current and current;
     }
-    try expect(current);
+    try expect(all_current);
 }
 
 /// The page's learner, as a recipe: its window, its small networks, SuperTrack's own collection.
@@ -6784,7 +6781,7 @@ test "robot_geno: D4 - a policy cloned from the teacher, judged in the real simu
     defer bind.deinit(gpa);
     var capture: codecs.bvh.Data = try codecs.bvh.parse(gpa, dance_bytes, null);
     defer capture.deinit();
-    // The dance from 5 s, for 10 s, lifted onto the floor - geno_train's and geno_ppo's stretch.
+    // The dance from 5 s, for 10 s, lifted onto the floor - geno_train's stretch.
     var clip: dance.Clip = try copyClip(gpa, &imported, bind, capture);
     defer clip.deinit();
     {

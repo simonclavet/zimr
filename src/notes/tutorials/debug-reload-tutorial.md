@@ -198,7 +198,7 @@ server has only what is in `zig-out/web/`. Run the app's build task.
 `.vscode/tasks.json`, `.zed/debug.json` and `.zed/tasks.json` for every
 app with a web build: a new row in `build.zig`'s `wgpu_apps` table gets
 its configs on the next run, with nothing else to list it in. Run it and
-commit all four files. `zig build check` fails, naming the stale files,
+commit all four files. `zig build tripwires` fails, naming the stale files,
 until you do. Zed reads `.zed/debug.json` as a bare JSON array and
 silently ignores the whole file if the JSON is broken, so regenerate
 instead of hand-editing.

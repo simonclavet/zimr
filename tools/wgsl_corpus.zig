@@ -1,7 +1,7 @@
 //! wgsl_corpus - the spv2wgsl regression corpus: every graphics shader the build compiles, held to
 //! tests/fixtures/wgsl_corpus.txt.
 //!
-//!     wgsl_corpus <corpus> <fixture> <spv2wgsl source>...              check  (`zig build corpus`, in `check`)
+//!     wgsl_corpus <corpus> <fixture> <spv2wgsl source>...              check  (`zig build corpus`, in `tripwires`)
 //!     wgsl_corpus --refresh <corpus> <fixture> <spv2wgsl source>...    pin    (`zig build corpus-refresh`)
 //!
 //! <corpus> is the directory `shader_codegen.WgslCorpus` fills: for each shader the build translates, the
@@ -563,7 +563,7 @@ const fixture_header: []const u8 =
     \\# The spv2wgsl corpus (tools/wgsl_corpus.zig). For every graphics shader the build compiles: what it shows
     \\# the host (`interface`), and the WGSL spv2wgsl wrote for each SPIR-V it was given (`output <spirv md5>
     \\# <wgsl md5>`, the newest first). `transpiler` is the MD5 of the spv2wgsl source those outputs came from.
-    \\# `zig build corpus-refresh` writes this file; `zig build corpus` (and `zig build check`) holds every shader
+    \\# `zig build corpus-refresh` writes this file; `zig build corpus` (and `zig build tripwires`) holds every shader
     \\# to it. Commit it with the change that moved it.
     \\
 ;

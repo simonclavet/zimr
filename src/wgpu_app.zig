@@ -114,7 +114,7 @@ pub const colorFromHSV = types.colorFromHSV;
 // namespace pulls no GL/WebGL surface into the wasm.
 const input = @import("runtime.zig").input;
 const FrameTimeFilter = @import("runtime.zig").core.FrameTimeFilter;
-const FramePacer = @import("runtime.zig").core.FramePacer;
+const FramePacer = @import("FramePacer.zig");
 
 const GpuFrame = gpu.GpuFrame;
 const Backend = gpu_iface.WgpuBackend;
@@ -171,10 +171,13 @@ pub const FramePhase = enum { idle, frame_2d, mode_3d };
 
 pub const Config = struct {
     window: WindowConfig = .{},
-    /// The most frames a second the app draws in a browser: 60, whatever the display's rate - a 120 Hz phone's
-    /// browser asks for twice as many, each one the app's whole update and drawing (`FramePacer`). Null draws every
-    /// frame the display asks for. Natively and headless, frames come at the window's or the script's pace.
-    max_frames_per_second: ?f32 = 60,
+    /// The most frames a second the app draws, on the beat a frame is due on (`FramePacer`); null draws every frame
+    /// the display gives. Each app chooses; left alone, it is 60 in a browser - a 120 Hz phone's browser asks for
+    /// twice as many, each one the app's whole update and drawing, on a phone that heats - and null natively, where a
+    /// window keeps its display's pace, 144 a second on some laptops. An app that moves by frames - counts them, or
+    /// advances a fixed amount in each, as raylib's `SetTargetFPS(60)` lets it - asks for 60, and its window holds it
+    /// there too. A script, headless or in a window, draws exactly the frames it asks for.
+    max_frames_per_second: ?f32 = if (host.is_browser) 60 else null,
     /// Seed for `Frame.random`. Set it for a reproducible run; leave it null to
     /// get a fresh seed each launch - from the host's crypto entropy in a real
     /// browser, or a fixed constant on native/headless so tests stay stable.
@@ -621,12 +624,14 @@ pub const App = struct {
     viewport_depth: u8 = 0,
 
     /// A native program's frames: `update` - the SAME function the browser calls once per frame - driven by the
-    /// window's messages until the window is closed (`native_loop.run`). Called after `run`, by the runner or by an
+    /// window's messages until the window is closed (`native_loop.run`), at most `Config.max_frames_per_second` of them
+    /// a second when the app asks for fewer than the display gives. Called after `run`, by the runner or by an
     /// own-frame app's `main`; on the web it returns at once, the browser calling the frames.
     pub fn runNative(self: *App) void {
+        const max_frames_per_second: ?f32 = self.config.max_frames_per_second;
         switch (comptime host.kind) {
             // lint:off decl-order: `update` and `receiveEvent` sit with the browser's exports, after App
-            .native => self.script_outcome = native_loop.run(&update, &receiveEvent, &saveFrame),
+            .native => self.script_outcome = native_loop.run(&update, &receiveEvent, &saveFrame, max_frames_per_second),
             // lint:off decl-order: (as above)
             .headless => self.script_outcome = native_loop.headless.run(&update, &receiveEvent, &saveFrame),
             .web, .none => {},

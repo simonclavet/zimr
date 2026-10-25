@@ -8,6 +8,10 @@
 //! run is watched this one way. A click on the learning curves shows the policy checkpoint nearest that minute; while
 //! the trainer runs, "reload" puts its newest policy in place of the one shown, and the character goes on.
 //!
+//! The lab starts trainers too, beside its own executable: on a new run from its form, or again on a run that ended -
+//! "resume", the trainer carrying on from the folder's weights and log - and asks one to stop through its `stop` file.
+//! A trainer keeps running when the lab closes.
+//!
 //! Run folders are files by path, which a page does not have: in a web build the list is left out.
 
 const std = @import("std");
@@ -118,17 +122,19 @@ const NewRunForm = struct {
     }
 };
 
-/// A trainer this lab started (`startRun`): its run's folder name and the program. The program's watcher thread
-/// keeps the program's address, so a started trainer never moves: `State.started` is a fixed array, and a slot is
-/// taken again only once its trainer has ended.
+/// A trainer this lab started (`startRun`, `resumeRun`): its run's folder name and the program. The program's watcher
+/// thread keeps the program's address, so a started trainer never moves: `State.started` is a fixed array, and a slot
+/// is taken again only once its trainer has ended.
 const StartedTrainer = struct {
-    run_name: z.Str(64) = .{},
+    run_name: z.Str(name_capacity) = .{},
     program: native_os.ChildProgram = .{},
     /// The program's state when the console was last told it (`watchStartedTrainers`): each change is told once.
     told_state: native_os.ChildState = .idle,
 
     /// How many trainers one lab starts and watches at once.
     const most: usize = 8;
+    /// The longest run name a slot holds, in bytes: the new-run form's longest (`NewRunForm.name_buffer`).
+    const name_capacity: usize = 64;
 
     fn isRunning(started: *const StartedTrainer) bool {
         return started.program.currentState() == .running;
@@ -341,6 +347,14 @@ const RunWatch = struct {
         watch.xs.deinit(gpa);
         watch.ys.deinit(gpa);
     }
+
+    /// Whether the run's trainer has gone silent (`RunStatus.isSilent`). Silence is judged by the run's save interval,
+    /// so never for a run with no status yet, or whose `run.zon` could not be read.
+    fn isSilent(watch: *const RunWatch, now_seconds: i64) bool {
+        const status: lab.RunStatus = watch.status orelse return false;
+        const save_minutes: f32 = watch.save_minutes orelse return false;
+        return status.isSilent(now_seconds, save_minutes);
+    }
 };
 
 /// Reads the run in `run_folder` again: its log's new lines into its curve, the plot's points from the curve, its
@@ -396,8 +410,9 @@ fn readRunWatch(
 
 /// A run loaded and shown: its policy (`lab.GenoPolicy`, the run's newest or one of its checkpoints) and one
 /// character living what the policy does (`lab.PolicyShow`) - no learner is loaded, so every learner's run is watched
-/// this one way. With them, the run's parameters (the new-run form starts from them), the policy file's name, and the
-/// run's folder name, its own copy, so that reloading reads the same run whatever the list holds by then.
+/// this one way - on the show's own clock. With them, the run's parameters (the new-run form starts from them), the
+/// policy file's name, and the run's folder name, its own copy, so that reloading reads the same run whatever the list
+/// holds by then.
 ///
 /// Memory: the show lives in `show_arena`, on the heap so that the arena stays where its allocator points when the
 /// struct moves; the policy is allocated with the lab's `gpa`, so that a newer policy can take its place while the
@@ -407,6 +422,8 @@ const ShownRun = struct {
     show_arena: *ArenaAllocator,
     policy: lab.GenoPolicy,
     show: lab.PolicyShow,
+    /// Real time, as the show's physics steps (`stepShowForFrame`): started afresh with each run shown.
+    clock: ppo_track.ShowClock,
     policy_name_buffer: lab.RunFile.NameBuffer,
     policy_name_length: usize,
     name_buffer: [256]u8,
@@ -456,6 +473,7 @@ fn loadRun(
         .show_arena = show_arena,
         .policy = policy,
         .show = show,
+        .clock = .{},
         .policy_name_buffer = undefined,
         .policy_name_length = @min(policy_name.len, lab.RunFile.name_capacity),
         .name_buffer = undefined,
@@ -536,16 +554,16 @@ fn drawRobot(
     }
 }
 
-/// Steps the show through the frame's whole physics steps (`ppo_track.showStepsForFrame`): one at 60 frames a
-/// second, the motion even at any frame rate.
+/// Steps the show through the physics steps its clock gives the frame (`ppo_track.ShowClock`): real time at any frame
+/// rate and never faster, and slow motion rather than longer steps on a device that cannot keep up.
 fn stepShowForFrame(
     show: *lab.PolicyShow,
     policy: *const lab.GenoPolicy,
-    pacing: ppo_track.ShowPacing,
+    clock: *ppo_track.ShowClock,
     timestep: f32,
     dt: f32,
 ) void {
-    const steps_to_take: u32 = ppo_track.showStepsForFrame(dt, timestep, pacing);
+    const steps_to_take: u32 = clock.stepsForFrame(dt, timestep);
     for (0..steps_to_take) |_| {
         show.step(policy);
     }
@@ -594,7 +612,6 @@ const State = struct {
     status: z.Str(160),
     look: Look,
     floor: Floor,
-    pacing: ppo_track.ShowPacing,
     new_run: NewRunForm,
     started: [StartedTrainer.most]StartedTrainer,
 };
@@ -750,25 +767,67 @@ fn freeStartedSlot(started: []StartedTrainer) ?*StartedTrainer {
     return null;
 }
 
-/// Starts the form's run: its folder made, its `run.zon` written, and the trainer beside the lab started on it,
-/// in a slot of `State.started` that watches it. Each step is told on the console; a step that fails stops there,
-/// saying why.
-fn startRun(s: *State, io: Io) void {
-    const name: []const u8 = s.new_run.name();
+/// Whether a trainer this lab started still runs on the run named `name`.
+fn isTrainerRunningOn(started: []const StartedTrainer, name: []const u8) bool {
+    for (started) |*slot| {
+        const is_on_this_run: bool = eql(u8, slot.run_name.slice(), name);
+        if (is_on_this_run and slot.isRunning()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// What a trainer needs to start: a slot of `State.started` to watch it in, and the trainer's executable.
+const TrainerLaunch = struct {
+    slot: *StartedTrainer,
+    trainer_path: []const u8,
+};
+
+/// A free slot and the trainer beside the lab, its path written into `path_buffer`. Null, after saying why, when
+/// every slot's trainer still runs or no trainer is there - found out before a run's folder is touched, so that a run
+/// whose trainer cannot start leaves nothing behind.
+fn trainerLaunch(s: *State, io: Io, path_buffer: []u8) ?TrainerLaunch {
     const slot: *StartedTrainer = freeStartedSlot(&s.started) orelse {
         tell(s, .warn, "{d} trainers already run: stop one first", .{StartedTrainer.most});
-        return;
+        return null;
     };
-    var trainer_path_buffer: [1200]u8 = undefined;
-    const trainer_path: []const u8 = trainerPath(io, &trainer_path_buffer) orelse {
+    const trainer_path: []const u8 = trainerPath(io, path_buffer) orelse {
         tell(s, .err, "cannot find the lab's own folder", .{});
-        return;
+        return null;
     };
     if (!native_os.fileExists(io, trainer_path)) {
         tell(s, .err, "no trainer beside the lab: see the console", .{});
         log.err("no trainer at {s}: build it with `zig build geno-lab -Dplatform=windows`", .{trainer_path});
-        return;
+        return null;
     }
+    const launch: TrainerLaunch = .{ .slot = slot, .trainer_path = trainer_path };
+    return launch;
+}
+
+/// Starts the trainer on the run named `name`, in `folder`, watched in the launch's slot: `--run=<folder>`, as the
+/// trainer takes its run (`tools/geno_trainer.zig`).
+fn startTrainer(
+    io: Io,
+    launch: TrainerLaunch,
+    name: []const u8,
+    folder: []const u8,
+) void {
+    var run_argument_buffer: [1300]u8 = undefined;
+    const run_argument: []const u8 = bufPrint(&run_argument_buffer, "--run={s}", .{folder}) catch return;
+    const argv: [2][]const u8 = .{ launch.trainer_path, run_argument };
+    log.info("{s}: starting {s} {s}", .{ name, launch.trainer_path, run_argument });
+    launch.slot.run_name = .print("{s}", .{name});
+    launch.slot.told_state = .idle;
+    launch.slot.program.start(io, &argv);
+}
+
+/// Starts the form's run: its folder made, its `run.zon` written, and the trainer beside the lab started on it
+/// (`startTrainer`). Each step is told on the console; a step that fails stops there, saying why.
+fn startRun(s: *State, io: Io) void {
+    const name: []const u8 = s.new_run.name();
+    var trainer_path_buffer: [1200]u8 = undefined;
+    const launch: TrainerLaunch = trainerLaunch(s, io, &trainer_path_buffer) orelse return;
     var folder_buffer: [1200]u8 = undefined;
     const folder: []const u8 = pathIn(runsFolderOf(s), name, &folder_buffer) orelse return;
     native_os.makeFolder(io, folder) catch |err| {
@@ -799,16 +858,46 @@ fn startRun(s: *State, io: Io) void {
     };
     log.info("{s}: wrote {s}:\n{s}", .{ name, run_file_path, text.written() });
 
-    var run_argument_buffer: [1300]u8 = undefined;
-    const run_argument: []const u8 = bufPrint(&run_argument_buffer, "--run={s}", .{folder}) catch return;
-    const argv: [2][]const u8 = .{ trainer_path, run_argument };
-    log.info("{s}: starting {s} {s}", .{ name, trainer_path, run_argument });
-    slot.run_name = .print("{s}", .{name});
-    slot.told_state = .idle;
-    slot.program.start(io, &argv);
+    startTrainer(io, launch, name, folder);
     s.new_run.is_open = false;
     // The new folder joins the list at once; its line fills in once the trainer writes its first status.
     refreshRuns(s, io);
+}
+
+/// Whether the run named `name`, watched in `watch`, can have its trainer started again: its status says it ended -
+/// stopped, or finished - or says it trains from a trainer gone silent (`RunWatch.isSilent`, taken to have died), and
+/// no trainer this lab started runs on it, which covers the seconds before a resumed trainer writes its first status.
+/// A run with no status yet is never resumable: its trainer may still be starting.
+fn isRunResumable(
+    watch: *const RunWatch,
+    started: []const StartedTrainer,
+    name: []const u8,
+    now_seconds: i64,
+) bool {
+    const status: lab.RunStatus = watch.status orelse return false;
+    const has_ended: bool = status.state == .stopped or status.state == .finished;
+    const has_ended_or_gone_silent: bool = has_ended or watch.isSilent(now_seconds);
+    return has_ended_or_gone_silent and !isTrainerRunningOn(started, name);
+}
+
+/// Starts the trainer again on the run named `name` (`isRunResumable`), on its folder as it stands: the trainer
+/// carries on from the folder's weights, log and judgements (`tools/geno_trainer.zig`), under its `run.zon` - which the
+/// lab leaves alone, so a limit raised there by hand holds. Weights that no longer fit the run are the trainer's to
+/// refuse, and it then leaves the folder untouched.
+fn resumeRun(s: *State, io: Io, name: []const u8) void {
+    // A slot must hold the whole name, or `isTrainerRunningOn` cannot match it and the run would offer "resume" again
+    // while its trainer runs. The form's names always fit; a folder made by hand may not.
+    const is_name_held: bool = name.len <= StartedTrainer.name_capacity;
+    if (!is_name_held) {
+        tell(s, .warn, "{s}: not resumed - its name is over {d} bytes", .{ name, StartedTrainer.name_capacity });
+        return;
+    }
+    var trainer_path_buffer: [1200]u8 = undefined;
+    const launch: TrainerLaunch = trainerLaunch(s, io, &trainer_path_buffer) orelse return;
+    var folder_buffer: [1200]u8 = undefined;
+    const folder: []const u8 = pathIn(runsFolderOf(s), name, &folder_buffer) orelse return;
+    startTrainer(io, launch, name, folder);
+    tell(s, .info, "{s}: resuming - its trainer carries on from its weights", .{name});
 }
 
 /// Asks the run named `name` to stop: its `stop` file written, which the trainer reads after its batch - it saves
@@ -929,7 +1018,6 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.status = .print("", .{});
     s.look = .{};
     s.floor = .{};
-    s.pacing = .{};
     s.watches = &.{};
     s.curves_refresh = .{};
     s.curve_plot = .{};
@@ -982,7 +1070,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 /// A run's line under its name, in its colour: its state - "silent" for a trainer that has stopped writing
-/// (`RunStatus.isSilent`) - its batch, and its latest time to failure.
+/// (`RunWatch.isSilent`) - its batch, and its latest time to failure.
 fn drawRunLine(
     u: ui.Ui,
     watch: *const RunWatch,
@@ -993,11 +1081,7 @@ fn drawRunLine(
         u.textColored(color, "  no status yet", .{});
         return;
     };
-    // Silence is judged by the run's save interval; a run whose `run.zon` could not be read is not judged.
-    const is_silent: bool = if (watch.save_minutes) |save_minutes|
-        status.isSilent(now_seconds, save_minutes)
-    else
-        false;
+    const is_silent: bool = watch.isSilent(now_seconds);
     const state_name: []const u8 = if (is_silent) "silent" else @tagName(status.state);
     if (status.recent_seconds_to_failure) |seconds| {
         u.textColored(color, "  {s}, batch {d}, loses it every {d:.1} s", .{ state_name, status.batches, seconds });
@@ -1149,19 +1233,28 @@ fn drawPanel(s: *State, f: *z.Frame) bool {
             openNewRunForm(s);
         }
         for (s.runs, s.watches, 0..) |run, *watch, index| {
-            // Each row's own id: every row has a "stop" button.
+            // Each row's own id: the rows' buttons share their labels.
             u.pushIdInt(@intCast(index));
             defer u.popId();
             const is_selected: bool = s.selected_run == index;
             if (u.selectable(run.name, is_selected, .{})) {
                 showRun(s, io, index);
             }
-            // A training run's line starts with its "stop" button, where the panel's width cannot push it out of view.
+            // A run's line starts with its button, where the panel's width cannot push it out of view: "stop" while
+            // its trainer trains, "resume" once the run has ended or its trainer has gone silent - a silent trainer
+            // reads no stop file.
             const state: ?lab.RunState = if (watch.status) |status| status.state else null;
-            const is_training: bool = state == .training or state == .measuring_servo;
+            const says_training: bool = state == .training or state == .measuring_servo;
+            const is_training: bool = says_training and !watch.isSilent(now_seconds);
+            const is_resumable: bool = isRunResumable(watch, &s.started, run.name, now_seconds);
             if (is_training) {
                 if (u.button("stop", .{})) {
                     requestStop(s, io, run.name);
+                }
+                u.sameLine(.{});
+            } else if (is_resumable) {
+                if (u.button("resume", .{})) {
+                    resumeRun(s, io, run.name);
                 }
                 u.sameLine(.{});
             }
@@ -1207,10 +1300,10 @@ fn update(f: *z.Frame, s: *State) void {
         }
         watchStartedTrainers(s);
     }
-    // The character moves evenly, whatever the frame rate (`stepShowForFrame`).
+    // The character moves at real time whatever the frame rate, and never faster (`stepShowForFrame`).
     if (s.shown) |*shown| {
         const timestep: f32 = model.opt.timestep;
-        stepShowForFrame(&shown.show, &shown.policy, s.pacing, timestep, dt);
+        stepShowForFrame(&shown.show, &shown.policy, &shown.clock, timestep, dt);
     }
 
     z.clearViewport(f, s.look.background);

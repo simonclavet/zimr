@@ -253,7 +253,7 @@ the second one.
 3. Smoke the surface's consumers: `zig build smoke-test -Dfocus=hello_world,pipeline_msaa,pipeline_rendertarget,launcher`,
    plus one example that calls `clearBackground` mid-frame (pick it by grep). Together they cover a plain
    frame, an MSAA resolve into the canvas, RTT followed by `reopen2DPass`, present-and-reacquire, and child ticks.
-4. `zig build check` (now including `bridge-check`); `zig build fix` first if lint or fmt complain.
+4. `zig build check` (now including `bridge-check`); `zig build lint-fix` first if lint or fmt complain.
 5. Re-run the probe on a rebuilt hello_world standalone: section 1.2's table, before and after.
 
 ### Stage 5 - device check (Simon)

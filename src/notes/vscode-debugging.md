@@ -146,7 +146,7 @@ or just close VS Code.
 
 3. Commit the four generated files (`.vscode/launch.json`,
    `.vscode/tasks.json`, `.zed/debug.json`, `.zed/tasks.json`) along
-   with your `build.zig` change.  Until you do, `zig build check`
+   with your `build.zig` change.  Until you do, `zig build tripwires`
    fails and names the stale files.
 
 build.zig hands the generator the name of every app with a web build,
@@ -167,7 +167,7 @@ If you need per-example customization (special preLaunchTask,
 viewport size, custom URL parameters), teach the generator
 (`tools/gen_editor_configs.zig`) rather than editing its output: a
 hand edit is overwritten by the next regeneration, and until then
-`zig build check` reports the file as stale.
+`zig build tripwires` reports the file as stale.
 
 ## Caveats
 

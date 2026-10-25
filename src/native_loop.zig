@@ -10,7 +10,8 @@
 //!     run          the runner's main, after App.run: drain the window's messages, hand their input to the
 //!                  engine as events, call `update`, until the window closes. A minimized window gets no
 //!                  frames, like a hidden tab; FIFO presentation waits for the display inside each frame, so the loop
-//!                  runs at the display's rate, as requestAnimationFrame does
+//!                  runs at the display's rate, as requestAnimationFrame does - or, for an app that asks for fewer
+//!                  frames (`Config.max_frames_per_second`), sleeps to their beat, as a browser skips frames
 //!     finish       after the app's teardown: the Vulkan host's shutdown and its validation report, then the window
 //!
 //! Input reaches the engine as the browser delivers it: the window hands each input message to `queueInput`,
@@ -32,6 +33,7 @@ const zm = @import("zm");
 const float = zm.float;
 const native_os = @import("native_os.zig");
 const vulkan_host = @import("wgpu_vulkan.zig");
+const FramePacer = @import("FramePacer.zig");
 const headless_platform = @import("platform/headless.zig");
 const script_log = std.log.scoped(.script);
 const win32 = @import("win32.zig");
@@ -1297,6 +1299,36 @@ fn serviceWindow(receive_event: EventFunction) WindowPass {
 /// How long the frame's wait sleeps between its askings, in units of 100 ns: a millisecond.
 const frame_wait_step_100ns: i64 = 10_000;
 
+/// The high-resolution waitable timer the loop's waits sleep on (`waitForFrame`, `waitForBeat`): asked for at the
+/// first wait and kept for the program's life; null where the system has none.
+fn frameWaitTimer() ?win32.HANDLE {
+    if (!has_asked_for_frame_wait_timer) {
+        has_asked_for_frame_wait_timer = true;
+        frame_wait_timer = win32.CreateWaitableTimerExW(
+            null,
+            null,
+            win32.CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+            win32.TIMER_ALL_ACCESS,
+        );
+    }
+    return frame_wait_timer;
+}
+
+/// Sleeps on the window's message queue and `timer` together (`MsgWaitForMultipleObjectsEx`): until a message comes,
+/// or `relative_due_100ns` - a negative due time, which is relative, in units of 100 ns - passes. Setting the timer
+/// also clears a signal left from an earlier wait.
+fn sleepUntilMessageOrDue(timer: win32.HANDLE, relative_due_100ns: i64) void {
+    _ = win32.SetWaitableTimer(timer, &relative_due_100ns, 0, null, null, 0);
+    const wait_handles: [1]win32.HANDLE = .{timer};
+    _ = win32.MsgWaitForMultipleObjectsEx(
+        1,
+        &wait_handles,
+        win32.INFINITE,
+        win32.QS_ALLINPUT,
+        win32.MWMO_INPUTAVAILABLE,
+    );
+}
+
 /// The frame's wait, before the frame: until the next frame can begin without waiting inside it - the frame slot free
 /// and a swapchain image in hand (`vulkan_host.tryAcquireAhead`) - the window's messages are handled as they arrive
 /// (`serviceWindow`), so that input reaches the engine, and an app's `on_input`, the moment it comes rather than at
@@ -1309,29 +1341,10 @@ const frame_wait_step_100ns: i64 = 10_000;
 /// none, there is no wait here: the frame waits inside its own acquire, as before this wait existed, and its input is
 /// read at its start. A window minimized or closed during the wait ends it, with what the loop does for it.
 fn waitForFrame(receive_event: EventFunction) WindowPass {
-    if (!has_asked_for_frame_wait_timer) {
-        has_asked_for_frame_wait_timer = true;
-        frame_wait_timer = win32.CreateWaitableTimerExW(
-            null,
-            null,
-            win32.CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
-            win32.TIMER_ALL_ACCESS,
-        );
-    }
-    const timer: win32.HANDLE = frame_wait_timer orelse return .draw;
+    const timer: win32.HANDLE = frameWaitTimer() orelse return .draw;
     while (!vulkan_host.tryAcquireAhead()) {
-        // Due one step from now - a negative due time is relative. Setting the timer also clears a signal left from
-        // an earlier wait, so this wait ends at the step, or at a message.
-        const due_in_one_step: i64 = -frame_wait_step_100ns;
-        _ = win32.SetWaitableTimer(timer, &due_in_one_step, 0, null, null, 0);
-        const wait_handles: [1]win32.HANDLE = .{timer};
-        _ = win32.MsgWaitForMultipleObjectsEx(
-            1,
-            &wait_handles,
-            win32.INFINITE,
-            win32.QS_ALLINPUT,
-            win32.MWMO_INPUTAVAILABLE,
-        );
+        // Due one step from now: the wait ends at the step, or at a message.
+        sleepUntilMessageOrDue(timer, -frame_wait_step_100ns);
         // Whichever woke it - a message, or the step - the window's messages are handled and its input handed over.
         const pass: WindowPass = serviceWindow(receive_event);
         if (pass != .draw) {
@@ -1339,6 +1352,34 @@ fn waitForFrame(receive_event: EventFunction) WindowPass {
         }
     }
     return .draw;
+}
+
+/// The frame's beat, before the frame's wait, for an app that asks for at most `frames_per_second`
+/// (`Config.max_frames_per_second`): the beat a browser's frames are drawn on (`FramePacer`), slept for on the
+/// window's messages and the timer together, as the frame's wait sleeps - so that input arriving meanwhile reaches the
+/// engine, and an app's `on_input`, the moment it comes. Where the system has no high-resolution timer there is no
+/// sleeping here, and the frames keep the display's pace. A window minimized or closed during the wait ends it, with
+/// what the loop does for it.
+fn waitForBeat(
+    receive_event: EventFunction,
+    pacer: *FramePacer,
+    frames_per_second: f32,
+) WindowPass {
+    const timer: win32.HANDLE = frameWaitTimer() orelse return .draw;
+    while (true) {
+        const now_ms: f64 = native_os.monotonicMilliseconds();
+        if (pacer.shouldRun(now_ms, frames_per_second)) {
+            return .draw;
+        }
+        // Due when the beat takes a frame, rounded up to the timer's unit, so that it does not wake a hair early.
+        const until_due_100ns: i64 = @ceil(pacer.millisecondsUntilDue(now_ms) * 10_000);
+        sleepUntilMessageOrDue(timer, -until_due_100ns);
+        // Whichever woke it - a message, or the beat - the window's messages are handled and its input handed over.
+        const pass: WindowPass = serviceWindow(receive_event);
+        if (pass != .draw) {
+            return pass;
+        }
+    }
 }
 
 /// A script's frames in the window: each pass handles the window's messages - the window stays alive and can be
@@ -1466,12 +1507,15 @@ fn runScriptInWindow(
     return session.outcome;
 }
 
-/// Runs the window's frames until it is closed, each at the time it starts on the system's clock - or, when the
-/// `ZIMR_SCRIPT` setting names a script, runs the script in the window (`runScriptInWindow`) and returns how it went.
+/// Runs the window's frames until it is closed, each at the time it starts on the system's clock - at most
+/// `max_frames_per_second` a second, when the app asks for fewer than the display gives (`waitForBeat`) - or, when
+/// the `ZIMR_SCRIPT` setting names a script, runs the script in the window (`runScriptInWindow`) and returns how it
+/// went: a script draws exactly the frames it asks for.
 pub fn run(
     update: UpdateFunction,
     receive_event: EventFunction,
     capture: script.CaptureFunction,
+    max_frames_per_second: ?f32,
 ) ?script.Outcome {
     if (comptime !has_window_loop) {
         // No window was opened (`openWindow`): no frames to run.
@@ -1482,12 +1526,19 @@ pub fn run(
     if (native_os.environmentVariable("ZIMR_SCRIPT", &setting_buffer)) |script_path| {
         return runScriptInWindow(update, receive_event, capture, script_path);
     }
+    var pacer: FramePacer = .{};
     while (true) {
-        const pass: WindowPass = switch (serviceWindow(receive_event)) {
-            // The frame's wait, here, input handed over as it arrives (`waitForFrame`).
-            .draw => waitForFrame(receive_event),
-            else => |other| other,
-        };
+        var pass: WindowPass = serviceWindow(receive_event);
+        // The frame's beat, for an app that asks for fewer frames than the display gives (`waitForBeat`).
+        if (pass == .draw) {
+            if (max_frames_per_second) |frames_per_second| {
+                pass = waitForBeat(receive_event, &pacer, frames_per_second);
+            }
+        }
+        // The frame's wait, here, input handed over as it arrives (`waitForFrame`).
+        if (pass == .draw) {
+            pass = waitForFrame(receive_event);
+        }
         switch (pass) {
             .draw => update(native_os.monotonicMilliseconds()),
             .hidden => win32.Sleep(16),

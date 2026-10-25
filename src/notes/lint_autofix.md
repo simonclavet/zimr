@@ -43,8 +43,8 @@ re-check clean and `zig ast-check` passes.
 ## P2 — build integration (turn 447, SHIPPED; WITHDRAWN Oct 18)
 
 > **Superseded (Simon, Oct 18): no build applies a fix any more.** `-Dautofix` and `-Dgate` are gone. Builds
-> CHECK - layout included, as the `zig-fmt` rule - and every fixable finding ends `autofix: zig build fix`, the
-> summary printing that command on its own line. `zig build fix` is the one step that rewrites, and it prints the
+> CHECK - layout included, as the `zig-fmt` rule - and every fixable finding ends `autofix: zig build lint-fix`, the
+> summary printing that command on its own line. `zig build lint-fix` is the one step that rewrites, and it prints the
 > diff of every file it writes (`tools/line_diff.zig`), then what is left in it for a person. Why: a build that
 > rewrites files raced the editing - one reformatted a file between reading it and an exact-text edit of it, and
 > one deleted a declaration whose first use had not been written yet. The account below is the history.

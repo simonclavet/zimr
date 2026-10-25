@@ -477,7 +477,7 @@ mid-session, which is how five compile errors accumulated in it unnoticed.
 derivative sweeps that step a whole model per epsilon). It is genuinely doing work; the fix is
 to filter it out while iterating elsewhere, not to weaken it.
 
-★★ **STILL TRUE AND STILL A TRAP: `zig build check` DOES NOT RUN UNIT TESTS.** It runs the
+★★ **STILL TRUE AND STILL A TRAP: `zig build tripwires` DOES NOT RUN UNIT TESTS.** It runs the
 shader corpus, lint and regression gates. A deliberately broken quaternion order passed `check`
 cleanly while `src/tests.zig` had two compile errors and had not built at all.
 
@@ -568,7 +568,7 @@ when Simon names it.
   injected at build time by `tools/docfmt.zig`, Zig's own tokenizer doing all highlighting,
   `<details>` folds, zero runtime JS and zero network. Simon's five decisions are made and
   recorded in §6. Stages 0-4 and 6 are landed; stage 5 (folds in `robots.html`) is what remains.
-  `zig build doc-gate` — also wired into `check` — is what keeps it from drifting back.
+  `zig build doc-gate` — also wired into `tripwires` — is what keeps it from drifting back.
 
 **PAUSED (was the last pair worked before zimrnum)**
 
@@ -619,15 +619,16 @@ compiler's cache moves each result into place the same way. A finding of a rule 
 fails it. No enabled rule is in progress today: in zimr a lint finding is a compile error.
 
 **No build rewrites a source (Simon, Oct 18).** Builds CHECK lint and layout and never apply them: every finding is
-listed, a fixable one ends `autofix: zig build fix`, and the summary prints that command on a line of its own. The
-layout is the `zig-fmt` lint rule (`zig fmt --check` inside the linter, with the same hint). `zig build fix` is the ONE
-step that writes: the linter's autofixes and the layout, then the tutorials' generated code blocks - and it prints
-the DIFF of every file the moment it writes it (`tools/line_diff.zig`), then lists, indented under the file, what is
-left there for a person. zbuild announces each rewritten file, `zbuild: fixed: <file>: <rule> x<count>` (a notice,
-never a finding); only a line that starts with its position, `path:line:col:`, is a finding to it, so the diff's
-source text is never taken for one. So: after writing a file, run `zbuild fix` and READ THE DIFF it prints - it is
-the exact change, and nothing else will touch the file until the next fix - and write in the house style from the
-start: most fixes are style slips. (Until Oct 18 every build ran `--fix` first: one reformatted a file between
+listed, a fixable one ends `autofix: zig build lint-fix`, and the summary prints that command on a line of its own.
+The layout is the `zig-fmt` lint rule (`zig fmt --check` inside the linter, with the same hint). `zig build lint-fix`
+(named `fix` until Oct 25 - renamed because a bare `fix` read as fixing whatever failed) is the ONE step that
+writes: the linter's autofixes and the layout, then the tutorials' generated code blocks - and it prints the DIFF of
+every file the moment it writes it (`tools/line_diff.zig`), then lists, indented under the file, what is left there
+for a person. zbuild announces each rewritten file, `zbuild: fixed: <file>: <rule> x<count>` (a notice, never a
+finding); only a line that starts with its position, `path:line:col:`, is a finding to it, so the diff's source text
+is never taken for one. So: after writing a file, run `zbuild lint-fix` and READ THE DIFF it prints - it is the exact
+change, and nothing else will touch the file until the next fix - and write in the house style from the start: most
+fixes are style slips. (Until Oct 18 every build ran `--fix` first: one reformatted a file between
 reading it and an exact-text edit of it, another deleted a declaration whose first use had not been written yet.)
 
 `zbuild --complete <step> [args]` (first argument only) runs the build to its end instead. Use it for:
@@ -651,8 +652,8 @@ build passes straight through; the build's own failure report, on standard error
 build run as `zig build ... > /dev/null 2> log` keeps the report and throws away the findings - which is how a whole
 session read "failed command: zimrlint" and re-ran the linter by hand to see why.
 
-**Only `zig build fix` rewrites sources** (and `zig build fmt` / `doc-folds`, for the layout or the tutorials alone).
-Read a file again after one of those before editing it by exact text - the diff it printed says what moved.
+**Only `zig build lint-fix` rewrites sources** (and `zig build fmt` / `doc-folds`, for the layout or the tutorials
+alone). Read a file again after one of those before editing it by exact text - the diff it printed says what moved.
 
 ## Disk and the zig cache
 
@@ -1053,11 +1054,11 @@ Ground rules for every call:
 - `-j1` always (1 core, ~3.9GB RAM).
 - **LINT AND FMT (Sep 25, and again Oct 18, Simon): no build rewrites style, and no compile waits on it.**
   Tests and smoke tests neither check nor touch style. Style is required where it matters, always as a
-  non-mutating CHECK that runs BESIDE the compile: every app's step, `all-examples`, `dist`, `check`, and the
+  non-mutating CHECK that runs BESIDE the compile: every app's step, `all-examples`, `dist`, `tripwires`, and the
   `-Dmode=ship` install fail unless `lint-check` passes (every rule, the layout included as `zig-fmt`).
-  `-Dautofix` and `-Dgate` are gone (Oct 18). `zig build fix` is the ONE step that rewrites (lint autofixes,
-  layout, tutorial code blocks), printing each file's diff. **End every turn with `zig build fix` (if
-  anything needs it - read its diff) then `zig build check`.**
+  `-Dautofix` and `-Dgate` are gone (Oct 18). `zig build lint-fix` is the ONE step that rewrites (lint autofixes,
+  layout, tutorial code blocks), printing each file's diff. **End every turn with `zig build lint-fix` (if
+  anything needs it - read its diff) then `zig build tripwires`.**
 - **NEVER the full `zig build test` inside a turn (Sep 25):** it outlasts a turn - one died mid-run, its finished work
   unreported. Run the modules touched (`test-<stem>`), or the main module's tests with `-Dfocus=<example>
   -Dtest-filter=<name>` (113 s for the timer tests), DETACHED if long. The full suite is Simon's, or a detached run.
@@ -1104,7 +1105,7 @@ The steps, **one tool call each**:
 3. **Smoke it**: `timeout 250 $ZIG build smoke-test -Dfocus=<snake_name> -j1`
    (first run may also time out while the smoke wasm builds — same retry rule).
    Green includes the per-frame call profile AND the ClobberScan.
-4. **Gate**: `timeout 250 $ZIG build check -j1` → green =
+4. **Gate**: `timeout 250 $ZIG build tripwires -j1` → green =
    `✓ WGSL corpus: no regressions` + `✓ wgpu_smoke PASSED`.
 5. **If a shader's interface or spv2wgsl's output changed on purpose** (the corpus says
    which, and says so): `timeout 250 $ZIG build corpus-refresh -j1`, then commit
@@ -1166,7 +1167,7 @@ example, which after a zimrmath edit recompiles EVERY shader.
 `src/shaders/zm_gpu_probe.zig` — a real SPIR-V fragment entry point that calls the
 riskiest helpers on `zm.Vec` and folds the results into its output, so
 `-O ReleaseFast` cannot delete them and call it verified. It is wired into
-`zig build check`, so it is no longer something to remember to run.
+`zig build tripwires`, so it is no longer something to remember to run.
 
 ★ This section previously documented `scripts/spv_math_probe.zig` and a hand-run
 command line. **That file did not exist** — the recipe had been carried in this
@@ -2451,13 +2452,13 @@ correct doctype, valid HTML, runs in Chrome — and a viewer still refuses. When
 somewhere and not here", measure its SHAPE (longest line, nesting depth, blob count), not just
 its validity.
 
-## ★★★ THE TURN LOOP: ITERATE ON ANY TARGET, `zig build fix` THEN `zig build check` BEFORE FINISHING
+## ★★★ THE TURN LOOP: ITERATE ON ANY TARGET, `zig build lint-fix` THEN `zig build tripwires` BEFORE FINISHING
 
 No compile waits on the lint (Oct 18), so there is nothing to switch off while iterating:
 
     iterate:   zig build <target>            the compile, with lint-check beside it on an app's step
-    fix:       zig build fix                 the autofixes and the layout, every file's diff printed
-    finish:    zig build check               lint + layout + corpus + smoke
+    fix:       zig build lint-fix            the autofixes and the layout, every file's diff printed
+    finish:    zig build tripwires           lint + layout + corpus + smoke
 
 ★★★ **WHY THE GATE CAME OFF THE COMPILE.** A lint gate in front of every compile made a half-finished edit
 fail on a line-length rule *before the compiler had said whether the change made sense*, and the linter's
@@ -2465,9 +2466,14 @@ message was then the only thing on screen, hiding the type error that mattered -
 port. `-Dgate=false` was the escape (8 s -> 1 s on `zimrnum-field-standalone`); now an app's step runs
 `lint-check` BESIDE its compile, so both kinds of finding come out of one build, and `-Dgate` is gone.
 
-★★ **`check` is still the one command that covers everything**, and it never edits a file. A fixable finding
-ends `autofix: zig build fix`, and the summary prints that command on its own line - run it, read the diff it
-prints, then run `check` again.
+★★ **`tripwires` is still the one command that covers everything**, and it never edits a file. A fixable finding
+ends `autofix: zig build lint-fix`, and the summary prints that command on its own line - run it, read the diff it
+prints, then run `tripwires` again.
+
+★ **It was called `check` until Oct 25, 2026**, and older notes and journals still say `check`. `zig build
+check` is a different step now: compile-only, no binaries - every test, every tool and the `-Dfocus` examples
+(`launcher` without it) through semantic analysis, nothing linted or run. ZLS's build-on-save runs it on every save;
+`addCompileCheck` in build.zig says what it covers.
 
 ## ★★★ BEFORE DELETING A FILE, GREP ITS BASENAME — NOT ITS PATH
 
@@ -2478,7 +2484,7 @@ real references — `@embedFile("./assets/sample.ogg")` in `src/codecs.zig` and
 `@embedFile("../assets/test_sine.wav")` in `src/tests/features_test.zig` — contain neither the
 string `src/assets` nor anything a path grep would match.
 
-★★★ **AND `zig build check` STAYED GREEN THROUGH ALL OF IT.** `check` does not compile the test
+★★★ **AND `zig build check` STAYED GREEN THROUGH ALL OF IT.** `tripwires` does not compile the test
 roots (recorded above, twice). Four snapshots shipped with `zig build test` failing on
 `FileNotFound` before the full suite was run again. The identical copies elsewhere were not
 substitutes: `@embedFile` cannot reach out of its module's tree, which is WHY the duplicate
@@ -2564,25 +2570,27 @@ how it stops being run at all:
 
     every edit        `test-fast -Dtest-filter=<name>`          seconds
     every turn        the ONE tier the edit touched             <150 s
-    before a snapshot `zig build check`                         ~79 s
+    before a snapshot `zig build tripwires`                     ~79 s
     arc close / bump / before device / weekly   the whole thing, DETACHED   ~15 min
 
-★★★ **`check` DOES NOT COMPILE THE TEST ROOTS, AND THIS BIT AGAIN ON 1980.** `check` was green
+★★★ **`tripwires` DOES NOT COMPILE THE TEST ROOTS, AND THIS BIT AGAIN ON 1980.** `check` was green
 for a whole session while `src/robot_mjcf.zig` had **4 compile errors** (`computeTwistOffsets`
 grew a `human_parents_for_rest` parameter and not one of its four call sites was updated) and
 `codecs.gltf`'s `minimal JSON document` test leaked 8 398 bytes. claude.md already recorded this
 exact failure once — "which is how five compile errors accumulated in it unnoticed" — and it
 happened again because nothing in the per-turn loop compiles the fast roots. **The per-turn gate
-must include a tier that actually compiles the code you changed.** `check` measures shaders,
+must include a tier that actually compiles the code you changed.** `tripwires` measures shaders,
 lint and regressions; it says NOTHING about whether the tree compiles.
 
 ★ A leak reported as `(empty stack trace)` is ReleaseSafe doing its one downside. Flip that one
 module to `.Debug` to locate it, then flip it back.
 
 ## Build / test gates
+- Does it compile? `zig build check` — every test root, every tool and the `-Dfocus` examples (`launcher` by
+  default), semantic analysis only: no binaries, nothing run. The step ZLS runs on every save.
 - General cross-cutting work: `zig build tier-a-check` — host tests + a small
   representative example typecheck + the spv2wgsl corpus + fixture WGSL.
-- wgpu / spv2wgsl work: `zig build wgpu-check` — skips example typechecks.
+- wgpu / spv2wgsl work: `zig build tripwires` — skips example typechecks.
 - Arc close, unfocused: `zig build test` — re-typechecks every example (~80s).
 - `-Dfocus=<comma names or prefix glob ending in '*'>` filters build / typecheck /
   smoke. The `smoke-test` filter takes the snake_case directory name
@@ -2612,9 +2620,9 @@ initializers.**
 **Tier 2 — the `zig fmt` gate (loud, but looks unrelated).** `zig fmt` ships
 automatic migrations for renamed BUILTINS: 1676 rewrote `@enumFromInt` →
 `@fromBackingInt(@intCast(x))` and `@intFromEnum` → `@backingInt` across 45 files
-(~700 sites). Since `check` and every app's step hold the tree to the `zig-fmt` rule, this is MANDATORY
+(~700 sites). Since `tripwires` and every app's step hold the tree to the `zig-fmt` rule, this is MANDATORY
 before any of them passes - it shows as a `[zig-fmt]` finding on every file the migration touches (it was a bare
-"process exited with code 1" naming no file, until Oct 18). **Run `zig build fix` early and read its diffs as a
+"process exited with code 1" naming no file, until Oct 18). **Run `zig build lint-fix` early and read its diffs as a
 migration, not as formatting.** Expect fallout: the expanded
 forms are longer, so a handful of lines blow the 120-col lint cap (7 last time) —
 fix them the way rule 10 says (lift to a named local), don't reflow blindly.
@@ -2842,7 +2850,7 @@ shader by its source path** (`tools/wgsl_corpus.zig`) and pins its INTERFACE - e
 outputs, bindings, structs spelled out - which does not depend on the compiler, so it is compared
 right after a bump, exactly when 2307 moved bindings. Only the byte-exact WGSL is per-SPIR-V (up to
 three per shader, so two machines both keep theirs), and new SPIR-V is a `note:`, never a pass that
-compared nothing: `check` fails if not one shader was compared.
+compared nothing: `tripwires` fails if not one shader was compared.
 
 ★ `fluid_gpu` smoke: **init 4372 calls, ~151.0/frame — identical to 1980 to the call**, and
 `wgpu_bringup` 202 init / ~28.0 per frame. A matching call profile across a compiler change is
@@ -3440,12 +3448,12 @@ column holds the translation, which was the assumption that produced the wrong a
 - **`zig build test` runs at the default stack** (no more `ulimit -s unlimited`):
   the host corpus tests that drove the spv2wgsl recursive emitter past the 8MB
   thread stack were removed (zimr1233). Transpiler regression coverage now lives
-  only in the standalone `wgpu-corpus` / `wgpu-check` gate (own process), so run
+  only in the standalone `corpus` / `tripwires` gate (own process), so run
   that when touching `spv2wgsl.zig`. If a NEW host test ever recurses that deep,
   prefer a `std.Thread.spawn(.{ .stack_size = ... })` wrapper over reinstating the
   global ulimit footgun.
 - **The corpus is every graphics shader the build compiles, not the cache** (Oct 18).
-  `zig build corpus` (and `check`) builds them all first - about 85, so a cold sandbox
+  `zig build corpus` (and `tripwires`) builds them all first - about 85, so a cold sandbox
   pays for the example shaders too - and holds each to `tests/fixtures/wgsl_corpus.txt`
   by source path. On a sandbox whose Zig differs from the last refresh's, every shader
   prints as `compiled to SPIR-V the fixture has no WGSL for`: that is a note, the
@@ -3542,7 +3550,7 @@ Iterate with focus; **land nothing on it**. The gate is the full `zig build test
 disagree precisely where it matters most.
 
 ## Lint — hard gate at 0
-Any new lint issue fails `check`, `dist`, every app's step and a `-Dmode=ship` build - beside their compile,
+Any new lint issue fails `tripwires`, `dist`, every app's step and a `-Dmode=ship` build - beside their compile,
 never in front of it. Scope is `src/` + `examples/` + `tools/`
 recursive, minus path-prefix carve-outs and a `deletion_skip` full-path list
 (condemned files only — never add live code to dodge a fix).
@@ -3699,7 +3707,7 @@ update the `//!` doc in the same turn, like a test.
   `std.log.warn` doesn't. A guard expected to fire in a test must return its error
   without logging, or log at warn.
 - **The build checks `zig fmt`'s layout** as the `zig-fmt` lint rule - a finding at the first line that differs,
-  with `autofix: zig build fix`. Run `zig build fix` after any `.zig` edit (python-regex edits especially) and
+  with `autofix: zig build lint-fix`. Run `zig build lint-fix` after any `.zig` edit (python-regex edits especially) and
   read the diff it prints.
 - **Test aggregators must compile or they don't run** — a green `zig build` of demos
   does NOT prove `src/tests.zig` compiles (demos don't instantiate every path). Run

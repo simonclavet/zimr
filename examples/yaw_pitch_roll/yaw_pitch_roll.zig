@@ -208,6 +208,8 @@ pub const app: z.AppSpec(State) = .{
             .scale_mode = .responsive,
             .depth_format = .depth24_plus,
         },
+        // Its keys turn the plane a fixed angle a frame (raylib's SetTargetFPS(60)): held to 60 natively too.
+        .max_frames_per_second = 60,
     },
     .init = initState,
     .deinit = deinit,

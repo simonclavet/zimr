@@ -257,7 +257,7 @@ idiom, the `.src-fold` rule and the generator's emit are all in place; what rema
 the long blocks and writing a summary line for each, which is editorial work rather than
 mechanical.
 
-**Stage 6 — done.** `tools/doc_gate.zig`, wired into `zig build check` and standalone as
+**Stage 6 — done.** `tools/doc_gate.zig`, wired into `zig build tripwires` and standalone as
 `zig build doc-gate`. Four properties: exactly one marker, no `<style>`, no `<script>` (except
 the named gallery), no webfont fetch. Each was planted one at a time and confirmed to turn the
 build red.

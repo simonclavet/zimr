@@ -9,7 +9,7 @@ REM One Chrome debug config + a build task + a release task per app
 REM (.vscode\extensions.json stays hand-maintained).
 REM
 REM Run after adding/removing a row in `wgpu_apps`, then commit the
-REM regenerated files. `zig build check` fails until you do.
+REM regenerated files. `zig build tripwires` fails until you do.
 
 zig build editor-configs
 if errorlevel 1 exit /b 1

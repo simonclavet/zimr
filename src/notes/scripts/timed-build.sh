@@ -7,7 +7,7 @@
 # when you want the run captured:
 #
 #   ./scripts/timed-build.sh test -Dfocus=tier-a
-#   ./scripts/timed-build.sh wgpu-check
+#   ./scripts/timed-build.sh tripwires
 #   ./scripts/timed-build.sh tier-a-check
 #
 # The TSV columns: timestamp_iso, command, wall_seconds, exit_status,

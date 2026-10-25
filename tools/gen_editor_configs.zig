@@ -11,7 +11,7 @@
 //! `zig build <step> -Dplatform=windows` task has built it (`emitVscodeNative`, `emitZedNative`).
 //!
 //! `--check` renders the same four files and compares them with the ones on disk instead of writing
-//! them. `zig build check` runs it, so an app added without regenerating the configs fails there,
+//! them. `zig build tripwires` runs it, so an app added without regenerating the configs fails there,
 //! naming the stale files. Carriage returns on disk are ignored: a Windows checkout's line endings
 //! are not drift.
 //!
@@ -28,7 +28,7 @@
 //!
 //! Output is byte-identical to the python's json.dumps(indent=4).
 //!
-//! Usage: `zig build editor-configs` writes, `zig build check` compares (`--help` for more).
+//! Usage: `zig build editor-configs` writes, `zig build tripwires` compares (`--help` for more).
 
 const std = @import("std");
 const Io = std.Io;

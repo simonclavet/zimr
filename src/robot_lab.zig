@@ -271,8 +271,8 @@ pub const PpoRecipe = struct {
     /// it lives long enough to learn what tracking is, and the hand fades before it can learn to lean on it.
     assist_start: f32 = 1.0,
     assist_batches: u32 = 300,
-    /// Episodes end here even while tracking is fine, in physics steps: longer than the dance's ten seconds.
-    max_episode_steps: u32 = 700,
+    /// Episodes end here even while tracking is fine, in physics steps: longer than the dance's twenty seconds.
+    max_episode_steps: u32 = 1300,
     /// Radians of raw pose offset per unit of action (`student_scale`, where the reasoning lives).
     action_scale: f32 = student_scale,
     /// Physics steps a decision is held (30 Hz decisions over 60 Hz physics), and DReCon's filter: the share of
@@ -2277,8 +2277,9 @@ pub const PolicyShowSettings = struct {
     seed: u64 = ppo_track.evaluation_seed,
     /// Physics steps a decision is held for.
     decimation: u32 = 2,
-    /// Physics steps after which an episode ends even while the character tracks well: a cut, not a failure.
-    max_episode_steps: u32 = 600,
+    /// Physics steps after which an episode ends even while the character tracks well: a cut, not a failure. The
+    /// dance's twenty seconds.
+    max_episode_steps: u32 = 1200,
     /// The task the fleet runs (`robot_track.Task`: the servo, the floor, the reward, the failure rule - Geno's is
     /// `robot_geno.tracking_task`), and DReCon's bodies: the ones the policy watches and the joints it nudges.
     task: robot_track.Task = .{},

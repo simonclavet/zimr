@@ -2,7 +2,7 @@
 //!
 //! `getup_train` on the robot built from Geno's skeleton and mesh: standing armature on every joint,
 //! self-collision off, every reset rested on the floor, DReCon's watched and actuated bodies in Geno's
-//! names, and the dance from 5 s to 15 s (baked for `geno_train`). The action scale is stated, not
+//! names, and the dance from 5 s to 25 s (baked beside `geno_train`'s 5 s to 15 s). The action scale is stated, not
 //! inherited: 1.2 rad per unit, filtered (a fifth new, four fifths held) - see `robot_geno.student_scale`.
 //!
 //! What follows is `getup_train`'s own description.

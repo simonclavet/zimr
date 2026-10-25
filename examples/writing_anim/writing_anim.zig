@@ -65,6 +65,8 @@ pub const app: z.AppSpec(State) = .{
             .height = 450,
             .scale_mode = .responsive,
         },
+        // It types a letter every few frames, as raylib's SetTargetFPS(60) lets it: held to 60 natively too.
+        .max_frames_per_second = 60,
     },
     .init = initState,
     .deinit = deinit,
