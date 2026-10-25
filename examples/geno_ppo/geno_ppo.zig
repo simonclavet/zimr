@@ -69,6 +69,7 @@ const ArrayList = std.ArrayList;
 const Trainer = ppo_track.Trainer(zn_mlp);
 
 const geno = z.robot_geno;
+const lab = z.robot_lab;
 const dance_zclip = @embedFile("dance.zclip");
 const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
 
@@ -114,7 +115,7 @@ const Task = enum {
     }
 
     /// The motion's name in `robot_geno`, whose PPO recipe the page trains with.
-    fn motion(task: Task) geno.PpoMotion {
+    fn motion(task: Task) lab.PpoMotion {
         return switch (task) {
             .getup => .getup,
             .dance => .dance,
@@ -123,7 +124,7 @@ const Task = enum {
 
     /// The trainer's options: PPO's recipe on Geno, its defaults - the same settings a training run's `run.zon`
     /// starts from - with Geno's task, DReCon bodies and the motion's tag.
-    fn options(task: Task, recipe: geno.PpoRecipe) ppo_track.Options {
+    fn options(task: Task, recipe: lab.PpoRecipe) ppo_track.Options {
         return recipe.options(task.motion());
     }
     /// Geno has one motion baked so far: "switching" restarts the dance.
@@ -150,8 +151,8 @@ const Progress = struct {
     /// Batches of history kept for the curve and the failure-rate window.
     const history_len: usize = 120;
     /// How many recent batches the mean time to failure is estimated over: a run log's window
-    /// (`robot_geno.RunLog.window_batches`), the same for the trainer and the lab's curves.
-    const window_batches: usize = geno.RunLog.window_batches;
+    /// (`robot_lab.RunLog.window_batches`), the same for the trainer and the lab's curves.
+    const window_batches: usize = lab.RunLog.window_batches;
     /// The mean times to failure the page times itself to, in seconds. The same marks for both motions: the measure
     /// does not depend on the clip's length, which is the point of it.
     const milestones = [_]f32{ 2.0, 5.0, 10.0, 20.0 };
@@ -205,10 +206,10 @@ const State = struct {
     /// Exactly-zero actions for the whole fleet: the servo alone.
     zero_actions: []f32,
     progress: Progress,
-    /// The training log, one CSV line a batch (`geno.RunLog`), saved with each autosave.
+    /// The training log, one CSV line a batch (`lab.RunLog`), saved with each autosave.
     training_log: ArrayList(u8),
     /// PPO's recipe on Geno as the page trains it: its defaults, the settings a training run's `run.zon` starts from.
-    recipe: geno.PpoRecipe,
+    recipe: lab.PpoRecipe,
     look: Look,
     floor: Floor,
     autosave: Autosave,
@@ -355,7 +356,7 @@ fn startTask(s: *State, task: Task, replace: bool) !void {
     s.trainer = try Trainer.init(s.gpa, &s.pipe, m, s.imported.names, &clips, trainer_options);
     s.progress = .{};
     s.training_log.clearRetainingCapacity();
-    try s.training_log.appendSlice(s.gpa, geno.RunLog.header);
+    try s.training_log.appendSlice(s.gpa, lab.RunLog.header);
 }
 
 /// Discards this motion's autosave and log, and trains from scratch.
@@ -724,7 +725,7 @@ fn update(f: *z.Frame, s: *State) void {
             const stats: ppo_track.Stats = s.trainer.learn();
             recordBatch(s, stats);
             const training_minutes: f32 = p.training_seconds / 60.0;
-            geno.RunLog.appendLine(s.gpa, &s.training_log, s.trainer.iterations, training_minutes, stats) catch |err| {
+            lab.RunLog.appendLine(s.gpa, &s.training_log, s.trainer.iterations, training_minutes, stats) catch |err| {
                 p.failed = @errorName(err);
             };
             offerWeights(s);

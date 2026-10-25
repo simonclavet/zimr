@@ -1,0 +1,46 @@
+// goban with a finger: every move is a touch's (`.kind = .touch`), as a phone reports it, so the presses and releases
+// after them are a finger's too. `zig build goban-headless -Dscript=examples/goban/check_finger.script`.
+// The board is 13 x 13 in 900 x 900: point (row, col) at (114 + 56 col, 114 + 56 row). The lift is 64 px, so a
+// finger at y aims at y - 64: a finger on (7, 6), at y 506, aims at y 442 - point (6, 6), whose snapping square is
+// y 422 .. 478.
+.{ .advance = 3 }
+// a finger taps Start Game on the main menu (443, 586), as on a phone: the game starts
+.{ .move = .{ .x = 443, .y = 586, .kind = .touch } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 2 }
+// touch at (450, 506) and hold: the ghost shows above the finger, on (6, 6)
+.{ .move = .{ .x = 450, .y = 506, .kind = .touch } }
+.{ .press = .left }
+.{ .advance = 3 }
+.{ .capture_to = "goban_finger_1_held.png" }
+// slide right one point while touching, rest there a moment (a finger's stone goes where the ghost was 0.1 s before
+// the lift), and lift: black is played on (6, 7), above where the finger lifted
+.{ .move = .{ .x = 506, .y = 506, .kind = .touch } }
+.{ .advance = 10 }
+.{ .release = .left }
+.{ .advance = 2 }
+.{ .capture_to = "goban_finger_2_played.png" }
+// white's turn. Touch aiming just right of black's (6, 7): finger at (516, 514) aims at (516, 450). The point under
+// the aim is taken, and of the playable points within one spacing (56 px) of the aim, (6, 8) is the nearest (46 px):
+// the ghost goes there, and the release plays there.
+.{ .move = .{ .x = 516, .y = 514, .kind = .touch } }
+.{ .press = .left }
+.{ .advance = 3 }
+.{ .capture_to = "goban_finger_3_beside.png" }
+.{ .release = .left }
+.{ .advance = 2 }
+// Menu (top right, under the finger itself - the interface reads the pointer where it is), then Return to Game, in
+// the pause window's first button at about (450, 215). Afterwards no finger touches the board: no ghost.
+.{ .move = .{ .x = 837, .y = 36, .kind = .touch } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 2 }
+.{ .move = .{ .x = 450, .y = 215, .kind = .touch } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 4 }
+.{ .capture_to = "goban_finger_4_after_menu.png" }

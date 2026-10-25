@@ -1,0 +1,19 @@
+// goban outposts: the game as it opens - no menu, no interface - a move by the person, the computer's reply, and a
+// game played on to its capture and its restart. A mouse; 900 x 900.
+.{ .advance = 3 }
+.{ .move = .{ .x = 20, .y = 450 } }
+.{ .advance = 2 }
+.{ .capture_to = "goban_outposts_1_start.png" }
+// Black self-ataris at (7, 0), beside white's (6, 0): its one liberty is (7, 1), and the computer takes it - a win
+.{ .move = .{ .x = 164, .y = 731 } }
+.{ .advance = 1 }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 1 }
+.{ .move = .{ .x = 20, .y = 450 } }
+.{ .advance = 75 }
+.{ .capture_to = "goban_outposts_2_captured.png" }
+// 1.5 s after the win - 90 frames - the game starts again by itself
+.{ .advance = 100 }
+.{ .capture_to = "goban_outposts_3_restarted.png" }

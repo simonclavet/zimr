@@ -1,0 +1,40 @@
+// The main menu with its three kinds of game, then a game against the computer: the menu as it opens, chosen
+// "Against the computer" (the person black), a 9 x 9 board, and the game after the person's first move and the
+// computer's reply. A mouse; 900 x 900.
+.{ .advance = 3 }
+.{ .move = .{ .x = 20, .y = 20 } }
+.{ .advance = 2 }
+.{ .capture_to = "goban_computer_1_menu.png" }
+// "Against the computer": the colour's line appears, Atari Go is locked on, its goal is offered
+.{ .move = .{ .x = 283, .y = 410 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 3 }
+.{ .capture_to = "goban_computer_2_against.png" }
+// 9 x 9, and Start Game: the person is black, to play first
+.{ .move = .{ .x = 325, .y = 510 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 2 }
+.{ .move = .{ .x = 450, .y = 795 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 3 }
+.{ .move = .{ .x = 20, .y = 450 } }
+.{ .advance = 2 }
+.{ .capture_to = "goban_computer_3_start.png" }
+// Black plays (2, 4): the white stone at (3, 4) is left one liberty, at (3, 5). The computer thinks, then replies
+.{ .move = .{ .x = 450, .y = 300 } }
+.{ .advance = 1 }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 1 }
+.{ .move = .{ .x = 20, .y = 450 } }
+.{ .advance = 1 }
+.{ .capture_to = "goban_computer_4_thinking.png" }
+.{ .advance = 90 }
+.{ .capture_to = "goban_computer_5_replied.png" }

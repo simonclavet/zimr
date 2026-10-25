@@ -431,6 +431,9 @@ pub extern "user32" fn MapVirtualKeyW(uCode: UINT, uMapType: UINT) callconv(.win
 /// Asks Windows for a WM_MOUSELEAVE the next time the pointer leaves `hwndTrack`'s client area - once: each entry asks
 /// again.
 pub extern "user32" fn TrackMouseEvent(event: *TRACKMOUSEEVENT) callconv(.winapi) BOOL;
+/// The extra information of the message being handled: for a mouse message Windows made from a pen or a touch, a
+/// signature saying which (`native_input.pointerKindOfExtraInfo`). Valid only while that message is handled.
+pub extern "user32" fn GetMessageExtraInfo() callconv(.winapi) LPARAM;
 pub extern "user32" fn ClientToScreen(hWnd: HWND, lpPoint: *POINT) callconv(.winapi) BOOL;
 /// Confines the cursor to a rectangle of the screen; null frees it.
 pub extern "user32" fn ClipCursor(lpRect: ?*const RECT) callconv(.winapi) BOOL;
@@ -1381,6 +1384,9 @@ pub const InputMessage = struct {
     label: u21 = 0,
     /// For a paste (`message_paste`), the pasted text as UTF-8, in the window's paste buffer until the next paste.
     text: []const u8 = &.{},
+    /// For a mouse message, its extra information (`GetMessageExtraInfo`), read while the message was handled: it says
+    /// whether a pen or a touch made it. 0 for every other message.
+    extra_info: usize = 0,
 };
 
 /// Whether a key going down is Windows' paste command: V with Ctrl held and Alt not (AltGr is Ctrl and Alt together,
@@ -1871,12 +1877,18 @@ pub const Window = struct {
             parameter_bits |= (mapped_scancode & 0xff) << 16;
         }
         const is_key_down: bool = message == WM_KEYDOWN or message == WM_SYSKEYDOWN;
+        const is_mouse_message: bool = message >= WM_MOUSEMOVE and message <= WM_XBUTTONUP;
+        var extra_info: usize = 0;
+        if (is_mouse_message) {
+            extra_info = @bitCast(GetMessageExtraInfo());
+        }
         handler(.{
             .message = message,
             .w_param = w_param,
             .l_param = @bitCast(parameter_bits),
             .scale = window.scale(),
             .label = if (is_key_down) keyLabel(@truncate(w_param)) else 0,
+            .extra_info = extra_info,
         });
     }
 

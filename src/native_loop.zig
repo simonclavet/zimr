@@ -1196,6 +1196,13 @@ pub fn currentMonitor() u32 {
 
 // ---- How the window is shown, and where ----
 
+/// The app asks to end: the flag the close button's message sets (`WM_CLOSE`) is set, so the next pass of the window's
+/// loop (`serviceWindow`) answers `.closed` and the run's own teardown follows - the GPU released, the allocator's
+/// leaks counted - exactly as when the person closes the window.
+pub fn requestQuit() void {
+    window.close_requested = true;
+}
+
 /// Minimizes, maximizes or restores the window. A fullscreen window already covers its monitor: maximizing it does
 /// nothing, as with GLFW.
 pub fn showWindow(show: contract.WindowShow) void {
@@ -1510,7 +1517,9 @@ pub const headless = struct {
         headless_platform.playAudioUntil(frame_ms);
         deliverPlatformEvents(receive_event);
         update(frame_ms);
-        return true;
+        // An app that asked to end in this frame ends the run after it, as the script's `.quit` would.
+        const run_goes_on: bool = !headless_platform.isQuitRequested();
+        return run_goes_on;
     }
 
     /// The run's own sound, written as a WAV file (`headless_platform.writeAudioCapture`).

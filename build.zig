@@ -1360,17 +1360,23 @@ fn projectHas(b: *std.Build, sub_path: []const u8) bool {
 ///   1. examples/<name>/<name>.zig, the example itself;
 ///   2. every other .zig in examples/<name>/, by name, minus `example_source_hidden`;
 ///   3. for each of `shaders` (the `App.shaders` basenames), examples/<s>.zig and,
-///      when it exists, examples/<s>_io.zig - where `addShaderDepFrom` finds them.
+///      when it exists, examples/<s>_io.zig - where `addShaderDepFrom` finds them;
+///   4. for each of `app_deps` (`App.app_deps`), examples/<d>/<d>.zig, the other
+///      example's file this one imports as the module `<d>`;
+///   5. for each of `kernel_deps` (`App.kernel_deps`), examples/<d>/kernels.zig,
+///      which this one's kernels.zig imports as `k_<d>`.
 ///
 /// Measured over all 304 gallery examples, that is exactly what each one imports
 /// from examples/, except gltf_textured's quad_glb_data.zig, a generated 1 KB byte
-/// array better left out. Every file is an `addFileArg`, so an edit reruns only
-/// the examples that show that file.
+/// array better left out, and goban's problems/index.zig, generated too. Every
+/// file is an `addFileArg`, so an edit reruns only the examples that show that file.
 fn installExampleSource(
     b: *std.Build,
     example_source_exe: *Compile,
     name: []const u8,
     shaders: []const []const u8,
+    app_deps: []const []const u8,
+    kernel_deps: []const []const u8,
 ) *InstallFile {
     const run: *Run = b.addRunArtifact(example_source_exe);
     run.addArg(name);
@@ -1396,6 +1402,12 @@ fn installExampleSource(
         if (projectHas(b, io_path)) {
             addExampleSourceFile(b, run, io_path);
         }
+    }
+    for (app_deps) |dep| {
+        addExampleSourceFile(b, run, b.fmt("examples/{s}/{s}.zig", .{ dep, dep }));
+    }
+    for (kernel_deps) |dep| {
+        addExampleSourceFile(b, run, b.fmt("examples/{s}/kernels.zig", .{dep}));
     }
     const web_dir: std.Build.InstallDir = .{ .custom = b.fmt("web/{s}", .{name}) };
     return b.addInstallFileWithDir(source_json, web_dir, "source.json");
@@ -1833,11 +1845,17 @@ fn buildJobKernels(
         \\//!
         \\//! It lives here, and not in the example, so that the APP - which imports
         \\//! kernels.zig for `registry.submit` - never links the worker's buffers.
+        \\const std = @import("std");
         \\const kernels = @import("kernels");
         \\
         \\comptime {
         \\    kernels.registry.exportWorkerEntry();
         \\}
+        \\
+        \\/// A kernel wasm imports nothing, so it has no console of its own: its log lines - among them the
+        \\/// message of a zimr assert that fails - are kept in its memory, and the worker sends them home with
+        \\/// the job's reply, for the page to print (`Registry.workerLogFn`).
+        \\pub const std_options: std.Options = .{ .logFn = kernels.registry.workerLogFn };
         \\
     );
 
@@ -1943,6 +1961,12 @@ pub const App = struct {
     ///
     /// Set this field to add jobs to an example; nothing else moves.
     job_kernels: bool = false,
+    /// Other examples whose kernels.zig this one's imports, each as `k_<name>` - for an example whose jobs are another
+    /// example's, as goban_outposts' are goban's.
+    kernel_deps: []const []const u8 = &.{},
+    /// Other examples this one imports, each as the module of its name rooted at `examples/<name>/<name>.zig` - as
+    /// go_puzzles_hero imports goban. The gallery's code pane shows each one's file beside the example's own.
+    app_deps: []const []const u8 = &.{},
     // lint:off decl-order: AppContext.buildAppModule takes the App this hook belongs to - a cycle
     configure: ?*const fn (AppContext, *Module) void = null,
 };
@@ -2482,9 +2506,67 @@ fn addHeadlessRun(
 /// gallery shows beside the example's description.
 const gallery_shot_width: u32 = 320;
 
+/// How wide the web gallery's copy of a screenshot is saved (`gallery-shots`), its height in proportion: the list
+/// beside the running example shows it in an 80 by 60 box, cropped to fill it, so a 16 by 9 frame is drawn about 107
+/// pixels wide - 224 is sharp on a screen of two device pixels to the pixel, at a third of the 320's bytes.
+const web_gallery_shot_width: u32 = 224;
+
+/// The frames a gallery screenshot is taken after: two seconds, as the script's clock counts them.
+const gallery_shot_frames: u32 = 120;
+
+/// How an example's gallery screenshot is taken: the script lines run first - a person's input taking the example
+/// past a first screen that is not what it is about, each line ending in a newline - then the frames drawn before
+/// the picture. An example with no row in `gallery_shot_recipes` takes the defaults.
+const GalleryShotRecipe = struct {
+    name: []const u8,
+    lead_in: []const u8 = "",
+    frames: u32 = gallery_shot_frames,
+};
+
+/// The examples whose gallery screenshot is not `gallery_shot_frames` frames of their first screen.
+const gallery_shot_recipes = [_]GalleryShotRecipe{
+    // The training examples size their work by the frame time: another round a frame while frames come in under
+    // budget, up to a cap. The script's clock gives every frame a sixtieth of a second however long it took, so the
+    // rounds a frame climb to the cap and stay there: two seconds of track_train are about 5,700 rounds of humanoid
+    // physics, a quarter of an hour in a Debug build. Twelve frames are 78 rounds.
+    .{ .name = "track_train", .frames = 12 },
+    .{ .name = "geno_train", .frames = 12 },
+    .{ .name = "getup_train", .frames = 12 },
+    .{ .name = "geno_ppo", .frames = 12 },
+    // goban opens on its main menu: a click on Start Game - x 270 .. 633, y 695 .. 740 of the 900 x 900 window,
+    // measured on the menu's own gallery thumbnail - starts a 13 x 13 game of plain Go, and the pointer then leaves
+    // the board, so that no ghost stone follows it. The release gets a frame of its own: the button counts a release
+    // only with the pointer still over it.
+    .{
+        .name = "goban",
+        .lead_in =
+        \\.{ .advance = 3 }
+        \\.{ .move = .{ .x = 450, .y = 718 } }
+        \\.{ .press = .left }
+        \\.{ .advance = 1 }
+        \\.{ .release = .left }
+        \\.{ .advance = 1 }
+        \\.{ .move = .{ .x = 20, .y = 20 } }
+        \\
+        ,
+    },
+};
+
+/// How `name`'s gallery screenshot is taken: its row of `gallery_shot_recipes`, or the defaults.
+fn galleryShotRecipe(name: []const u8) GalleryShotRecipe {
+    for (gallery_shot_recipes) |recipe| {
+        if (eql(u8, recipe.name, name)) {
+            return recipe;
+        }
+    }
+    return .{ .name = name };
+}
+
 /// The `gallery-shots` run of one example: its headless program run from the build root with a script on its
-/// standard input - two seconds of frames, a thumbnail saved as zig-out/gallery_shots/<name>.png, the end - and the
-/// audio start screen skipped (`ZIMR_SKIP_START_SCREEN`), so that the picture is the example's own.
+/// standard input - its recipe's lead-in and frames (`galleryShotRecipe`), a thumbnail saved as
+/// zig-out/gallery_shots/<name>.png for the native gallery and a smaller one as zig-out/web/shots/<name>.png for the
+/// web gallery's list (where `dist` finds it), the end - and the audio start screen skipped
+/// (`ZIMR_SKIP_START_SCREEN`), so that the picture is the example's own.
 fn addGalleryShot(b: *std.Build, exe: *Compile, name: []const u8) *Run {
     const run: *Run = b.addRunArtifact(exe);
     run.has_side_effects = true;
@@ -2497,7 +2579,15 @@ fn addGalleryShot(b: *std.Build, exe: *Compile, name: []const u8) *Run {
         ".{{ .capture_thumbnail = .{{ .path = \"zig-out/gallery_shots/{s}.png\", .width = {d} }} }}\n",
         .{ name, gallery_shot_width },
     );
-    const script: []const u8 = b.fmt(".{{ .advance = 120 }}\n{s}.quit\n", .{thumbnail_line});
+    const web_thumbnail_line: []const u8 = b.fmt(
+        ".{{ .capture_thumbnail = .{{ .path = \"zig-out/web/shots/{s}.png\", .width = {d} }} }}\n",
+        .{ name, web_gallery_shot_width },
+    );
+    const recipe: GalleryShotRecipe = galleryShotRecipe(name);
+    const script: []const u8 = b.fmt(
+        "{s}.{{ .advance = {d} }}\n{s}{s}.quit\n",
+        .{ recipe.lead_in, recipe.frames, thumbnail_line, web_thumbnail_line },
+    );
     run.setStdIn(.{ .bytes = script });
     return run;
 }
@@ -2715,6 +2805,9 @@ pub const AppContext = struct {
         if (app.compute_kernels.len > 0) {
             const app_dir: LazyPath = b.path(b.fmt("examples/{s}", .{app.name}));
             ctx.wireComputeKernels(user_mod, b, app_dir, app.compute_kernels);
+        }
+        for (app.app_deps) |dep| {
+            user_mod.addImport(dep, ctx.buildUserModShared(dep));
         }
         if (app.configure) |configure| {
             configure(ctx, user_mod);
@@ -5311,6 +5404,8 @@ pub fn build(b: *std.Build) void {
         .{ .source = b.path("src/notes/tutorials/backends-tutorial.html"), .name = "backends-tutorial.html" },
         // Sound: samples, the mixer, its two sides, each platform's output, latency, instruments.
         .{ .source = b.path("src/notes/tutorials/sound_tutorial.html"), .name = "sound_tutorial.html" },
+        // goban: a Go board's points, the disjoint-set forest that keeps its groups, and the rules on top of it.
+        .{ .source = b.path("src/notes/tutorials/goban_tutorial.html"), .name = "goban_tutorial.html" },
         // The per-file atlas, generated as HTML by `zig build files-html`.
         .{ .source = b.path("src/notes/files.html"), .name = "files.html" },
     };
@@ -5971,6 +6066,33 @@ pub fn build(b: *std.Build) void {
         .{ .name = "digital_clock", .title = "zimr - WebGPU - digital clock" },
         .{ .name = "tic_tac_toe", .title = "zimr - WebGPU - tic tac toe" },
         .{ .name = "langton_ant", .title = "zimr - WebGPU - langton ant" },
+        // The computer opponent's search runs as a job (examples/goban/kernels.zig): on a worker in a page, a thread
+        // natively, inline where neither can be had.
+        .{ .name = "goban", .title = "zimr - goban", .job_kernels = true },
+        // goban on 8 x 8 against the computer, from a scattered start, with no interface: goban's code, another app.
+        .{
+            .name = "goban_outposts",
+            .title = "zimr - goban outposts",
+            .job_kernels = true,
+            .kernel_deps = &.{"goban"},
+            .app_deps = &.{"goban"},
+        },
+        // goban's kill problems against the computer, with Undo and Next: goban's code, another app.
+        .{
+            .name = "goban_problems",
+            .title = "zimr - goban problems",
+            .job_kernels = true,
+            .kernel_deps = &.{"goban"},
+            .app_deps = &.{"goban"},
+        },
+        // Fights, life puzzles and kill puzzles in turn, abandoned down and solved up: goban's code, another app.
+        .{
+            .name = "go_puzzles_hero",
+            .title = "zimr - go puzzles hero",
+            .job_kernels = true,
+            .kernel_deps = &.{"goban"},
+            .app_deps = &.{"goban"},
+        },
         .{ .name = "snake", .title = "zimr - WebGPU - snake" },
         .{ .name = "fps_playground", .title = "zimr - WebGPU - fps playground" },
         .{ .name = "clock_of_clocks", .title = "zimr - WebGPU - clock of clocks" },
@@ -6670,6 +6792,8 @@ pub fn build(b: *std.Build) void {
             tools.example_source,
             wgpu_app.name,
             wgpu_app.shaders,
+            wgpu_app.app_deps,
+            wgpu_app.kernel_deps,
         );
         example_sources_step.dependOn(&source_install.step);
         // `job_kernels` is the whole opt-in: the example's kernels.zig ALSO becomes a
@@ -6680,7 +6804,7 @@ pub fn build(b: *std.Build) void {
                 b,
                 wgpu_app.name,
                 b.path(b.fmt("examples/{s}/kernels.zig", .{wgpu_app.name})),
-                &.{},
+                wgpu_app.kernel_deps,
                 wasm_optimize,
                 build_opts_wgpu,
                 build_opts_zm,
@@ -6715,13 +6839,14 @@ pub fn build(b: *std.Build) void {
     // zig-out/headless/bin/<name>, to run again directly. `-Dscript` names the script it runs (`native_input.Command`);
     // frames it captures without a path go to zig-out/headless/<name>/. Every example the native host runs.
     const script_path: ?[]const u8 = b.option([]const u8, "script", "Headless runs: the script to run");
-    // ---- `gallery-shots`: a thumbnail of every example, for the native gallery to show beside its description -
-    // each example's headless program run for two seconds and its frame saved shrunk (`addGalleryShot`), into
-    // zig-out/gallery_shots/, where the gallery looks, from beside its own executable, at ../gallery_shots/.
+    // ---- `gallery-shots`: a thumbnail of every example, for the native gallery to show beside its description and
+    // the web gallery beside its name - each example's headless program run for two seconds and its frame saved
+    // shrunk twice (`addGalleryShot`): into zig-out/gallery_shots/, where the native gallery looks, from beside its own
+    // executable, at ../gallery_shots/, and smaller into zig-out/web/shots/, which the web gallery's list loads.
     // `-Dshots=a,b,c` takes only those examples; the step builds every example's headless program otherwise.
     const gallery_shots_step: *Step = b.step(
         "gallery-shots",
-        "Save a thumbnail of every example for the native gallery (-Dshots=a,b,c for only those)",
+        "Save a thumbnail of every example for the native and web galleries (-Dshots=a,b,c for only those)",
     );
     const shot_names_option: ?[]const u8 = b.option([]const u8, "shots", "gallery-shots: only these examples");
     for (wgpu_apps) |wgpu_app| {
@@ -6865,10 +6990,11 @@ pub fn build(b: *std.Build) void {
         "tic_tac_toe",
         "langton_ant",
         "snake",
+        "goban",
         "fps_playground",
         "starfield",
         "shader_effects",
-        "audio_scale_star",
+        "audio_scale_star_hands",
         "quadruped",
         "gallery_all",
     };
@@ -7026,7 +7152,7 @@ pub fn build(b: *std.Build) void {
             b,
             "launcher",
             b.path("examples/launcher/kernels.zig"),
-            &.{ "worker_png", "four_ways" },
+            &.{ "worker_png", "four_ways", "goban" },
             wasm_optimize,
             build_opts_wgpu,
             build_opts_zm,
@@ -7035,7 +7161,14 @@ pub fn build(b: *std.Build) void {
         inline for (flagships) |fname| {
             launcher_mod.addImport("ex_" ++ fname, app_mods.get(fname).?);
         }
-        const launcher_source: *InstallFile = installExampleSource(b, tools.example_source, "launcher", &.{});
+        const launcher_source: *InstallFile = installExampleSource(
+            b,
+            tools.example_source,
+            "launcher",
+            &.{},
+            &.{},
+            &.{},
+        );
         example_sources_step.dependOn(&launcher_source.step);
         _ = finishWgpuApp(
             b,
@@ -7332,6 +7465,7 @@ pub fn build(b: *std.Build) void {
         "src/notes/tutorials/backends-tutorial.html",
         "src/notes/tutorials/gpu-compute-tutorial.html",
         "src/notes/tutorials/sound_tutorial.html",
+        "src/notes/tutorials/goban_tutorial.html",
     };
     const doc_folds_step: *Step = b.step(
         "doc-folds",
@@ -7536,6 +7670,92 @@ pub fn build(b: *std.Build) void {
         bmpc_cartpole_run.has_side_effects = true;
         const bmpc_cartpole_step: *Step = b.step("bmpc-cartpole", "BMPC learns to balance a cartpole (on demand)");
         bmpc_cartpole_step.dependOn(&bmpc_cartpole_run.step);
+    }
+
+    // test-goban: the tests at the end of `examples/goban/goban.zig`, built from the example's own file for the build's
+    // machine. The rules, the forest and the diagrams need only `zm`, and Zig analyses only what the tests reach, so
+    // nothing of the engine is compiled. Debug, unlike the suite's ReleaseSafe: these tests run in well under a second,
+    // so the compile is the whole wait, and Debug is the mode whose backend compiles incrementally -
+    // `zig build test-goban --watch -fincremental` reruns the tests on every save after a short recompile.
+    {
+        const goban_test_mod: *Module = b.createModule(.{
+            .root_source_file = b.path("examples/goban/goban.zig"),
+            .target = native_target,
+            .optimize = .Debug,
+        });
+        goban_test_mod.addImport("zm", zimrmath_mod);
+        // The arena (`goban-arena`, below) is one of these tests, and skips itself here.
+        const goban_test_options: *Step.Options = b.addOptions();
+        goban_test_options.addOption(bool, "run_arena", false);
+        goban_test_mod.addOptions("goban_test_options", goban_test_options);
+        const goban_test: *Compile = b.addTest(.{ .root_module = goban_test_mod });
+        if (test_filter) |f| {
+            goban_test.filters = b.allocator.dupe([]const u8, &.{f}) catch @panic("OOM");
+        }
+        const goban_test_run: *Run = b.addRunArtifact(goban_test);
+        const goban_test_step: *Step = b.step("test-goban", "The goban example's rules, forest and diagrams");
+        goban_test_step.dependOn(&goban_test_run.step);
+    }
+
+    // goban-arena: two settings of goban's computer opponent play each other - the `arena:` tests at the end of
+    // `examples/goban/goban.zig` - and the score is printed. ReleaseFast, since a match is a hundred games of searches;
+    // on demand, like bmpc-cartpole, since a match takes minutes.
+    {
+        const goban_arena_mod: *Module = b.createModule(.{
+            .root_source_file = b.path("examples/goban/goban.zig"),
+            .target = native_target,
+            .optimize = .ReleaseFast,
+        });
+        goban_arena_mod.addImport("zm", zimrmath_mod);
+        const goban_arena_options: *Step.Options = b.addOptions();
+        goban_arena_options.addOption(bool, "run_arena", true);
+        goban_arena_mod.addOptions("goban_test_options", goban_arena_options);
+        const goban_arena: *Compile = b.addTest(.{ .root_module = goban_arena_mod });
+        const arena_filter: []const u8 = test_filter orelse "arena:";
+        goban_arena.filters = b.allocator.dupe([]const u8, &.{arena_filter}) catch @panic("OOM");
+        const goban_arena_run: *Run = b.addRunArtifact(goban_arena);
+        goban_arena_run.has_side_effects = true;
+        const goban_arena_description: []const u8 = "Two settings of goban's computer play a match (on demand)";
+        const goban_arena_step: *Step = b.step("goban-arena", goban_arena_description);
+        goban_arena_step.dependOn(&goban_arena_run.step);
+    }
+
+    // goban-play: a game against goban's computer from the command line (examples/goban/goban_play.zig) - each call the
+    // whole game, its moves after `--`: `zbuild goban-play -- --computer white d5 c4`. ReleaseFast, so its second of
+    // search runs as many iterations as the app's natively.
+    {
+        const goban_play_mod: *Module = b.createModule(.{
+            .root_source_file = b.path("examples/goban/goban_play.zig"),
+            .target = native_target,
+            .optimize = .ReleaseFast,
+        });
+        goban_play_mod.addImport("zm", zimrmath_mod);
+        const goban_play_exe: *Compile = b.addExecutable(.{ .name = "goban-play", .root_module = goban_play_mod });
+        const goban_play_run: *Run = b.addRunArtifact(goban_play_exe);
+        // What follows `--` goes to the program, and the run is never cached: each call is a new move.
+        goban_play_run.addPassthruArgs();
+        const goban_play_step: *Step = b.step("goban-play", "A game against goban's computer from the command line");
+        goban_play_step.dependOn(&goban_play_run.step);
+    }
+
+    // goban-problems-convert: published SGF problems turned into goban's kill problems, each target found with goban's
+    // search (examples/goban/goban_problems_tool.zig): `zbuild goban-problems-convert -- --out <dir> <sgf files>`.
+    {
+        const goban_convert_mod: *Module = b.createModule(.{
+            .root_source_file = b.path("examples/goban/goban_problems_tool.zig"),
+            .target = native_target,
+            .optimize = .ReleaseFast,
+        });
+        goban_convert_mod.addImport("zm", zimrmath_mod);
+        const goban_convert_exe: *Compile = b.addExecutable(.{
+            .name = "goban-problems-convert",
+            .root_module = goban_convert_mod,
+        });
+        const goban_convert_run: *Run = b.addRunArtifact(goban_convert_exe);
+        goban_convert_run.addPassthruArgs();
+        const goban_convert_description: []const u8 = "goban's kill problems from published SGF problems";
+        const goban_convert_step: *Step = b.step("goban-problems-convert", goban_convert_description);
+        goban_convert_step.dependOn(&goban_convert_run.step);
     }
 
     // ---- Differential validator (Phase 0 of spv2wgsl-rewrite-plan).
@@ -8243,6 +8463,7 @@ pub fn build(b: *std.Build) void {
             "src/robot_supertrack.zig",
             "src/robot_latent.zig",
             "src/robot_geno.zig",
+            "src/robot_lab.zig",
             "src/robot_latent_kit_tests.zig",
             "src/robot_track_resident_tests.zig",
             "src/robot_policy.zig",
@@ -8253,7 +8474,15 @@ pub fn build(b: *std.Build) void {
             // SuperTrack alone (a supervised world model + a policy through it) on the cartpole.
         };
         const robot_tests_members: []const []const u8 = robotTestsMembers(b);
+        // `-Dfast-root=<file>`: that one file of the list alone - its tests checked without building every other root.
+        const fast_root_description: []const u8 = "test-fast: run only this file of the fast list (its path as listed)";
+        const fast_root_only: ?[]const u8 = b.option([]const u8, "fast-root", fast_root_description);
         for (fast_test_roots) |root| {
+            if (fast_root_only) |only_root| {
+                if (!eql(u8, root, only_root)) {
+                    continue;
+                }
+            }
             // * The module ROOT is the file itself, so a test under `src/tests/` reaching a
             // sibling with `@import("../x.zig")` would escape the module path. Those tests
             // import through `src/` instead - see `ragdoll_bvh_test.zig`.

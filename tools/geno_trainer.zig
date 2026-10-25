@@ -1,12 +1,16 @@
 //! geno_trainer - DReCon trained by PPO on Geno, headless, in a run folder: the training a night runs.
 //!
-//! A run is a folder. The trainer reads the run's parameters from its `run.zon` (`robot_geno.PpoRun`: the motion, PPO's
-//! recipe on Geno, the run's own controls), trains as fast as the GPU and the CPU allow - no window, no frames - and
-//! writes what it learns into the same folder, so that another program can watch the run while it goes:
+//! A run is a folder. The trainer reads the run's parameters from its `run.zon` (`robot_lab.GenoRun`: the task, the
+//! learner with its recipe, the run's own controls - or the older `robot_lab.PpoRun`, read as a PPO run), trains as
+//! fast as the GPU and the CPU allow - no window, no frames - and writes what it learns into the same folder, so that
+//! another program can watch the run while it goes. PPO is the learner it trains for now; a run that chose another
+//! is refused by name:
 //!
 //!     run.zon          the parameters; written with the defaults when the folder has none
 //!     weights          the newest weights (`ppo_track.Trainer.exportWeights`), rewritten whole every few minutes
 //!     weights_b<N>     a checkpoint: the weights after batch N, kept every so many minutes
+//!     policy           the newest policy (`robot_lab.PolicyFile`), written with the weights - what the lab plays
+//!     policy_m<N>      a checkpoint: the policy after N minutes of training, kept with the weights' checkpoint
 //!     log.csv          one line per batch, raw counts (steps watched, failures, reward, episodes, assist)
 //!     status.zon       where the run is: its state, batches, minutes, the servo's and the recent time to failure
 //!     stop             created by anyone: the trainer saves everything and exits
@@ -17,7 +21,7 @@
 //! motion) are refused, and the folder is left untouched. The run ends when its `stop` file appears, or after the
 //! hours or batches `run.zon` allows; then the last weights, the log and the status are written, and the program
 //! exits 0. It exits 1 when it refuses the run - an unreadable `run.zon`, a value out of its range
-//! (`robot_geno.PpoRun.problem`), weights that do not fit - and 2 when the run fails: the GPU or the robot cannot be
+//! (`robot_lab.GenoRun.problem`), weights that do not fit - and 2 when the run fails: the GPU or the robot cannot be
 //! set up, or a file cannot be written.
 //!
 //!     geno_trainer --run=runs/night1
@@ -27,12 +31,12 @@ const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const Io = std.Io;
 const bufPrint = std.fmt.bufPrint;
-const allocPrint = std.fmt.allocPrint;
 const ArrayList = std.ArrayList;
 const parseFloat = std.fmt.parseFloat;
 const splitScalar = std.mem.splitScalar;
 const basename = std.fs.path.basename;
 const z = @import("zimr");
+const zm = @import("zm");
 const cli = @import("cli");
 const zn_mlp = @import("zn_mlp");
 
@@ -46,31 +50,34 @@ const dance = z.robot_dance;
 const track = z.robot_track;
 const ppo_track = z.robot_ppo_track;
 const geno = z.robot_geno;
+const lab = z.robot_lab;
 const native_os = z.native_os;
 const readWhole = native_os.readWhole;
 const writeWhole = native_os.writeWhole;
 const fileExists = native_os.fileExists;
 const Trainer = ppo_track.Trainer(zn_mlp);
+const eql = std.mem.eql;
+const clamp = zm.clamp;
 
 /// The network kernels' SPIR-V: one module holding every entry of `zn_mlp`.
 const zn_mlp_spirv: []const u8 = @embedFile("zn_mlp_spv");
 /// The dance, retargeted to Geno and baked (`zig build clip-bake`), as the training page embeds it.
 const dance_zclip: []const u8 = @embedFile("geno_dance_zclip");
 
-/// How the trainer ends, as its exit code tells whoever started it: `robot_geno`'s, so the training lab reads the
+/// How the trainer ends, as its exit code tells whoever started it: `robot_lab`'s, so the training lab reads the
 /// code by the same definition.
-const Exit = geno.TrainerExit;
+const Exit = lab.TrainerExit;
 
 // ---- The run folder ----
 //
-// The folder's files, their names and the log's columns are `robot_geno`'s (`RunFile`, `RunLog`): the training lab
+// The folder's files, their names and the log's columns are `robot_lab`'s (`RunFile`, `RunLog`): the training lab
 // reads what this program writes, by the same definitions.
 
-const RunFile = geno.RunFile;
-const RunLog = geno.RunLog;
+const RunFile = lab.RunFile;
+const RunLog = lab.RunLog;
 
-const RunState = geno.RunState;
-const RunStatus = geno.RunStatus;
+const RunState = lab.RunState;
+const RunStatus = lab.RunStatus;
 
 /// The path of `name` in the run folder, in `arena`.
 fn pathIn(
@@ -97,17 +104,21 @@ fn say(io: Io, comptime format: []const u8, arguments: anytype) void {
     Io.File.stdout().writeStreamingAll(io, line) catch return;
 }
 
-/// The run's parameters from the folder's `run.zon` - written there with every default when the folder has none,
-/// so that every run folder states what it trains. Null, after saying why, when the file cannot be read as a run.
+/// The run's parameters from the folder's `run.zon` (`lab.GenoRun`, which reads the older `PpoRun` too) - written
+/// there with every default when the folder has none, so that every run folder states what it trains, its learner
+/// included. Null, after saying why, when the file cannot be read
+/// as a run. Memory: two allocators, as the ZON parser takes them (`lab.GenoRun.parse`) - `gpa` the parser's working
+/// memory, freed before it returns; `arena` everything else, the caller's scratch: the file's text, its path, a
+/// default run's text, a refusal's description. The run returned is plain values, pointing into neither.
 fn readRunParameters(
     gpa: Allocator,
     arena: Allocator,
     io: Io,
     folder: []const u8,
-) !?geno.PpoRun {
+) !?lab.GenoRun {
     const run_path: []const u8 = try runFilePath(arena, folder, .parameters);
-    const source: []u8 = try readWhole(gpa, io, run_path, RunFile.most_bytes) orelse {
-        const defaults: geno.PpoRun = .{};
+    const source: []u8 = try readWhole(arena, io, run_path, RunFile.most_bytes) orelse {
+        const defaults: lab.GenoRun = .{};
         var text: Io.Writer.Allocating = .init(arena);
         try defaults.write(&text.writer);
         try text.writer.writeAll("\n");
@@ -116,10 +127,9 @@ fn readRunParameters(
         say(io, "geno_trainer: no {s} in {s} - wrote one with every default", .{ run_file_name, folder });
         return defaults;
     };
-    defer gpa.free(source);
     const terminated_source: [:0]const u8 = try arena.dupeSentinel(u8, source, 0);
-    var failure: geno.PpoRun.ParseFailure = .{ .description = "" };
-    return geno.PpoRun.parse(gpa, arena, terminated_source, &failure) catch |err| switch (err) {
+    var failure: lab.GenoRun.ParseFailure = .{ .description = "" };
+    return lab.GenoRun.parse(gpa, arena, terminated_source, &failure) catch |err| switch (err) {
         error.ParseZon => {
             say(io, "geno_trainer: refused: {s}", .{failure.description});
             return null;
@@ -181,8 +191,15 @@ const RunProgress = struct {
     /// Whether this start has saved yet: its first batch always does, so that a run restarted by hand shows its new
     /// start at once.
     has_saved_this_start: bool = false,
+    /// Whether this start's first policy file was read back and found to play as the trainer acts
+    /// (`policyPlaysAsTrained`).
+    has_checked_policy_this_start: bool = false,
     saved_at_minutes: f32 = 0,
     checkpointed_at_minutes: f32 = 0,
+    /// The run's judgements as `judge.csv` holds them (`lab.JudgeLog`): the servo's line, then one per judgement of
+    /// the newest policy - grown with the program's `gpa`, and freed with the log.
+    judgements: ArrayList(u8) = .empty,
+    judged_at_minutes: f32 = 0,
     /// Wall-clock milliseconds of the last progress line printed (`reportProgress`).
     reported_at_ms: f64 = 0,
 };
@@ -220,9 +237,89 @@ fn saveStatus(
     try writeWhole(arena, io, status_path, text.written());
 }
 
-/// The newest weights, the log and the status, each written whole.
+/// The run's policy (`lab.GenoPolicy`): PPO's actor made from the trainer's latest readback - the parameters the
+/// weights file holds, not the actor's CPU copy, which can lag the readback by an update - with its normaliser and
+/// the controller's range, scale and filter. Memory: the policy's arrays are in `arena`, the caller's scratch - freed
+/// with it, nothing to `deinit`.
+fn trainerPolicy(arena: Allocator, trainer: *Trainer) !lab.GenoPolicy {
+    const params: []const f32 = trainer.ppo.pipe.readLatest(.params) orelse {
+        return error.NoReadback;
+    };
+    if (params.len < trainer.ppo.param_count) {
+        return error.NoReadback;
+    }
+    const parts: lab.PpoPolicyParts = .{
+        .kit_parameters = params,
+        .actor_layer_offsets = trainer.ppo.p_off,
+        .observation_size = trainer.n_obs,
+        .hidden_width = trainer.options.hidden,
+        .action_size = trainer.env.subset.dofs,
+        .observation_normalizer = if (trainer.options.normalize) trainer.observation_normalizer else null,
+        .action_limit = trainer.env.options.action_limit,
+        .action_scale = trainer.env.options.action_scale,
+        .filter_beta = trainer.env.options.beta,
+    };
+    return lab.policyOfPpo(arena, parts);
+}
+
+/// The run's policy (`trainerPolicy`) written in the folder under `name` (`lab.PolicyFile`): a new file, renamed over
+/// any old one. Memory: the policy, its file's bytes and the path in `arena`, the caller's scratch.
+fn savePolicy(
+    arena: Allocator,
+    io: Io,
+    folder: []const u8,
+    trainer: *Trainer,
+    name: []const u8,
+) !void {
+    const policy: lab.GenoPolicy = try trainerPolicy(arena, trainer);
+    const bytes: []u8 = try lab.PolicyFile.encode(arena, &policy);
+    const path: []const u8 = try pathIn(arena, folder, name);
+    try writeWhole(arena, io, path, bytes);
+}
+
+/// Whether the folder's policy file plays as the trainer acts: read back, decoded, and asked for its action on every
+/// environment's observation now, against the trainer's own answer - its normaliser, its actor's mean on the same
+/// parameters (the actor's CPU copy brought to the readback first, `syncWeights`), the controller's clamp - bit for
+/// bit. Run once a start, after the first save: a policy file that plays otherwise is the program's fault, not the
+/// training's, and the run fails rather than leave a file the lab would play wrongly. Memory: the file, the policy
+/// and the buffers in `arena`, the caller's scratch.
+fn policyPlaysAsTrained(
+    arena: Allocator,
+    io: Io,
+    folder: []const u8,
+    trainer: *Trainer,
+) !bool {
+    _ = trainer.ppo.syncWeights();
+    const path: []const u8 = try pathIn(arena, folder, RunFile.policy_name);
+    const bytes: []u8 = try native_os.readWhole(arena, io, path, RunFile.most_bytes) orelse {
+        return false;
+    };
+    const policy: lab.GenoPolicy = try lab.PolicyFile.decode(arena, bytes);
+    const observation: []f32 = try arena.alloc(f32, trainer.n_obs);
+    const normalized: []f32 = try arena.alloc(f32, trainer.n_obs);
+    const trainer_action: []f32 = try arena.alloc(f32, trainer.env.subset.dofs);
+    const policy_action: []f32 = try arena.alloc(f32, trainer.env.subset.dofs);
+    const scratch: lab.PolicyScratch = try .init(arena, &policy);
+    const limit: f32 = trainer.env.options.action_limit;
+    for (0..trainer.env.options.envs) |env| {
+        trainer.env.observe(env, observation);
+        @memcpy(normalized, observation);
+        trainer.normalizeObservation(normalized);
+        trainer.ppo.actMean(normalized, trainer_action);
+        for (trainer_action) |*component| {
+            component.* = clamp(component.*, -limit, limit);
+        }
+        lab.policyMeanAction(&policy, observation, scratch, policy_action);
+        if (!eql(f32, trainer_action, policy_action)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// The newest weights, the policy, the log and the status, each written whole. Memory: all of it in `arena` - the
+/// weights' bytes, the policy and its file, the paths - scratch for this save, which the caller resets after it.
 fn saveAll(
-    gpa: Allocator,
     arena: Allocator,
     io: Io,
     folder: []const u8,
@@ -232,10 +329,10 @@ fn saveAll(
 ) !void {
     // The parameters read back, and the counters beside them, of the same update.
     trainer.waitForReadback();
-    const weights_bytes: []u8 = try trainer.exportWeights(gpa);
-    defer gpa.free(weights_bytes);
+    const weights_bytes: []u8 = try trainer.exportWeights(arena);
     const weights_path: []const u8 = try runFilePath(arena, folder, .weights);
     try writeWhole(arena, io, weights_path, weights_bytes);
+    try savePolicy(arena, io, folder, trainer, RunFile.policy_name);
     const log_path: []const u8 = try runFilePath(arena, folder, .log);
     try writeWhole(arena, io, log_path, progress.log.items);
     try saveStatus(arena, io, folder, trainer, progress, state);
@@ -243,9 +340,10 @@ fn saveAll(
     progress.saved_at_minutes = trainingMinutes(progress);
 }
 
-/// The weights kept as a checkpoint under the batch that trained them, `weights_b<N>`.
+/// The weights kept as a checkpoint under the batch that trained them, `weights_b<N>`, and the policy under the
+/// minute of training, `policy_m<N>`. Memory: the weights' bytes, the policy and the paths in `arena`, the caller's
+/// scratch.
 fn saveCheckpoint(
-    gpa: Allocator,
     arena: Allocator,
     io: Io,
     folder: []const u8,
@@ -253,12 +351,17 @@ fn saveCheckpoint(
     progress: *RunProgress,
 ) !void {
     trainer.waitForReadback();
-    const weights_bytes: []u8 = try trainer.exportWeights(gpa);
-    defer gpa.free(weights_bytes);
-    const name: []const u8 = try allocPrint(arena, "weights_b{d:0>7}", .{trainer.iterations});
+    const weights_bytes: []u8 = try trainer.exportWeights(arena);
+    var name_buffer: RunFile.NameBuffer = undefined;
+    const name: []const u8 = RunFile.checkpointName(trainer.iterations, &name_buffer);
     const checkpoint_path: []const u8 = try pathIn(arena, folder, name);
     try writeWhole(arena, io, checkpoint_path, weights_bytes);
-    progress.checkpointed_at_minutes = trainingMinutes(progress);
+    const minutes: f32 = trainingMinutes(progress);
+    const whole_minutes: u64 = @floor(minutes);
+    var policy_name_buffer: RunFile.NameBuffer = undefined;
+    const policy_name: []const u8 = RunFile.policyCheckpointName(whole_minutes, &policy_name_buffer);
+    try savePolicy(arena, io, folder, trainer, policy_name);
+    progress.checkpointed_at_minutes = minutes;
 }
 
 /// Whether the run must end now, and how: its folder's `stop` file, or its limits.
@@ -266,7 +369,7 @@ fn endState(
     arena: Allocator,
     io: Io,
     folder: []const u8,
-    parameters: geno.PpoRun,
+    parameters: lab.PpoRun,
     trainer: *const Trainer,
     progress: *const RunProgress,
 ) !?RunState {
@@ -296,6 +399,67 @@ fn lastLoggedMinutes(log_text: []const u8) f32 {
 
 /// Carries the run on from the folder's weights and log, when it has them. False, after saying why, when the weights
 /// do not fit this run's network - the run is then refused, and nothing in the folder is overwritten.
+/// The newest policy judged (`lab.judgePolicy`: fixed starts a second apart across the run's clip, the mean action,
+/// nothing random), its line added to the run's judgements and `judge.csv` rewritten whole - and, before the first,
+/// the servo alone judged on the same starts: the baseline every judgement is read against. Memory: the policy, the
+/// judge's actor and the starts in `arena`, the caller's scratch; the judge's fleet with `gpa`, freed before it
+/// returns; the judgements' text grows in `progress.judgements` with `gpa`, as `progress` owns it.
+fn judgeNewestPolicy(
+    gpa: Allocator,
+    arena: Allocator,
+    io: Io,
+    folder: []const u8,
+    trainer: *Trainer,
+    progress: *RunProgress,
+) !void {
+    trainer.waitForReadback();
+    const fleet: *track.Fleet = trainer.env.fleet;
+    const clip: *const dance.Clip = fleet.clips[0];
+    const frames_per_second: usize = 60;
+    const starts: []usize = try track.evenStarts(arena, clip, frames_per_second);
+    const settings: lab.PolicyJudgeSettings = .{
+        .starts = starts,
+        .decimation = trainer.options.decimation,
+        .task = trainer.options.task,
+        .bodies = trainer.options.bodies,
+    };
+    const body_names: []const []const u8 = fleet.options.body_names;
+    if (progress.judgements.items.len == 0) {
+        try progress.judgements.appendSlice(gpa, lab.JudgeLog.header);
+        const servo: track.Judgement = try lab.judgePolicy(gpa, arena, trainer.m, body_names, clip, null, settings);
+        try lab.JudgeLog.appendLine(gpa, &progress.judgements, 0, 0, servo);
+    }
+    const policy: lab.GenoPolicy = try trainerPolicy(arena, trainer);
+    const judgement: track.Judgement = try lab.judgePolicy(gpa, arena, trainer.m, body_names, clip, &policy, settings);
+    const minutes: f32 = trainingMinutes(progress);
+    try lab.JudgeLog.appendLine(gpa, &progress.judgements, trainer.iterations, minutes, judgement);
+    const judgements_path: []const u8 = try runFilePath(arena, folder, .judgements);
+    try writeWhole(arena, io, judgements_path, progress.judgements.items);
+    progress.judged_at_minutes = minutes;
+    const error_seconds: f32 = judgement.meanTimeToFailureError() orelse 0;
+    say(io, "judged at batch {d}: loses the reference every {d:.2} s (standard error {d:.2} s), {d} of {d} starts\n", .{
+        trainer.iterations,
+        judgement.meanTimeToFailure(),
+        error_seconds,
+        judgement.failures,
+        judgement.starts,
+    });
+}
+
+/// The minutes of training at the judgements' last line (`lab.JudgeLog`); zero when there is none.
+fn lastJudgedMinutes(judgements_text: []const u8) f32 {
+    var last_minutes: f32 = 0;
+    var lines: std.mem.SplitIterator(u8, .scalar) = splitScalar(u8, judgements_text, '\n');
+    while (lines.next()) |line| {
+        const judged: lab.JudgeLog.Line = lab.JudgeLog.parseLine(line) orelse continue;
+        last_minutes = judged.training_minutes;
+    }
+    return last_minutes;
+}
+
+/// Memory: two allocators for two lifetimes - the folder's files are read into `arena`, the caller's scratch for
+/// this start; the run's log is copied into `progress.log` with `gpa`, which `progress` owns and keeps growing for
+/// the rest of the run.
 fn resumeFromFolder(
     gpa: Allocator,
     arena: Allocator,
@@ -305,15 +469,19 @@ fn resumeFromFolder(
     progress: *RunProgress,
 ) !bool {
     const weights_path: []const u8 = try runFilePath(arena, folder, .weights);
-    const weights_bytes: []u8 = try readWhole(gpa, io, weights_path, RunFile.most_bytes) orelse return true;
-    defer gpa.free(weights_bytes);
+    const weights_bytes: []u8 = try readWhole(arena, io, weights_path, RunFile.most_bytes) orelse return true;
     trainer.importWeights(weights_bytes) catch |err| {
         say(io, "geno_trainer: refused: the folder's weights do not fit this run ({s})", .{@errorName(err)});
         return false;
     };
     const log_path: []const u8 = try runFilePath(arena, folder, .log);
-    if (try readWhole(gpa, io, log_path, RunFile.most_bytes)) |saved_log| {
-        defer gpa.free(saved_log);
+    const judgements_path: []const u8 = try runFilePath(arena, folder, .judgements);
+    if (try readWhole(arena, io, judgements_path, RunFile.most_bytes)) |saved_judgements| {
+        progress.judgements.clearRetainingCapacity();
+        try progress.judgements.appendSlice(gpa, saved_judgements);
+        progress.judged_at_minutes = lastJudgedMinutes(saved_judgements);
+    }
+    if (try readWhole(arena, io, log_path, RunFile.most_bytes)) |saved_log| {
         progress.log.clearRetainingCapacity();
         try progress.log.appendSlice(gpa, saved_log);
         // The minutes already trained: the last line's second column.
@@ -396,13 +564,14 @@ fn train(
     report_interval_ms: f64,
     arena_state: *ArenaAllocator,
     folder: []const u8,
-    parameters: geno.PpoRun,
+    parameters: lab.PpoRun,
     trainer: *Trainer,
     progress: *RunProgress,
 ) !RunState {
     const decisions_per_collect: u32 = 64;
     const save_minutes: f32 = parameters.save_minutes;
     const checkpoint_minutes: f32 = parameters.checkpoint_minutes;
+    const judge_minutes: f32 = parameters.judge_minutes;
     while (true) {
         // Paths and texts of one batch's files are made in the arena, emptied every batch.
         _ = arena_state.reset(.retain_capacity);
@@ -422,12 +591,24 @@ fn train(
         const minutes_since_save: f32 = minutes - progress.saved_at_minutes;
         const is_save_due: bool = !progress.has_saved_this_start or minutes_since_save >= save_minutes;
         if (is_save_due) {
-            try saveAll(gpa, arena, io, folder, trainer, progress, .training);
+            try saveAll(arena, io, folder, trainer, progress, .training);
+        }
+        if (progress.has_saved_this_start and !progress.has_checked_policy_this_start) {
+            if (!try policyPlaysAsTrained(arena, io, folder, trainer)) {
+                say(io, "the policy file does not play as the trainer acts - the run fails\n", .{});
+                return error.PolicyDoesNotPlayAsTrained;
+            }
+            progress.has_checked_policy_this_start = true;
         }
         const minutes_since_checkpoint: f32 = minutes - progress.checkpointed_at_minutes;
         const is_checkpoint_due: bool = checkpoint_minutes > 0 and minutes_since_checkpoint >= checkpoint_minutes;
         if (is_checkpoint_due) {
-            try saveCheckpoint(gpa, arena, io, folder, trainer, progress);
+            try saveCheckpoint(arena, io, folder, trainer, progress);
+        }
+        const minutes_since_judgement: f32 = minutes - progress.judged_at_minutes;
+        const is_judgement_due: bool = judge_minutes > 0 and minutes_since_judgement >= judge_minutes;
+        if (is_judgement_due) {
+            try judgeNewestPolicy(gpa, arena, io, folder, trainer, progress);
         }
         reportProgress(io, report_interval_ms, folder, trainer, progress, stats);
     }
@@ -468,7 +649,7 @@ fn runTraining(
     report_interval_ms: f64,
     arena_state: *ArenaAllocator,
     folder: []const u8,
-    parameters: geno.PpoRun,
+    parameters: lab.PpoRun,
 ) !Exit {
     const arena: Allocator = arena_state.allocator();
     // A stop left by an earlier run is not this one's.
@@ -506,6 +687,7 @@ fn runTraining(
 
     var progress: RunProgress = .{};
     defer progress.log.deinit(gpa);
+    defer progress.judgements.deinit(gpa);
     try progress.log.appendSlice(gpa, RunLog.header);
     if (!try resumeFromFolder(gpa, arena, io, folder, trainer, &progress)) {
         return .refused;
@@ -546,7 +728,7 @@ fn runTraining(
     );
     _ = arena_state.reset(.retain_capacity);
     const final_arena: Allocator = arena_state.allocator();
-    try saveAll(gpa, final_arena, io, folder, trainer, &progress, end_state);
+    try saveAll(final_arena, io, folder, trainer, &progress, end_state);
     // The stop is consumed: started again, the run carries on.
     if (end_state == .stopped) {
         const consumed_stop_path: []const u8 = try runFilePath(final_arena, folder, .stop);
@@ -577,11 +759,16 @@ pub fn main(init: std.process.Init) !u8 {
         say(io, "geno_trainer: refused: the run folder {s} cannot be made ({s})", .{ folder, @errorName(err) });
         return Exit.refused.code();
     };
-    const parameters: geno.PpoRun = try readRunParameters(gpa, arena, io, folder) orelse return Exit.refused.code();
-    if (parameters.problem()) |why| {
+    const run: lab.GenoRun = try readRunParameters(gpa, arena, io, folder) orelse return Exit.refused.code();
+    if (run.problem()) |why| {
         say(io, "geno_trainer: refused: run.zon: {s}", .{why});
         return Exit.refused.code();
     }
+    // The learner the run chose: PPO trains on the path below; the others join the trainer one at a time.
+    const parameters: lab.PpoRun = run.toPpoRun() orelse {
+        say(io, "geno_trainer: refused: run.zon: learner.{s} is not in the trainer yet", .{@tagName(run.learner)});
+        return Exit.refused.code();
+    };
     const report_interval_ms: f64 = 1000.0 * arguments.@"--report-seconds";
     const exit: Exit = runTraining(gpa, io, report_interval_ms, &arena_state, folder, parameters) catch |err| failed: {
         say(io, "geno_trainer: failed: {s}", .{@errorName(err)});

@@ -1,0 +1,66 @@
+// goban problems: the first problem as it opens - its region of the board, the Undo button. A mouse; 900 x 900.
+.{ .advance = 3 }
+.{ .move = .{ .x = 450, .y = 20 } }
+.{ .advance = 2 }
+.{ .capture_to = "goban_problems_1_start.png" }
+// Black's first move, the book's rs - row 0, column 1 in this run's half turn - then the computer's reply
+.{ .move = .{ .x = 248, .y = 284 } }
+.{ .advance = 1 }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 1 }
+.{ .move = .{ .x = 450, .y = 20 } }
+.{ .advance = 90 }
+.{ .capture_to = "goban_problems_2_reply.png" }
+// Undo takes back the reply and the move: the problem as it opened
+.{ .move = .{ .x = 60, .y = 860 } }
+.{ .advance = 1 }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 2 }
+.{ .move = .{ .x = 450, .y = 20 } }
+.{ .advance = 2 }
+.{ .capture_to = "goban_problems_3_undone.png" }
+// The book's line again: rs, the book's reply rr at once, then ns - "Correct": Solved, and Next
+.{ .move = .{ .x = 248, .y = 284 } }
+.{ .advance = 1 }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 1 }
+.{ .move = .{ .x = 450, .y = 20 } }
+.{ .advance = 5 }
+.{ .move = .{ .x = 572, .y = 284 } }
+.{ .advance = 1 }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 1 }
+.{ .move = .{ .x = 450, .y = 450 } }
+.{ .advance = 5 }
+.{ .capture_to = "goban_problems_4_solved.png" }
+// Play on after Solved: the board is not held - the computer answers ns, and Solved stays
+.{ .advance = 90 }
+.{ .capture_to = "goban_problems_5_played_on.png" }
+// Undo takes back the computer's answer and ns: Solved goes, Next stays
+.{ .move = .{ .x = 60, .y = 860 } }
+.{ .advance = 1 }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 2 }
+.{ .move = .{ .x = 450, .y = 450 } }
+.{ .advance = 2 }
+.{ .capture_to = "goban_problems_6_undone.png" }
+// Next: the second problem, in a symmetry of its own
+.{ .move = .{ .x = 827, .y = 862 } }
+.{ .advance = 1 }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 2 }
+.{ .move = .{ .x = 450, .y = 20 } }
+.{ .advance = 2 }
+.{ .capture_to = "goban_problems_7_next.png" }

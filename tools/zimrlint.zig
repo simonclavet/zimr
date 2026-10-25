@@ -624,63 +624,66 @@ const c_types = std.StaticStringMap(void).initComptime(.{
 // every entry must be a real `pub` decl in zimrmath.zig.
 const keywords = std.StaticStringMap(void).initComptime(.{
     // scalar functions
-    .{ "abs", {} },          .{ "sqrt", {} },          .{ "sinRad", {} },         .{ "cosRad", {} },
-    .{ "tanRad", {} },       .{ "asinRad", {} },       .{ "acosRad", {} },        .{ "atanRad", {} },
-    .{ "atan2Rad", {} },     .{ "sincosRad", {} },     .{ "exp", {} },            .{ "exp2", {} },
-    .{ "exp10", {} },        .{ "pow", {} },           .{ "log2", {} },           .{ "log10", {} },
-    .{ "floor", {} },        .{ "ceil", {} },          .{ "round", {} },          .{ "trunc", {} },
-    .{ "fract", {} },        .{ "hypot", {} },         .{ "mulAdd", {} },         .{ "radFromDeg", {} },
+    .{ "abs", {} },           .{ "sqrt", {} },           .{ "sinRad", {} },           .{ "cosRad", {} },
+    .{ "tanRad", {} },        .{ "asinRad", {} },        .{ "acosRad", {} },          .{ "atanRad", {} },
+    .{ "atan2Rad", {} },      .{ "sincosRad", {} },      .{ "exp", {} },              .{ "exp2", {} },
+    .{ "exp10", {} },         .{ "pow", {} },            .{ "log2", {} },             .{ "log10", {} },
+    .{ "floor", {} },         .{ "ceil", {} },           .{ "round", {} },            .{ "trunc", {} },
+    .{ "fract", {} },         .{ "hypot", {} },          .{ "mulAdd", {} },           .{ "radFromDeg", {} },
     .{ "degFromRad", {} },
     // turns: the unit an angle is measured in when it is a fraction of a circle. Same standing
     // as `sin`/`cos` above - aliased at file scope, used bare, never shadowed - because a call
     // reading `sinTurns(phase_turns)` is the point and `zm.sinTurns(phase_turns)` is noise.
-      .{ "sinTurns", {} },      .{ "cosTurns", {} },       .{ "tanTurns", {} },
-    .{ "sincosTurns", {} },  .{ "turnsFromRad", {} },  .{ "radFromTurns", {} },   .{ "turnsFromDeg", {} },
+       .{ "sinTurns", {} },       .{ "cosTurns", {} },         .{ "tanTurns", {} },
+    .{ "sincosTurns", {} },   .{ "turnsFromRad", {} },   .{ "radFromTurns", {} },     .{ "turnsFromDeg", {} },
     .{ "degFromTurns", {} },
     // interpolation / range
-    .{ "lerp", {} },          .{ "clamp", {} },          .{ "clamp01", {} },
-    .{ "smoothstep", {} },   .{ "min", {} },           .{ "max", {} },
+     .{ "lerp", {} },           .{ "clamp", {} },            .{ "clamp01", {} },
+    .{ "smoothStep", {} },    .{ "min", {} },            .{ "max", {} },              .{ "smootherStep", {} },
+    .{ "smoothStep01", {} },  .{ "smootherStep01", {} },
     // vector functions
-               .{ "dot", {} },
-    .{ "dot2", {} },         .{ "dot3", {} },          .{ "dot4", {} },           .{ "cross", {} },
-    .{ "cross2", {} },       .{ "length", {} },        .{ "length2", {} },        .{ "length3", {} },
-    .{ "length4", {} },      .{ "lengthSq2", {} },     .{ "lengthSq3", {} },      .{ "lengthSq4", {} },
-    .{ "normalize", {} },    .{ "normalize2", {} },    .{ "normalize3", {} },     .{ "normalize4", {} },
-    .{ "distance", {} },     .{ "distance2", {} },     .{ "distance3", {} },      .{ "distance4", {} },
-    .{ "reflect2", {} },     .{ "reflect3", {} },      .{ "refract2", {} },       .{ "refract3", {} },
-    .{ "project3", {} },     .{ "reject3", {} },       .{ "angle2", {} },         .{ "angle3", {} },
+    .{ "dot", {} },              .{ "dot2", {} },
+    .{ "dot3", {} },          .{ "dot4", {} },           .{ "cross", {} },            .{ "cross2", {} },
+    .{ "length", {} },        .{ "length2", {} },        .{ "length3", {} },          .{ "length4", {} },
+    .{ "lengthSq2", {} },     .{ "lengthSq3", {} },      .{ "lengthSq4", {} },        .{ "normalize", {} },
+    .{ "normalize2", {} },    .{ "normalize3", {} },     .{ "normalize4", {} },       .{ "distance", {} },
+    .{ "distance2", {} },     .{ "distance3", {} },      .{ "distance4", {} },        .{ "reflect2", {} },
+    .{ "reflect3", {} },      .{ "refract2", {} },       .{ "refract3", {} },         .{ "project3", {} },
+    .{ "reject3", {} },       .{ "angle2", {} },         .{ "angle3", {} },
     // vector constructors
-    .{ "vec2", {} },         .{ "vec3", {} },          .{ "vec4", {} },
+              .{ "vec2", {} },
+    .{ "vec3", {} },          .{ "vec4", {} },
     // constants
               .{ "pi", {} },
     // `phi` is NOT reserved, deliberately: it means an SSA phi node in spv2wgsl and the
     // azimuthal angle in spherical coordinates, both of which predate and outnumber the
     // golden ratio here. Reserving it made every angle named `phi` a violation. The
     // constant is `golden_ratio` now, and that is what is reserved.
-    .{ "tau", {} },          .{ "golden_ratio", {} },  .{ "nan", {} },            .{ "inf", {} },
-    .{ "sqrt2", {} },        .{ "sqrt1_2", {} },       .{ "euler", {} },          .{ "log2e", {} },
-    .{ "log10e", {} },       .{ "ln2", {} },           .{ "ln10", {} },           .{ "two_sqrtpi", {} },
-    .{ "rad_per_deg", {} },  .{ "deg_per_rad", {} },
+                  .{ "tau", {} },
+    .{ "golden_ratio", {} },  .{ "nan", {} },            .{ "inf", {} },              .{ "sqrt2", {} },
+    .{ "sqrt1_2", {} },       .{ "euler", {} },          .{ "log2e", {} },            .{ "log10e", {} },
+    .{ "ln2", {} },           .{ "ln10", {} },           .{ "two_sqrtpi", {} },       .{ "rad_per_deg", {} },
+    .{ "deg_per_rad", {} },
     // types (a zimr program means zm.Color/zm.Mat4/... by these names - never re-bind them)
-      .{ "Aabb", {} },           .{ "Aabb2", {} },
-    .{ "Boolx4", {} },       .{ "Boolx8", {} },        .{ "Boolx16", {} },        .{ "CameraProjection", {} },
-    .{ "ColorU32", {} },     .{ "Complex", {} },       .{ "F32x4Component", {} }, .{ "F32x8", {} },
-    .{ "F32x16", {} },       .{ "Mat", {} },           .{ "Mat2", {} },           .{ "Mat22", {} },
-    .{ "Mat3", {} },         .{ "OrthoBasis3", {} },   .{ "Plane2", {} },         .{ "Quat", {} },
-    .{ "RayCamera", {} },    .{ "RayCameraDesc", {} }, .{ "Rot2", {} },           .{ "Sweep2", {} },
-    .{ "Transform2", {} },   .{ "Trs", {} },           .{ "Vec", {} },            .{ "Vec2i", {} },
-    .{ "Vec3", {} },         .{ "Vec2", {} },          .{ "Color", {} },          .{ "Ray", {} },
-    .{ "RayCollision", {} }, .{ "Transform", {} },     .{ "quat", {} },           .{ "Camera2D", {} },
-    .{ "Camera3D", {} },
+      .{ "Aabb", {} },           .{ "Aabb2", {} },            .{ "Boolx4", {} },
+    .{ "Boolx8", {} },        .{ "Boolx16", {} },        .{ "CameraProjection", {} }, .{ "ColorU32", {} },
+    .{ "Complex", {} },       .{ "F32x4Component", {} }, .{ "F32x8", {} },            .{ "F32x16", {} },
+    .{ "Mat", {} },           .{ "Mat2", {} },           .{ "Mat22", {} },            .{ "Mat3", {} },
+    .{ "OrthoBasis3", {} },   .{ "Plane2", {} },         .{ "Quat", {} },             .{ "RayCamera", {} },
+    .{ "RayCameraDesc", {} }, .{ "Rot2", {} },           .{ "Sweep2", {} },           .{ "Transform2", {} },
+    .{ "Trs", {} },           .{ "Vec", {} },            .{ "Vec2i", {} },            .{ "Vec3", {} },
+    .{ "Vec2", {} },          .{ "Color", {} },          .{ "Ray", {} },              .{ "RayCollision", {} },
+    .{ "Transform", {} },     .{ "quat", {} },           .{ "Camera2D", {} },         .{ "Camera3D", {} },
     // more functions (distinctive, no collisions). `splat3` / `splat2` / `splat2i` are the rest of the `splat`
     // family - what `prefer-splat` writes for Vec3 / Vec2 / Vec2i.
-        .{ "complex", {} },       .{ "determinant", {} },    .{ "f32x4", {} },
-    .{ "f32x8", {} },        .{ "lerpV", {} },         .{ "mapLinear", {} },      .{ "modAngle", {} },
-    .{ "mulMat", {} },       .{ "mulMatVec", {} },     .{ "niceNum", {} },        .{ "remap", {} },
-    .{ "scaling", {} },      .{ "splat", {} },         .{ "swizzle", {} },        .{ "transpose", {} },
-    .{ "vec", {} },          .{ "splat3", {} },        .{ "splat2", {} },         .{ "splat2i", {} },
+    .{ "complex", {} },       .{ "determinant", {} },    .{ "f32x4", {} },            .{ "f32x8", {} },
+    .{ "lerpV", {} },         .{ "mapLinear", {} },      .{ "modAngle", {} },         .{ "mulMat", {} },
+    .{ "mulMatVec", {} },     .{ "niceNum", {} },        .{ "remap", {} },            .{ "scaling", {} },
+    .{ "splat", {} },         .{ "swizzle", {} },        .{ "transpose", {} },        .{ "vec", {} },
+    .{ "splat3", {} },        .{ "splat2", {} },         .{ "splat2i", {} },
     // numeric conversions (int<->float helpers; never a local name)
-    .{ "float", {} },        .{ "float64", {} },       .{ "int", {} },
+             .{ "float", {} },
+    .{ "float64", {} },       .{ "int", {} },
 });
 
 // ============================================================================

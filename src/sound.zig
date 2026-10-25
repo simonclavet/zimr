@@ -4246,8 +4246,8 @@ pub const mixer = struct {
     // lint:off module-var: the worklet instance's one state - its exported functions can share nothing else
     var worklet_state: WorkletState = .{};
 
-    /// Exports the worklet's entry points under their names (`worklet_abi`). Called by the app module's root, in a
-    /// build for the browser.
+    /// Exports the worklet's entry points under their names (`worklet_abi`). Called by `audio_device.init`, in a build
+    /// for the browser: only a module whose app opens the device carries them.
     pub fn exportWorkletEntryPoints() void {
         @export(&workletStart, .{ .name = worklet_abi.start });
         @export(&workletCommandBuffer, .{ .name = worklet_abi.command_buffer });
@@ -6773,6 +6773,16 @@ pub const audio_device = struct {
     /// second call while open does nothing. A page's browser starts its audio context suspended until the person's
     /// first gesture, which page audio waits for itself; until then the mixer runs, and nothing is heard.
     pub fn init(state: *AudioDeviceState) void {
+        // The renderer's entry points, for the browser: there the audio worklet runs a second instance of the app's
+        // module and renders the sound through them (`mixer.worklet_abi`). A `comptime` block in a function runs only
+        // when the function is compiled, so they are exported only from a module whose app opens the device. A page
+        // whose module has none plays no sound, makes no audio context and loads no worklet
+        // (`page_audio.prepareRenderer`).
+        comptime {
+            if (is_wasm) {
+                mixer.exportWorkletEntryPoints();
+            }
+        }
         if (state.ready) {
             return;
         }
@@ -9645,8 +9655,9 @@ pub const sounds = struct {
         };
     }
 
-    /// A sound from a file's bytes in memory: WAV, decoded at once. An OGG file is refused (`error.OggNeedsDecoder`) -
-    /// Vorbis plays as music, decoded as it plays; any other format is unknown (`error.UnknownAudioFormat`).
+    /// A sound from a file's bytes in memory: WAV or Ogg Vorbis, decoded whole at once (`loadFromVorbis` for Vorbis);
+    /// any other format is unknown (`error.UnknownAudioFormat`). A sound is for something short - a click, a capture,
+    /// a chime: a long Vorbis file belongs to `music`, which decodes it as it plays.
     pub fn loadFromMemory(
         state: *SoundTable,
         device: *const audio_device.AudioDeviceState,
@@ -9663,8 +9674,56 @@ pub const sounds = struct {
                 defer waves.unload(waves_state, wave);
                 return try loadFromWave(state, device, gpa, wave);
             },
-            .ogg => return error.OggNeedsDecoder,
+            .ogg => return try loadFromVorbis(state, device, gpa, bytes),
         }
+    }
+
+    /// A sound from an Ogg Vorbis file's bytes, decoded whole (`codecs.audio.vorbis.Decoder`): its frames, interleaved
+    /// as the mixer reads them, at the stream's rate. The mixer plays one channel or two, so a stream of more is
+    /// refused (`error.TooManyChannels`) rather than played wrong.
+    fn loadFromVorbis(
+        state: *SoundTable,
+        device: *const audio_device.AudioDeviceState,
+        gpa: Allocator,
+        bytes: []const u8,
+    ) !Sound {
+        var decoder: codecs.audio.vorbis.Decoder = try .init(gpa, bytes);
+        defer decoder.deinit();
+        const channel_count: usize = decoder.channelCount();
+        if (channel_count > 2) {
+            return error.TooManyChannels;
+        }
+        var samples: ArrayList(f32) = .empty;
+        errdefer samples.deinit(gpa);
+        // A chunk of whole frames for one channel or two.
+        var chunk: [4096]f32 = undefined;
+        while (true) {
+            const frames_read: usize = try decoder.readFrames(&chunk);
+            if (frames_read == 0) {
+                break;
+            }
+            try samples.appendSlice(gpa, chunk[0 .. frames_read * channel_count]);
+        }
+        const owned_samples: []f32 = try samples.toOwnedSlice(gpa);
+        errdefer gpa.free(owned_samples);
+        const slot: u32 = state.allocate() orelse return error.SoundTableFull;
+        const entry: *SoundEntry = state.get(slot).?;
+        const channels: u8 = @intCast(channel_count);
+        entry.samples = owned_samples;
+        entry.channels = channels;
+        entry.sample_rate = decoder.sampleRate();
+        entry.samples_allocator = gpa;
+        entry.engine_mixer = device.engine_mixer;
+        const frame_count: usize = owned_samples.len / channel_count;
+        return .{
+            .stream = .{
+                .buffer = @ptrFromInt(@as(usize, slot)),
+                .sampleRate = decoder.sampleRate(),
+                .sampleSize = 32,
+                .channels = channels,
+            },
+            .frameCount = @intCast(frame_count),
+        };
     }
 
     /// A second sound sharing `source`'s samples, with playback parameters of its own - for playing one sound at
@@ -9904,6 +9963,40 @@ pub const sounds = struct {
         ));
     }
 
+    test "loadFromMemory: an Ogg Vorbis file decodes whole - every frame, at the stream's rate and channels" {
+        var device: audio_device.AudioDeviceState = .{};
+        var wave_table: waves.AllocTable = .{};
+        var table: SoundTable = .{};
+        const ogg_bytes: []const u8 = codecs.audio.ogg.sample_ogg;
+        const sound: Sound = try loadFromMemory(&table, &device, &wave_table, testing_allocator, ".ogg", ogg_bytes);
+        defer unload(&table, sound);
+        try expect(isReady(&table, sound));
+
+        // The same stream decoded again, apart, a few frames at a time: the sound holds all of them, in order.
+        var decoder: codecs.audio.vorbis.Decoder = try .init(testing_allocator, ogg_bytes);
+        defer decoder.deinit();
+        const channel_count: usize = decoder.channelCount();
+        try expectEqual(decoder.sampleRate(), sound.stream.sampleRate);
+        try expectEqual(@as(u32, @intCast(channel_count)), sound.stream.channels);
+        const entry: *const SoundEntry = entryOf(&table, sound).?;
+        var frames_compared: usize = 0;
+        var chunk: [256]f32 = undefined;
+        while (true) {
+            const frames_read: usize = try decoder.readFrames(&chunk);
+            if (frames_read == 0) {
+                break;
+            }
+            const sample_start: usize = frames_compared * channel_count;
+            const sample_count: usize = frames_read * channel_count;
+            const stored: []const f32 = entry.samples[sample_start .. sample_start + sample_count];
+            try expectEqualSlices(f32, chunk[0..sample_count], stored);
+            frames_compared += frames_read;
+        }
+        try expect(frames_compared > 0);
+        try expectEqual(@as(u32, @intCast(frames_compared)), sound.frameCount);
+        try expectEqual(frames_compared * channel_count, entry.samples.len);
+    }
+
     test "a sound plays on the device's mixer: play, pause, resume, stop; the setters persist and reach its voice" {
         var engine_mixer: mixer.Mixer = .{};
         var device: audio_device.AudioDeviceState = .{ .engine_mixer = &engine_mixer };
@@ -10006,8 +10099,8 @@ comptime {
 // A `Sound` is a wave's samples registered with the mixer; playing it starts a voice reading them, at the sound's
 // volume, pitch and pan. A sound is made from:
 //   - `loadFromWave(wave)` - a wave in memory: a WAV file's, or one the composer made.
-//   - `loadFromMemory(bytes)` - a WAV file's bytes. An OGG file is refused (`error.OggNeedsDecoder`): Vorbis plays
-//     as music, decoded as it plays.
+//   - `loadFromMemory(bytes)` - a WAV or Ogg Vorbis file's bytes, decoded whole at load: for short sounds. A long
+//     Vorbis file - music - plays through `music` instead, decoded as it plays.
 //   - `loadAlias(source)` - a second sound sharing another's samples, with playback parameters of its own.
 
 // ============================================================================

@@ -58,8 +58,15 @@ sense.
 Geometry: `dot`, `cross3`, `length`, `lengthSqr`, `normalize`,
 `distance`.
 
-GLSL-style: `clamp`, `clamp01`, `mix` (lerp), `fract`,
-`smoothstep`, `step`, `sign`.
+GLSL-style: `clamp`, `clamp01`, `mix` (lerp), `fract`, `step`, `sign`.
+
+Easing, f32 or vectors of f32 (a bare literal computes as f32), branch-free for shaders:
+`smoothStep(e0, e1, x)` and `smoothStep01(t)` (the cubic), `smootherStep(e0, e1, x)` and
+`smootherStep01(t)` (Perlin's quintic, flat first and second derivatives at the ends).
+The GLSL spellings `smoothstep` / `smootherstep` are private stubs that name these.
+
+Motion: `DoubleSpring(T)` - a critically damped spring run twice in series, stepped in
+closed form toward a goal that may move every frame; `T` is f32 or a vector of f32.
 
 Matrices (column-major, M*v):
 - Construction: `identity`, `translation`, `rotationX/Y/Z`,

@@ -293,17 +293,20 @@
 //!     A free-list reclaims freed indices (`js_free`), and `js_mark`/`js_reset`
 //!     bracket a scope so all handles interned within it are released at once -
 //!     each frame of a page runs in one, so the table stays bounded in a render
-//!     loop. A scope is airtight: `js_mark` sets the free list aside, so the
-//!     scope's handles take no slot below its mark - where its reset would not
-//!     reach them - and `js_reset` gives the list back, with the slots the scope
-//!     freed below its mark added. A handle that must outlive the scope it is made
+//!     loop. A scope is airtight and fills holes first: a handle it makes takes a
+//!     free slot when there is one, and the free slots it takes below its mark
+//!     are noted on it (`__scopeStack`), so `js_reset` frees those and pops what
+//!     lies above the mark. A handle that must outlive the scope it is made
 //!     in - an object the page keeps for its life, made the first time a frame
 //!     needs it - is pinned (`js_pin`): a reset leaves it, and the slots below it
-//!     are freed rather than popped; `js_free` unpins it. A free slot holds
+//!     are freed rather than popped - free slots the next scopes take again, so a
+//!     pin made mid-frame lengthens the table once, not at every pin; `js_free`
+//!     unpins it. A free slot holds
 //!     `__freedSlotMarker`, a marker of its own - not `undefined`, which is a value a handle
 //!     may hold (a call that returns nothing) and must still be freeable - and
 //!     the marker throws when used: a handle used after it was freed says so.
-//!     `js_table_length` reads the table's length, for diagnostics.
+//!     `js_table_length` reads the table's length, for diagnostics, and
+//!     `js_live_handle_count` the slots in use - the length less the free slots.
 //!   * DEBUGGING HANDLES: `js_set_handle_debugging(1)` turns on, in its realm,
 //!     a record of where each handle is made - an `Error`, whose stack the
 //!     engine captures cheaply and formats only when read: when a tombstone
@@ -2652,9 +2655,11 @@ const Transpiler = struct {
             \\const __pinnedHandles = new Set();
             //
             // The scopes open now, innermost last: for each, the table's length when it opened - its mark - and the
-            // free list as it was then, set aside while the scope runs (`js_mark`). A scope that reused a free slot
-            // below its mark would make a handle its reset never reaches; with the list set aside, every handle a scope
-            // makes lies above its mark.
+            // free slots below its mark that it took for handles of its own (`__href`). Its reset pops what lies above
+            // the mark and frees those slots, so a scope fills the table's free slots before it lengthens the table.
+            // Without that, a handle pinned in a frame after others the frame made - a cache filled the first time a
+            // frame needs it - would hold the table at its length for good, the slots below it free and never taken
+            // again, and each such pin would lengthen the table by a frame's handles.
             \\const __scopeStack = [];
             //
             // What a freed slot holds while debugging is off: one marker shared by all freed slots - not `undefined`,
@@ -2713,11 +2718,19 @@ const Transpiler = struct {
             \\  return describedSite;
             \\}
             //
-            // A new handle for `value`: a freed slot if there is one, else a new slot at the table's end. While
-            // debugging, the place it was made in is captured with it.
+            // A new handle for `value`: a freed slot if there is one, else a new slot at the table's end. A freed slot
+            // below the innermost scope's mark is noted on the scope, whose reset frees it. While debugging, the place
+            // the handle was made in is captured with it.
             \\function __href(value) {
-            \\  const handle = __Hf.length ? __Hf.pop() : __H.length;
+            \\  const reusesFreeSlot = __Hf.length > 0;
+            \\  const handle = reusesFreeSlot ? __Hf.pop() : __H.length;
             \\  __H[handle] = value;
+            \\  if (reusesFreeSlot && __scopeStack.length > 0) {
+            \\    const innermostScope = __scopeStack[__scopeStack.length - 1];
+            \\    if (handle < innermostScope.mark) {
+            \\      innermostScope.slotsTakenBelowMark.push(handle);
+            \\    }
+            \\  }
             \\  if (__isDebuggingHandles) {
             \\    __errorWhereHandleWasMade[handle] = new Error();
             \\  }
@@ -2882,12 +2895,11 @@ const Transpiler = struct {
             \\  }
             \\}
             //
-            // Opens a scope: returns the table's length - the scope's mark - and sets the free list aside until the
-            // scope is reset, so that every handle made inside lies above the mark.
+            // Opens a scope: returns the table's length - the scope's mark. What the scope makes above the mark, its
+            // reset pops; the free slots below the mark it takes, `__href` notes on it, and its reset frees.
             \\function js_mark() {
             \\  const mark = __H.length;
-            \\  __scopeStack.push({ mark: mark, outerFreeList: __Hf });
-            \\  __Hf = [];
+            \\  __scopeStack.push({ mark: mark, slotsTakenBelowMark: [] });
             \\  return mark;
             \\}
             //
@@ -2896,14 +2908,38 @@ const Transpiler = struct {
             \\  return __H.length;
             \\}
             //
-            // Closes the scope opened at `mark`, releasing every handle made since. With nothing pinned, the table is
-            // popped back to the mark. With pins, the slots above the highest pin are popped, and the scope's slots
-            // below it, unpinned, are freed one by one - marked free and put on the free list. Then the free list as
-            // the scope found it comes back, with the scope's still-free slots added: those it freed below its mark
-            // (handles of an outer scope it let go), and those freed around pins. A scope opened inside this one and
-            // never reset - its function left by an exception - is closed with it, its free slots kept; a record whose
-            // mark is lower belongs to an outer scope and is left in place.
+            // The live handles: the table's slots less the free ones - what a leak raises, where the length also
+            // counts the free slots below a pinned handle.
+            \\function js_live_handle_count() {
+            \\  return __H.length - __Hf.length;
+            \\}
+            //
+            // Frees a slot a closing scope made, unless it is pinned or free already: marked free and put on the free
+            // list.
+            \\function __freeScopeSlot(handle) {
+            \\  if (__pinnedHandles.has(handle) || __isFreedSlot(__H[handle])) {
+            \\    return;
+            \\  }
+            \\  __H[handle] = __markerForFreedSlot(handle);
+            \\  __Hf.push(handle);
+            \\}
+            //
+            // Closes the scope opened at `mark`, releasing every handle made since. First the free slots below its mark
+            // that the scope took are freed again - and those of any scope opened inside it and never reset, its
+            // function left by an exception, which is closed with it; a record whose mark is lower belongs to an outer
+            // scope and is left in place. Then, with nothing pinned, the table is popped back to the mark; with pins,
+            // the slots above the highest pin are popped, and the scope's slots below it, unpinned, are freed one by
+            // one. Last, the free slots the popping removed leave the free list.
             \\function js_reset(mark) {
+            \\  while (__scopeStack.length > 0 && __scopeStack[__scopeStack.length - 1].mark >= mark) {
+            \\    const scope = __scopeStack.pop();
+            \\    for (const handle of scope.slotsTakenBelowMark) {
+            \\      __freeScopeSlot(handle);
+            \\    }
+            \\    if (scope.mark === mark) {
+            \\      break;
+            \\    }
+            \\  }
             \\  if (__pinnedHandles.size === 0) {
             \\    while (__H.length > mark) {
             \\      __H.pop();
@@ -2913,32 +2949,13 @@ const Transpiler = struct {
             \\      __H.pop();
             \\    }
             \\    for (let handle = __H.length - 1; handle >= mark; handle--) {
-            \\      const isPinned = __pinnedHandles.has(handle);
-            \\      if (!isPinned && !__isFreedSlot(__H[handle])) {
-            \\        __H[handle] = __markerForFreedSlot(handle);
-            \\        __Hf.push(handle);
-            \\      }
+            \\      __freeScopeSlot(handle);
             \\    }
             \\  }
-            \\  const isStillFree = function (handle) {
-            \\    return handle < __H.length && __isFreedSlot(__H[handle]);
-            \\  };
-            \\  let freeSlots = __Hf.filter(isStillFree);
-            \\  while (__scopeStack.length > 0) {
-            \\    const scope = __scopeStack.pop();
-            \\    if (scope.mark > mark) {
-            \\      const abandonedFreeSlots = scope.outerFreeList.filter(isStillFree);
-            \\      freeSlots = freeSlots.concat(abandonedFreeSlots);
-            \\      continue;
-            \\    }
-            \\    if (scope.mark === mark) {
-            \\      freeSlots = scope.outerFreeList.concat(freeSlots);
-            \\    } else {
-            \\      __scopeStack.push(scope);
-            \\    }
-            \\    break;
-            \\  }
-            \\  __Hf = freeSlots;
+            \\  const tableLength = __H.length;
+            \\  __Hf = __Hf.filter(function (handle) {
+            \\    return handle < tableLength;
+            \\  });
             \\}
             // A JavaScript function that calls the program's function `functionIndex` with handles for its arguments,
             // freed when it returns. An exception escaping it is handed to the realm's hook before it goes on

@@ -44,6 +44,7 @@ const track = z.robot_track;
 const latent = z.robot_latent;
 const resident = z.robot_track_resident;
 const zn_mlp = @import("zn_mlp");
+const lab = z.robot_lab;
 
 const Allocator = std.mem.Allocator;
 const bufPrint = std.fmt.bufPrint;
@@ -87,19 +88,9 @@ const shown_budget: f32 = 0.050;
 const max_rounds_in_flight: u64 = 8;
 const training_budget: f32 = 0.250;
 
-/// The learner, sized for a phone: small networks, short windows, a handful of windows per update.
-const learner_options: resident.Options = .{
-    .rows = 16,
-    .window = 8,
-    .hidden = 64,
-    .policy_hidden = 64,
-    .collect = 16,
-    .world_updates = 1,
-    .policy_updates = 1,
-    // Smoothness (CAPS): without it the policy's actions jump by 70% of their size every frame and the body
-    // looks like it is exploding; at 1 the jumps fall fourfold and it falls less (measured on the CPU twin).
-    .w_smooth = 1.0,
-};
+/// The learner, sized for a phone: small networks, short windows, a handful of windows per update - SuperTrack's
+/// recipe as a run file defaults it (`robot_lab.SuperTrackLearner`), one definition for the page and the trainer.
+const learner_options: resident.Options = (lab.SuperTrackLearner{}).options();
 
 /// Geno's task (`geno.tracking_task`: servo, floor, floor rest, the gated reward, the task's failure rule) with
 /// one change the LEARNER needs: a training window's grace after every reset. Every episode then yields at least

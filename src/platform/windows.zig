@@ -1204,6 +1204,11 @@ pub fn epochMillis() f64 {
     return ticks / ticks_per_millisecond;
 }
 
+/// The performance counter (`QueryPerformanceCounter`), in milliseconds.
+pub fn monotonicMilliseconds() f64 {
+    return native_os.monotonicMilliseconds();
+}
+
 /// The monitors, as Windows lists them (`native_loop.monitorCount`, `monitor`, `currentMonitor`).
 pub fn monitorCount() u32 {
     return native_loop.monitorCount();
@@ -1228,6 +1233,11 @@ pub fn focusWindow() void {
 
 pub fn setWindowPosition(monitor_index: u32, x: f32, y: f32) void {
     native_loop.setWindowPosition(monitor_index, x, y);
+}
+
+/// The app asks to end (`native_loop.requestQuit`): the window closes as if its close button were pressed.
+pub fn requestQuit() void {
+    native_loop.requestQuit();
 }
 
 pub fn setWindowSizeLimits(limits: contract.SizeLimits) void {

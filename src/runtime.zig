@@ -1340,6 +1340,8 @@ pub const input = struct {
         /// Whether the pointer is over the drawing area, as the platform last reported (`pushPointerPresence`);
         /// what `isCursorOnScreen` answers. True until the platform says otherwise.
         cursor_on_screen: bool = true,
+        /// What the latest pointer event came from (`contract.PointerKind`): a mouse until a platform says otherwise.
+        pointer_kind: contract.PointerKind = .mouse,
         cursor_hidden: bool = false,
         /// Whether the platform holds the pointer locked, as it last reported (`pushPointerLock`).
         pointer_locked: bool = false,
@@ -1609,6 +1611,11 @@ pub const input = struct {
     /// The pointer entered the drawing area (`is_inside`) or left it.
     pub fn pushPointerPresence(state: *InputState, is_inside: bool) void {
         state.mouse.cursor_on_screen = is_inside;
+    }
+
+    /// The kind of pointer the latest pointer event came from.
+    pub fn pushPointerKind(state: *InputState, kind: contract.PointerKind) void {
+        state.mouse.pointer_kind = kind;
     }
 
     /// Whether cutting `text` at `cut` would split a character: the byte there continues one (UTF-8 continuation
@@ -2711,6 +2718,11 @@ pub const input = struct {
     /// Returns whether the cursor is currently over the canvas.
     pub fn isCursorOnScreen(state: *const InputState) bool {
         return state.mouse.cursor_on_screen;
+    }
+
+    /// What the latest pointer event came from: a mouse, a finger or a pen (`contract.PointerKind`).
+    pub fn pointerKind(state: *const InputState) contract.PointerKind {
+        return state.mouse.pointer_kind;
     }
 
     /// The input side of locking the pointer for first-person controls: the cursor recorded as hidden, and hidden

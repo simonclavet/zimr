@@ -21,7 +21,7 @@ pub const Io = shader_externs.IoT(void);
 pub const Out = shader_externs.Out;
 pub const TextureRef = shader_externs.TextureRef;
 
-const smoothstep = zm.smoothstep;
+const smoothStep = zm.smoothStep;
 const length = zm.length;
 
 comptime {
@@ -42,7 +42,7 @@ pub fn shaderMain(io_in: Io) Out {
     const b: f32 = io_in.scene(uv - off)[2];
 
     // Vignette: fade toward the edges (edge0 > edge1 -> bright center).
-    const vig: f32 = smoothstep(0.85, 0.30, length(dir));
+    const vig: f32 = smoothStep(0.85, 0.30, length(dir));
 
     out.final_color = .{ r * vig, g * vig, b * vig, 1.0 };
     return out;

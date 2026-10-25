@@ -266,7 +266,7 @@ comptime {
     _ = &zm.clamp01;
     _ = &zm.lerp;
     _ = &zm.step;
-    _ = &zm.smoothstep;
+    _ = &zm.smoothStep;
     _ = &zm.hypot;
     _ = &zm.log2;
     _ = &zm.log10;

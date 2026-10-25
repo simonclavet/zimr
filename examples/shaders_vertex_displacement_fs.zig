@@ -6,7 +6,7 @@ const zm = @import("zm");
 const Vec3 = zm.Vec3;
 const dot = zm.dot;
 const normalize = zm.normalize;
-const smoothstep = zm.smoothstep;
+const smoothStep = zm.smoothStep;
 const shader_io = @import("shaders_vertex_displacement_fs_io.zig");
 const shader_externs = @import("shaders_vertex_displacement_fs_externs");
 
@@ -31,8 +31,8 @@ pub fn shaderMain(io_in: Io) Out {
     const deep: Vec3 = .{ 0.03, 0.10, 0.32 };
     const midc: Vec3 = .{ 0.06, 0.42, 0.66 };
     const crest: Vec3 = .{ 0.82, 0.94, 1.00 };
-    const c1: Vec3 = mixVec3(deep, midc, smoothstep(0.25, 0.55, h));
-    const base: Vec3 = mixVec3(c1, crest, smoothstep(0.62, 0.90, h));
+    const c1: Vec3 = mixVec3(deep, midc, smoothStep(0.25, 0.55, h));
+    const base: Vec3 = mixVec3(c1, crest, smoothStep(0.62, 0.90, h));
 
     // Blinn specular glint. Exponent 32 via five squarings - the DSL has no pow().
     const view: Vec3 = normalize(Vec3{ io_in.frag_view[0], io_in.frag_view[1], io_in.frag_view[2] });

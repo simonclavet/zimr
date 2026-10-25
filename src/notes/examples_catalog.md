@@ -7,20 +7,20 @@ a single feature up close, a minimal repro — and those stay. Each one's descri
 the simple version of, and the fuller example's verdict lists its simple versions, so the relation
 reads both ways. Only examples that are clearly redundant are deleted.
 
-- **Sources.** The gallery's one-liners live in `src/web/manifest.json` (305 cards; the native
+- **Sources.** The gallery's one-liners live in `src/web/manifest.json` (309 cards; the native
   `zimr_gallery` reads the same file). The descriptions below are rewritten from each example's own
   header comment, which is usually more accurate than the card. Where a card is wrong or a placeholder,
   the "Manifest fixes" section says so.
 - **Columns.** ★ is the manifest's complexity stars, and "—" means the example is not in the gallery.
   LOC counts every `.zig` file in the example's directory.
-- **Scope.** There are 326 directories; `assets/` and `example_common/` are shared support, not
-  examples. That leaves **324 examples**: 305 in the gallery and 19 outside it.
+- **Scope.** There are 333 directories; `assets/` and `example_common/` are shared support, not
+  examples. That leaves **331 examples**: 309 in the gallery and 22 outside it.
 
 ## Verdicts
 
 | Verdict | Meaning | Count |
 | --- | --- | ---: |
-| **KEEP** | stays | 317 |
+| **KEEP** | stays | 324 |
 | **DELETE** | clearly redundant: the same demo as another one, or a debugging step whose job is done | 5 |
 | **MERGE → x** | folded into `x`, then deleted | 2 |
 
@@ -233,6 +233,10 @@ gallery needs a show-or-hide call.
 | ecs_solar_system | 4 | 450 | An ECS node tree with tags and a CmdBuf: sun, planets, moons, ships and their orbits. | KEEP |
 | snake | 1 | 450 | Snake, by keyboard or by swipe, filling any window. | KEEP (flagship) |
 | tic_tac_toe | 1 | 274 | Two players share the screen; the board, X and O are all 2D shapes. | KEEP (flagship) |
+| goban | 3 | 5335 | Go and Atari Go: each group a tree of stones whose root keeps its liberties; a dragged stone shows the liberties it would leave and the stones it would take; captures fly to the side; a debug panel with the forest drawn, a judge, a move log and diagrams to copy and paste. | KEEP (flagship) |
+| goban_outposts | 2 | 38 | goban made another way (`goban.appFor`): Atari Go on 8 x 8 against the computer, a ladder of games (each rung played moving first, then second; won moving second, it gives the computer an outpost or takes one of the person's), no interface, a won game restarting by itself. | KEEP |
+| goban_problems | 2 | 33 | goban made another way (`goban.appFor`): its kill problems against the computer, the problem's region of the board, random symmetries, Undo and Next. | KEEP |
+| go_puzzles_hero | 2 | 42 | goban made another way (`goban.appFor`): fights on the outpost ladder, life and kill puzzles in turn, each puzzle a ladder of starts - abandoned down, solved up. | KEEP |
 
 ### Animation and easing
 
@@ -436,6 +440,8 @@ The `pipeline_*` series is a progression; each step adds one WebGPU mechanism.
 | audio_spectrum_visualizer | 2 | 222 | A live FFT of the master bus through an analyser tap. | KEEP |
 | composer_drum | 3 | 208 | An 8-step kick, snare and hat loop baked by `composer.Sequence`, with a playhead. | KEEP |
 | music_streaming | 3 | 157 | Stream an OGG: play, pause, seek, volume. | KEEP |
+| audio_scale_star | — | 1104 | The notes and chords of the major scale drawn around a circle in thirds, so that every chord is three neighbours: its root, its third and its fifth. | KEEP |
+| audio_scale_star_hands | — | 7385 | A scale played with two hands - the left chooses a chord, the right plays its notes - and shown several ways at once, each degree of the scale in its own colour in every key. | KEEP |
 
 ### Networking
 
@@ -495,6 +501,7 @@ None of these are in the gallery. The Geno pages are their humanoid counterparts
 | geno_train | — | 516 | **`track_train` on Geno.** | KEEP |
 | getup_frames | — | 444 | The get-up reference posed frame by frame, with foot heights and sole flatness. | KEEP (tool) |
 | geno_fit | — | 581 | Geno's fitted collision shapes riding the captures, optionally with the skinned mesh. | KEEP (tool) |
+| geno_lab | — | 1171 | The training lab: a run folder's parameters and newest weights loaded into a network, and Geno shown following the dance with them, the reference beside him; the weights reloaded while the trainer runs. | KEEP (tool) |
 
 ### UI
 

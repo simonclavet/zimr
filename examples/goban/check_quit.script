@@ -1,0 +1,26 @@
+// goban's Quit to Desktop ends the run (`z.requestQuit`): Menu, then the pause window's third button, then lines
+// the run never reaches. `zig build goban-headless -Dscript=examples/goban/check_quit.script`. The pause window's
+// buttons are centred near y 215 (Return to Game), 272 (Restart), 329 (Return to Main Menu) and 387 (Quit to
+// Desktop), at x 450.
+.{ .advance = 3 }
+// the main menu's Start Game, at (443, 586): a 13 x 13 game of plain Go
+.{ .move = .{ .x = 443, .y = 586 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 2 }
+.{ .move = .{ .x = 440, .y = 440 } }
+.{ .advance = 1 }
+.{ .move = .{ .x = 837, .y = 36 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+// the window is made in the frame after the release, at its first size; from the frame after that it fits its content
+.{ .advance = 3 }
+.{ .capture_to = "goban_quit_1_paused.png" }
+.{ .move = .{ .x = 450, .y = 387 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 30 }
+.{ .capture_to = "goban_quit_2_never.png" }

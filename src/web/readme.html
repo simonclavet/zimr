@@ -268,6 +268,17 @@ fn update(f: *z.Frame, s: *State) void {
                 singletons; two instances of the same app would not share a
                 byte.
             </p>
+            <p>
+                A run ends when the person closes the window, or when the app
+                asks: <code>z.requestQuit()</code> finishes the frame, runs
+                <code>deinit</code> and the GPU's teardown, and exits, by the same
+                way out as the close button. It exists where the program drives
+                its own frames &mdash; native and headless runs, as
+                <code>z.host.drives_own_frames</code> says. A page is called by
+                its browser and only the person closes its tab, so a call compiled
+                for the web does not compile: an app's Quit button sits inside
+                <code>if (comptime z.host.drives_own_frames)</code>.
+            </p>
 
             <p>
                 Examples run under <code>.memory = .managed</code>, the default,
@@ -465,6 +476,17 @@ drawScene(&sw, s);</code></pre>
                 this: one-finger drag orbits, two-finger pinch zooms, and the
                 drag is gated on <code>ui.wantCaptureMouse()</code> so grabbing
                 a slider never spins the camera.
+            </p>
+            <p>
+                A finger, a mouse and a pen all drive the pointer, a touch as the
+                left button. <code>z.pointerKind(f.input)</code> says which one the
+                latest pointer event came from &mdash; <code>.mouse</code>,
+                <code>.touch</code> or <code>.pen</code> &mdash; as each platform
+                reports it: the browser's <code>PointerEvent.pointerType</code>, the
+                mark Windows puts on the mouse messages it makes from a touch or a
+                pen. A platform that cannot tell says mouse. A finger hides the point
+                it touches and cannot hover, so an app may aim a little above it, or
+                show only while it touches what a mouse would show on hover.
             </p>
 
             <p>
@@ -1836,6 +1858,10 @@ robot.solvePointCloud(&amp;model, &amp;data, samples[0..n], opts);</code></pre>
             <h4>Sound</h4>
             <ul class="tut-index">
                 <li><a href="sound_tutorial.html">Sound</a> &mdash; samples, the mixer and its two sides, each platform's output, latency from a key to its sound, and instruments</li>
+            </ul>
+            <h4>Games</h4>
+            <ul class="tut-index">
+                <li><a href="goban_tutorial.html">goban</a> &mdash; a Go board: naming the points, the disjoint-set forest that keeps the groups, and the rules on top of it</li>
             </ul>
             <h4>Compute and learning</h4>
             <ul class="tut-index">

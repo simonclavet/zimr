@@ -147,12 +147,18 @@ pub fn loadValue(key: []const u8, buffer: []u8) ?[]u8 {
     return buffer[0..decoded.len];
 }
 
+/// Whether a failed save has been logged: a page whose host gives it no storage - a sandboxed viewer's - fails every
+/// save, and says so once.
+// lint:off module-var: the page's one storage, saved to through the contract's stateless `saveValue`
+var save_failure_logged: bool = false;
+
 /// Saves `bytes` under `key` in `localStorage`, base64-encoded (`loadValue`). A failure - storage full or
-/// unavailable - is logged, and the value is not kept.
+/// unavailable - is logged the first time, and the value is not kept.
 pub fn saveValue(key: []const u8, bytes: []const u8) void {
     const status: i32 = dom.persistence_save_bytes(std.heap.wasm_allocator, key, bytes) catch -1;
-    if (status != 0) {
-        log(.warn, "web platform: a value could not be saved (storage full or unavailable)");
+    if (status != 0 and !save_failure_logged) {
+        log(.warn, "web platform: a value could not be saved (storage full or unavailable); not said again");
+        save_failure_logged = true;
     }
 }
 
@@ -443,6 +449,11 @@ pub fn epochMillis() f64 {
     return web.dom.epochMillis();
 }
 
+/// The page's `performance.now()`.
+pub fn monotonicMilliseconds() f64 {
+    return web.dom.now_ms();
+}
+
 /// One monitor: the screen the page is shown on - its size in CSS pixels, at the device pixel ratio. A page sees no
 /// other monitor, and cannot tell the refresh rate.
 pub fn monitorCount() u32 {
@@ -492,6 +503,13 @@ pub fn setWindowPosition(monitor_index: u32, x: f32, y: f32) void {
 pub fn setWindowSizeLimits(limits: contract.SizeLimits) void {
     _ = limits;
     @compileError("web platform: a page cannot limit its browser window's size");
+}
+
+/// A page is called by its browser, frame after frame, and only the person closes its tab: an app that would end its
+/// run has no run to end here, so code that asks for it does not compile for the web (`z.host.drives_own_frames`
+/// says where it does).
+pub fn requestQuit() void {
+    @compileError("web platform: a page cannot close its browser's tab");
 }
 
 /// A key's label: the US layout's for now. A page reads the person's layout only in Chromium, and only through a

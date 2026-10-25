@@ -49,7 +49,7 @@ const vec4 = zm.vec4;
 const dot = zm.dot;
 const length = zm.length;
 const normalize = zm.normalize;
-const smoothstep = zm.smoothstep;
+const smoothStep = zm.smoothStep;
 const fract = zm.fract;
 const lerp = zm.lerp;
 const clamp01 = zm.clamp01;
@@ -69,7 +69,7 @@ export fn main() callconv(.{ .spirv_fragment = .{} }) void {
 
     // length + smoothstep: a soft ring around the centre.
     const distance_from_center: f32 = length(centered);
-    const ring: f32 = smoothstep(0.4, 0.45, distance_from_center) * smoothstep(0.5, 0.45, distance_from_center);
+    const ring: f32 = smoothStep(0.4, 0.45, distance_from_center) * smoothStep(0.5, 0.45, distance_from_center);
 
     // lerp + fract + a Vec3 build: a colour cycling between two endpoints.
     const cycle: f32 = fract(u.time * 0.25);

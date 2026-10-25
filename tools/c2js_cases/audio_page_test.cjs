@@ -215,6 +215,7 @@ function loudestOf(blocks) {
       resetHandles: js_reset,
       // The runtime's handles, for its own checks below.
       freeHandle: js_free,
+      pinHandle: js_pin,
       tableLength: js_table_length,
       setHandleDebugging: js_set_handle_debugging,
       handleCensus: (limit) => __H[js_handle_census(limit)],
@@ -253,6 +254,32 @@ function loudestOf(blocks) {
       pageAudio.freeHandle(pageAudio.handleOf(undefined));
     }
     assert.ok(pageAudio.tableLength() <= lengthBefore + 2, 'the table grew to ' + pageAudio.tableLength());
+    // A launcher's switches: each frame lets the last pin go, makes forty handles, then pins one more - page audio
+    // started again, as each app a launcher shows starts it. The free slots below each pin are taken again by the next
+    // frame: the table stays as long as after the first.
+    let pinnedInFrame = 0;
+    let lengthAfterFirstPin = 0;
+    for (let frame = 0; frame < 100; frame += 1) {
+      const frameScope = pageAudio.markHandles();
+      if (pinnedInFrame !== 0) pageAudio.freeHandle(pinnedInFrame);
+      for (let k = 0; k < 40; k += 1) pageAudio.handleOf({ k });
+      pinnedInFrame = pageAudio.handleOf({ pinnedIn: frame });
+      pageAudio.pinHandle(pinnedInFrame);
+      pageAudio.resetHandles(frameScope);
+      if (frame === 0) lengthAfterFirstPin = pageAudio.tableLength();
+    }
+    assert.ok(pageAudio.tableLength() <= lengthAfterFirstPin + 1, 'pins grew the table from ' + lengthAfterFirstPin
+      + ' to ' + pageAudio.tableLength());
+    assert.strictEqual(pageAudio.valueOf(pinnedInFrame).pinnedIn, 99, 'the last pin holds its value');
+    pageAudio.freeHandle(pinnedInFrame);
+    // A slot freed inside a scope and taken again there is released by the scope's reset.
+    const liveBeforeReuse = pageAudio.liveHandleCount();
+    const outerHandle = pageAudio.handleOf({ outer: true });
+    const reuseScope = pageAudio.markHandles();
+    pageAudio.freeHandle(outerHandle);
+    assert.strictEqual(pageAudio.handleOf({ inner: true }), outerHandle, 'the scope takes the freed slot');
+    pageAudio.resetHandles(reuseScope);
+    assert.strictEqual(pageAudio.liveHandleCount(), liveBeforeReuse, 'the slot taken again outlived its scope');
     // Debugging: a stale handle named with where it was made and freed; a leak counted by the code that made it.
     // One handle made before debugging begins, to be counted apart.
     const madeBeforeDebugging = pageAudio.handleOf({ early: true });
@@ -289,7 +316,8 @@ function loudestOf(blocks) {
     }
     assert.ok(pageAudio.tableLength() <= lengthBeforePromises + 2, 'promises grew the table to ' + pageAudio.tableLength());
     assert.ok(pageAudio.promiseRegistryLength() <= 3, 'the registry grew to ' + pageAudio.promiseRegistryLength());
-    console.log('runtime: 2 000 scoped frames, the table flat; a stale handle named; a leak counted where it was made;'
+    console.log('runtime: 2 000 scoped frames, the table flat; 100 frames pinning a handle each, the table flat;'
+      + ' a slot taken again in a scope released by it; a stale handle named; a leak counted where it was made;'
       + ' 500 frames of promises, the table and the registry flat');
   }
 

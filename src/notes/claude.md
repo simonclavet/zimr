@@ -413,6 +413,9 @@ Prior arc (`src/notes/mocap_plan.md`, §11-12): BVH/FBX loading, skinning, and t
                                                      `test-zimrnum`, `test-robot`...; `zn-` until Oct 11, when the
                                                      zimrnum prefix was found on every root)
     zig build test -Dslow-tests                      also the long simulations and learning curves
+    zig build test-goban --watch -fincremental       goban's tests on every save: 4 s to the first result, then a
+                                                     23-31 ms recompile and ~0.4 s of tests per save (Debug, so the
+                                                     self-hosted backend compiles incrementally; Oct 18)
     zig build test-<stem> -Dtest-report              also print the robot tests' measurement tables,
                                                      and run the MEASUREMENT tests, which skip otherwise
     zig build test -Dtest-timing                     each fast-tier test process lists its tests of 1 s or more
@@ -1860,7 +1863,8 @@ STYLE: `@trunc` is the house form for float->int, NOT `@intFromFloat` (Simon).
 - **1 core, ~3.9 GB RAM.** `-j1` is forced by the CPU, not memory. Parallelism is unavailable.
 - **Prefer the LAUNCHER over N standalones** when exercising several examples:
   `buildUserModShared` memoizes the shared modules, so engine+UI compile ONCE.
-- Untried levers, best first: `-fincremental` / `--watch`; pinning native tool binaries into
+- `-fincremental` / `--watch` WORKS on 0.18.0-dev.253 for host Debug artifacts (Oct 18, goban_plan.md journal:
+  a one-line edit 2.4 s plain, 11-18 ms per incremental update). Untried levers, best first: pinning native tool binaries into
   `tools/bin/`; `-ftime-report` to decide between attacking analysis or codegen.
 
 **★ MATCH A TOOL'S OPTIMIZE MODE TO ITS RUNTIME, NOT TO A BLANKET POLICY.** `gen_externs` is
@@ -3414,6 +3418,18 @@ translationV(-p))` — over inverting a matrix by hand. It needs no assumption a
 column holds the translation, which was the assumption that produced the wrong answer twice.
 
 ## Known sandbox quirks
+- **A finger in a headless script** (Oct 18): `.{ .move = .{ .x, .y, .kind = .touch } }` - the presses and releases
+  after it are a touch's too, and `z.pointerKind` says `.touch`. Without `.kind` a script's pointer is a mouse.
+- **The main test root on Linux needs no libc - keep it so** (Oct 18): `src/tests.zig` builds for the host with
+  `link_libc = false`, so `std.c` is unreachable there. `native_os.environmentVariable` returns null without libc
+  (before that fix, `isStartScreenSkipped`'s `getenv` broke the whole root on Linux while Windows passed). The UI test
+  context has no font metrics: text measures 0 wide and `font_size` tall - test layout vertically or with explicit
+  sizes.
+- **Headless runs need a Vulkan driver, and a fresh sandbox has none** (Oct 18): no ICD under
+  `/usr/share/vulkan/icd.d`. `apt-get update && apt-get install -y mesa-vulkan-drivers` (about a minute; the archive
+  is on the allowed list) adds lavapipe; then `zig build <name>-headless -Dscript=<file> -Dmode=release` runs on
+  `llvmpipe` with the validation layer, and `.capture_to` paths are written relative to the repo root - move the PNGs
+  out of the tree before zipping.
 - **`> file 2>&1` CAN LOSE STDOUT.** std's `File.Writer` writes a regular file POSITIONALLY, so with both streams
   on one file a later stderr write (a leak report at exit) lands at offset 0 over what stdout wrote. Two runs then
   "agree" on the leak lines alone (Sep 28: decl_deps looked like it printed nothing). `zig build`'s own output does

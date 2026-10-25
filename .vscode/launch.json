@@ -948,6 +948,50 @@
             "smartStep": true
         },
         {
+            "name": "Debug: go-puzzles-hero",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/go_puzzles_hero/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build go-puzzles-hero",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: goban",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/goban/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build goban",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: goban-outposts",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/goban_outposts/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build goban-outposts",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: goban-problems",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/goban_problems/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build goban-problems",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
             "name": "Debug: gripper",
             "type": "chrome",
             "request": "launch",
@@ -4488,6 +4532,50 @@
                 "settings set target.use-fast-stepping false"
             ],
             "preLaunchTask": "zig: build gltf-textured (windows)"
+        },
+        {
+            "name": "Debug: go-puzzles-hero (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/go_puzzles_hero.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build go-puzzles-hero (windows)"
+        },
+        {
+            "name": "Debug: goban (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/goban.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build goban (windows)"
+        },
+        {
+            "name": "Debug: goban-outposts (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/goban_outposts.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build goban-outposts (windows)"
+        },
+        {
+            "name": "Debug: goban-problems (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/goban_problems.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build goban-problems (windows)"
         },
         {
             "name": "Debug: gripper (windows)",

@@ -19,7 +19,7 @@
 const zm = @import("zm");
 const Vec = zm.Vec;
 const clamp01 = zm.clamp01;
-const smoothstep = zm.smoothstep;
+const smoothStep = zm.smoothStep;
 const vec4 = zm.vec4;
 const shader_io = @import("effect_mask_fs_io.zig");
 const shader_externs = @import("effect_mask_fs_externs");
@@ -48,7 +48,7 @@ pub fn shaderMain(io_in: Io) Out {
     // DIVIDER: a wipe along x. `softness` = 0 gives raylib's hard cut; feathering
     // it is strictly nicer and costs nothing.
     const half: f32 = @max(softness, 0.0005); // never a zero-width smoothstep
-    const div_t: f32 = smoothstep(divider - half, divider + half, uv[0]);
+    const div_t: f32 = smoothStep(divider - half, divider + half, uv[0]);
 
     // Select without branching on a sampled value.
     const t: f32 = if (mode < 0.5) mask_t else div_t;

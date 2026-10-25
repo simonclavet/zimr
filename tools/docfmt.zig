@@ -252,7 +252,7 @@ const style =
     \\  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
     \\  color-scheme:dark;
     \\}
-    \\body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+    \\body.gallery.list-open{grid-template-columns:minmax(300px,28%) 1fr;}
     \\.gallery a{border:0;}
     \\.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
     \\.list-open .g-side{display:flex;}
@@ -274,14 +274,29 @@ const style =
     \\  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
     \\  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
     \\}
-    \\/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+    \\/* A row: the example's screenshot (web/shots/<name>.png, which `zig build
+    \\   gallery-shots` saves), and beside it the name, the stars and the first
+    \\   three lines of the description. The picture is cropped to its box, so
+    \\   every row is the same height whatever the example's shape. scroll-margin:
+    \\   scrolled into view, a row clears the sticky module heading. */
     \\.g-item{
-    \\  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+    \\  display:flex;align-items:flex-start;gap:.7em;padding:.3em 1em;
     \\  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
     \\}
     \\.g-item:hover{color:var(--fg);background:var(--panel);}
     \\.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
-    \\.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    \\.g-shot{
+    \\  flex:none;display:block;width:80px;height:60px;max-width:none;object-fit:cover;
+    \\  background:var(--panel);border:1px solid var(--rule);border-radius:2px;
+    \\}
+    \\.g-text{flex:1;min-width:0;line-height:1.3;}
+    \\.g-name{display:flex;justify-content:space-between;gap:.6em;}
+    \\.g-name span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    \\.g-about{
+    \\  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;line-clamp:3;
+    \\  overflow:hidden;color:var(--faint);font-size:11px;
+    \\}
+    \\.g-item:hover .g-about,.g-item.on .g-about{color:var(--dim);}
     \\.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
     \\.g-none{padding:1em;color:var(--faint);}
     \\.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
@@ -350,7 +365,6 @@ const style =
     \\@media(max-width:700px){
     \\  body.gallery.list-open{grid-template-columns:1fr;}
     \\  .g-side{position:fixed;inset:44px 0 0 0;z-index:3;border-right:0;}
-    \\  .g-item{padding:.45em 1em;}
     \\  .g-desc{display:none;}
     \\  .g-src .l{white-space:pre-wrap;overflow-wrap:anywhere;}
     \\}

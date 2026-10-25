@@ -235,6 +235,8 @@ extern fn js_reset(m: Handle) void;
 extern fn js_pin(h: Handle) void;
 /// The live handles counted by where they were made, the `limit` most first, as text (`js_set_handle_debugging`).
 extern fn js_handle_census(limit: u32) Handle;
+/// The live handles: the table's slots less the free ones (`watchHandleTable`).
+extern fn js_live_handle_count() u32;
 
 // object literal + void-call (no return handle) + module->bridge bulk copy.
 extern fn js_obj() Handle;
@@ -1025,24 +1027,27 @@ const handle_watch_window_ms: f64 = 30_000;
 /// page that releases what its callbacks mint rises by none; a pinned handle is one, made once.
 const handle_growth_alarm: u32 = 300;
 
-/// The length reported first, whatever its rise: 200 000 handles - hundreds of times a page's own.
-const handle_table_alarm_length: u32 = 200_000;
+/// The live handles reported first, whatever their rise: 200 000 - hundreds of times a page's own.
+const live_handle_alarm_count: u32 = 200_000;
 
-/// The handle table, watched from frame to frame (`watchHandleTable`). A frame resets the table to where it began
-/// (`ZimrBoot.tick`), so its length at each frame's start is what lives outside frames: the handles made at boot, the
-/// pinned ones (`Value.keep`) - a few hundred, steady - and whatever a callback that runs outside the frame loop minted
-/// and never released: an event listener, a timer, a promise's callback with no handle scope of its own. A page whose
-/// length at a frame's start keeps rising leaks; one that stays put does not. The watch measures the rise over windows
-/// of `handle_watch_window_ms` and says so on the page's log (`console.error`, which the page shows) when it passes
-/// `handle_growth_alarm` - seconds after a leak starts, where the browser's own failure ("Invalid array length") comes
-/// tens of millions of handles later. It also says so each time the length doubles past `handle_table_alarm_length`.
+/// The handle table, watched from frame to frame (`watchHandleTable`). A frame releases what it made (`ZimrBoot.tick`),
+/// so the live handles at each frame's start are what lives outside frames: the handles made at boot, the pinned ones
+/// (`Value.keep`) - a few hundred, steady - and whatever a callback that runs outside the frame loop minted and never
+/// released: an event listener, a timer, a promise's callback with no handle scope of its own. A page whose live
+/// handles at a frame's start keep rising leaks; one whose stay put does not. The table's length is not the measure:
+/// a handle pinned in a frame after others the frame made holds the table at its length, the slots below it free, and
+/// the later frames take them again - a rise of a frame's handles, once, with nothing kept. The watch measures the rise
+/// over windows of `handle_watch_window_ms` and says so on the page's log (`console.error`, which the page shows) when
+/// it passes `handle_growth_alarm` - seconds after a leak starts, where the browser's own failure ("Invalid array
+/// length") comes tens of millions of handles later. It also says so each time the count doubles past
+/// `live_handle_alarm_count`.
 const HandleWatch = struct {
-    /// The length at the start of the window under way, and when the window began; 0 before the first frame.
-    window_start_length: u32 = 0,
+    /// The live handles at the start of the window under way, and when the window began; 0 before the first frame.
+    window_start_live_count: u32 = 0,
     window_start_ms: f64 = 0,
-    /// The length past which the size is reported next: the first time at `handle_table_alarm_length`, then each time
-    /// it doubles.
-    next_size_report_length: u32 = handle_table_alarm_length,
+    /// The count past which the live handles are reported next: the first time at `live_handle_alarm_count`, then
+    /// each time it doubles.
+    next_size_report_count: u32 = live_handle_alarm_count,
 };
 
 const BridgeGlobals = struct {
@@ -1173,6 +1178,12 @@ const BridgeGlobals = struct {
     const Jobs = struct {
         spawned: bool = false, // have we tried to create the workers yet?
         usable: bool = false, // ...and did it work? (a sandboxed iframe says no)
+        /// When the workers were made, on `performance.now()`: a pool none of whose workers has said it is ready
+        /// `startup_deadline_ms` later is given up (`checkPoolStarted`).
+        spawned_at_ms: f64 = 0,
+        /// Whether the pool was made and then given up - its workers failed to start - so that a job it took and never
+        /// ran reads as failed, not as running for ever.
+        abandoned_pool: bool = false,
         workers: Value = undefined, // JS Array of Worker
         busy_with: Value = undefined, // JS Array: worker index -> job handle it is running (0 = idle)
         /// JS Array: worker index -> 1 once that worker has INSTANTIATED its kernel wasm.
@@ -4266,12 +4277,29 @@ const ZimrInput = struct {
     fn domButtonOf(e: Value) i32 {
         return @trunc(js_to_num(e.get("button").h));
     }
+    /// A pointer event's kind, as the engine numbers it (`wgpu_app.inputPushPointerKind`): 0 a mouse, 1 a touch, 2 a
+    /// pen - `PointerEvent.pointerType`'s "mouse", "touch" and "pen"; anything else is taken for a mouse.
+    fn pointerKindOf(e: Value) i32 {
+        const pointer_type: Value = e.get("pointerType");
+        if (pointer_type.eql(str("touch"))) {
+            return 1;
+        }
+        if (pointer_type.eql(str("pen"))) {
+            return 2;
+        }
+        return 0;
+    }
+    /// Tells the engine which kind of pointer the event's pushes that follow come from.
+    fn pushPointerKind(e: Value) void {
+        callIfPresent("input_push_pointer_kind", .{numArg(pointerKindOf(e))});
+    }
     fn onPointerDown(ev: Handle) void {
         const e: Value = .{ .h = ev };
         const p: [2]f64 = localXY(e);
         // Per-pointer -> the touch ring.
         // The press's own time, on `performance.now()`'s clock, with both of its pushes.
         const time_ms: f64 = js_to_num(e.get("timeStamp").h);
+        pushPointerKind(e);
         callIfPresent("zimr_input_push_touch_down", .{
             numArg(pointerId(e)),
             numArg(p[0]),
@@ -4294,6 +4322,7 @@ const ZimrInput = struct {
     fn onPointerMove(ev: Handle) void {
         const e: Value = .{ .h = ev };
         const p: [2]f64 = localXY(e);
+        pushPointerKind(e);
         // Per-pointer -> the touch ring (tracks by id).
         callIfPresent("zimr_input_push_touch_move", .{ numArg(pointerId(e)), numArg(p[0]), numArg(p[1]) });
         // Mouse channel on EVERY move, exactly as the proven TS bridge did
@@ -4334,6 +4363,7 @@ const ZimrInput = struct {
     fn onPointerUp(ev: Handle) void {
         const e: Value = .{ .h = ev };
         const p: [2]f64 = localXY(e);
+        pushPointerKind(e);
         callIfPresent("zimr_input_push_touch_up", .{ numArg(pointerId(e)), numArg(p[0]), numArg(p[1]) });
         g.input.dragging = false;
         callIfPresent("input_push_mouse_button_up", .{domButtonOf(e)});
@@ -4661,6 +4691,7 @@ const ZimrJobs = struct {
                 return;
             }
             w.set("onmessage", func(&onWorkerMessage).call("bind", .{ num(0), num(@floatFromInt(i)) }));
+            w.set("onerror", func(&onWorkerError).call("bind", .{ num(0), num(@floatFromInt(i)) }));
             _ = g.jobs.workers.call("push", .{w});
             _ = g.jobs.busy_with.call("push", .{num(0)});
             _ = g.jobs.ready.call("push", .{num(0)}); // not until it says so
@@ -4672,6 +4703,96 @@ const ZimrJobs = struct {
             _ = w.call("postMessage", .{msg});
         }
         g.jobs.usable = true;
+        g.jobs.spawned_at_ms = nowMs();
+    }
+
+    /// How long a pool's workers have to say they are ready (`checkPoolStarted`). Instantiating the kernel wasm takes a
+    /// few milliseconds on a phone; a worker that has not started in seconds will not.
+    const startup_deadline_ms: f64 = 3000;
+
+    /// `performance.now()`.
+    fn nowMs() f64 {
+        const performance: Value = global().get("performance");
+        return js_to_num(performance.call("now", .{}).h);
+    }
+
+    /// Whether any of the pool's workers has said it is ready.
+    fn anyWorkerReady() bool {
+        const worker_count: u32 = g.jobs.ready.getU32("length");
+        var worker_index: u32 = 0;
+        while (worker_index < worker_count) : (worker_index += 1) {
+            if (js_to_num(g.jobs.ready.at(worker_index).h) >= 1) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// Gives the pool up when none of its workers has started in `startup_deadline_ms`. A page can be allowed to
+    /// make a Worker and still never run one - the Claude app's preview makes them without a word, and they never
+    /// start - and without this the jobs queued for them would wait for ever, while `available()` told the app it had
+    /// workers.
+    fn checkPoolStarted() void {
+        if (!g.jobs.usable or anyWorkerReady()) {
+            return;
+        }
+        const waited_ms: f64 = nowMs() - g.jobs.spawned_at_ms;
+        if (waited_ms > startup_deadline_ms) {
+            abandonPool("no worker started within 3 s");
+        }
+    }
+
+    /// A worker could not run its program (its `error` event): it takes no job from now on, and when no worker is
+    /// left that could, the pool is given up.
+    fn onWorkerError(worker_idx_h: Handle, event_h: Handle) void {
+        const m: Handle = js_mark();
+        defer js_reset(m);
+        const slot: u32 = @trunc(js_to_num(worker_idx_h));
+        // A script that threw has a message; a script that could not be loaded at all - a page that may make workers
+        // and not run them - is a plain error event with none, and the line the pool gives up with says enough.
+        const event: Value = .{ .h = event_h };
+        const message: Value = event.get("message");
+        const has_message: bool = message.truthy();
+        if (has_message) {
+            _ = global().get("console").call("error", .{ str("zimr.jobs: a worker failed:"), message });
+        }
+        g.jobs.ready.setAt(slot, num(-1));
+        const worker_count: u32 = g.jobs.ready.getU32("length");
+        var worker_index: u32 = 0;
+        while (worker_index < worker_count) : (worker_index += 1) {
+            if (js_to_num(g.jobs.ready.at(worker_index).h) >= 0) {
+                return; // one still starting, or started
+            }
+        }
+        abandonPool("every worker failed to start");
+    }
+
+    /// Gives the pool up: its workers stopped, `available()` false from now on - so `src/jobs.zig` runs kernels
+    /// inline, and an app that asks `jobs.parallel()` can do its work another way - and every job it took and has not
+    /// run failed, named "WorkersUnavailable", so that `poll` delivers the failure instead of waiting for ever.
+    /// Said on `console.info`, which the page's log overlay leaves off the screen: an app's fallback - its work done
+    /// another way - is the designed path where a host lets no worker start, not a fault to show over the app.
+    fn abandonPool(comptime reason: []const u8) void {
+        _ = global().get("console").call("info", .{ str("zimr.jobs: the workers are given up -"), str(reason) });
+        const worker_count: u32 = g.jobs.workers.getU32("length");
+        var worker_index: u32 = 0;
+        while (worker_index < worker_count) : (worker_index += 1) {
+            _ = g.jobs.workers.at(worker_index).call("terminate", .{});
+        }
+        _ = g.jobs.workers.call("splice", .{ num(0), num(@floatFromInt(worker_count)) });
+        _ = g.jobs.busy_with.call("splice", .{ num(0), num(@floatFromInt(worker_count)) });
+        _ = g.jobs.ready.call("splice", .{ num(0), num(@floatFromInt(worker_count)) });
+        const queued_count: u32 = g.jobs.queue.getU32("length");
+        var queued_index: u32 = 0;
+        while (queued_index < queued_count) : (queued_index += 1) {
+            const job: Value = g.jobs.queue.at(queued_index);
+            const handle: f64 = job.getNum("handle");
+            _ = g.jobs.results.call("set", .{ num(handle), num(-2) });
+            _ = g.jobs.kernel_errors.call("set", .{ num(handle), str("WorkersUnavailable") });
+        }
+        _ = g.jobs.queue.call("splice", .{ num(0), num(@floatFromInt(queued_count)) });
+        g.jobs.usable = false;
+        g.jobs.abandoned_pool = true;
     }
 
     /// Is a boolean-ish JS field SET?
@@ -4714,6 +4835,9 @@ const ZimrJobs = struct {
             return;
         }
 
+        // The kernel's log lines first - a job abandoned still said what it said.
+        printWorkerLog(data);
+
         // Did the owner give up while this was in flight (Job.deinit)? Then throw the
         // result away instead of parking a multi-megabyte Uint8Array in the Map that
         // nobody will ever come back for.
@@ -4744,6 +4868,47 @@ const ZimrJobs = struct {
         const slot: u32 = @trunc(js_to_num(worker_idx_h));
         g.jobs.busy_with.setAt(slot, num(0)); // this worker is free again
         pump();
+    }
+
+    /// Prints the log lines a worker's reply carries (`log`: what the kernel wrote through `Registry.workerLogFn`), one
+    /// console call a line, by the level the line begins with - `error(...)`, `warning(...)`, `info(...)`,
+    /// `debug(...)` - as the page's own lines are printed, and so on the page's overlay too, which is the only console
+    /// a phone has.
+    fn printWorkerLog(data: Value) void {
+        const has_log: bool = js_to_num(data.call("hasOwnProperty", .{str("log")}).h) != 0;
+        if (!has_log) {
+            return;
+        }
+        const lines: Value = data.get("log").call("split", .{str("\n")});
+        const line_count: u32 = lines.getU32("length");
+        const page_console: Value = global().get("console");
+        var line_index: u32 = 0;
+        while (line_index < line_count) : (line_index += 1) {
+            const line: Value = lines.at(line_index);
+            if (line.getU32("length") == 0) {
+                continue;
+            }
+            // Each level's line begins with its name, and goes to its console method (a method's name is fixed at
+            // compile time, so the levels are unrolled).
+            const ConsoleLevel = struct { line_start: []const u8, console_method: []const u8 };
+            const levels: [4]ConsoleLevel = .{
+                .{ .line_start = "error", .console_method = "error" },
+                .{ .line_start = "warning", .console_method = "warn" },
+                .{ .line_start = "info", .console_method = "info" },
+                .{ .line_start = "debug", .console_method = "debug" },
+            };
+            var printed: bool = false;
+            inline for (levels) |level| {
+                const line_is_of_level: bool = js_to_num(line.call("startsWith", .{str(level.line_start)}).h) != 0;
+                if (!printed and line_is_of_level) {
+                    _ = page_console.call(level.console_method, .{ str("zimr.jobs worker:"), line });
+                    printed = true;
+                }
+            }
+            if (!printed) {
+                _ = page_console.call("log", .{ str("zimr.jobs worker:"), line });
+            }
+        }
     }
 
     /// Hand queued jobs to idle workers until one or the other runs out.
@@ -4792,6 +4957,7 @@ const ZimrJobs = struct {
     /// the kernel inline if the answer is no.
     fn available() f64 {
         spawn();
+        checkPoolStarted();
         return if (g.jobs.usable) 1 else 0;
     }
 
@@ -4863,11 +5029,17 @@ const ZimrJobs = struct {
     /// Ask `typeof` instead. A number is the failure marker; anything else is the result, and
     /// its `.length` is the byte count.
     fn poll(handle: f64) f64 {
-        if (!g.jobs.usable) {
+        checkPoolStarted();
+        const pool_was_made: bool = g.jobs.usable or g.jobs.abandoned_pool;
+        if (!pool_was_made) {
             return -1;
         }
         const r: Value = g.jobs.results.call("get", .{num(handle)});
         if (r.isNull()) {
+            // A pool given up has no job running: one it never recorded is failed, not waiting.
+            if (g.jobs.abandoned_pool) {
+                return -2;
+            }
             return -1; // still queued or still running
         }
         // `Number.isFinite` does NOT coerce its argument: it is false for anything that is
@@ -6820,30 +6992,29 @@ const ZimrBoot = struct {
     /// it polls the in-flight promise and hands the result to advance(); once
     /// running (stage 4) it ticks one frame of the wasm module. It re-arms itself
     /// every call until stage 0, which means "stopped" (idle or a fatal error).
-    /// Watches the handle table at a frame's start (`HandleWatch`): `length_at_frame_start` is the frame's mark - the
-    /// table's length before the frame made any handle. Reports a rise over a window, and a size past the alarm's, on
-    /// the page's log.
-    fn watchHandleTable(length_at_frame_start: Handle, now_ms: f64) void {
+    /// Watches the handle table at a frame's start (`HandleWatch`): `live_count_at_frame_start` is the live handles
+    /// before the frame made any. Reports a rise over a window, and a count past the alarm's, on the page's log.
+    fn watchHandleTable(live_count_at_frame_start: u32, now_ms: f64) void {
         const watch: *HandleWatch = &g.boot.handle_watch;
-        const length: u32 = length_at_frame_start;
+        const live_count: u32 = live_count_at_frame_start;
         const is_first_frame: bool = watch.window_start_ms == 0;
         if (is_first_frame) {
             watch.window_start_ms = now_ms;
-            watch.window_start_length = length;
+            watch.window_start_live_count = live_count;
             return;
         }
         const window_ms: f64 = now_ms - watch.window_start_ms;
         if (window_ms >= handle_watch_window_ms) {
-            // Saturating: freeing pinned handles can shorten the table, which is no rise.
-            const rise: u32 = length -| watch.window_start_length;
+            // Saturating: freeing pinned handles lowers the count, which is no rise.
+            const rise: u32 = live_count -| watch.window_start_live_count;
             if (rise >= handle_growth_alarm) {
                 _ = global().get("console").call("error", .{
-                    str("zimr: the page's handle table rose by"),
+                    str("zimr: the page's live handles rose by"),
                     numArg(@floatFromInt(rise)),
-                    str("handles in"),
+                    str("in"),
                     numArg(@round(window_ms / 1000)),
                     str("s outside frames, to"),
-                    numArg(@floatFromInt(length)),
+                    numArg(@floatFromInt(live_count)),
                     str("- a callback that runs outside the frame loop (an event listener, a timer, a promise's" ++
                         " callback) keeps every handle it mints: give it a handle scope (scopedListener, or" ++
                         " js_mark/js_reset around its body). Where the live handles were made, while handle" ++
@@ -6852,15 +7023,15 @@ const ZimrBoot = struct {
                 });
             }
             watch.window_start_ms = now_ms;
-            watch.window_start_length = length;
+            watch.window_start_live_count = live_count;
         }
-        if (length >= watch.next_size_report_length) {
+        if (live_count >= watch.next_size_report_count) {
             _ = global().get("console").call("error", .{
-                str("zimr: the page's handle table holds"),
-                numArg(@floatFromInt(length)),
-                str("handles between frames, where a page keeps a few hundred: something keeps what it mints"),
+                str("zimr: the page holds"),
+                numArg(@floatFromInt(live_count)),
+                str("live handles between frames, where a page keeps a few hundred: something keeps what it mints"),
             });
-            watch.next_size_report_length = length *| 2;
+            watch.next_size_report_count = live_count *| 2;
         }
     }
 
@@ -6871,6 +7042,8 @@ const ZimrBoot = struct {
         // longer. What the page keeps for its life is pinned where it is made (`Value.keep`). The boot's stages run
         // outside any scope: what they make - the adapter, the device, the module - is kept.
         const is_running: bool = g.boot.stage == 4;
+        // Counted before the frame makes a handle: what lives outside frames (`watchHandleTable`).
+        const live_handles_at_frame_start: u32 = js_live_handle_count();
         const frame_scope: Handle = if (is_running) js_mark() else 0;
         defer if (is_running) js_reset(frame_scope);
         switch (g.boot.stage) {
@@ -6923,7 +7096,7 @@ const ZimrBoot = struct {
                 ZimrWgpu.syncCanvasBacking();
                 const performance: Value = global().get("performance");
                 const now_ms: f64 = js_to_num(performance.call("now", .{}).h);
-                watchHandleTable(frame_scope, now_ms);
+                watchHandleTable(live_handles_at_frame_start, now_ms);
                 if (g.boot.classic_contract) {
                     // Classic wasi reactor: update(frame_ms) - the frame's time, which the app's frame clock follows.
                     _ = g.boot.module_exports.call("update", .{Value{ .h = js_num(now_ms) }});

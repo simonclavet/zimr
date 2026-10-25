@@ -1305,6 +1305,40 @@ pub const ObsNormalizer = struct {
             o.* = clamp((x - mu) / sigma, -self.clip, self.clip);
         }
     }
+
+    /// `observe` for an observation kept in f32, as a learner whose networks take f32 keeps it: each value widened to
+    /// f64 and folded in exactly as `observe` folds it, so that the statistics are the ones `observe` makes of the
+    /// widened values. Collection only.
+    pub fn observeF32(self: *ObsNormalizer, obs: []const f32) Error!void {
+        if (obs.len != self.mean.len) {
+            return Error.ShapeMismatch;
+        }
+        self.count += 1;
+        for (obs, self.mean, self.m2) |value, *mu, *m2| {
+            const x: f64 = value;
+            const delta: f64 = x - mu.*;
+            mu.* += delta / self.count;
+            // The second delta, against the updated mean - as `observe`.
+            m2.* += delta * (x - mu.*);
+        }
+    }
+
+    /// `apply` in place, for an observation kept in f32: each value widened, normalised in f64 exactly as `apply`
+    /// normalises it, and narrowed back once - the numbers `apply` gives for the widened values, rounded to f32. PURE,
+    /// like `apply`: the statistics are not touched. With nothing observed yet, the observation is left as it is.
+    pub fn applyInPlaceF32(self: ObsNormalizer, obs: []f32) Error!void {
+        if (obs.len != self.mean.len) {
+            return Error.ShapeMismatch;
+        }
+        if (self.count < 1) {
+            return;
+        }
+        for (obs, self.mean, self.m2) |*value, mu, m2| {
+            const x: f64 = value.*;
+            const sigma: f64 = @sqrt(m2 / self.count + self.epsilon);
+            value.* = @floatCast(clamp((x - mu) / sigma, -self.clip, self.clip));
+        }
+    }
 };
 
 /// The shuffled minibatch walk every on-policy update needs, owned once.
@@ -8578,6 +8612,57 @@ test "zn rl: apply does not touch the statistics, so evaluation cannot drift" {
     // otherwise reach the network as an enormous value and move every weight through it.
     try expect(@abs(out[0]) <= stats.clip);
     try expect(approxEqAbs(f64, out[0], stats.clip, 1.0e-12));
+}
+
+test "zn rl: an f32 observation folds in and normalises exactly as its widened f64 values do" {
+    // A learner whose networks take f32 keeps its observations in f32 (`robot_ppo_track`); its normaliser must be
+    // this one, with the same statistics and the same numbers, or a policy would see one normalisation in training
+    // and another deployed. Two normalisers fed the same observations - one through `observeF32`, one through
+    // `observe` with the values widened - hold identical statistics, and normalise an observation to identical
+    // numbers, one in place in f32 and one in f64 then narrowed.
+    const gpa: Allocator = testing_allocator;
+    var narrow: ObsNormalizer = try .init(gpa, 3);
+    defer narrow.deinit(gpa);
+    var wide: ObsNormalizer = try .init(gpa, 3);
+    defer wide.deinit(gpa);
+    narrow.clip = 5;
+    wide.clip = 5;
+    // Nothing observed yet: the observation is left as it is.
+    var untouched = [3]f32{ 3.0, -2.0, 0.5 };
+    try narrow.applyInPlaceF32(&untouched);
+    try expectEqualSlices(f32, &.{ 3.0, -2.0, 0.5 }, &untouched);
+    const observations = [_][3]f32{
+        .{ 1.5, 10.0, -0.2 },
+        .{ 1.4, 12.5, 0.3 },
+        .{ 1.6, 9.0, 0.1 },
+        .{ 1.5, 30.0, -0.4 },
+        .{ 1.45, 11.0, 0.0 },
+    };
+    for (observations) |observation| {
+        try narrow.observeF32(&observation);
+        var widened: [3]f64 = undefined;
+        for (&widened, observation) |*wide_value, value| {
+            wide_value.* = value;
+        }
+        try wide.observe(&widened);
+    }
+    try expectEqual(wide.count, narrow.count);
+    try expectEqualSlices(f64, wide.mean, narrow.mean);
+    try expectEqualSlices(f64, wide.m2, narrow.m2);
+    // One observation, the last input far enough out to be clamped at five deviations.
+    var in_place = [3]f32{ 1.55, 15.0, 9.0 };
+    var widened_input: [3]f64 = undefined;
+    for (&widened_input, in_place) |*wide_value, value| {
+        wide_value.* = value;
+    }
+    var wide_output: [3]f64 = undefined;
+    try wide.apply(&widened_input, &wide_output);
+    try narrow.applyInPlaceF32(&in_place);
+    for (in_place, wide_output) |narrowed, wide_value| {
+        const wide_narrowed: f32 = @floatCast(wide_value);
+        try expectEqual(wide_narrowed, narrowed);
+    }
+    try expectEqual(@as(f32, 5.0), in_place[2]);
 }
 
 test "zn rl: normalising makes two wildly different scales comparable" {

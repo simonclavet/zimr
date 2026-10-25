@@ -1,0 +1,141 @@
+# goban's problems as a person read them from their diagrams, for goban_problems_tool's annotated runs: each line a
+# problem's name, its kind (kill, live, or skip for no life-and-death problem) and its target's point in SGF letters
+# (- for a skip), tab-separated, then a note. A capturing race - living and killing the same moves - is a kill problem,
+# its target the white group in the race.
+ggg-intermediate-62.sgf	live	bq	black's corner group; uncertain
+ggg-intermediate-63.sgf	skip	-	an opening question, no group to kill or save
+ggg-intermediate-64.sgf	live	qp	black's group on the right edge
+ggg-intermediate-65.sgf	skip	-	attacking a lone white stone
+ggg-intermediate-66.sgf	skip	-	a hane on the edge
+ggg-intermediate-67.sgf	kill	dr	white's two stones on the left; the middle group the other choice
+ggg-intermediate-68.sgf	kill	mq	white's cutting stones
+ggg-intermediate-69.sgf	kill	cp	white's group on the third line
+ggg-intermediate-70.sgf	live	po	black's group on the right side
+ggg-intermediate-71.sgf	kill	cq	capturing race: white's two stones inside black's corner
+ggg-intermediate-72.sgf	skip	-	a middle-board shape question
+ggg-intermediate-73.sgf	kill	co	capturing race: white's two stones inside black's group
+ggg-intermediate-74.sgf	kill	cq	white's stone by the corner
+ggg-intermediate-75.sgf	kill	fq	white's pair at the bottom
+ggg-intermediate-76.sgf	kill	fq	capturing race: white's group beside black's column
+ggg-intermediate-77.sgf	kill	cm	white's pair above black's three stones; uncertain which white group
+ggg-intermediate-78.sgf	kill	gr	capturing race: white's three stones under black's group
+ggg-intermediate-79.sgf	kill	er	capturing race: white's three stones under black's row of four
+ggg-intermediate-80.sgf	kill	fo	capturing race: white's stones above and inside black's group; uncertain
+ggg-intermediate-81.sgf	kill	cn	white's big group on the left side
+ggg-intermediate-82.sgf	kill	cq	capturing race: white's stones under black's group
+ggg-intermediate-83.sgf	kill	gq	white's stones at the bottom, cut from the right
+ggg-intermediate-84.sgf	kill	oq	white's group inside black's wall
+ggg-intermediate-85.sgf	live	nr	black's group at the bottom; perhaps a race
+ggg-intermediate-86.sgf	kill	cp	white's group in the lower left
+ggg-intermediate-87.sgf	kill	oq	capturing race: white's pair inside black's group
+ggg-intermediate-88.sgf	kill	fq	white's group under black's wall
+ggg-intermediate-89.sgf	kill	dr	white's group at the bottom
+ggg-intermediate-90.sgf	kill	cq	white's group in the lower-left corner
+ggg-intermediate-91.sgf	kill	gq	the right one of white's two groups under black's wall
+ggg-intermediate-92.sgf	kill	qq	white's stones under black's wall at the bottom right
+ggg-intermediate-93.sgf	kill	bp	white's group in the lower-left corner
+ggg-intermediate-94.sgf	kill	pq	white's group between black's stones on the right; uncertain
+ggg-intermediate-95.sgf	kill	pp	white's cutting pair
+ggg-intermediate-96.sgf	kill	nq	white's cutting pair
+ggg-intermediate-97.sgf	kill	qp	capturing race: white's pair under black's pair on the right edge
+ggg-intermediate-98.sgf	kill	en	white's cutting stones, netted from a distance
+ggg-intermediate-99.sgf	kill	nq	white's cutting stone; uncertain
+ggg-intermediate-100.sgf	kill	iq	white's group along the bottom in a tangle; uncertain
+ggg-intermediate-101.sgf	kill	oq	white's group in the middle right
+ggg-intermediate-102.sgf	kill	fq	capturing race: white's group beside black's corner group; uncertain which white group
+ggg-intermediate-103.sgf	kill	pp	white's diagonal stones; uncertain
+ggg-intermediate-104.sgf	kill	pp	white's column on the right
+ggg-intermediate-105.sgf	kill	np	capturing race: white's group against black's middle group
+ggg-intermediate-106.sgf	kill	nq	white's cutting pair
+ggg-intermediate-107.sgf	live	oq	black's group under white's wall; three first moves
+ggg-intermediate-108.sgf	kill	pn	white's column between black's stones; uncertain
+ggg-intermediate-109.sgf	kill	or	capturing race: white's stones beside black's three at the bottom
+ggg-intermediate-110.sgf	kill	pq	capturing race: white's column against black's pair
+ggg-intermediate-112.sgf	kill	qr	white's stones in the bottom-right corner; uncertain
+ggg-intermediate-113.sgf	kill	nq	white's stones under black's wall
+ggg-intermediate-114.sgf	kill	oo	white's stones left of black's cutting stone; uncertain
+ggg-intermediate-115.sgf	kill	qp	white's column on the right, cut; uncertain
+ggg-intermediate-120.sgf	kill	dn	white's cutting stones inside black's group
+ggg-intermediate-121.sgf	kill	dp	capturing race: white's stones above black's group at the bottom
+ggg-intermediate-122.sgf	live	er	black's group at the bottom; perhaps a race against white's stone inside
+ggg-intermediate-123.sgf	live	eo	black's upper pair among white's stones; uncertain
+ggg-intermediate-124.sgf	live	bq	black's corner group
+ggg-intermediate-125.sgf	kill	dr	capturing race: white's stones left of black's row at the bottom
+ggg-intermediate-126.sgf	live	cn	black's left group, white stones inside it; uncertain
+ggg-intermediate-127.sgf	kill	er	capturing race: white's stones between black's
+ggg-intermediate-128.sgf	live	cr	black's corner group inside white's stones
+ggg-intermediate-129.sgf	kill	iq	capturing race: white's stone beside black's cutting pair
+ggg-intermediate-130.sgf	kill	cq	white's group on the left side
+ggg-intermediate-131.sgf	kill	dn	white's upper group
+ggg-intermediate-132.sgf	kill	fr	capturing race: white's pair under black's pair
+ggg-intermediate-133.sgf	live	bp	black's stones on the left among white's
+ggg-intermediate-134.sgf	kill	dq	white's group at the bottom left
+ggg-intermediate-135.sgf	kill	on	white's stone among black's on the right; uncertain
+ggg-intermediate-136.sgf	kill	fq	capturing race: white's pair beside black's group
+ggg-intermediate-137.sgf	kill	fp	a tesuji: white's stone put in atari
+ggg-intermediate-138.sgf	live	de	black's group at the top
+ggg-intermediate-139.sgf	kill	gq	white's group at the bottom
+ggg-intermediate-140.sgf	kill	cq	capturing race: white's stones inside black's column
+ggg-hard-21.sgf	kill	dr	white's two stones at the bottom left; uncertain
+ggg-hard-22.sgf	kill	dp	white's group at the bottom inside black's wall
+ggg-hard-23.sgf	kill	op	white's group in the bottom right
+ggg-hard-24.sgf	kill	pm	white's big group on the right side
+ggg-hard-25.sgf	live	cp	black's group in the lower left
+ggg-hard-26.sgf	live	eq	black's group in the lower left, white stones inside
+ggg-hard-27.sgf	live	hq	black's invading stones in white's area
+ggg-hard-28.sgf	kill	rq	white's group in the bottom-right corner
+ggg-hard-29.sgf	live	nq	black's group inside white's stones
+ggg-hard-30.sgf	kill	rn	white's group on the right edge
+ggg-hard-31.sgf	kill	pq	white's group on the right inside black's stones; uncertain
+ggg-hard-32.sgf	kill	cp	white's group on the left side
+ggg-hard-33.sgf	live	mq	black's middle group
+ggg-hard-34.sgf	kill	pq	white's group in the bottom-right corner
+ggg-hard-35.sgf	kill	dr	white's group in the lower-left corner
+ggg-easy-30.sgf	kill	dr	white's group along the bottom left
+ggg-easy-37.sgf	live	pr	black's group at the bottom right inside white's
+ggg-easy-43.sgf	kill	bq	white's column on the second line
+ggg-easy-48.sgf	kill	en	white's pair beside black's cut stones; uncertain
+ggg-easy-52.sgf	kill	cm	white's pair; uncertain
+ggg-easy-55.sgf	kill	nq	white's stones around black's group; uncertain
+ggg-easy-82.sgf	kill	er	white's row along the bottom
+ggg-easy-86.sgf	kill	oq	white's group in the bottom-right corner
+ggg-easy-91.sgf	kill	rl	capturing race: white's pair inside black's group on the right edge
+ggg-easy-95.sgf	live	cp	black's group on the left inside white's
+ggg-easy-98.sgf	kill	dn	white's pair; uncertain
+ggg-easy-100.sgf	kill	mo	the right one of white's two groups along the bottom
+ggg-easy-30.sgf	kill	dr	white's group at the bottom under black's wall
+ggg-easy-37.sgf	live	pr	black's middle group, white stones inside it; uncertain
+ggg-easy-43.sgf	kill	bq	white's column on the left edge
+ggg-easy-48.sgf	kill	eo	white's pair between black's stones; uncertain
+ggg-easy-52.sgf	kill	cn	white's cutting pair; uncertain
+ggg-easy-55.sgf	kill	nq	white's group at the bottom left, in a race with black's right side; uncertain
+ggg-easy-82.sgf	kill	er	white's row on the second line at the bottom
+ggg-easy-86.sgf	kill	oq	white's group in the bottom-right corner
+ggg-easy-91.sgf	kill	rl	capturing race: white's pair inside black's group on the right edge
+ggg-easy-95.sgf	live	cp	black's corner group
+ggg-easy-98.sgf	kill	dn	white's cutting pair; uncertain
+ggg-easy-100.sgf	kill	mo	the right one of the two white groups
+ggg-easy-107.sgf	kill	pq	capturing race: white's pair under black's cut pair
+ggg-easy-112.sgf	kill	qr	white's group in the bottom-right corner
+ggg-easy-121.sgf	kill	cq	white's pair under black's stones
+ggg-easy-124.sgf	kill	bp	white's stones on the left edge
+ggg-easy-134.sgf	kill	cq	white's group in the lower left
+ggg-intermediate-07.sgf	kill	oq	white's group in the bottom-right corner
+ggg-intermediate-09.sgf	kill	nr	capturing race: white's pair inside black's group; uncertain
+ggg-intermediate-24.sgf	kill	fq	white's stones inside black's group at the bottom
+ggg-intermediate-40.sgf	kill	kq	capturing race: white's group in the middle of the bottom; uncertain
+ggg-intermediate-41.sgf	kill	fq	white's pair beside the corner, netted; uncertain
+ggg-intermediate-42.sgf	live	op	black's group on the right side; uncertain
+ggg-intermediate-43.sgf	kill	jq	white's cutting pair at the bottom, netted; uncertain
+ggg-intermediate-48.sgf	kill	cp	white's stones on the left against black's column
+ggg-intermediate-49.sgf	kill	dq	white's column between black's stones
+ggg-intermediate-50.sgf	kill	nq	white's pair under black's row
+ggg-intermediate-52.sgf	kill	pp	white's pair between black's stones, cut from above; uncertain
+ggg-intermediate-54.sgf	kill	ro	white's column on the right edge
+ggg-intermediate-57.sgf	kill	hp	white's cutting stone; uncertain
+ggg-intermediate-58.sgf	skip	-	a whole-board question of connecting
+ggg-intermediate-59.sgf	kill	eq	white's stones inside black's group, split; uncertain
+ggg-intermediate-60.sgf	skip	-	a middle-game position, its target not plain
+ggg-intermediate-61.sgf	skip	-	a middle-game position, its target not plain
+ggg-intermediate-117.sgf	kill	qo	white's group in the bottom-right corner
+ggg-intermediate-119.sgf	kill	op	white's stone put in atari

@@ -148,7 +148,7 @@ pub const ShaderPipeline = struct {
     /// into the shader compile so shader bodies can `@import("zm")`
     /// and use the full Mat/Vec/Quat algebra (mulMat, mulMatVec,
     /// mulMatPoint, quatToMat, ...) and the GLSL-style helpers
-    /// (vec2/vec3/vec4, clamp01, mix, fract, smoothstep, dot,
+    /// (vec2/vec3/vec4, clamp01, mix, fract, smoothStep, dot,
     /// length, normalize, sw) directly.  Stage 5 of math-unification
     /// migrated all shaders from the (now-deleted) `shadermath`
     /// module to `math`; Stage 10 deleted shadermath outright.

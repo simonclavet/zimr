@@ -235,6 +235,10 @@ pub fn epochMillis() f64 {
     @compileError("template platform: `epochMillis` is not written");
 }
 
+pub fn monotonicMilliseconds() f64 {
+    @compileError("template platform: `monotonicMilliseconds` is not written");
+}
+
 pub fn monitorCount() u32 {
     @compileError("template platform: `monitorCount` is not written");
 }
@@ -267,6 +271,10 @@ pub fn setWindowPosition(monitor_index: u32, x: f32, y: f32) void {
 pub fn setWindowSizeLimits(limits: contract.SizeLimits) void {
     _ = limits;
     @compileError("template platform: `setWindowSizeLimits` is not written");
+}
+
+pub fn requestQuit() void {
+    @compileError("template platform: `requestQuit` is not written");
 }
 
 pub fn keyName(key: contract.KeyboardKey, buffer: []u8) ?[]const u8 {

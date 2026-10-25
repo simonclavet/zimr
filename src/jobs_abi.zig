@@ -51,6 +51,11 @@ pub const out_ptr = "zimr_job_out_ptr";
 pub const err_ptr = "zimr_job_err_ptr";
 pub const err_len = "zimr_job_err_len";
 
+// The log lines the last job wrote (`Registry.workerLogFn`), as UTF-8 text, one line each: where they are in the
+// kernel's memory, and how many bytes. The worker sends them home with the job's reply, and the page prints them.
+pub const log_ptr = "zimr_job_log_ptr";
+pub const log_len = "zimr_job_log_len";
+
 /// Message tags. The host sends `init` and `job`; the worker replies `ready` and `done`.
 pub const msg = struct {
     pub const init = "init";

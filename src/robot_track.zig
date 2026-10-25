@@ -55,6 +55,8 @@ const asinRad = zm.asinRad;
 const isFinite = zm.isFinite;
 const float = zm.float;
 const float64 = zm.float64;
+const expectApproxEqRel = std.testing.expectApproxEqRel;
+const expectEqual = std.testing.expectEqual;
 const pi = zm.pi;
 const qmul = zm.qmul;
 const conjugate = zm.conjugate;
@@ -2124,16 +2126,70 @@ pub const Judgement = struct {
     failures: usize,
     /// Starts that ran to the clip's end still with the reference.
     reached_end: usize,
-    /// Steps watched, over every start's episode.
+    /// Steps watched, over every start's episode: the sum, over the starts, of each first episode's length.
     watched_steps: usize,
     reward_sum: f64,
     frame_time: f32,
+    /// What the standard errors need beyond the sums above, a start's first episode lasting t steps and its failing
+    /// counted f (1 when the rule ended it, else 0): the sum of every t squared, and the sum of t over the starts that
+    /// failed (`meanTimeToFailureError`).
+    tracked_steps_squares: f64 = 0.0,
+    failed_starts_steps: f64 = 0.0,
+    /// Per start, the share of the clip from its frame to the clip's end that it tracked before losing the reference
+    /// (1 when it reached the end): their sum, and the sum of their squares (`meanTrackedShare`).
+    tracked_share_sum: f64 = 0.0,
+    tracked_share_squares: f64 = 0.0,
 
     /// Mean time to failure (seconds): the time watched per failure - the number that says how long a character
     /// keeps the reference. With no failure at all it is the whole time watched: a lower bound.
     pub fn meanTimeToFailure(self: Judgement) f32 {
         const seconds: f32 = float(self.watched_steps) * self.frame_time;
         return seconds / float(@max(self.failures, 1));
+    }
+
+    /// The STANDARD ERROR of the mean time to failure (seconds): how far the number would move between two
+    /// judgements of the same controller on other starts, so that a difference between two runs can be told from
+    /// noise. The mean time to failure is a RATIO of two sums over the starts - steps watched over failures, R =
+    /// sum(t) / sum(f) - and its error is the delta method's for a ratio: with n starts and the mean failure f-bar,
+    ///
+    ///     se(R) = sqrt( sum((t - R f)^2) / (n - 1) ) / (sqrt(n) f-bar)
+    ///
+    /// the spread of what each start adds beyond the ratio, scaled to the mean. The sum expands to sum(t^2) -
+    /// 2 R sum(t f) + R^2 sum(f) (f^2 is f), which the judgement keeps. Null with fewer than two starts or no failure:
+    /// the mean time to failure is then only a lower bound.
+    pub fn meanTimeToFailureError(self: Judgement) ?f32 {
+        const start_count: f64 = float64(self.starts);
+        const failure_count: f64 = float64(self.failures);
+        if (self.starts < 2 or self.failures == 0) {
+            return null;
+        }
+        const steps_sum: f64 = float64(self.watched_steps);
+        const ratio: f64 = steps_sum / failure_count;
+        const squared_residual_sum: f64 = self.tracked_steps_squares - 2.0 * ratio * self.failed_starts_steps +
+            ratio * ratio * failure_count;
+        const residual_variance: f64 = @max(squared_residual_sum, 0.0) / (start_count - 1.0);
+        const mean_failure: f64 = failure_count / start_count;
+        const error_in_steps: f64 = @sqrt(residual_variance) / (@sqrt(start_count) * mean_failure);
+        return @floatCast(error_in_steps * self.frame_time);
+    }
+
+    /// The mean share of the clip a start tracked, from its frame to the clip's end, before it lost the reference:
+    /// 1 for a controller that never loses it. Unlike the mean time to failure, it weighs every start alike.
+    pub fn meanTrackedShare(self: Judgement) f32 {
+        return @floatCast(self.tracked_share_sum / float64(@max(self.starts, 1)));
+    }
+
+    /// The standard error of the mean tracked share: the shares' sample deviation over the square root of the number
+    /// of starts. Null with fewer than two starts.
+    pub fn meanTrackedShareError(self: Judgement) ?f32 {
+        if (self.starts < 2) {
+            return null;
+        }
+        const start_count: f64 = float64(self.starts);
+        const mean_share: f64 = self.tracked_share_sum / start_count;
+        const squared_deviation_sum: f64 = self.tracked_share_squares - start_count * mean_share * mean_share;
+        const sample_variance: f64 = @max(squared_deviation_sum, 0.0) / (start_count - 1.0);
+        return @floatCast(@sqrt(sample_variance / start_count));
     }
 
     /// The share of starts that reached the clip's end.
@@ -2176,6 +2232,9 @@ pub const Judging = struct {
     fleet: *Fleet,
     actions: []f32,
     finished: []bool,
+    /// Per start: the steps its first episode has lasted so far, and the steps from its frame to the clip's end.
+    first_episode_steps: []usize,
+    available_steps: []usize,
     remaining: usize,
     result: Judgement,
 
@@ -2195,12 +2254,23 @@ pub const Judging = struct {
         errdefer gpa.free(actions);
         @memset(actions, 0.0);
         const finished: []bool = try gpa.alloc(bool, starts.len);
+        errdefer gpa.free(finished);
         @memset(finished, false);
+        const first_episode_steps: []usize = try gpa.alloc(usize, starts.len);
+        errdefer gpa.free(first_episode_steps);
+        @memset(first_episode_steps, 0);
+        // An episode reaches the clip's end at its last frame: from frame f, the frames after it.
+        const available_steps: []usize = try gpa.alloc(usize, starts.len);
+        for (available_steps, starts) |*available, frame| {
+            available.* = clip.frame_count - 1 - frame;
+        }
         return .{
             .gpa = gpa,
             .fleet = fleet,
             .actions = actions,
             .finished = finished,
+            .first_episode_steps = first_episode_steps,
+            .available_steps = available_steps,
             .remaining = starts.len,
             .result = .{
                 .starts = starts.len,
@@ -2214,6 +2284,8 @@ pub const Judging = struct {
     }
 
     pub fn deinit(self: *Judging) void {
+        self.gpa.free(self.available_steps);
+        self.gpa.free(self.first_episode_steps);
         self.gpa.free(self.finished);
         self.gpa.free(self.actions);
         self.fleet.deinit();
@@ -2235,12 +2307,14 @@ pub const Judging = struct {
                     continue;
                 }
                 self.result.watched_steps += 1;
+                self.first_episode_steps[env] += 1;
                 self.result.reward_sum += self.fleet.rewards[env];
                 if (!self.fleet.dones[env]) {
                     continue;
                 }
                 done.* = true;
                 self.remaining -= 1;
+                self.recordStart(env);
                 switch (self.fleet.ends[env]) {
                     .lost => self.result.failures += 1,
                     .clip_end => self.result.reached_end += 1,
@@ -2249,6 +2323,20 @@ pub const Judging = struct {
             }
         }
         return self.remaining == 0;
+    }
+
+    /// A start's first episode, ended: its length, squared, into the sums the standard errors need, the share of the
+    /// clip it tracked, and - when the rule ended it - its length among the failed starts' (`Judgement`).
+    fn recordStart(self: *Judging, env: usize) void {
+        const episode_steps: f64 = float64(self.first_episode_steps[env]);
+        const available: f64 = float64(@max(self.available_steps[env], 1));
+        const tracked_share: f64 = episode_steps / available;
+        self.result.tracked_steps_squares += episode_steps * episode_steps;
+        self.result.tracked_share_sum += tracked_share;
+        self.result.tracked_share_squares += tracked_share * tracked_share;
+        if (self.fleet.ends[env] == .lost) {
+            self.result.failed_starts_steps += episode_steps;
+        }
     }
 };
 
@@ -2374,6 +2462,57 @@ pub fn liftPerFrame(
         largest = @max(largest, lift);
     }
     return largest;
+}
+
+test "robot_track: a judgement's standard errors are the per-start formulas, worked from its sums" {
+    // Four starts: their first episodes lasted 100, 50, 200 and 30 steps, the third reaching the clip's end and the
+    // others losing the reference, with 200, 100, 200 and 300 steps of the clip before them. The judgement keeps only
+    // sums; its errors must be the formulas worked from the starts themselves - the delta method's residuals t - R f
+    // for the ratio, the shares' sample deviation for the mean share.
+    const episode_steps = [4]f64{ 100, 50, 200, 30 };
+    const failed = [4]f64{ 1, 1, 0, 1 };
+    const available = [4]f64{ 200, 100, 200, 300 };
+    var judgement: Judgement = .{
+        .starts = 4,
+        .failures = 3,
+        .reached_end = 1,
+        .watched_steps = 380,
+        .reward_sum = 0,
+        .frame_time = 1.0 / 60.0,
+    };
+    for (episode_steps, failed, available) |steps, failure, steps_available| {
+        const share: f64 = steps / steps_available;
+        judgement.tracked_steps_squares += steps * steps;
+        judgement.failed_starts_steps += steps * failure;
+        judgement.tracked_share_sum += share;
+        judgement.tracked_share_squares += share * share;
+    }
+    // The delta method from the starts: R = 380 / 3 steps per failure, the residuals t - R f.
+    const ratio: f64 = 380.0 / 3.0;
+    var residual_squares: f64 = 0;
+    for (episode_steps, failed) |steps, failure| {
+        const residual: f64 = steps - ratio * failure;
+        residual_squares += residual * residual;
+    }
+    const expected_steps_error: f64 = @sqrt(residual_squares / 3.0) / (@sqrt(4.0) * 0.75);
+    const expected_error: f32 = @floatCast(expected_steps_error / 60.0);
+    try expectApproxEqRel(expected_error, judgement.meanTimeToFailureError().?, 1.0e-5);
+    // The mean share and its error from the shares 0.5, 0.5, 1 and 0.1.
+    const shares = [4]f64{ 0.5, 0.5, 1.0, 0.1 };
+    var share_deviation_squares: f64 = 0;
+    for (shares) |share| {
+        share_deviation_squares += (share - 0.525) * (share - 0.525);
+    }
+    const expected_share_error: f32 = @floatCast(@sqrt(share_deviation_squares / 3.0 / 4.0));
+    try expectApproxEqRel(@as(f32, 0.525), judgement.meanTrackedShare(), 1.0e-6);
+    try expectApproxEqRel(expected_share_error, judgement.meanTrackedShareError().?, 1.0e-5);
+    // No failure: the mean time to failure is a lower bound, without an error; one start: no spread to measure.
+    var never_failed: Judgement = judgement;
+    never_failed.failures = 0;
+    try expectEqual(@as(?f32, null), never_failed.meanTimeToFailureError());
+    var one_start: Judgement = judgement;
+    one_start.starts = 1;
+    try expectEqual(@as(?f32, null), one_start.meanTrackedShareError());
 }
 
 test "robot_track: the judge - the same starts every time, identical twice, every start counted once" {
@@ -3088,7 +3227,7 @@ pub fn liftAboveFloor(m: *const rbt.Model, clip: *dance.Clip, d: *rbt.Data) f32 
 
 test "robot_track: D8 - the reference through the floor, left alone or lifted clear" {
     // THE FLOOR DECISION. Grounding shifts a clip by the median lowest FOOT point, which is a fair
-    // rule for walking and a poor one for a clip that lies down: the walk ends up 3 cm through the
+    // rule for walking and a poor one for a clip that lies down: the walk ends up 2 cm through the
     // floor at its deepest, the get-up 10. A tracker cannot reproduce a pose that is inside the
     // floor - the contacts push back - so either the clip is lifted until nothing penetrates, or
     // the reward absorbs the difference.
@@ -3127,7 +3266,14 @@ test "robot_track: D8 - the reference through the floor, left alone or lifted cl
     const dense: []f32 = try gpa.alloc(f32, m.nv * m.nv);
     defer gpa.free(dense);
 
-    for ([_][]const u8{ "assets/lafan1/walk1_subject2.bvh", "assets/lafan1/fallAndGetUp2_subject2.bvh" }) |path| {
+    const walk_path: []const u8 = "assets/lafan1/walk1_subject2.bvh";
+    const get_up_path: []const u8 = "assets/lafan1/fallAndGetUp2_subject2.bvh";
+    for ([_][]const u8{ walk_path, get_up_path }) |path| {
+        // The decision's premises - left alone the clip is buried, one offset floats it - are the get-up's: it
+        // lies on the floor for seconds, so its deepest frames sit far below its typical one. A walk's frames all
+        // sit within a centimetre of each other, so one offset lifts it clear without floating it far, and how
+        // deep or how far is a fact about the capture, not about lifting.
+        const lies_down: bool = eql(u8, path, get_up_path);
         const names = [_][]const u8{ "as retargeted", "lifted clear ", "lifted per frame" };
         for (0..3) |option| {
             var clip: dance.Clip = loadClip(gpa, io, path, 12.0) catch return error.SkipZigTest;
@@ -3199,10 +3345,20 @@ test "robot_track: D8 - the reference through the floor, left alone or lifted cl
             });
             // The decision, asserted rather than admired: per-frame lifting is the only option
             // right on BOTH sides - the typical frame on the floor and the deepest one clear of
-            // it. Leaving the clip alone buries it; one offset for the whole clip floats it.
+            // it. Leaving the get-up alone buries it; one offset for the whole of it floats it.
+            // On every clip, lifting clear leaves nothing under the floor.
             switch (option) {
-                0 => try expect(reference_deepest < -0.02),
-                1 => try expect(typical > 0.01 and reference_deepest > -0.001),
+                0 => {
+                    if (lies_down) {
+                        try expect(reference_deepest < -0.02);
+                    }
+                },
+                1 => {
+                    try expect(reference_deepest > -0.001);
+                    if (lies_down) {
+                        try expect(typical > 0.01);
+                    }
+                },
                 else => {
                     try expect(@abs(typical) < 0.01);
                     try expect(reference_deepest > -0.01);

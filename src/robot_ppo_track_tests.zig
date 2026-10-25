@@ -18,6 +18,8 @@ const track = @import("robot_track.zig");
 const dance = @import("robot_dance.zig");
 const ppo_track = @import("robot_ppo_track.zig");
 const track_env = @import("robot_track_env.zig");
+const lab = @import("robot_lab.zig");
+const robot_policy = @import("robot_policy.zig");
 const sac_track = @import("robot_sac_track.zig");
 const compute_host = @import("compute_host.zig");
 const codecs = @import("codecs.zig");
@@ -44,6 +46,8 @@ const window_frames = ppo_track.window_frames;
 const float = zm.float;
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
+const expectApproxEqRel = std.testing.expectApproxEqRel;
+const expectEqualSlices = std.testing.expectEqualSlices;
 const expectError = std.testing.expectError;
 const bufPrint = std.fmt.bufPrint;
 
@@ -627,7 +631,7 @@ test "robot_ppo_track: a sliced batch, and weights that travel as bytes" {
         const normed: *Trainer(zn_mlp) = try .init(gpa, &host, m, setup.imported.names, &clips, normed_options);
         defer normed.deinit();
         _ = normed.iterate();
-        try expect(normed.obs_count > 0);
+        try expect(normed.observation_normalizer.count > 0);
         break :blk try normed.exportWeights(gpa);
     };
     defer gpa.free(normed_bytes);
@@ -635,9 +639,9 @@ test "robot_ppo_track: a sliced batch, and weights that travel as bytes" {
     const reloaded: *Trainer(zn_mlp) = try .init(gpa, &host, m, setup.imported.names, &clips, normed_options);
     defer reloaded.deinit();
     try reloaded.importWeights(normed_bytes);
-    try expect(reloaded.obs_count == 4 * 64);
+    try expect(reloaded.observation_normalizer.count == 4 * 64);
     var spread: f64 = 0.0;
-    for (reloaded.obs_m2) |m2| {
+    for (reloaded.observation_normalizer.m2) |m2| {
         spread += m2;
     }
     try expect(spread > 0.0);
@@ -978,8 +982,8 @@ test "robot_ppo_track: D5 step 3 - PPO's policy cloned from the teacher, judged 
     // THE NORMALISER on 660 rows: dimensions whose spread is near its floor, and how often a normalised input is
     // pinned at +-5 - on training rows against held-out ones.
     var narrow: usize = 0;
-    const count: f64 = float64(@max(trainer.obs_count, 1));
-    for (trainer.obs_m2) |m2| {
+    const count: f64 = @max(trainer.observation_normalizer.count, 1);
+    for (trainer.observation_normalizer.m2) |m2| {
         if (@sqrt(m2 / count) < 1.0e-3) {
             narrow += 1;
         }
@@ -1133,4 +1137,212 @@ test "robot_ppo_track: episodes CUT by the step cap are bootstrapped from where 
     });
     try expect(cut >= 2);
     _ = trainer.learn();
+}
+
+test "PolicyShow: a PPO trainer's policy, shown without its trainer, lives what Trainer.Show lives - bit for bit" {
+    // The lab's watch and judge show any learner's policy file one way (`lab.PolicyShow`); PPO's own show
+    // (`Trainer.Show`) acts through the trainer. Same seed, same characters, same 600 physics steps: every decision's
+    // actions, the exposure and the failures must be the same. A trainer that has collected a few decisions first,
+    // so its normaliser has statistics to normalise by. CONTROL: one weight changed, the actions differ.
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    var setup: Setup = undefined;
+    setup.init(gpa, threaded.io(), "assets/lafan1/walk1_subject2.bvh", walk_first) catch return error.SkipZigTest;
+    defer setup.deinit();
+    const m: *rbt.Model = &setup.imported.model;
+    const clips = [_]*const dance.Clip{&setup.clip};
+    const options: Options = .{ .envs = 2, .horizon = 8, .normalize = true };
+    var host: Host = .initCpu();
+    const trainer: *Trainer(zn_mlp) = try .init(gpa, &host, m, setup.imported.names, &clips, options);
+    defer trainer.deinit();
+    _ = trainer.collect(8);
+    var arena_state: ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    var policy: lab.GenoPolicy = try lab.policyOfPpo(arena, .{
+        .kit_parameters = trainer.ppo.cpu_params,
+        .actor_layer_offsets = trainer.ppo.p_off,
+        .observation_size = trainer.n_obs,
+        .hidden_width = trainer.options.hidden,
+        .action_size = trainer.env.subset.dofs,
+        .observation_normalizer = if (trainer.options.normalize) trainer.observation_normalizer else null,
+        .action_limit = trainer.env.options.action_limit,
+        .action_scale = trainer.env.options.action_scale,
+        .filter_beta = trainer.env.options.beta,
+    });
+    const characters: usize = 2;
+    var show: Trainer(zn_mlp).Show = try trainer.startShow(gpa, characters, ppo_track.evaluation_seed);
+    defer Trainer(zn_mlp).endShow(gpa, &show);
+    // PPO's show caps episodes at the fleet's own default, 600 physics steps: the policy show is given the same.
+    var policy_show: lab.PolicyShow = try .start(arena, m, setup.imported.names, &clips, &policy, .{
+        .character_count = characters,
+        .seed = ppo_track.evaluation_seed,
+        .decimation = options.decimation,
+        .max_episode_steps = 600,
+        .task = options.task,
+        .bodies = options.bodies,
+    });
+    defer policy_show.end();
+    for (0..600) |_| {
+        trainer.stepShow(&show);
+        policy_show.step(&policy);
+        try expectEqualSlices(f32, show.actions, policy_show.actions);
+    }
+    try expectEqual(show.exposure, policy_show.exposure_steps);
+    try expectEqual(show.failures, policy_show.failure_count);
+    // The control: two new shows on the same seed, the second with one weight of the last layer changed - after one
+    // step, their actions differ.
+    const control_settings: lab.PolicyShowSettings = .{
+        .character_count = characters,
+        .seed = ppo_track.evaluation_seed,
+        .decimation = options.decimation,
+        .task = options.task,
+        .bodies = options.bodies,
+    };
+    var unchanged_show: lab.PolicyShow = try .start(arena, m, setup.imported.names, &clips, &policy, control_settings);
+    defer unchanged_show.end();
+    unchanged_show.step(&policy);
+    const last_layer: lab.PolicyLayer = policy.layers[policy.layers.len - 1];
+    last_layer.weights_and_biases[last_layer.weights_and_biases.len - 1] += 0.5;
+    var changed_show: lab.PolicyShow = try .start(arena, m, setup.imported.names, &clips, &policy, control_settings);
+    defer changed_show.end();
+    changed_show.step(&policy);
+    try expect(!eql(f32, unchanged_show.actions, changed_show.actions));
+}
+
+/// A policy of two layers whose every weight and bias is zero, sized `observation_size` -> `hidden` -> `action_size`
+/// and taking raw observations: its mean action is zero, whatever it observes. Memory: in `arena`.
+fn zeroPolicy(
+    arena: Allocator,
+    observation_size: usize,
+    hidden: usize,
+    action_size: usize,
+    options: Options,
+) !lab.GenoPolicy {
+    const widths: []u32 = try arena.alloc(u32, 3);
+    widths[0] = @intCast(observation_size);
+    widths[1] = @intCast(hidden);
+    widths[2] = @intCast(action_size);
+    const layers: []lab.PolicyLayer = try arena.alloc(lab.PolicyLayer, 2);
+    const first_parameters: []f32 = try arena.alloc(f32, lab.PolicyLayer.parameterCount(observation_size, hidden));
+    const second_parameters: []f32 = try arena.alloc(f32, lab.PolicyLayer.parameterCount(hidden, action_size));
+    @memset(first_parameters, 0.0);
+    @memset(second_parameters, 0.0);
+    layers[0] = .{ .activation = .tanh, .weights_and_biases = first_parameters };
+    layers[1] = .{ .activation = .none, .weights_and_biases = second_parameters };
+    const policy: lab.GenoPolicy = .{
+        .widths = widths,
+        .layers = layers,
+        .normalization = null,
+        .action_limit = 1.0,
+        .action_scale = options.action_scale,
+        .filter_beta = options.beta,
+    };
+    return policy;
+}
+
+test "judgePolicy: zero weights are judged as the servo alone, twice the same; a policy at its limit is not the servo" {
+    // The judge is the measuring instrument every comparison of runs rests on, so before its verdicts are trusted, its
+    // controls. A policy whose every weight and bias is zero acts with zero offsets - the servo alone - and must be
+    // judged exactly as the judge judges the servo with no policy at all: this holds the actor's whole path (the
+    // decision, the filter, the hold, the restart) to the judge's own. The same policy judged twice must be judged
+    // the same: nothing is random. And a policy that pushes every joint to its limit must be judged otherwise than the
+    // servo: the instrument can tell controllers apart.
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    var setup: Setup = undefined;
+    setup.init(gpa, threaded.io(), "assets/lafan1/walk1_subject2.bvh", walk_first) catch return error.SkipZigTest;
+    defer setup.deinit();
+    const m: *rbt.Model = &setup.imported.model;
+    const names: []const []const u8 = setup.imported.names;
+    const options: Options = .{};
+    var arena_state: ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    // The policy's sizes, as DReCon's bodies on this robot give them.
+    const bodies: robot_policy.Bodies = options.bodies;
+    const subset: robot_policy.Subset = try robot_policy.subsetFor(arena, m, names, bodies.watched, bodies.actuated);
+    const observation_size: usize = robot_policy.observationSize(subset);
+    const policy: lab.GenoPolicy = try zeroPolicy(arena, observation_size, 8, subset.dofs, options);
+    const starts: []usize = try track.evenStarts(arena, &setup.clip, 30);
+    const settings: lab.PolicyJudgeSettings = .{
+        .starts = starts,
+        .decimation = options.decimation,
+        .task = options.task,
+        .bodies = bodies,
+    };
+    const servo: track.Judgement = try lab.judgePolicy(gpa, arena, m, names, &setup.clip, null, settings);
+    const zero: track.Judgement = try lab.judgePolicy(gpa, arena, m, names, &setup.clip, &policy, settings);
+    try expectEqual(servo.starts, zero.starts);
+    try expectEqual(servo.failures, zero.failures);
+    try expectEqual(servo.reached_end, zero.reached_end);
+    try expectEqual(servo.watched_steps, zero.watched_steps);
+    try expectEqual(servo.reward_sum, zero.reward_sum);
+    const again: track.Judgement = try lab.judgePolicy(gpa, arena, m, names, &setup.clip, &policy, settings);
+    try expectEqual(zero.watched_steps, again.watched_steps);
+    try expectEqual(zero.reward_sum, again.reward_sum);
+    // At its limit: the last layer's biases all one, so every joint's action is +1 whatever the policy observes.
+    const last_layer: lab.PolicyLayer = policy.layers[1];
+    const biases_start: usize = policy.widths[1] * policy.widths[2];
+    @memset(last_layer.weights_and_biases[biases_start..], 1.0);
+    const pushed: track.Judgement = try lab.judgePolicy(gpa, arena, m, names, &setup.clip, &policy, settings);
+    const judged_otherwise: bool = pushed.watched_steps != servo.watched_steps or
+        pushed.failures != servo.failures or
+        pushed.reward_sum != servo.reward_sum;
+    try expect(judged_otherwise);
+}
+
+test "judgePolicy: a judgement's sums are its starts' own - each start judged alone adds up to all judged together" {
+    // The standard errors are worked from sums the judge keeps as each start's first episode ends (`track.Judgement`).
+    // Each start runs on a world of its own, so judging the starts one at a time must give the same episodes: the
+    // sums of the single judgements are the judgement of them all. A start that reached the clip's end tracked a
+    // share of exactly one - the check that the steps available from a start are counted right.
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    var setup: Setup = undefined;
+    setup.init(gpa, threaded.io(), "assets/lafan1/walk1_subject2.bvh", walk_first) catch return error.SkipZigTest;
+    defer setup.deinit();
+    const m: *rbt.Model = &setup.imported.model;
+    const names: []const []const u8 = setup.imported.names;
+    const options: Options = .{};
+    var arena_state: ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    const starts: []usize = try track.evenStarts(arena, &setup.clip, 30);
+    const together: track.Judgement = try lab.judgePolicy(gpa, arena, m, names, &setup.clip, null, .{
+        .starts = starts,
+        .task = options.task,
+        .bodies = options.bodies,
+    });
+    var watched_steps: usize = 0;
+    var failures: usize = 0;
+    var tracked_steps_squares: f64 = 0;
+    var failed_starts_steps: f64 = 0;
+    var tracked_share_sum: f64 = 0;
+    var tracked_share_squares: f64 = 0;
+    for (starts) |start| {
+        const alone: track.Judgement = try lab.judgePolicy(gpa, arena, m, names, &setup.clip, null, .{
+            .starts = &.{start},
+            .task = options.task,
+            .bodies = options.bodies,
+        });
+        if (alone.reached_end == 1) {
+            try expectEqual(@as(f64, 1.0), alone.tracked_share_sum);
+        }
+        watched_steps += alone.watched_steps;
+        failures += alone.failures;
+        tracked_steps_squares += alone.tracked_steps_squares;
+        failed_starts_steps += alone.failed_starts_steps;
+        tracked_share_sum += alone.tracked_share_sum;
+        tracked_share_squares += alone.tracked_share_squares;
+    }
+    try expectEqual(watched_steps, together.watched_steps);
+    try expectEqual(failures, together.failures);
+    try expectApproxEqRel(tracked_steps_squares, together.tracked_steps_squares, 1.0e-12);
+    try expectApproxEqRel(failed_starts_steps, together.failed_starts_steps, 1.0e-12);
+    try expectApproxEqRel(tracked_share_sum, together.tracked_share_sum, 1.0e-12);
+    try expectApproxEqRel(tracked_share_squares, together.tracked_share_squares, 1.0e-12);
 }

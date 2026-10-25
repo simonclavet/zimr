@@ -237,13 +237,14 @@ test "zm: the GPU math vocabulary is reachable by its standard names" {
     const zm = @import("zm");
     const canonical = [_][]const u8{
         // the ones that bit us
-        "step",   "lerp",       "clamp01",
+        "step",         "lerp",           "clamp01",
         // the rest of the shader-author vocabulary
-        "clamp",  "smoothstep", "fract",
-        "dot",    "cross",      "normalize",
-        "length", "distance",   "sinRad",
-        "cosRad", "floor",      "round",
-        "trunc",  "remap",
+        "clamp",        "smoothStep",     "fract",
+        "smootherStep", "dot",            "cross",
+        "smoothStep01", "smootherStep01", "normalize",
+        "length",       "distance",       "sinRad",
+        "cosRad",       "floor",          "round",
+        "trunc",        "remap",
     };
     inline for (canonical) |n| {
         if (!@hasDecl(zm, n)) {
@@ -255,7 +256,7 @@ test "zm: the GPU math vocabulary is reachable by its standard names" {
 
     // ONE public spelling per operation. A dead spelling that becomes pub again
     // is a second name for the same op - exactly the drift this file prevents.
-    const dead = [_][]const u8{ "mix", "saturate", "stepEdge", "sin", "cos", "sincos" };
+    const dead = [_][]const u8{ "mix", "saturate", "stepEdge", "sin", "cos", "sincos", "smoothstep", "smootherstep" };
     inline for (dead) |n| {
         if (@hasDecl(zm, n)) {
             @compileError("zimrmath exposes the dead spelling '" ++ n ++

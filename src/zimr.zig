@@ -159,6 +159,7 @@ pub const dom = web.dom;
 pub const DateTime = web.dom.DateTime;
 pub const localTime = web.dom.localNow;
 pub const epochMillis = wgpu_app.epochMillis;
+pub const monotonicMilliseconds = wgpu_app.monotonicMilliseconds;
 pub const timezoneOffsetMinutes = web.dom.tz_offset_min;
 
 // Software rasterizer (pure-Zig) + its per-pixel fragment-shader dispatcher, so
@@ -476,6 +477,7 @@ pub const robot_latent = @import("robot_latent.zig");
 pub const robot_geno_shapes = @import("robot_geno_shapes.zig");
 /// A robot built from the character its captures were recorded on (rl_track_plan.md, Phase R).
 pub const robot_geno = @import("robot_geno.zig");
+pub const robot_lab = @import("robot_lab.zig");
 /// Geno's robot model as `robot_geno.writeModel` makes it - a fixture its tests hold byte-equal to a fresh
 /// build, so pages load the body without re-measuring it.
 pub const robot_geno_model: []const u8 = @embedFile("tests/fixtures/robot/geno.xml");
@@ -906,6 +908,8 @@ pub const drawFullscreenShader = wgpu_app.drawFullscreenShader;
 // Input query API (free functions over f.input), mirroring the GL path.
 pub const MouseButton = wgpu_app.MouseButton;
 pub const getMousePosition = wgpu_app.getMousePosition;
+pub const pointerKind = wgpu_app.pointerKind;
+pub const PointerKind = wgpu_app.PointerKind;
 pub const getDeviceGravity = wgpu_app.getDeviceGravity;
 pub const getTouchPointCount = wgpu_app.getTouchPointCount;
 pub const getTouchPosition = wgpu_app.getTouchPosition;
@@ -932,6 +936,7 @@ pub const monitor = wgpu_app.monitor;
 pub const currentMonitor = wgpu_app.currentMonitor;
 pub const WindowShow = wgpu_app.WindowShow;
 pub const SizeLimits = wgpu_app.SizeLimits;
+pub const requestQuit = wgpu_app.requestQuit;
 pub const showWindow = wgpu_app.showWindow;
 pub const focusWindow = wgpu_app.focusWindow;
 pub const setWindowPosition = wgpu_app.setWindowPosition;

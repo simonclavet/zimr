@@ -1001,7 +1001,7 @@ const CorpusArgs = struct {
     @"--refresh": bool = false,
     corpus: []const u8,
     fixture: []const u8,
-    transpiler_sources: []const [:0]const u8 = &.{},
+    @"transpiler-sources": []const [:0]const u8 = &.{},
 };
 
 const corpus_cli: cli.Config(CorpusArgs) = .{
@@ -1011,7 +1011,9 @@ const corpus_cli: cli.Config(CorpusArgs) = .{
         .@"--refresh" = .{ .description = "rewrite the fixture from this build instead of checking against it" },
         .corpus = .{ .description = "the build's corpus: <shader>.spv and <shader>.wgsl, by source path" },
         .fixture = .{ .description = "the fixture, tests/fixtures/wgsl_corpus.txt" },
-        .transpiler_sources = .{ .description = "spv2wgsl's source files, which name the spv2wgsl outputs came from" },
+        .@"transpiler-sources" = .{
+            .description = "spv2wgsl's source files, which name the spv2wgsl outputs came from",
+        },
     },
 };
 
@@ -1027,7 +1029,7 @@ fn runCorpus(
         try out.print("\u{2717} WGSL corpus: the build collected no shaders into {s}\n", .{args.corpus});
         return 1;
     }
-    const transpiler: []const u8 = try transpilerFingerprint(arena, io, args.transpiler_sources);
+    const transpiler: []const u8 = try transpilerFingerprint(arena, io, args.@"transpiler-sources");
     const fixture_text: ?[]const u8 = try readOptionalFile(arena, io, args.fixture);
     var fixture: Fixture = .{};
     if (fixture_text) |text| {

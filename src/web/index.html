@@ -143,25 +143,62 @@
             }
         }
 
-        // Rebuild the list for the current filter. 300 rows: cheap enough to
-        // redraw on every keystroke, and nothing to keep in sync.
+        // A screenshot that fails to load - an example `gallery-shots` has not
+        // reached - becomes an empty frame of the same size, so its row keeps
+        // its shape and the picture is not asked for again.
+        function replaceMissingShot(e) {
+            const frame = document.createElement("span");
+            frame.className = "g-shot";
+            e.target.replaceWith(frame);
+        }
+
+        // An example's row in the list: its screenshot - shots/<name>.png, which
+        // `zig build gallery-shots` saves, fetched lazily, so only the rows
+        // scrolled into view cost a request - its name, its stars and its
+        // description. Built the first time the row is shown and kept, so a
+        // filter that hides and shows it again fetches nothing twice.
+        function rowOf(ex) {
+            if (!ex.row) {
+                const template = document.createElement("template");
+                template.innerHTML = `<a class="g-item" href="#${escapeHtml(ex.name)}"
+                    title="${escapeHtml(ex.description)}"><img class="g-shot"
+                    src="shots/${escapeHtml(ex.name)}.png" alt="" loading="lazy" decoding="async"><span
+                    class="g-text"><span class="g-name"><span>${escapeHtml(ex.name)}</span><span
+                    class="g-stars">${stars(ex.stars)}</span></span><span
+                    class="g-about">${escapeHtml(ex.description)}</span></span></a>`;
+                ex.row = template.content.firstElementChild;
+                // On the picture itself, not the list: the row may be filtered
+                // out of the list when the answer comes back.
+                ex.row.querySelector("img").addEventListener("error", replaceMissingShot);
+            }
+            ex.row.classList.toggle("on", ex === current);
+            return ex.row;
+        }
+
+        // Lay out the list for the current filter: the kept rows of the examples
+        // that match, under their module headings.
         function render() {
             const terms = q.value.toLowerCase().split(/\s+/).filter(Boolean);
             const m = mod.value;
             const shown = examples.filter(ex =>
                 (!m || ex.module === m) && terms.every(t => ex.hay.includes(t)));
-            let html = "", group = "";
+            const rows = [];
+            let group = "";
             for (const ex of shown) {
                 if (ex.module !== group) {
                     group = ex.module;
-                    html += `<div class="g-group">${escapeHtml(group)}</div>`;
+                    const heading = document.createElement("div");
+                    heading.className = "g-group";
+                    heading.textContent = group;
+                    rows.push(heading);
                 }
-                const on = ex === current ? " on" : "";
-                html += `<a class="g-item${on}" href="#${escapeHtml(ex.name)}"
-                    title="${escapeHtml(ex.description)}"><span>${escapeHtml(ex.name)}</span><span
-                    class="g-stars">${stars(ex.stars)}</span></a>`;
+                rows.push(rowOf(ex));
             }
-            list.innerHTML = html || `<p class="g-none">No example matches.</p>`;
+            if (rows.length === 0) {
+                list.innerHTML = `<p class="g-none">No example matches.</p>`;
+            } else {
+                list.replaceChildren(...rows);
+            }
             count.textContent = shown.length === examples.length
                 ? `${examples.length} examples`
                 : `${shown.length} of ${examples.length}`;
@@ -251,8 +288,13 @@
                 return;
             }
             source = { name: ex.name, files };
+            // A file of the example's own folder by its name, any other by its
+            // path under examples/: an imported example's kernels.zig shows as
+            // goban/kernels.zig beside the example's own kernels.zig.
+            const own = `examples/${ex.name}/`;
+            const label = path => path.startsWith(own) ? path.slice(own.length) : path.replace(/^examples\//, "");
             tabs.innerHTML = files.map((f, i) =>
-                `<button class="g-tab" data-i="${i}" title="${escapeHtml(f.path)}">${escapeHtml(f.path.split("/").pop())}`
+                `<button class="g-tab" data-i="${i}" title="${escapeHtml(f.path)}">${escapeHtml(label(f.path))}`
                 + `<span class="n">${f.lines}</span></button>`
             ).join("") + `<button class="g-tab g-copy" id="code-copy" title="copy this file">copy</button>`;
             showFile(0);

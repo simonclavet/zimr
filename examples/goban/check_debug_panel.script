@@ -1,0 +1,68 @@
+// goban's debug panel: H opens it; the inspector shows the stone under the pointer; "Verify every move" runs the
+// judge after each move and says what it found; the panel's Undo takes a move back. A mouse.
+// `zig build goban-headless -Dscript=examples/goban/check_debug_panel.script`. The main menu's Start Game is at
+// (443, 586); on 13 x 13 point (row, col) is at (114 + 56 col, 114 + 56 row). The panel's own positions were read
+// from its frame: Undo at (60, 226), Copy diagram at (118, 330), Paste diagram at (328, 330), the "Verify every
+// move" checkbox at (38, 428), below the forest view's.
+.{ .advance = 3 }
+.{ .move = .{ .x = 20, .y = 20 } }
+.{ .advance = 1 }
+.{ .move = .{ .x = 443, .y = 586 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 2 }
+.{ .key_down = .h }
+.{ .advance = 1 }
+.{ .key_up = .h }
+.{ .advance = 3 }
+.{ .capture_to = "goban_debug_1_open.png" }
+// switch the judge on, then black (8, 8) and white (8, 9): clear of the panel, which grows a line once the judge has
+// spoken (it reaches about (543, 457))
+.{ .move = .{ .x = 38, .y = 428 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 1 }
+.{ .move = .{ .x = 562, .y = 562 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 1 }
+.{ .move = .{ .x = 618, .y = 562 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 1 }
+// rest on black's (8, 8): the inspector shows it; the judge has checked both moves
+.{ .move = .{ .x = 562, .y = 562 } }
+.{ .advance = 3 }
+.{ .capture_to = "goban_debug_2_inspected.png" }
+// the panel's Undo: move 1 of 2, white's stone gone, no stone played under the panel
+.{ .move = .{ .x = 60, .y = 226 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 3 }
+.{ .capture_to = "goban_debug_3_undone.png" }
+// Copy diagram, then Paste diagram: the position goes to the clipboard as text and comes back as a new game of the
+// same position - one black stone
+.{ .move = .{ .x = 118, .y = 330 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 1 }
+.{ .move = .{ .x = 328, .y = 330 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 3 }
+.{ .capture_to = "goban_debug_4_round_trip.png" }
+// a 5 x 5 diagram pasted (as the system's own paste would bring it): white to play, two black stones and one white
+.{ .paste = "// goban 5x5, white to play\n. . . . .\n. X X . .\n. O . . .\n. . . . .\n. . . . ." }
+.{ .advance = 3 }
+.{ .capture_to = "goban_debug_5_pasted.png" }
+// text that is not a diagram: the note says why, and the position stays
+.{ .paste = "hello" }
+.{ .advance = 3 }
+.{ .capture_to = "goban_debug_6_not_a_diagram.png" }

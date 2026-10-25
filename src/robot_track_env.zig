@@ -66,6 +66,9 @@ pub const Options = struct {
     /// Radians per unit of action, handed to the fleet: the scale a policy is trained under is the one it is judged
     /// under.
     action_scale: f32 = 0.2,
+    /// The controller's range: each component of an action is clamped to this either side before the controller
+    /// scales it - what every learner's action, and every policy's, is held to.
+    action_limit: f32 = 1.0,
     /// The task, WHOLE (`robot_track.Task`: servo, floor, reward, failure rule).
     task: track.Task = .{},
     /// DReCon's watched and actuated bodies, in this robot's names.
@@ -216,7 +219,7 @@ pub const TrackEnv = struct {
         for (0..envs) |env| {
             const requested: []const f32 = actions[env * dofs ..][0..dofs];
             for (self.applied[env * dofs ..][0..dofs], requested) |*applied, value| {
-                applied.* = clamp(value, -1.0, 1.0);
+                applied.* = clamp(value, -self.options.action_limit, self.options.action_limit);
             }
             outcomes[env] = .{};
             self.ended_yet[env] = false;

@@ -56,6 +56,7 @@ const native_loop = @import("native_loop.zig");
 const platform = @import("platform.zig");
 const console = @import("platform/console.zig");
 const contract = platform.contract;
+pub const PointerKind = contract.PointerKind;
 const dom_input = @import("dom_input.zig");
 const native_log = std.log.scoped(.native);
 const zm = @import("zm");
@@ -1975,6 +1976,14 @@ pub fn currentMonitor() u32 {
 pub const WindowShow = contract.WindowShow;
 pub const SizeLimits = contract.SizeLimits;
 
+/// Ends the program's run: the loop finishes the frame it is in, tears down - the GPU released, the allocator's leaks
+/// counted - and the program exits, as after the window's close button. For the programs that drive their own frames
+/// (`host.drives_own_frames`: native and headless); a page is called by its browser and only the person closes its
+/// tab, so a call compiled for the web does not compile - write it inside `if (comptime z.host.drives_own_frames)`.
+pub fn requestQuit() void {
+    platform.current.requestQuit();
+}
+
 /// Minimizes, maximizes or restores the window. A page cannot: this does not compile for the web.
 pub fn showWindow(show: WindowShow) void {
     platform.current.showWindow(show);
@@ -2019,6 +2028,13 @@ pub fn requestPaste() void {
 /// The wall clock: milliseconds since the Unix epoch, UTC (`platform.current.epochMillis`).
 pub fn epochMillis() f64 {
     return platform.current.epochMillis();
+}
+
+/// The monotonic clock: milliseconds from a fixed start, never moved by a setting of the system's time - for timing
+/// work within a frame (`platform.current.monotonicMilliseconds`). In a headless run it is the run's clock, which
+/// stands still within a frame.
+pub fn monotonicMilliseconds() f64 {
+    return platform.current.monotonicMilliseconds();
 }
 
 /// Puts text on the system clipboard.
@@ -2430,6 +2446,13 @@ fn gestureMode(f: *Frame, touches: i32) GestureMode {
 /// Position of touch point `index` (0-based) in logical/design pixels.
 pub fn getTouchPosition(in: *const input.InputState, index: i32) Vec2 {
     return input.getTouchPosition(in, index);
+}
+
+/// What the latest pointer event came from: a mouse, a finger on a touch screen, or a pen - as the platform says
+/// (`contract.PointerKind`; a platform that cannot tell says mouse). A finger hides the point it touches and cannot
+/// hover; an app can aim above a finger, or show what a mouse would show on hover only while a finger touches.
+pub fn pointerKind(in: *const input.InputState) PointerKind {
+    return input.pointerKind(in);
 }
 
 pub fn getMousePosition(in: *const input.InputState) Vec2 {
@@ -3504,19 +3527,31 @@ pub fn drawRectangleRotated(
 const WgpuRenderTexture = @import("wgpu_texture.zig").WgpuRenderTexture;
 const codecs = @import("codecs.zig");
 
-/// Decode PNG bytes into a CPU Image (RGBA8). Agnostic (codecs.png.decode).
-pub fn loadImageFromMemory(gpa: Allocator, bytes: []const u8) !types.Image {
-    const decoded: codecs.png.Image = try codecs.png.decode(gpa, bytes);
+/// A CPU Image of decoded RGBA8 pixels, which it takes over - `unloadImage` frees them.
+fn rgba8Image(pixels: []u8, width: u32, height: u32) types.Image {
     return types.Image{
-        .data = decoded.pixels.ptr,
-        .width = @intCast(decoded.width),
-        .height = @intCast(decoded.height),
+        .data = pixels.ptr,
+        .width = @intCast(width),
+        .height = @intCast(height),
         .mipmaps = 1,
-        // codecs.png decodes to RGBA8. Use the real PixelFormat value (not 0,
+        // Both decoders give RGBA8. Use the real PixelFormat value (not 0,
         // which isn't a valid enum member) so image* ops that read the format
         // via @enumFromInt work instead of tripping an illegal-enum panic.
         .format = @backingInt(types.PixelFormat.uncompressed_r8g8b8a8),
     };
+}
+
+/// Decode PNG or JPEG bytes into a CPU Image (RGBA8), the format told by the bytes' start: a JPEG begins with its
+/// start-of-image marker, FF D8, and the FF of the marker after it (codecs.jpeg.decode); anything else is read as a
+/// PNG (codecs.png.decode), whose own signature check refuses what is neither. Agnostic.
+pub fn loadImageFromMemory(gpa: Allocator, bytes: []const u8) !types.Image {
+    const is_jpeg: bool = bytes.len >= 3 and bytes[0] == 0xFF and bytes[1] == 0xD8 and bytes[2] == 0xFF;
+    if (is_jpeg) {
+        const decoded_jpeg: codecs.jpeg.Image = try codecs.jpeg.decode(gpa, bytes);
+        return rgba8Image(decoded_jpeg.pixels, decoded_jpeg.width, decoded_jpeg.height);
+    }
+    const decoded_png: codecs.png.Image = try codecs.png.decode(gpa, bytes);
+    return rgba8Image(decoded_png.pixels, decoded_png.width, decoded_png.height);
 }
 
 /// Upload a decoded RGBA8 Image to a GPU texture (wgpu loadTextureFromImage).
@@ -5386,6 +5421,21 @@ pub export fn update(frame_ms: f64) void {
 // lint:off module-var: the browser's pointer, between its events
 var web_pointer: [2]f32 = .{ 0, 0 };
 
+// The kind of the browser's latest pointer (`PointerEvent.pointerType`), which the bridge sends before each pointer
+// event's pushes, so the move and the button carry it.
+// lint:off module-var: the browser's pointer kind, between its events
+var web_pointer_kind: contract.PointerKind = .mouse;
+
+/// The kind of the pointer whose event follows, as the bridge reads `pointerType`: 0 mouse, 1 touch, 2 pen; any other
+/// number - which no bridge sends - is a mouse.
+pub fn inputPushPointerKind(kind_number: i32) callconv(.c) void {
+    web_pointer_kind = switch (kind_number) {
+        1 => .touch,
+        2 => .pen,
+        else => .mouse,
+    };
+}
+
 /// A mouse button event where the browser's pointer last moved, or null for a number outside a byte - which no
 /// browser sends.
 fn webButton(dom_button: i32) ?contract.MouseButton {
@@ -5399,6 +5449,7 @@ fn webButton(dom_button: i32) ?contract.MouseButton {
         .x = web_pointer[0],
         .y = web_pointer[1],
         .modifiers = .{},
+        .kind = web_pointer_kind,
     };
 }
 
@@ -5424,6 +5475,7 @@ pub fn inputPushMouseMove(
         .dx = step[0],
         .dy = step[1],
         .modifiers = .{},
+        .kind = web_pointer_kind,
     } });
 }
 
@@ -5576,6 +5628,7 @@ pub fn inputPushTouchUp(
 // The input calls, exported under the names the browser's bridge calls them by.
 comptime {
     @export(&inputPushMouseMove, .{ .name = "input_push_mouse_move" });
+    @export(&inputPushPointerKind, .{ .name = "input_push_pointer_kind" });
     @export(&inputPushMotion, .{ .name = "input_push_motion" });
     @export(&inputPushMouseButtonDown, .{ .name = "input_push_mouse_button_down" });
     @export(&inputPushMouseButtonUp, .{ .name = "input_push_mouse_button_up" });
@@ -5595,14 +5648,6 @@ comptime {
     @export(&inputPushTouchDown, .{ .name = "zimr_input_push_touch_down" });
     @export(&inputPushTouchMove, .{ .name = "zimr_input_push_touch_move" });
     @export(&inputPushTouchUp, .{ .name = "zimr_input_push_touch_up" });
-}
-
-// The audio worklet's entry points: in the browser, the audio worklet runs a second instance of this module, and
-// renders the sound there through them (`sound.mixer.worklet_abi`).
-comptime {
-    if (host.kind == .web) {
-        sound.mixer.exportWorkletEntryPoints();
-    }
 }
 
 // The platform this build runs on keeps the contract - checked in every build of the engine.
@@ -5661,16 +5706,19 @@ fn receiveEvent(event: contract.Event) void {
             }
         },
         .mouse_move => |move| {
+            input.pushPointerKind(state, move.kind);
             const position: [2]f32 = cssToLogical(app, move.x, move.y);
             input.pushMouseMove(state, position[0], position[1]);
             const movement: [2]f32 = cssMovementToLogical(app, move.dx, move.dy);
             input.pushMouseMovement(state, movement[0], movement[1]);
         },
         .mouse_button_down => |button| {
+            input.pushPointerKind(state, button.kind);
             input.pushPressTime(state, null, button.time_ms);
             input.pushMouseButtonDown(state, dom_input.mouseButtonFromDomButton(@backingInt(button.button)));
         },
         .mouse_button_up => |button| {
+            input.pushPointerKind(state, button.kind);
             input.pushMouseButtonUp(state, dom_input.mouseButtonFromDomButton(@backingInt(button.button)));
         },
         .mouse_wheel => |wheel| input.pushMouseWheel(state, wheel.dx, wheel.dy),

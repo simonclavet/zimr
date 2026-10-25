@@ -330,7 +330,31 @@ pub const KeyDown = struct {
 pub const Position = struct {
     x: f32,
     y: f32,
+    /// What moved there: a mouse, or - for the mouse messages Windows makes from them - a pen or a finger
+    /// (`pointerKindOfExtraInfo`).
+    kind: contract.PointerKind = .mouse,
 };
+
+/// Windows marks the mouse messages it makes from a pen or a touch: their extra information (`GetMessageExtraInfo`)
+/// holds a signature in its upper 24 bits, and bit 7 set means a touch, clear a pen. Any other value is a mouse's.
+///
+///       extra info  0xFF515780   signature 0xFF515700, bit 7 set     a touch
+///                   0xFF515700   signature, bit 7 clear              a pen
+///                   0x00000000   no signature                        a mouse
+pub fn pointerKindOfExtraInfo(extra_info: usize) contract.PointerKind {
+    const signature_mask: usize = 0xFFFFFF00;
+    const pen_or_touch_signature: usize = 0xFF515700;
+    const touch_bit: usize = 0x80;
+    const has_signature: bool = extra_info & signature_mask == pen_or_touch_signature;
+    if (!has_signature) {
+        return .mouse;
+    }
+    const is_touch: bool = extra_info & touch_bit != 0;
+    if (is_touch) {
+        return .touch;
+    }
+    return .pen;
+}
 
 /// A wheel movement in notches, on each axis.
 pub const WheelMovement = struct {
@@ -426,6 +450,7 @@ pub const InputQueue = struct {
 /// A character becomes UTF-8 text, in bytes the converter holds until the next conversion - the engine copies what it
 /// keeps. Modifiers are not recorded here: the engine reads them from the keys it holds.
 pub const ContractEvents = struct {
+    /// The pointer's last position, and the kind of pointer that moved it there: a button event carries both.
     pointer: Position = .{ .x = 0, .y = 0 },
     text_bytes: [4]u8 = undefined,
     /// When the events being converted arrived, in milliseconds on the system's monotonic clock - the clock sound is
@@ -454,6 +479,7 @@ pub const ContractEvents = struct {
                     .dx = position.x - previous.x,
                     .dy = position.y - previous.y,
                     .modifiers = .{},
+                    .kind = position.kind,
                 } };
             },
             .mouse_button_down => |button| .{ .mouse_button_down = converter.buttonAtPointer(button) },
@@ -489,6 +515,7 @@ pub const ContractEvents = struct {
             .y = converter.pointer.y,
             .modifiers = .{},
             .time_ms = converter.arrival_ms,
+            .kind = converter.pointer.kind,
         };
     }
 
@@ -536,10 +563,11 @@ fn translateKeyUp(w_param: usize, parameter_bits: usize, queue: *InputQueue) voi
 }
 
 /// A mouse message's position, in logical pixels.
-fn positionOf(parameter_bits: usize, scale: f32) Position {
+fn positionOf(parameter_bits: usize, scale: f32, kind: contract.PointerKind) Position {
     return .{
         .x = logicalPixels(win32.signedLowWord(parameter_bits), scale),
         .y = logicalPixels(win32.signedHighWord(parameter_bits), scale),
+        .kind = kind,
     };
 }
 
@@ -559,7 +587,8 @@ fn translateButton(message: win32.InputMessage, queue: *InputQueue) void {
         else => false,
     };
     const parameter_bits: usize = @bitCast(message.l_param);
-    queue.push(.{ .mouse_move = positionOf(parameter_bits, message.scale) });
+    const kind: contract.PointerKind = pointerKindOfExtraInfo(message.extra_info);
+    queue.push(.{ .mouse_move = positionOf(parameter_bits, message.scale, kind) });
     if (is_press) {
         queue.push(.{ .mouse_button_down = button });
     } else {
@@ -575,7 +604,10 @@ pub fn translate(message: win32.InputMessage, queue: *InputQueue) void {
         win32.WM_KEYDOWN, win32.WM_SYSKEYDOWN => translateKeyDown(parameter_bits, message.label, queue),
         win32.WM_KEYUP, win32.WM_SYSKEYUP => translateKeyUp(message.w_param, parameter_bits, queue),
         win32.WM_CHAR => queue.pushUtf16(@truncate(message.w_param)),
-        win32.WM_MOUSEMOVE => queue.push(.{ .mouse_move = positionOf(parameter_bits, message.scale) }),
+        win32.WM_MOUSEMOVE => {
+            const kind: contract.PointerKind = pointerKindOfExtraInfo(message.extra_info);
+            queue.push(.{ .mouse_move = positionOf(parameter_bits, message.scale, kind) });
+        },
         win32.WM_LBUTTONDOWN,
         win32.WM_RBUTTONDOWN,
         win32.WM_MBUTTONDOWN,
@@ -659,7 +691,9 @@ pub const GamepadAxisValue = struct {
 /// One command of a script: the language itself, each line one value of this type written in ZON (`parseCommand`).
 ///
 ///     .{ .advance = 3 }                         draws 3 frames: the only command that moves time
-///     .{ .move = .{ .x = 240, .y = 121 } }      the pointer moves there, in the drawing area's logical pixels
+///     .{ .move = .{ .x = 240, .y = 121 } }      the pointer moves there, in the drawing area's logical pixels;
+///                                               `.kind = .touch` (or `.pen`) makes it a finger's (a pen's) - the
+///                                               presses and releases after it are that pointer's too
 ///     .{ .press = .left }                       a mouse button goes down where the pointer is: .left, .middle,
 ///                                               .right, .back or .forward
 ///     .{ .release = .left }                     ... and comes up
@@ -775,6 +809,7 @@ pub const ScriptedPerson = struct {
                     .dx = position.x - person.pointer.x,
                     .dy = position.y - person.pointer.y,
                     .modifiers = person.modifiers,
+                    .kind = position.kind,
                 } };
                 count += 1;
                 person.pointer = position;
@@ -815,8 +850,15 @@ pub const ScriptedPerson = struct {
         return out[0..1];
     }
 
+    /// A button event where the pointer is, from the kind of pointer that last moved there.
     fn buttonEvent(person: *const ScriptedPerson, button: contract.Button) contract.MouseButton {
-        return .{ .button = button, .x = person.pointer.x, .y = person.pointer.y, .modifiers = person.modifiers };
+        return .{
+            .button = button,
+            .x = person.pointer.x,
+            .y = person.pointer.y,
+            .modifiers = person.modifiers,
+            .kind = person.pointer.kind,
+        };
     }
 
     /// Records a modifier key going down or coming up; other keys leave the modifiers as they are.
@@ -1196,4 +1238,45 @@ test "native_input: an engine key's scancode is the one that names it" {
     try expectEqual(@as(?u16, 0x1E), scancodeOfEngineKey(.a));
     try expectEqual(@as(?u16, 0x11C), scancodeOfEngineKey(.kp_enter));
     try expectEqual(KeyboardKey.q, engineKeyFromScancode(scancodeOfEngineKey(.q).?).?);
+}
+
+test "pointer kind: Windows' signature on a mouse message says a touch or a pen; no signature, a mouse" {
+    try expectEqual(contract.PointerKind.touch, pointerKindOfExtraInfo(0xFF515780));
+    try expectEqual(contract.PointerKind.touch, pointerKindOfExtraInfo(0xFF515781));
+    try expectEqual(contract.PointerKind.pen, pointerKindOfExtraInfo(0xFF515700));
+    try expectEqual(contract.PointerKind.mouse, pointerKindOfExtraInfo(0));
+    try expectEqual(contract.PointerKind.mouse, pointerKindOfExtraInfo(0x12345680));
+}
+
+test "pointer kind: a touch's move and its press, through the queue and the conversion, both say touch" {
+    var queue: InputQueue = .{};
+    const touch_info: usize = 0xFF515780;
+    const touch_press: win32.InputMessage = .{
+        .message = win32.WM_LBUTTONDOWN,
+        .w_param = 0,
+        .l_param = 0,
+        .scale = 1,
+        .extra_info = touch_info,
+    };
+    translate(touch_press, &queue);
+    try expectEqual(@as(usize, 2), queue.count);
+    var converter: ContractEvents = .{};
+    const move: contract.Event = converter.convert(queue.events[0]);
+    const press: contract.Event = converter.convert(queue.events[1]);
+    try expectEqual(contract.PointerKind.touch, move.mouse_move.kind);
+    try expectEqual(contract.PointerKind.touch, press.mouse_button_down.kind);
+}
+
+test "pointer kind: a script's move with .kind = .touch, and the press after it, are a finger's" {
+    var arena_state: ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    var person: ScriptedPerson = .{};
+    var out: [ScriptedPerson.most_events_per_command]contract.Event = undefined;
+    const touch_move: Command = try parseForTest(arena, ".{ .move = .{ .x = 10, .y = 20, .kind = .touch } }");
+    const move_events: []const contract.Event = person.eventsFor(touch_move, &out);
+    try expectEqual(contract.PointerKind.touch, move_events[move_events.len - 1].mouse_move.kind);
+    const press: Command = try parseForTest(arena, ".{ .press = .left }");
+    const press_events: []const contract.Event = person.eventsFor(press, &out);
+    try expectEqual(contract.PointerKind.touch, press_events[0].mouse_button_down.kind);
 }

@@ -628,6 +628,38 @@
       "functions": []
     },
     {
+      "name": "goban",
+      "module": "core",
+      "stars": 3,
+      "title": "zimr - goban",
+      "description": "Go and Atari Go on a wooden board: drag a stone and see the liberties it would leave, captures flying to the side, a click for each stone, and a debug panel that draws the forest of groups the rules run on",
+      "functions": []
+    },
+    {
+      "name": "goban_outposts",
+      "module": "core",
+      "stars": 2,
+      "title": "zimr - goban outposts",
+      "description": "Atari Go on 8 x 8 against the computer, a ladder of games - each rung won moving second gives the computer an outpost or takes one of yours - goban's own code, made into another app with no menu and no buttons",
+      "functions": []
+    },
+    {
+      "name": "goban_problems",
+      "module": "core",
+      "stars": 2,
+      "title": "zimr - goban problems",
+      "description": "Go kill problems against the computer: capture the marked stone, in the part of the board the problem is played in, each drawn in a random symmetry - Undo, and Next once solved",
+      "functions": []
+    },
+    {
+      "name": "go_puzzles_hero",
+      "module": "core",
+      "stars": 2,
+      "title": "zimr - go puzzles hero",
+      "description": "Fights, life puzzles and kill puzzles against the computer in turn - a puzzle given up comes back from a later start, the kinds alternating, and each one solved leads back towards the full problem",
+      "functions": []
+    },
+    {
       "name": "touch_paint",
       "module": "core",
       "stars": 2,

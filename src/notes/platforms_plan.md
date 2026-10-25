@@ -3493,6 +3493,22 @@ The migration of `platform_api.md` (section 8), each step leaving both platforms
      chords (`boxCountChoiceFor`): the list's 33 have 3 (three of them), 4 (21), 5 (two, into 6, the last box empty),
      8 (six) and 12 (one). Checked headless at 900 by 415: 2-5-1 picked - "3 boxes", ii V I; 1-5-6-4 picked, then 12
      chosen - its four kept and eight empty, each box about 33 pixels wide.
+     **The launcher's "leak": pins mid-frame held the table up (Oct 25, Simon's screenshot: "the page's handle table
+     rose by 426 handles in 30 s outside frames, to 4878", in the launcher on goban).** No callback leaked. Measured
+     in the built launcher with handle debugging on: the live handles stayed at ~441 while the length went 442 -> 856
+     -> 1284, each step one pin made inside a frame after the frame's other handles - `jsNowMs` caching `performance`
+     the first time, then `page_audio.startForwarding`'s node and notice list at EVERY app with sound the launcher
+     starts (it stops the last and pins two new). A reset cannot pop below a pin, so the frame's ~430 handles under it
+     became free slots - and `js_mark` set the free list aside, so no scope ever took them again: ~430 slots a restart,
+     for good, and the watch, reading the length, called it a leak. Fixed in the c2js runtime: a scope takes free slots
+     first, notes those below its mark (`slotsTakenBelowMark`), and its reset frees them. That also closes a hole in the
+     old "airtight" design - a slot freed below the mark inside a scope and taken again there outlived the reset. The
+     watch now counts live handles (`js_live_handle_count`: the length less the free slots), so a one-off rise over
+     free slots is no alarm. Checked: the old and new runtimes, extracted from `c2js.zig` and run in Node - 100 frames
+     each pinning after 40 handles grew the old table 63 -> 4 023, the new not at all; the reused slot leaked in the
+     old, not the new. Live in the built launcher, the new runtime patched in at boot with debugging on: 13 app
+     switches, sound apps and goban included - the length rose once (443 -> 863, the first pin, no free slots yet) and
+     stayed, live 443 throughout, no stale handle. `audio-page-test` gains both checks.
      a. The audio context at 48 000 Hz, resumed at the first click, tap or key.
      b. The worklet's module: the program's text and one line calling `start()`, loaded from a Blob URL - or from a
         `data:` URL where the page's origin is opaque (a file opened from disk, a sandboxed frame).
@@ -4648,3 +4664,42 @@ own system's callback: CoreAudio's render callback, AAudio's data callback, `AVA
 **The Oct 11 list this replaces**, kept for the record: C1, C3 and C8 were done then; C5's turns since are section 9's
 journal; scripts on every platform, C2, C6, C4, C7, C10, B7, B9 and C9 were its items 3 to 9, all in the table above or
 under "what can wait".
+
+**Oct 18 - a page that plays no sound makes no audio context; the viewer's fallback is a notice (Simon, from the
+goban page in Claude's viewer).** Every web build exported the worklet's entry points (a `comptime` block in
+`wgpu_app.zig`), so every page made an AudioContext at boot and tried the worklet - and in Claude's viewer, whose
+opaque origin refuses both the Blob and the `data:` URL, every page put the fallback's warning on screen, goban's
+too, which plays nothing. Now `sound.audio_device.init` exports them from a `comptime` block inside itself: a block in
+a function runs only when the function is compiled, so only a module whose app opens the device carries the
+renderer. Measured: goban's wasm 0 of the 20 entry points (its single-file page 5.9 -> 4.8 MB), audio_mixer's all 20;
+in Chromium (swiftshader WebGPU) goban's page made 0 audio contexts, audio_mixer's 1, plain and in a sandboxed frame
+(origin `null` - desktop Chrome still loads the worklet there). And the fallback - a way the sound plays, not a
+fault - is said as a notice: `page_audio`'s `warn` became `logReport(level, ...)`, `ReportLevel.notice` going to
+`console.info`, which the single-file page's on-page console does not copy (it mirrors log, warn and error); the four
+real faults stay warnings. With `addModule` made to reject, as in the viewer: the line went to `console.info`, the
+page showed nothing. `test-sound` 268 passed (5 skipped), `audio-page-test` green. The sound tutorial says it (2.1,
+6.4). Sound still plays in the viewer, through the script processor.
+
+**Oct 18 - the pointer's kind, from every platform (goban's need).** `contract.PointerKind` (mouse, touch, pen) on the
+pointer events, kept as the input state's latest (`z.pointerKind`). Web: `pointerType`, pushed by the bridge before
+each pointer event. Windows: the pen-or-touch signature in a mouse message's extra information (`GetMessageExtraInfo`,
+0xFF515700 in the upper 24 bits, bit 7 for touch). Headless: `.kind = .touch` on a script's `.move`. A platform that
+cannot tell says mouse - the unwritten ones, until written. Not yet: Windows' WM_POINTER messages, which a touch app
+registered for them would get instead of the mouse messages.
+
+**Oct 18 - a sound effect from Ogg Vorbis (goban's stone sounds).** `sounds.loadFromMemory` decodes an OGG whole at
+load (`loadFromVorbis`, through `codecs.audio.vorbis.Decoder`); it refused one before (`error.OggNeedsDecoder`, "until
+Vorbis"). Music still decodes as it plays. A stream of more than two channels is refused (`error.TooManyChannels`).
+
+**Oct 25 - screenshots in the web gallery's list (Simon: "show small screenshots with the example names in the left
+sidebar ... the description on 3 lines, next to the thumbnail ... not more than 3 times the height").** Each row of
+`src/web/index.html`'s list is the example's screenshot, an 80 by 60 box cropped to fill (`object-fit: cover`), beside
+its name, its stars and the first three lines of its description (`-webkit-line-clamp`): 67.8 px a row against 25.4
+before, measured in the browser - 2.7 times. The list column widened from `minmax(240px, 25%)` to `minmax(300px,
+28%)`, the room the description needs (`tools/docfmt.zig`). Rows are built once and kept (`rowOf`), so filtering moves
+them and fetches no picture twice; a screenshot that fails to load becomes an empty frame of the same size, in its
+row, for good. Pictures are lazy: only the rows scrolled into view cost a request. `gallery-shots` now saves a second,
+224-wide copy as zig-out/web/shots/<name>.png (`web_gallery_shot_width`, `addGalleryShot`), inside the web folder so
+`dist` ships it. Checked in the browser on a copy of the page with the stylesheet injected as docfmt does: desktop,
+1280-wide and phone (375, no sideways scroll), search, click, arrow keys. Not built here: `zig build` and the step
+itself, Simon's.

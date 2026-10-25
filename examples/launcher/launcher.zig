@@ -27,7 +27,8 @@ const vec2 = zm.vec2;
 // The flagship roster. Order = switch order. A broad tour of the engine: 3D PBR,
 // full UI, physics (2D and 3D, alone and side by side), robot dynamics with a
 // live MPC planner, two CPU-vs-GPU side-by-sides, 2D/3D plots, two GPU fluids,
-// a warp starfield, switchable 2D post-fx, a playable scale star, and fractals.
+// a warp starfield, switchable 2D post-fx, Go, a scale played with two hands,
+// and fractals.
 const flagships = [_]z.AppVtable{
     z.eraseApp(@import("ex_helmet_sw").app), // CPU vs GPU PBR helmet
     z.eraseApp(@import("ex_bone_socket").app), // rigged character, skeletal animation + socketed sword
@@ -57,10 +58,11 @@ const flagships = [_]z.AppVtable{
     z.eraseApp(@import("ex_tic_tac_toe").app), // two-player tic tac toe, plain 2D shapes
     z.eraseApp(@import("ex_langton_ant").app), // Langtons ant with pan/zoom + turn trail
     z.eraseApp(@import("ex_snake").app), // snake: eat dots to grow, keyboard + swipe
+    z.eraseApp(@import("ex_goban").app), // Go and Atari Go: liberties as you aim, the forest of groups drawn
     z.eraseApp(@import("ex_fps_playground").app), // first-person physics: walk + jump on cubes
     z.eraseApp(@import("ex_starfield").app), // warp-speed starfield
     z.eraseApp(@import("ex_shader_effects").app), // switchable 2D post-fx
-    z.eraseApp(@import("ex_audio_scale_star").app), // the major scale in thirds, played with Shepard tones
+    z.eraseApp(@import("ex_audio_scale_star_hands").app), // a scale with two hands: a chord left, its notes right
     // * A Go1 with a procedurally spliced arm: the torso weaves through three incommensurate
     // frequencies while the gripper holds a point that travels with the feet. Reports its own
     // attitude error, gripper drift, foot slip and friction-cone occupancy.
@@ -94,6 +96,20 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 const zone_w: f32 = 42; // width of each tap zone (prev on the left, next on the right)
+/// The pill's width besides its dots: the two chevrons' zones and the room around the first and last dot.
+const pill_chevrons_w: f32 = 80;
+
+/// The distance between two of the pill's dots: 11 px, or less on a window too narrow for that - a phone held upright
+/// is about 400 px wide, and 36 dots 11 px apart make a pill of 465 - so that the whole pill, both chevrons with it,
+/// stays on the screen, 8 px from each edge.
+fn pillDotSpacing(window_w: f32) f32 {
+    const widest_spacing: f32 = 11;
+    const edge_margin: f32 = 8;
+    const gaps: f32 = float(n_apps - 1);
+    const room_for_dots: f32 = window_w - 2 * edge_margin - pill_chevrons_w;
+    const fitted_spacing: f32 = room_for_dots / gaps;
+    return @min(widest_spacing, fitted_spacing);
+}
 
 fn drawPill(
     f: *z.Frame,
@@ -114,8 +130,8 @@ fn drawPill(
     // > next chevron (apex right), right zone.
     gl.triangle(vec2(x + w - 18, cy - 7), vec2(x + w - 18, cy + 7), vec2(x + w - 8, cy), .{ .color = white });
 
-    // One dot per app between the chevrons; the active one is bright.
-    const spacing: f32 = 11;
+    // One dot per app between the chevrons, spread over the pill's width; the active one is bright.
+    const spacing: f32 = (w - pill_chevrons_w) / float(n_apps - 1);
     const start_x: f32 = x + 44;
     var i: usize = 0;
     while (i < n_apps) : (i += 1) {
@@ -134,9 +150,9 @@ fn update(f: *z.Frame, s: *State) void {
 
     // Switch pill: < [dot per app] >. Centered, raised above the bottom edge so
     // it clears bottom-corner content (insets, logs).
-    const spacing: f32 = 11;
+    const spacing: f32 = pillDotSpacing(w);
     const n_f: f32 = float(n_apps);
-    const pill_w: f32 = 80 + spacing * (n_f - 1);
+    const pill_w: f32 = pill_chevrons_w + spacing * (n_f - 1);
     const pill_h: f32 = 34;
     const px: f32 = (w - pill_w) * 0.5;
     const py: f32 = h - pill_h - 56;

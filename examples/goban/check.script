@@ -1,0 +1,56 @@
+// goban: hover, press - drag - release, a second move, Undo, Menu, Restart; the frame saved after each step.
+// `zig build goban-headless -Dscript=examples/goban/check.script` runs it.
+// The window is 900 x 900 and the board 13 x 13: spacing floor(900 / 16) = 56, point (row, col) at
+// (114 + 56 col, 114 + 56 row). The interface's font is min(900 / 20, 26) = 26 px, so Undo (4.8 x 2 fonts), in the
+// bottom-left corner, spans x 10.4 .. 135.2, y 837.6 .. 889.6, and Menu (4 x 2 fonts) x 785.6 .. 889.6, y 10.4 .. 62.4. The pause window is
+// 12 fonts wide from x 294 and 499.4 px tall, its top at y 137 - a third of the 379.8 px it leaves between the 10.4 px
+// margins; under its title bar its first two buttons, 1.8 fonts tall, are centred near y 215 (Return to Game) and
+// y 272 (Restart).
+.{ .advance = 3 }
+// the main menu's Start Game, at (443, 586): a 13 x 13 game of plain Go
+.{ .move = .{ .x = 443, .y = 586 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 2 }
+// hover the centre point (6, 6): the ghost, light, follows
+.{ .move = .{ .x = 450, .y = 450 } }
+.{ .advance = 3 }
+.{ .capture_to = "goban_1_hover.png" }
+// press on (6, 6), drag to (6, 7), hold: the ghost is nearly opaque and on its way
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .move = .{ .x = 506, .y = 450 } }
+.{ .advance = 1 }
+.{ .capture_to = "goban_2_dragging.png" }
+// release on (6, 7): black is played there, not where it was picked up
+.{ .release = .left }
+.{ .advance = 2 }
+// white at (5, 7), a tap
+.{ .move = .{ .x = 506, .y = 394 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 2 }
+.{ .capture_to = "goban_3_two_moves.png" }
+// Undo: white's stone goes; the press on the button plays nothing
+.{ .move = .{ .x = 73, .y = 863 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 2 }
+.{ .capture_to = "goban_4_undone.png" }
+// Menu: the pause window
+.{ .move = .{ .x = 837, .y = 36 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 2 }
+.{ .capture_to = "goban_5_paused.png" }
+// Restart: an empty board, the window closed, and no stone played under the button
+.{ .move = .{ .x = 450, .y = 272 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 2 }
+.{ .capture_to = "goban_6_restarted.png" }

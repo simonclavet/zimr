@@ -19,7 +19,9 @@
 //! mix / saturate / stepEdge / sin / cos / sincos -> exist only as PRIVATE, EMPTY
 //! decls whose doc names the canonical spelling. One name per operation, enforced
 //! by the COMPILER - not by a lint rule you have to remember to run.
-//! smoothstep -> zm.smoothstep
+//! smoothstep -> zm.smoothStep (edges) / zm.smoothStep01 (on [0, 1])   camelCase; `smoothstep` is a private stub
+//! smootherstep -> zm.smootherStep / zm.smootherStep01   (Perlin's quintic: flat first and second derivatives)
+//! DoubleSpring(T) -> a critically damped spring run twice in series, for eased motion toward a moving goal
 //! fract      -> zm.fract
 //! dot cross normalize length distance reflect -> same names
 //! abs min max floor ceil sqrt pow exp log -> Zig BUILTINS (@abs, @min, ...),
@@ -61,7 +63,7 @@
 //! - **`Vec2 = @Vector(2, f32)`** for UI / 2D math - 8 bytes,
 //! distinct from `Vec` for storage efficiency.
 //! - **GLSL-style scalar helpers** (`vec3(x, y, z)`, `clamp01(t)`,
-//! `lerp(a, b, t)`, `fract(x)`, `smoothstep(e0, e1, x)`,
+//! `lerp(a, b, t)`, `fract(x)`, `smoothStep(e0, e1, x)`,
 //! `pow(x, y)`, `sw(v, "yzx")`, ...) live at the top level so
 //! shader code reads idiomatically.
 //! - **Shader intrinsics** (texture/sampler types, sampling, storage
@@ -10042,6 +10044,16 @@ fn cos() void {} // lint:off unused-global: reference-pinned discoverability stu
 /// (turns). See `sin` above.
 fn sincos() void {} // lint:off unused-global: reference-pinned discoverability stub
 
+/// The GLSL spelling, all lower case. USE `zm.smoothStep` (between edges) or `zm.smoothStep01` (on [0, 1]):
+/// zimr's names are camelCase, as Zig's are.
+/// Private + empty on purpose - see `saturate` for why a dead name is still a decl.
+fn smoothstep() void {} // lint:off unused-global: reference-pinned discoverability stub
+
+/// The usual spelling of Perlin's curve, all lower case. USE `zm.smootherStep` (between edges) or
+/// `zm.smootherStep01` (on [0, 1]).
+/// Private + empty on purpose - see `saturate` for why a dead name is still a decl.
+fn smootherstep() void {} // lint:off unused-global: reference-pinned discoverability stub
+
 test "zm: the dead spellings still exist (privately) to stay discoverable" {
     // PINNED BY REFERENCE, NOT BY `@hasDecl`. On Zig 0.17.0-dev.1980 `@hasDecl` no longer
     // reports PRIVATE decls, even from inside the declaring file - measured: it answers `false`
@@ -10065,13 +10077,296 @@ test "zm: the dead spellings still exist (privately) to stay discoverable" {
     _ = &sin;
     _ = &cos;
     _ = &sincos;
+    _ = &smoothstep;
+    _ = &smootherstep;
 }
 
-/// `0` below `e0`, `1` above `e1`, smooth Hermite interpolation
-/// between.  Matches `shadermath.smoothstep`.
-pub fn smoothstep(e0: f32, e1: f32, v: f32) f32 {
-    const t: f32 = clamp01((v - e0) / (e1 - e0));
-    return t * t * (3.0 - 2.0 * t);
+/// Refuses, by name, anything but `f32` or a vector of `f32`: the shape the easing curves and `DoubleSpring` take,
+/// since they mix their argument with plain `f32` parameters (the edges, the times). `who` names the caller in the
+/// error.
+fn requireF32Lanes(comptime T: type, comptime who: []const u8) void {
+    requireFloatLike(T);
+    if (comptime FloatScalar(T) != f32) {
+        @compileError("zm." ++ who ++ ": expected f32 or a vector of f32, got " ++ @typeName(T));
+    }
+}
+
+/// The type an f32-lane function computes in, for an argument of type `T`: `T` itself, or `f32` for a bare literal
+/// (`comptime_float`), so `smoothStep01(0.25)` works as it does in a shader.
+fn F32Lanes(comptime T: type) type {
+    if (T == comptime_float) {
+        return f32;
+    }
+    return T;
+}
+
+/// A scalar known only at run time, given to every lane of `T` (`splatTo` is its compile-time sibling).
+fn broadcast(comptime T: type, value: FloatScalar(T)) T {
+    if (comptime @typeInfo(T) == .vector) {
+        return @splat(value);
+    }
+    return value;
+}
+
+/// The cubic smoothstep on [0, 1]: `t` clamped to [0, 1], then
+///
+///     s(t) = t^2 (3 - 2 t)
+///
+/// the Hermite curve from 0 to 1 whose first derivative, s'(t) = 6 t (1 - t), is zero at both ends. Its second
+/// derivative there is not: s''(0) = 6 and s''(1) = -6 (see `smootherStep01`). Symmetric: s(1 - t) = 1 - s(t).
+///
+/// `t` is `f32` or a vector of `f32`, lane by lane (a bare literal computes as f32). Branch-free - the clamp is
+/// `clamp01` - so a shader may call it.
+pub fn smoothStep01(t: anytype) F32Lanes(@TypeOf(t)) {
+    const T = F32Lanes(@TypeOf(t));
+    requireF32Lanes(T, "smoothStep01");
+    const t_lanes: T = t;
+    const clamped: T = clamp01(t_lanes);
+    const slope_part: T = splatTo(T, 3.0) - splatTo(T, 2.0) * clamped;
+    const eased: T = clamped * clamped * slope_part;
+    return eased;
+}
+
+/// GLSL's smoothstep: 0 at and below `e0`, 1 at and above `e1`, and `smoothStep01` of `(x - e0) / (e1 - e0)`
+/// between. `x` is `f32` or a vector of `f32`, with scalar edges - GLSL's `smoothstep(float, float, genType)`. With
+/// `e1 < e0` the formula gives the mirror image, a ramp that falls as `x` rises (GLSL leaves that case undefined;
+/// shaders use it for vignettes); equal edges divide by zero.
+pub fn smoothStep(e0: f32, e1: f32, x: anytype) F32Lanes(@TypeOf(x)) {
+    const T = F32Lanes(@TypeOf(x));
+    requireF32Lanes(T, "smoothStep");
+    const x_lanes: T = x;
+    const edge0: T = broadcast(T, e0);
+    const edge_width: T = broadcast(T, e1 - e0);
+    const t: T = (x_lanes - edge0) / edge_width;
+    return smoothStep01(t);
+}
+
+/// Perlin's smootherstep on [0, 1]: `t` clamped to [0, 1], then the quintic
+///
+///     s(t) = t^3 (t (6 t - 15) + 10) = 6 t^5 - 15 t^4 + 10 t^3
+///
+/// It is the lowest-degree polynomial whose value goes from 0 to 1 while its first AND second derivatives are zero
+/// at both ends: s'(t) = 30 t^2 (t - 1)^2 and s''(t) = 60 t (t - 1) (2 t - 1). `smoothStep01`'s cubic has a zero
+/// first derivative at the ends but a second derivative of 6 there, so a motion eased by it starts and stops with a
+/// jump in acceleration; smootherstep's does not. Symmetric: s(1 - t) = 1 - s(t), and s(1/2) = 1/2.
+///
+/// `t` is `f32` or a vector of `f32`, lane by lane (a bare literal computes as f32). Branch-free, so a shader may
+/// call it.
+pub fn smootherStep01(t: anytype) F32Lanes(@TypeOf(t)) {
+    const T = F32Lanes(@TypeOf(t));
+    requireF32Lanes(T, "smootherStep01");
+    const t_lanes: T = t;
+    const clamped: T = clamp01(t_lanes);
+    const inner: T = clamped * splatTo(T, 6.0) - splatTo(T, 15.0);
+    const middle: T = clamped * inner + splatTo(T, 10.0);
+    const eased: T = clamped * clamped * clamped * middle;
+    return eased;
+}
+
+/// Smootherstep between edges: 0 at and below `e0`, 1 at and above `e1`, and `smootherStep01` of
+/// `(x - e0) / (e1 - e0)` between. The same shape as `smoothStep`: `x` is `f32` or a vector of `f32`, scalar edges,
+/// in either order; equal edges divide by zero.
+pub fn smootherStep(e0: f32, e1: f32, x: anytype) F32Lanes(@TypeOf(x)) {
+    const T = F32Lanes(@TypeOf(x));
+    requireF32Lanes(T, "smootherStep");
+    const x_lanes: T = x;
+    const edge0: T = broadcast(T, e0);
+    const edge_width: T = broadcast(T, e1 - e0);
+    const t: T = (x_lanes - edge0) / edge_width;
+    return smootherStep01(t);
+}
+
+/// A critically damped spring run twice in series (Daniel Holden, "Spring-It-On", theorangeduck.com): a hidden point
+/// chases the goal, and the shown point chases the hidden one. A single critically damped spring reaches its goal as
+/// fast as it can without overshooting, but it starts with a jump in acceleration; two in series start with zero
+/// velocity AND zero acceleration, so a motion driven by `step` eases in and out like `smootherstep`, while following
+/// a goal that may move every frame.
+///
+/// ONE SPRING. A critically damped spring with damping `y` (in 1/s), released at offset `j0 = x - goal` with velocity
+/// `v`, follows exactly
+///
+///     x(t) = goal + (j0 + j1 t) e^(-y t),      v(t) = (v - j1 y t) e^(-y t),      j1 = v + j0 y
+///
+/// so `step` advances it by `dt` in closed form - no integration error, at any frame rate. The damping is chosen from
+/// a half-life, the time in which the offset halves when starting from rest: `y = 2 ln 2 / half_life`, to within
+/// the guard 1e-5 s added to the half-life, which makes a zero blend snap to the goal rather than divide by zero.
+///
+/// TWO IN SERIES. `blend_seconds` is about how long the trip takes; each spring gets a quarter of it as its
+/// half-life. The hidden point steps first, toward the goal; the shown point then steps toward the hidden point's new
+/// place.
+///
+/// `T` is `f32` or a vector of `f32` (`Vec2`, `Vec3`, `Vec`): a vector spring is one spring per lane, the lanes
+/// sharing the damping.
+pub fn DoubleSpring(comptime T: type) type {
+    requireF32Lanes(T, "DoubleSpring");
+    return struct {
+        const Self = @This();
+
+        /// Where the spring is, and how fast it moves: what a caller reads.
+        value: T,
+        velocity: T,
+        /// The hidden point the shown one chases, and its velocity.
+        hidden_value: T,
+        hidden_velocity: T,
+
+        /// A spring standing still at `start`: both points there, neither moving.
+        pub fn atRest(start: T) Self {
+            const zero: T = splatTo(T, 0.0);
+            const resting: Self = .{
+                .value = start,
+                .velocity = zero,
+                .hidden_value = start,
+                .hidden_velocity = zero,
+            };
+            return resting;
+        }
+
+        /// Advances the spring by `dt` seconds toward `goal`, taking about `blend_seconds` for the whole trip (the
+        /// type's comment gives the closed form).
+        pub fn step(spring: *Self, goal: T, blend_seconds: f32, dt: f32) void {
+            assertf(blend_seconds >= 0 and dt >= 0, @src(), "DoubleSpring.step: blend {d} s, dt {d} s", .{
+                blend_seconds,
+                dt,
+            });
+            // A step of no time - a paused frame - changes nothing. It returns here, because the closed form
+            // computes the value as `(value - goal) + goal`, which rounds it by up to half a unit in its last place.
+            const no_time_passes: bool = dt == 0;
+            if (no_time_passes) {
+                return;
+            }
+            const half_life_seconds: f32 = blend_seconds / 4.0;
+            const half_life_guard_seconds: f32 = 1.0e-5;
+            const damping: f32 = 2.0 * ln2 / (half_life_seconds + half_life_guard_seconds);
+            const decay: f32 = @exp(-damping * dt);
+            stepOneSpring(&spring.hidden_value, &spring.hidden_velocity, goal, damping, decay, dt);
+            stepOneSpring(&spring.value, &spring.velocity, spring.hidden_value, damping, decay, dt);
+        }
+
+        /// One critically damped spring advanced by `dt` in closed form: `decay` is `e^(-damping dt)`, computed once
+        /// for both springs of the pair.
+        fn stepOneSpring(
+            value: *T,
+            velocity: *T,
+            goal: T,
+            damping: f32,
+            decay: f32,
+            dt: f32,
+        ) void {
+            const damping_lanes: T = broadcast(T, damping);
+            const decay_lanes: T = broadcast(T, decay);
+            const dt_lanes: T = broadcast(T, dt);
+            const offset: T = value.* - goal;
+            const offset_term: T = velocity.* + offset * damping_lanes;
+            value.* = decay_lanes * (offset + offset_term * dt_lanes) + goal;
+            velocity.* = decay_lanes * (velocity.* - offset_term * damping_lanes * dt_lanes);
+        }
+    };
+}
+
+test "smoothStep and smootherStep: ends, middles, values worked by hand, symmetry, flat ends, edges, lanes, literals" {
+    // On [0, 1]. A quarter of the way: the cubic 3/16 - 2/64 = 10/64, the quintic (6 - 60 + 160) / 1024 = 106/1024,
+    // both exact in binary.
+    try expectEqual(@as(f32, 0.0), smoothStep01(@as(f32, -0.5)));
+    try expectEqual(@as(f32, 0.0), smoothStep01(@as(f32, 0.0)));
+    try expectEqual(@as(f32, 0.15625), smoothStep01(@as(f32, 0.25)));
+    try expectEqual(@as(f32, 0.5), smoothStep01(@as(f32, 0.5)));
+    try expectEqual(@as(f32, 1.0), smoothStep01(@as(f32, 1.0)));
+    try expectEqual(@as(f32, 1.0), smoothStep01(@as(f32, 3.0)));
+    try expectEqual(@as(f32, 0.0), smootherStep01(@as(f32, -0.5)));
+    try expectEqual(@as(f32, 0.0), smootherStep01(@as(f32, 0.0)));
+    try expectEqual(@as(f32, 0.103515625), smootherStep01(@as(f32, 0.25)));
+    try expectEqual(@as(f32, 0.5), smootherStep01(@as(f32, 0.5)));
+    try expectEqual(@as(f32, 1.0), smootherStep01(@as(f32, 1.0)));
+    try expectEqual(@as(f32, 1.0), smootherStep01(@as(f32, 3.0)));
+
+    // A bare literal computes as f32, as in a shader.
+    const from_literal: f32 = smootherStep01(0.25);
+    try expectEqual(@as(f32, 0.103515625), from_literal);
+
+    // Between edges: x = 3 on edges 2 and 6 is t = 1/4; reversed edges mirror the ramp.
+    try expectEqual(@as(f32, 0.15625), smoothStep(2.0, 6.0, @as(f32, 3.0)));
+    try expectEqual(@as(f32, 0.103515625), smootherStep(2.0, 6.0, @as(f32, 3.0)));
+    try expectEqual(@as(f32, 1.0 - 0.15625), smoothStep(6.0, 2.0, @as(f32, 3.0)));
+    try expectEqual(@as(f32, 1.0), smoothStep(0.85, 0.30, @as(f32, 0.1)));
+
+    // Symmetry: s(1 - t) = 1 - s(t) for both.
+    var t: f32 = 0.0;
+    while (t <= 1.0) : (t += 0.0625) {
+        try expectApproxEqAbs(1.0 - smoothStep01(t), smoothStep01(1.0 - t), 1e-6);
+        try expectApproxEqAbs(1.0 - smootherStep01(t), smootherStep01(1.0 - t), 1e-6);
+    }
+
+    // Flat ends: near t = 0 smootherstep is 10 t^3, so over a step h from the start its first finite difference is
+    // about 10 h^2 and its second about 60 h - both vanish with h. smoothstep (3 t^2) has a first difference of about
+    // 3 h, and its second stays at 6, its second derivative at the end.
+    const h: f32 = 1.0e-3;
+    const quintic_first_difference: f32 = smootherStep01(h) / h;
+    const quintic_second_difference: f32 = (smootherStep01(2.0 * h) - 2.0 * smootherStep01(h)) / (h * h);
+    const cubic_first_difference: f32 = smoothStep01(h) / h;
+    const cubic_second_difference: f32 = (smoothStep01(2.0 * h) - 2.0 * smoothStep01(h)) / (h * h);
+    try expect(quintic_first_difference < 1.0e-4);
+    try expect(@abs(quintic_second_difference) < 1.0e-1);
+    try expect(cubic_first_difference > 2.0e-3);
+    try expect(cubic_second_difference > 5.0);
+
+    // Vectors: every lane as its own scalar call, for all four.
+    const lanes_in: Vec = .{ -1.0, 0.25, 0.5, 2.0 };
+    const cubic_lanes: Vec = smoothStep01(lanes_in);
+    const quintic_lanes: Vec = smootherStep01(lanes_in);
+    const cubic_edged_lanes: Vec = smoothStep(0.0, 4.0, lanes_in * splat(4.0));
+    const quintic_edged_lanes: Vec = smootherStep(0.0, 4.0, lanes_in * splat(4.0));
+    inline for (0..4) |lane| {
+        try expectEqual(smoothStep01(lanes_in[lane]), cubic_lanes[lane]);
+        try expectEqual(smootherStep01(lanes_in[lane]), quintic_lanes[lane]);
+        try expectEqual(smoothStep(0.0, 4.0, lanes_in[lane] * 4.0), cubic_edged_lanes[lane]);
+        try expectEqual(smootherStep(0.0, 4.0, lanes_in[lane] * 4.0), quintic_edged_lanes[lane]);
+    }
+    const pair: Vec2 = smoothStep01(@as(Vec2, .{ 0.25, 0.75 }));
+    try expectEqual(@as(f32, 0.15625), pair[0]);
+    try expectEqual(@as(f32, 1.0 - 0.15625), pair[1]);
+}
+
+test "DoubleSpring: the first step worked by hand, no overshoot, arrival, lanes as scalars, dt 0 changes nothing" {
+    // From rest at 0 toward 1, the first step has a closed form: the hidden point moves to 1 - e (1 + y dt), and the
+    // shown point, chasing it from rest, moves the same fraction of that: (1 - e (1 + y dt))^2, with e = e^(-y dt).
+    const blend_seconds: f32 = 0.3;
+    const dt: f32 = 1.0 / 60.0;
+    const damping_by_hand: f64 = 2.0 * ln2 / (0.075 + 1.0e-5);
+    const decay_by_hand: f64 = @exp(-damping_by_hand * dt);
+    const hidden_by_hand: f64 = 1.0 - decay_by_hand * (1.0 + damping_by_hand * dt);
+    const shown_by_hand: f64 = hidden_by_hand * hidden_by_hand;
+    var spring: DoubleSpring(f32) = .atRest(0.0);
+    spring.step(1.0, blend_seconds, dt);
+    try expectApproxEqAbs(@as(f32, @floatCast(hidden_by_hand)), spring.hidden_value, 1e-6);
+    try expectApproxEqAbs(@as(f32, @floatCast(shown_by_hand)), spring.value, 1e-6);
+
+    // Toward a goal from rest it never passes the goal and never turns back, and it is there after two blends.
+    var previous_value: f32 = spring.value;
+    for (1..2 * 18) |_| {
+        spring.step(1.0, blend_seconds, dt);
+        try expect(spring.value >= previous_value);
+        try expect(spring.value <= 1.0);
+        previous_value = spring.value;
+    }
+    try expect(1.0 - spring.value < 2.0e-2);
+
+    // A Vec2 spring is two f32 springs.
+    var pair: DoubleSpring(Vec2) = .atRest(.{ 0.0, 10.0 });
+    var first_lane: DoubleSpring(f32) = .atRest(0.0);
+    var second_lane: DoubleSpring(f32) = .atRest(10.0);
+    for (0..20) |_| {
+        pair.step(.{ 1.0, -4.0 }, blend_seconds, dt);
+        first_lane.step(1.0, blend_seconds, dt);
+        second_lane.step(-4.0, blend_seconds, dt);
+    }
+    try expectEqual(first_lane.value, pair.value[0]);
+    try expectEqual(second_lane.value, pair.value[1]);
+
+    // A step of no time leaves it where it was.
+    const before: DoubleSpring(Vec2) = pair;
+    pair.step(.{ 5.0, 5.0 }, blend_seconds, 0.0);
+    try expectEqual(before.value, pair.value);
+    try expectEqual(before.hidden_value, pair.hidden_value);
 }
 
 /// Generic dot product over `@Vector(N, f32)`.  Use the arity-suffixed
@@ -10362,13 +10657,13 @@ test "Complex + and - work natively (Vec2 alias)" {
     try expectEqual(@as(f32, -2), d[1]);
 }
 
-test "shader parity: clamp01 / lerp / fract / step / smoothstep" {
+test "shader parity: clamp01 / lerp / fract / step / smoothStep" {
     try expectEqual(@as(f32, 0), clamp01(-1));
     try expectEqual(@as(f32, 1), clamp01(2));
     try expectEqual(@as(f32, 5), lerp(0, 10, 0.5));
     try expectEqual(@as(f32, 0.25), fract(2.25));
     try expectEqual(@as(f32, 1.0), step(0.5, 0.7));
-    try expectApproxEqAbs(@as(f32, 0.5), smoothstep(0, 1, 0.5), 1e-6);
+    try expectApproxEqAbs(@as(f32, 0.5), smoothStep(0, 1, 0.5), 1e-6);
 }
 
 test "shader parity: dot / length / normalize generic" {

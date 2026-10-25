@@ -21,7 +21,7 @@ const Vec = zm.Vec;
 const Vec2 = zm.Vec2;
 const Vec3 = zm.Vec3;
 const clamp01 = zm.clamp01;
-const smoothstep = zm.smoothstep;
+const smoothStep = zm.smoothStep;
 const vec2 = zm.vec2;
 const vec3 = zm.vec3;
 const vec4 = zm.vec4;
@@ -38,13 +38,13 @@ fn disc(px: f32, py: f32, cx: f32, cy: f32, radius: f32, aa: f32) f32 {
     const dx: f32 = px - cx;
     const dy: f32 = py - cy;
     const d: f32 = @sqrt(dx * dx + dy * dy);
-    return 1.0 - smoothstep(radius - aa, radius + aa, d);
+    return 1.0 - smoothStep(radius - aa, radius + aa, d);
 }
 
 /// Soft-edged bar: 1 where |v - centre| < half.
 fn bar(v: f32, centre: f32, half: f32, aa: f32) f32 {
     const d: f32 = @abs(v - centre);
-    return 1.0 - smoothstep(half - aa, half + aa, d);
+    return 1.0 - smoothStep(half - aa, half + aa, d);
 }
 
 /// The glyph ramp. `level` is 0..7; higher = more ink. Built from discs and bars

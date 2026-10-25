@@ -1,0 +1,15 @@
+// go puzzles hero: the fight as it opens, and a tap where a puzzle's hint button stands - in a fight there is none, and
+// the fight goes on. A mouse; 900 x 900.
+.{ .advance = 3 }
+.{ .move = .{ .x = 450, .y = 450 } }
+.{ .advance = 2 }
+.{ .capture_to = "go_puzzles_hero_1_fight.png" }
+.{ .move = .{ .x = 70, .y = 860 } }
+.{ .advance = 1 }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 2 }
+.{ .move = .{ .x = 450, .y = 450 } }
+.{ .advance = 2 }
+.{ .capture_to = "go_puzzles_hero_2_fight_goes_on.png" }

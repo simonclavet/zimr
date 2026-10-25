@@ -1,0 +1,53 @@
+// goban's captured stones: six stones leave white's (6, 7) in atari, and black takes it on (6, 8). The stone flies
+// to black's column, left of the board, shrinking on the way; then it sits in the column's first slot.
+// `zig build goban-headless -Dscript=examples/goban/check_captures.script`. Point (row, col) is at
+// (114 + 56 col, 114 + 56 row) on the 13 x 13 board in 900 x 900.
+.{ .advance = 3 }
+// the main menu's Start Game, at (443, 586): a 13 x 13 game of plain Go
+.{ .move = .{ .x = 443, .y = 586 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 2 }
+.{ .move = .{ .x = 440, .y = 440 } }
+.{ .advance = 1 }
+// black (6, 6), white (6, 7), black (5, 7), white (3, 3), black (7, 7), white (2, 2): mouse taps
+.{ .move = .{ .x = 450, .y = 450 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 1 }
+.{ .move = .{ .x = 506, .y = 450 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 1 }
+.{ .move = .{ .x = 506, .y = 394 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 1 }
+.{ .move = .{ .x = 282, .y = 282 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 1 }
+.{ .move = .{ .x = 506, .y = 506 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 1 }
+.{ .move = .{ .x = 226, .y = 226 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 1 }
+// black takes white's (6, 7) on (6, 8)
+.{ .move = .{ .x = 562, .y = 450 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 8 }
+.{ .capture_to = "goban_capture_1_flying.png" }
+.{ .advance = 32 }
+.{ .capture_to = "goban_capture_2_landed.png" }

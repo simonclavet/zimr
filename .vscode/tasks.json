@@ -3132,6 +3132,150 @@
             "problemMatcher": []
         },
         {
+            "label": "zig: build go-puzzles-hero",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "go-puzzles-hero",
+                "-Dplatform=web"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: release go-puzzles-hero",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "go-puzzles-hero",
+                "-Dplatform=web",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build goban",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "goban",
+                "-Dplatform=web"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: release goban",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "goban",
+                "-Dplatform=web",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build goban-outposts",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "goban-outposts",
+                "-Dplatform=web"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: release goban-outposts",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "goban-outposts",
+                "-Dplatform=web",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build goban-problems",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "goban-problems",
+                "-Dplatform=web"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: release goban-problems",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "goban-problems",
+                "-Dplatform=web",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "zig: build gripper",
             "type": "shell",
             "command": "zig",
@@ -12994,6 +13138,70 @@
             "args": [
                 "build",
                 "gltf-textured",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build go-puzzles-hero (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "go-puzzles-hero",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build goban (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "goban",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build goban-outposts (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "goban-outposts",
+                "-Dplatform=windows"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build goban-problems (windows)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "goban-problems",
                 "-Dplatform=windows"
             ],
             "presentation": {

@@ -25,12 +25,14 @@ const track = @import("robot_track.zig");
 const policy = @import("robot_policy.zig");
 const track_env = @import("robot_track_env.zig");
 const gym = @import("robot_gym.zig");
+const zrl = @import("zrl");
 const dance = @import("robot_dance.zig");
 const compute_host = @import("compute_host.zig");
 
 const Allocator = std.mem.Allocator;
 const clamp = zm.clamp;
 const assertf = zm.assertf;
+const assertUnreachable = zm.assertUnreachable;
 const float = zm.float;
 const float64 = zm.float64;
 const bufPrint = std.fmt.bufPrint;
@@ -74,6 +76,9 @@ pub const Options = struct {
     /// far faster from inputs near zero with unit spread - velocities in m/s next to angles in
     /// radians next to heights in metres are not that.
     normalize: bool = false,
+    /// How many deviations either side a normalised input is clamped to: the observation normaliser's clip
+    /// (`zrl.ObsNormalizer.clip`).
+    observation_clamp: f64 = 5.0,
     /// The root assist's schedule (see `Gains.assist`): this much at the first batch, fading
     /// linearly to zero over `assist_batches`. Zero, the default, is the real task throughout.
     assist_start: f32 = 0.0,
@@ -291,11 +296,11 @@ pub fn Trainer(comptime M: type) type {
         reference_state: track.State,
         probe: rbt.Data,
         obs_scratch: []f32,
-        /// The observation normaliser: a running mean and sum of squared deviations per input,
-        /// in f64 - with a count in the millions, an f32 mean stops moving long before it is right.
-        obs_mean: []f64,
-        obs_m2: []f64,
-        obs_count: u64 = 0,
+        /// The observation normaliser (`zrl.ObsNormalizer`, Welford's): per input, the running mean of every
+        /// observation counted and the sum of squared deviations from it, and how many observations they count; its
+        /// clip is the options' `observation_clamp`. Its statistics are part of the policy: a policy file carries
+        /// them, frozen (`robot_lab.policyOfPpo`).
+        observation_normalizer: zrl.ObsNormalizer,
         decisions: u64 = 0,
         steps: u64 = 0,
         iterations: u64 = 0,
@@ -340,8 +345,7 @@ pub fn Trainer(comptime M: type) type {
                 .reference_state = undefined,
                 .probe = undefined,
                 .obs_scratch = undefined,
-                .obs_mean = undefined,
-                .obs_m2 = undefined,
+                .observation_normalizer = undefined,
             };
             self.arena = ArenaAllocator.init(gpa);
             errdefer self.arena.deinit();
@@ -384,11 +388,9 @@ pub fn Trainer(comptime M: type) type {
                 .reference_state = try track.State.init(owned, m.nbody),
                 .probe = try rbt.Data.init(owned, m),
                 .obs_scratch = try owned.alloc(f32, n_obs),
-                .obs_mean = try owned.alloc(f64, n_obs),
-                .obs_m2 = try owned.alloc(f64, n_obs),
+                .observation_normalizer = try zrl.ObsNormalizer.init(owned, n_obs),
             };
-            @memset(self.obs_mean, 0.0);
-            @memset(self.obs_m2, 0.0);
+            self.observation_normalizer.clip = options.observation_clamp;
             self.env.fleet.options.task.gains.assist = options.assist_start;
             for (self.order, 0..) |*slot, i| {
                 slot.* = @intCast(i);
@@ -427,7 +429,7 @@ pub fn Trainer(comptime M: type) type {
             steps: u64,
             iterations: u64,
             /// How many observations the normaliser has seen.
-            obs_count: u64 = 0,
+            observations_seen: u64 = 0,
         };
 
         /// The size of this trainer's weights file (`exportWeights`), in bytes: the header, both networks'
@@ -449,7 +451,8 @@ pub fn Trainer(comptime M: type) type {
         /// own: the two agree only once the readback reflects every update dispatched
         /// (`isReadbackCurrent`). A program without frames waits for that first (`waitForReadback`); a page
         /// saves when it holds; a file saved by hand mid-update is a frame behind, which for looking at
-        /// it is nothing.
+        /// it is nothing. Memory: the bytes are allocated with `gpa` and are the caller's to free (or its
+        /// arena's).
         pub fn exportWeights(self: *Self, gpa: Allocator) ![]u8 {
             const count: usize = self.ppo.param_count;
             const params: []const f32 = self.ppo.pipe.readLatest(.params) orelse return error.NoReadback;
@@ -470,7 +473,7 @@ pub fn Trainer(comptime M: type) type {
                 .iterations = self.iterations,
                 .flags = if (self.options.normalize) 1 else 0,
                 .tag = self.options.tag,
-                .obs_count = self.obs_count,
+                .observations_seen = @trunc(self.observation_normalizer.count),
             };
             // The normaliser rides after the weights: a network trained on normalised inputs,
             // loaded without the statistics that normalised them, is a different network.
@@ -485,13 +488,15 @@ pub fn Trainer(comptime M: type) type {
                 at += raw.len;
             }
             if (self.options.normalize) {
-                const n: f64 = @floatFromInt(@max(self.obs_count, 1));
-                for (self.obs_mean) |mean| {
+                // Each input's mean and its variance, the sum of squared deviations over the count.
+                const normalizer: zrl.ObsNormalizer = self.observation_normalizer;
+                const n: f64 = @max(normalizer.count, 1);
+                for (normalizer.mean) |mean| {
                     const value: f32 = @floatCast(mean);
                     @memcpy(bytes[at..][0..4], asBytes(&value));
                     at += 4;
                 }
-                for (self.obs_m2) |m2| {
+                for (normalizer.m2) |m2| {
                     const value: f32 = @floatCast(m2 / n);
                     @memcpy(bytes[at..][0..4], asBytes(&value));
                     at += 4;
@@ -545,11 +550,15 @@ pub fn Trainer(comptime M: type) type {
                 defer self.gpa.free(extra);
                 const start: usize = @sizeOf(Header) + 3 * count * @sizeOf(f32);
                 @memcpy(sliceAsBytes(extra), bytes[start..]);
-                self.obs_count = header.obs_count;
-                const n: f64 = @floatFromInt(@max(self.obs_count, 1));
+                // The file keeps each input's mean and variance; the normaliser keeps the sum of squared deviations,
+                // the variance times the count.
+                self.observation_normalizer.count = @floatFromInt(header.observations_seen);
+                const n: f64 = @max(self.observation_normalizer.count, 1);
                 const means: []const f32 = extra[0..self.n_obs];
                 const variances: []const f32 = extra[self.n_obs..];
-                for (self.obs_mean, self.obs_m2, means, variances) |*mean, *m2, saved_mean, saved_var| {
+                const own_means: []f64 = self.observation_normalizer.mean;
+                const own_sums: []f64 = self.observation_normalizer.m2;
+                for (own_means, own_sums, means, variances) |*mean, *m2, saved_mean, saved_var| {
                     mean.* = saved_mean;
                     m2.* = @as(f64, saved_var) * n;
                 }
@@ -625,29 +634,53 @@ pub fn Trainer(comptime M: type) type {
         /// is true while collecting (the statistics move) and false when judging or bootstrapping
         /// (they do not). A no-op unless `options.normalize`.
         /// An observation scaled as the policy sees it, without touching the statistics.
-        pub fn normalizeObservation(self: *Self, obs: []f32) void {
-            self.normalizeObservations(obs, false);
+        /// `observation` normalised in place by the statistics as they stand, without counting it into them - as a
+        /// show or a judge sees it (`normalizeObservations`).
+        pub fn normalizeObservation(self: *Self, observation: []f32) void {
+            self.normalizeObservations(observation, false);
         }
 
-        fn normalizeObservations(self: *Self, obs: []f32, learn_stats: bool) void {
+        /// `observation` normalised in place, when the options normalise - first counted into the running statistics
+        /// when `updates_statistics`: while PPO collects its rollouts, every observation it acts on is counted; shown
+        /// or judged, none is, so that watching a policy cannot change what it sees. The normaliser is zimrrl's
+        /// (`zrl.ObsNormalizer`), the one definition the policy files share.
+        ///
+        /// WHY NORMALISE. An observation mixes units: joint angles in radians, heights in metres, velocities in metres
+        /// and radians per second. Their sizes differ by factors of ten or more, and a network trained on them as they
+        /// are spends its first updates finding scales instead of learning the task - the large inputs swamp the
+        /// small ones, and one step size cannot suit them all. Normalised, every input is a Z-SCORE: how many of its
+        /// own deviations it lies from its own mean, clamped to `observation_clamp` of them so that a rare extreme
+        /// reading cannot drive the network far from anything it was trained on.
+        ///
+        /// WELFORD'S UPDATE (`observeF32`). Per input, a running mean and a running sum of squared deviations from it
+        /// (`m2`), updated one observation at a time without keeping any of them. With n observations counted and a
+        /// new value x:
+        ///
+        ///     distance_before  = x - mean          (from the mean of the n - 1 before)
+        ///     mean            += distance_before / n
+        ///     m2              += distance_before * (x - mean)      (the distance from the NEW mean)
+        ///
+        /// The variance is m2 / n whenever it is wanted. This is the numerically stable way: the textbook sums - of x
+        /// and of x squared, the variance their difference - subtract two large, nearly equal numbers and lose the
+        /// variance to rounding once the mean is large next to the spread. The statistics are f64 because the count
+        /// reaches millions: a new value moves the mean by its distance over n, which in f32 drops below the mean's
+        /// last bit long before the mean is right.
+        fn normalizeObservations(
+            self: *Self,
+            observation: []f32,
+            updates_statistics: bool,
+        ) void {
             if (!self.options.normalize) {
                 return;
             }
-            if (learn_stats) {
-                self.obs_count += 1;
-                const n: f64 = @floatFromInt(self.obs_count);
-                for (obs, self.obs_mean, self.obs_m2) |x, *mean, *m2| {
-                    const delta: f64 = @as(f64, x) - mean.*;
-                    mean.* += delta / n;
-                    m2.* += delta * (@as(f64, x) - mean.*);
-                }
+            if (updates_statistics) {
+                self.observation_normalizer.observeF32(observation) catch {
+                    assertUnreachable(@src(), "PPO: an observation of another size than its normaliser's", .{});
+                };
             }
-            const n: f64 = @floatFromInt(@max(self.obs_count, 1));
-            for (obs, self.obs_mean, self.obs_m2) |*x, mean, m2| {
-                const deviation: f64 = @sqrt(m2 / n + 1.0e-8);
-                const z_score: f64 = (@as(f64, x.*) - mean) / deviation;
-                x.* = @floatCast(clamp(z_score, -5.0, 5.0));
-            }
+            self.observation_normalizer.applyInPlaceF32(observation) catch {
+                assertUnreachable(@src(), "PPO: an observation of another size than its normaliser's", .{});
+            };
         }
 
         /// Collect a batch, work out the advantages, and update. Returns how it went.
@@ -901,7 +934,7 @@ pub fn Trainer(comptime M: type) type {
                         self.normalizeObservations(self.obs_scratch, false);
                         self.ppo.actMean(self.obs_scratch, slot);
                         for (slot) |*a| {
-                            a.* = clamp(a.*, -1.0, 1.0);
+                            a.* = clamp(a.*, -self.env.options.action_limit, self.env.options.action_limit);
                         }
                     }
                 }
@@ -1009,8 +1042,9 @@ pub fn Trainer(comptime M: type) type {
                     );
                     self.normalizeObservations(self.obs_scratch, false);
                     self.ppo.actMean(self.obs_scratch, action);
+                    const limit: f32 = self.env.options.action_limit;
                     for (action) |*component| {
-                        component.* = clamp(component.*, -1.0, 1.0);
+                        component.* = clamp(component.*, -limit, limit);
                     }
                 }
                 show.held_steps_left = steps_per_decision;

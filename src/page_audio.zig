@@ -351,8 +351,8 @@ const offset_top_sink_ms_per_s: f64 = 0.1;
 /// browser's estimate of when a frame is played.
 const dropout_threshold_ms: f64 = 2;
 
-/// The most bytes of a warning the panel shows.
-const last_warning_capacity: usize = 200;
+/// The most bytes of a report the panel shows.
+const last_report_capacity: usize = 200;
 
 /// Everything the page's sound output holds. Its handles are made outside every handle scope (see this file's head)
 /// and kept for the page's life; 0 where there is none yet.
@@ -428,8 +428,8 @@ const PageAudio = struct {
     frame_gap_count: f64 = 0,
     shown_longest_frame_gap_ms: f64 = 0,
     shown_mean_frame_gap_ms: f64 = 0,
-    last_warning: [last_warning_capacity]u8 = undefined,
-    last_warning_length: usize = 0,
+    last_report: [last_report_capacity]u8 = undefined,
+    last_report_length: usize = 0,
     /// `undefined`, made once: the value a handler is cleared with. Its handle is never freed (c2js's `js_free` does
     /// not free a handle of `undefined`), so it is made once rather than at each use.
     undefined_value: Handle = 0,
@@ -437,19 +437,44 @@ const PageAudio = struct {
 // lint:off module-var: the page's one sound output - the browser's callbacks reach it, and they take no context
 var page_audio: PageAudio = .{};
 
+/// How a report of page audio's is said in the console. A fault - no Web Audio, a renderer that failed - is a
+/// warning. That the sound plays through the script processor is a notice: it is a way the sound plays, a little
+/// later, not a fault, and it is the normal case in a viewer whose page has an opaque origin, where no worklet can
+/// load. A notice goes to `console.info`, which the single-file page does not copy onto the page.
+const ReportLevel = enum {
+    notice,
+    warning,
+
+    /// The console method the level is said with.
+    fn consoleMethod(level: ReportLevel) []const u8 {
+        switch (level) {
+            .notice => {
+                return "info";
+            },
+            .warning => {
+                return "warn";
+            },
+        }
+    }
+};
+
 /// Keeps `prefix` and the text of `detail` - a string, or anything `String()` makes one of - as page audio's last
-/// warning, for the diagnostics panel, and says it in the page's console.
-fn warn(comptime prefix: []const u8, detail: Handle) void {
-    const prefix_length: usize = @min(prefix.len, last_warning_capacity);
-    @memcpy(page_audio.last_warning[0..prefix_length], prefix[0..prefix_length]);
-    const detail_room: []u8 = page_audio.last_warning[prefix_length..];
+/// report, for the diagnostics panel, and says it in the page's console at its level.
+fn logReport(
+    comptime level: ReportLevel,
+    comptime prefix: []const u8,
+    detail: Handle,
+) void {
+    const prefix_length: usize = @min(prefix.len, last_report_capacity);
+    @memcpy(page_audio.last_report[0..prefix_length], prefix[0..prefix_length]);
+    const detail_room: []u8 = page_audio.last_report[prefix_length..];
     const detail_length: u32 = js_string_into(detail, detail_room.ptr, @intCast(detail_room.len));
-    page_audio.last_warning_length = prefix_length + detail_length;
+    page_audio.last_report_length = prefix_length + detail_length;
     const prefix_value: Handle = string(prefix);
     defer js_free(prefix_value);
     const console: Handle = globalNamed("console");
     defer js_free(console);
-    callVoid2(console, "warn", prefix_value, detail);
+    callVoid2(console, comptime level.consoleMethod(), prefix_value, detail);
 }
 
 /// The handle of `undefined`, made the first time it is asked for.
@@ -546,12 +571,14 @@ fn onLoadedFromDataUrl(result: Handle) void {
     page_audio.loading = .loaded;
 }
 
-/// Neither URL loaded: the script processor will play. Said once in the page's console, with the browser's reason.
+/// Neither URL loaded: the script processor will play. Said once in the page's console, with the browser's reason, as
+/// a notice (`ReportLevel`): in a viewer whose page has an opaque origin this is how every page's sound plays.
 fn onDataUrlLoadFailed(failure: Handle) void {
     const scope: Handle = js_mark();
     defer js_reset(scope);
     page_audio.loading = .unavailable;
-    warn("zimr: the renderer worklet could not load, so the main thread renders: ", property(failure, "message"));
+    const reason: Handle = property(failure, "message");
+    logReport(.notice, "zimr: the renderer worklet could not load, so the main thread renders: ", reason);
 }
 
 /// The module loaded from the Blob URL: the renderer worklet can be used.
@@ -797,7 +824,7 @@ fn onRendererMessage(event: Handle) void {
         page_audio.processor_state = .running;
     } else if (isString(kind, "failed")) {
         page_audio.processor_state = .failed;
-        warn("zimr: the renderer in the audio worklet failed: ", property(message, "message"));
+        logReport(.warning, "zimr: the renderer in the audio worklet failed: ", property(message, "message"));
     }
 }
 
@@ -806,7 +833,7 @@ fn onProcessorError(event: Handle) void {
     const scope: Handle = js_mark();
     defer js_reset(scope);
     page_audio.processor_state = .failed;
-    warn("zimr: the renderer in the audio worklet failed: ", property(event, "message"));
+    logReport(.warning, "zimr: the renderer in the audio worklet failed: ", property(event, "message"));
 }
 
 /// Hands page audio the app's instance's exports, once it is instantiated: what the forwarded bytes are copied from,
@@ -1122,7 +1149,7 @@ pub fn startPulled(sample_rate: f64, channel_count: u32) f64 {
     if (page_audio.context == 0) {
         const no_audio: Handle = string("the sound is not played");
         defer js_free(no_audio);
-        warn("zimr: this browser has no Web Audio: ", no_audio);
+        logReport(.warning, "zimr: this browser has no Web Audio: ", no_audio);
         return 0;
     }
     const make_processor: Handle = property(page_audio.context, "createScriptProcessor");
@@ -1130,7 +1157,8 @@ pub fn startPulled(sample_rate: f64, channel_count: u32) f64 {
     if (js_truthy(make_processor) == 0) {
         const no_processor: Handle = string("the sound is not played");
         defer js_free(no_processor);
-        warn("zimr: this browser has neither an AudioWorklet nor a script processor here: ", no_processor);
+        const prefix: []const u8 = "zimr: this browser has neither an AudioWorklet nor a script processor here: ";
+        logReport(.warning, prefix, no_processor);
         return 0;
     }
     const block_frames_value: Handle = js_num(processor_block_frames);
@@ -1546,9 +1574,9 @@ fn describeOutput(builder: *TextBuilder) void {
         builder.appendText(" ms, handles ");
         builder.appendWholeNumber(js_table_length());
     }
-    if (page_audio.last_warning_length > 0) {
+    if (page_audio.last_report_length > 0) {
         builder.appendText("\n");
-        builder.appendText(page_audio.last_warning[0..page_audio.last_warning_length]);
+        builder.appendText(page_audio.last_report[0..page_audio.last_report_length]);
     }
 }
 

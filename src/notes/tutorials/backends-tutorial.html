@@ -4660,7 +4660,10 @@ pub fn translate(message: win32.InputMessage, queue: *InputQueue) void {
         win32.WM_KEYDOWN, win32.WM_SYSKEYDOWN =&gt; translateKeyDown(parameter_bits, message.label, queue),
         win32.WM_KEYUP, win32.WM_SYSKEYUP =&gt; translateKeyUp(message.w_param, parameter_bits, queue),
         win32.WM_CHAR =&gt; queue.pushUtf16(@truncate(message.w_param)),
-        win32.WM_MOUSEMOVE =&gt; queue.push(.{ .mouse_move = positionOf(parameter_bits, message.scale) }),
+        win32.WM_MOUSEMOVE =&gt; {
+            const kind: contract.PointerKind = pointerKindOfExtraInfo(message.extra_info);
+            queue.push(.{ .mouse_move = positionOf(parameter_bits, message.scale, kind) });
+        },
         win32.WM_LBUTTONDOWN,
         win32.WM_RBUTTONDOWN,
         win32.WM_MBUTTONDOWN,
@@ -4884,7 +4887,8 @@ fn translateButton(message: win32.InputMessage, queue: *InputQueue) void {
         else =&gt; false,
     };
     const parameter_bits: usize = @bitCast(message.l_param);
-    queue.push(.{ .mouse_move = positionOf(parameter_bits, message.scale) });
+    const kind: contract.PointerKind = pointerKindOfExtraInfo(message.extra_info);
+    queue.push(.{ .mouse_move = positionOf(parameter_bits, message.scale, kind) });
     if (is_press) {
         queue.push(.{ .mouse_button_down = button });
     } else {
@@ -5216,17 +5220,21 @@ as its watcher already does; and not the child's handle, which that wait closes 
 
 <p>The panel also shows a picture of the example: a thumbnail <code>zig build gallery-shots</code> saved. The step
 runs every example's headless program with a short script on its standard input - two seconds of frames, then the
-frame saved shrunk to 320 pixels across, then the end:</p>
+frame saved shrunk twice, 320 pixels across for this gallery and 224 for the web gallery's list, then the end:</p>
 
 <pre class="sketch"><code>   .{ .advance = 120 }
    .{ .capture_thumbnail = .{ .path = "zig-out/gallery_shots/music_streaming.png", .width = 320 } }
+   .{ .capture_thumbnail = .{ .path = "zig-out/web/shots/music_streaming.png", .width = 224 } }
    .quit</code></pre>
 
 <p>The shrinking makes each thumbnail pixel the mean of the frame's pixels it covers, so that fine lines and text thin
 out evenly; a thumbnail is a few kilobytes. The run sets <code>ZIMR_SKIP_START_SCREEN</code>, so that an example
 with an audio start screen is pictured past it. <code>-Dshots=a,b,c</code> takes only those examples. The gallery
 looks for <code>gallery_shots/&lt;name&gt;.png</code> one folder up from its own (zig-out/windows/) or two
-(zig-out/headless/bin/), loads it the first time the example is chosen, and keeps it.</p>
+(zig-out/headless/bin/), loads it the first time the example is chosen, and keeps it. The web gallery's list shows
+<code>shots/&lt;name&gt;.png</code> beside each example's name, cropped to an 80 by 60 box; the copy sits inside
+zig-out/web/, so <code>zig build dist</code> ships it with the pages, and an example with none yet keeps an empty
+frame.</p>
 
 <p>A program builds for Windows when the platform carries out every request it makes: a request not written yet on
 Windows is a compile error naming it (section 13.5). An example that needs one is left out of the native build, and
@@ -5712,16 +5720,19 @@ fn receiveEvent(event: contract.Event) void {
             }
         },
         .mouse_move =&gt; |move| {
+            input.pushPointerKind(state, move.kind);
             const position: [2]f32 = cssToLogical(app, move.x, move.y);
             input.pushMouseMove(state, position[0], position[1]);
             const movement: [2]f32 = cssMovementToLogical(app, move.dx, move.dy);
             input.pushMouseMovement(state, movement[0], movement[1]);
         },
         .mouse_button_down =&gt; |button| {
+            input.pushPointerKind(state, button.kind);
             input.pushPressTime(state, null, button.time_ms);
             input.pushMouseButtonDown(state, dom_input.mouseButtonFromDomButton(@backingInt(button.button)));
         },
         .mouse_button_up =&gt; |button| {
+            input.pushPointerKind(state, button.kind);
             input.pushMouseButtonUp(state, dom_input.mouseButtonFromDomButton(@backingInt(button.button)));
         },
         .mouse_wheel =&gt; |wheel| input.pushMouseWheel(state, wheel.dx, wheel.dy),
@@ -5898,7 +5909,10 @@ pub const requests = [_]Request{
     // queue, the oldest copied out by `pollSocket` - dropped, and null returned, when longer than `out`; closed, the
     // handle freed. Handle 0 is no socket, and reads closed. `socketOriginUrl` is the address of the server the app
     // came from: the page's own origin in the browser; natively, the signaling server on this machine.
-    // Then the wall clock: milliseconds since the Unix epoch, UTC.
+    // Then the wall clock: milliseconds since the Unix epoch, UTC; and the monotonic clock, in milliseconds from any
+    // fixed start, which no setting of the system's time moves - for measuring how long something takes, such as the
+    // share of a frame a piece of work may spend. A headless run's is the run's own clock, which only its frames move,
+    // so that the run gives the same frames however fast its machine is.
     .{ .name = "openSocket", .signature = fn (url: []const u8) u32 },
     .{ .name = "socketState", .signature = fn (handle: u32) SocketState },
     .{ .name = "sendSocket", .signature = fn (handle: u32, bytes: []const u8) void },
@@ -5906,6 +5920,7 @@ pub const requests = [_]Request{
     .{ .name = "closeSocket", .signature = fn (handle: u32) void },
     .{ .name = "socketOriginUrl", .signature = fn (out: []u8) []const u8 },
     .{ .name = "epochMillis", .signature = fn () f64 },
+    .{ .name = "monotonicMilliseconds", .signature = fn () f64 },
     // The monitors: how many there are, each one's description (null past the count), and the one holding the drawing
     // area - the window's, or the page's screen.
     .{ .name = "monitorCount", .signature = fn () u32 },
@@ -5925,6 +5940,10 @@ pub const requests = [_]Request{
         y: f32,
     ) void },
     .{ .name = "setWindowSizeLimits", .signature = fn (limits: SizeLimits) void },
+    // The app asks to end: the loop finishes the frame it is in, tears down and the program exits, as after the close
+    // button - one way out of the program, whichever asked. A platform whose program is called by another (a page,
+    // called by its browser) has nothing to end.
+    .{ .name = "requestQuit", .signature = fn () void },
     // A key's label in the person's current layout, as UTF-8 written into `buffer`: for a letter key, the letter it
     // types there - the key at the US Q is "A" on a French keyboard - and for the others the layout's own name for
     // them; null for no key, or a label longer than `buffer`.
@@ -6715,9 +6734,9 @@ included - and so does each event listener (<code>scopedListener</code>), since 
    after the reset    boot handles | pinned |           (the frame's slots free for the next frame)</code></pre>
 
 <p>A scope is airtight. The table also keeps a list of free slots - slots released one at a time by
-<code>js_free</code> - and a new handle takes one before growing the table. A handle a scope made in a slot below its
-mark would be beyond its reset's reach, so <code>js_mark</code> sets the free list aside while the scope runs, and
-<code>js_reset</code> gives it back: a scope's handles all lie above its mark.</p>
+<code>js_free</code>, or around a pinned handle (below) - and a new handle takes one before growing the table. A handle a
+scope made in a slot below its mark would be beyond the reach of popping, so the scope notes each such slot it takes,
+and its reset frees those as it pops what lies above the mark.</p>
 
 <p>A free slot holds a marker of its own, not <code>undefined</code>: a handle may hold <code>undefined</code> - a call
 that returns nothing gives one - and must still be freeable. The marker throws when it is used, so a handle used after
@@ -6725,15 +6744,20 @@ it was freed says so at once, until its slot is given to a new handle.</p>
 
 <p>A handle that must outlive its scope - an object the page keeps for its life, made the first time a frame needs it,
 like the canvas's context - is <em>pinned</em> where it is stored (<code>Value.keep</code>, <code>js_pin</code>): a
-reset leaves it in place, and frees the slots around it. <code>js_free</code> releases and unpins it. The two mistakes
+reset leaves it in place, and frees the slots around it - and since a scope takes free slots first, the next frames
+take those slots again: a frame that pins a handle after making others lengthens the table once, not at every such
+pin. (Before scopes took free slots, a page whose audio a launcher restarted at each app grew by a frame's handles at
+every restart - some 430 a time.) <code>js_free</code> releases and unpins it. The two mistakes
 are therefore symmetric. Code that runs outside every scope keeps everything it mints: a leak. A handle stored for
 later without being pinned is reclaimed when its scope ends: a stale handle.</p>
 
-<p>A leak shows by itself. Since every frame resets the table to where the frame began, the table's length at a frame's
-start is what lives outside frames: the boot handles and the pinned ones, a few hundred, and anything leaked. On a page
-that releases what it mints, that length stays put; on one that leaks, it rises. The bridge watches it
-(<code>watchHandleTable</code>): a rise of 300 handles in 30 seconds - ten a second - or a table past 200 000, is
-written to the page's log, which the page shows on screen, naming the likely cause and the cure. The sound's diagnostics
+<p>A leak shows by itself. Since every frame releases what it made, the live handles at a frame's start - the table's
+length less its free slots (<code>js_live_handle_count</code>) - are what lives outside frames: the boot handles and
+the pinned ones, a few hundred, and anything leaked. On a page that releases what it mints, that count stays put; on one
+that leaks, it rises. The length itself is not the measure: a pin made mid-frame holds it up, over free slots, with
+nothing kept. The bridge watches the count (<code>watchHandleTable</code>): a rise of 300 handles in 30 seconds - ten a
+second - or a count past 200 000, is written to the page's log, which the page shows on screen, naming the likely cause
+and the cure. The sound's diagnostics
 panel shows the length too (<code>js_table_length</code>), for the page and for the audio worklet, whose table lives in
 the audio thread's realm and is reset by none of the page's frames: on a healthy page both numbers hold steady from
 refresh to refresh.</p>

@@ -679,6 +679,10 @@ pub const Style = struct {
     window_padding: Vec2 = .{ 10, 10 }, // was .{ 8, 8 }
     frame_padding: Vec2 = .{ 6, 4 }, // was .{ 4, 3 }
     item_spacing: Vec2 = .{ 10, 6 }, // was .{ 8, 4 }
+    /// Where a button's label sits in the space inside its frame padding: (0, 0) at the top left, (1, 1) at the
+    /// bottom right, (0.5, 0.5) - the default - centred. It matters only for a button sized larger than its label.
+    /// Dear ImGui's `ButtonTextAlign`, with Dear ImGui's default.
+    button_text_align: Vec2 = .{ 0.5, 0.5 },
     title_bar_height: f32 = 28, // was 22
     menu_bar_height: f32 = 28, // was 22
 
@@ -4450,6 +4454,20 @@ pub const Window = struct {
     /// behaviour so content overflow shows a scrollbar instead of
     /// silently re-growing the window.
     user_resized: bool = false,
+    /// Set once the person has moved the window by dragging its title bar: its place is then theirs, not the app's.
+    /// `closeWindow`'s warning about an auto-sized window running off the canvas is about the app's layout, so it is
+    /// not given for a window the person has moved - Dear ImGui likewise lets a person drag a window partly off the
+    /// screen, keeping only enough of it in view to take hold of again.
+    user_moved: bool = false,
+    /// The height at which the window last ran below the canvas, the frame before; -1 when it did not. A window can
+    /// overhang for the one frame it grows - placed by its height the frame before, it is moved the next - so
+    /// `closeWindow` warns only of an overhang that lasts: two frames running at the same height.
+    overhang_height: f32 = -1,
+    /// The bounds `setNextWindowSizeConstraints` set for this frame, null where it set none: fitting the window to
+    /// its content as it closes keeps within them too, as Dear ImGui's `CalcWindowAutoFitSize` does - so a window
+    /// held shorter than its content scrolls it.
+    size_min: ?Vec2 = null,
+    size_max: ?Vec2 = null,
 
     /// Only used by the tooltip-block window - stash points for the
     /// current_window / current_draw_list at `beginTooltip` so
@@ -8545,22 +8563,28 @@ fn closeWindow(ctx: *UiContext, w: *Window) void {
     const inner_origin_y: f32 = w.pos[1] + effectiveTitleBarHeight(ctx, w) + ctx.style.window_padding[1];
     const content_h_natural: f32 = w.layout.cursor_max[1] + w.scroll_y - inner_origin_y;
     const content_w_natural: f32 = w.layout.cursor_max[0] + w.scroll_x - w.pos[0] + ctx.style.window_padding[0];
+    // The window's padding goes on every side of its content, as Dear ImGui's `CalcWindowAutoFitSize` puts it. The
+    // width above already has both sides: `cursor_max[0] - pos[0]` includes the left padding, and the right is added.
+    // The content's height is measured from below the top padding, so a fitted height adds the title bar and the
+    // padding above AND below - without the second, the last item sat on the window's bottom edge.
+    const padding_above_and_below: f32 = 2 * ctx.style.window_padding[1];
+    const fitted_h: f32 = content_h_natural + effectiveTitleBarHeight(ctx, w) + padding_above_and_below;
+    // The fit keeps within the window's size constraints, as Dear ImGui's does: a window held shorter than its
+    // content is given the scroll below to reach the rest.
+    const fitted_size: Vec2 = clampWindowSize(.{ content_w_natural, fitted_h }, w.size_min, w.size_max);
     // P5.2: `always_auto_resize` matches imgui's
     // `ImGuiWindowFlags_AlwaysAutoResize` semantics - every frame,
     // window matches its content's natural extent (BOTH grow AND
     // shrink), ignoring `user_resized`. Normal behavior (no flag)
     // only grows, and pins once the user has dragged.
     if (w.flags.always_auto_resize) {
-        const total_h: f32 = content_h_natural + effectiveTitleBarHeight(ctx, w) + ctx.style.window_padding[1];
-        w.size[0] = content_w_natural;
-        w.size[1] = total_h;
+        w.size = fitted_size;
     } else if (!w.user_resized) {
-        if (content_w_natural > w.size[0]) {
-            w.size[0] = content_w_natural;
+        if (fitted_size[0] > w.size[0]) {
+            w.size[0] = fitted_size[0];
         }
-        const total_h: f32 = content_h_natural + effectiveTitleBarHeight(ctx, w) + ctx.style.window_padding[1];
-        if (total_h > w.size[1]) {
-            w.size[1] = total_h;
+        if (fitted_size[1] > w.size[1]) {
+            w.size[1] = fitted_size[1];
         }
     }
 
@@ -8576,7 +8600,14 @@ fn closeWindow(ctx: *UiContext, w: *Window) void {
     // forgot.
     if (!w.user_resized) {
         const canvas_h_f: f32 = float(ctx.canvas_h);
-        if (w.pos[1] + w.size[1] > canvas_h_f) {
+        const placed_by_app: bool = !w.user_moved;
+        const runs_below_canvas: bool = placed_by_app and w.pos[1] + w.size[1] > canvas_h_f;
+        const overhang_lasts: bool = runs_below_canvas and w.overhang_height == w.size[1];
+        w.overhang_height = -1;
+        if (runs_below_canvas) {
+            w.overhang_height = w.size[1];
+        }
+        if (overhang_lasts) {
             warnOnce(
                 @src(),
                 "ui.window: auto-expanded '{s}' (h={d:.0}) extends below canvas " ++
@@ -8590,7 +8621,7 @@ fn closeWindow(ctx: *UiContext, w: *Window) void {
         // content". Warn once at 3x ratio.
         const viewport_h_local: f32 = @max(
             1,
-            w.size[1] - effectiveTitleBarHeight(ctx, w) - ctx.style.window_padding[1],
+            w.size[1] - effectiveTitleBarHeight(ctx, w) - padding_above_and_below,
         );
         if (content_h_natural > viewport_h_local * 3) {
             warnOnce(
@@ -8602,7 +8633,9 @@ fn closeWindow(ctx: *UiContext, w: *Window) void {
     }
 
     // ---- Compute scroll bookkeeping ----------------------------------
-    const viewport_h: f32 = @max(0, w.size[1] - effectiveTitleBarHeight(ctx, w) - ctx.style.window_padding[1]);
+    // The visible content's height, inside the padding on both sides: scrolled to the end, the last item keeps the
+    // bottom padding below it, as at the top.
+    const viewport_h: f32 = @max(0, w.size[1] - effectiveTitleBarHeight(ctx, w) - padding_above_and_below);
     w.scroll_max_y = @max(0, content_h_natural - viewport_h);
     // Shift-wheel pan: when the user holds Shift, vertical wheel
     // ticks route to horizontal scroll instead of vertical.  Common
@@ -9078,6 +9111,7 @@ fn renderWindowChrome(ctx: *UiContext, w: *Window) void {
     // Continue drag.
     if (ctx.active_id == drag_id) {
         if (md) {
+            const pos_before_drag: Vec2 = w.pos;
             w.pos[0] = mp[0] - ctx.active_id_press_x;
             w.pos[1] = mp[1] - @as(f32, @floatCast(ctx.active_id_press_value));
             // Clamp to canvas so the title bar can't disappear off-screen.
@@ -9087,6 +9121,10 @@ fn renderWindowChrome(ctx: *UiContext, w: *Window) void {
             w.pos[0] = @min(w.pos[0], cw - 32);
             w.pos[1] = @max(w.pos[1], 0);
             w.pos[1] = @min(w.pos[1], ch - ctx.style.title_bar_height);
+            const window_moved: bool = @reduce(.Or, w.pos != pos_before_drag);
+            if (window_moved) {
+                w.user_moved = true;
+            }
 
             //.ii: dock-drag tracking is GATED
             // on a cumulative-motion threshold from the press
@@ -9475,6 +9513,9 @@ fn openWindow(
     // user must call setNextWindowSizeConstraints each frame
     // they want the bounds enforced. Document if/when this
     // turns out to be a footgun.
+    // The window keeps this frame's bounds for `closeWindow`, which fits it to its content within them.
+    w.size_min = ctx.next_window_size_min;
+    w.size_max = ctx.next_window_size_max;
     if (ctx.next_window_size_min != null or ctx.next_window_size_max != null) {
         w.size = clampWindowSize(w.size, ctx.next_window_size_min, ctx.next_window_size_max);
         ctx.next_window_size_min = null;
@@ -10297,7 +10338,9 @@ fn textWrappedImpl(
                 while (line_start < full.len and full[line_start] == ' ') {
                     line_start += 1;
                 }
-                line_end = line_start;
+                // The word that did not fit starts the new line. Leaving it out for the next word's turn to
+                // measure again would drop it when it is the last: no turn follows.
+                line_end = word_end;
             } else {
                 line_end = word_end;
             }
@@ -21473,6 +21516,98 @@ test "Q3: itemAdd does NOT set hovered_id when mouse is elsewhere" {
     try expect(env.ctx.hovered_id != id);
 }
 
+test "button label: alignedTextPosition centres, starts, ends, and pins a larger text to the start" {
+    const inner_min: Vec2 = .{ 10, 20 };
+    const inner_max: Vec2 = .{ 110, 60 };
+    const text_size: Vec2 = .{ 40, 10 };
+    try expectEqual(@as(Vec2, .{ 40, 35 }), alignedTextPosition(inner_min, inner_max, text_size, .{ 0.5, 0.5 }));
+    try expectEqual(@as(Vec2, .{ 10, 20 }), alignedTextPosition(inner_min, inner_max, text_size, .{ 0, 0 }));
+    try expectEqual(@as(Vec2, .{ 70, 50 }), alignedTextPosition(inner_min, inner_max, text_size, .{ 1, 1 }));
+    const wide_text: Vec2 = .{ 300, 10 };
+    try expectEqual(@as(Vec2, .{ 10, 35 }), alignedTextPosition(inner_min, inner_max, wide_text, .{ 0.5, 0.5 }));
+}
+
+/// The commands a window has drawn since `first_index`: what one widget call added, for the button-label tests.
+fn commandsSince(window: WindowHandle, first_index: usize) []const DrawCmd {
+    const all_commands: []const DrawCmd = window.win.draw_list.cmds.items;
+    return all_commands[first_index..];
+}
+
+/// The text command among `commands` that draws `label`.
+fn labelCommand(commands: []const DrawCmd, label: []const u8) ?DrawCmd {
+    for (commands) |command| {
+        if (command == .text and eql(u8, command.text.s, label)) {
+            return command;
+        }
+    }
+    return null;
+}
+
+test "button label: a sized button centres it, as Dear ImGui's ButtonTextAlign does; the style moves it" {
+    // The test context has no font metrics - a label measures 0 wide and `font_size` tall - so the horizontal check
+    // centres a zero-width label, and the vertical one a real line.
+    var env = TestEnv.init(testing_allocator);
+    defer env.deinit();
+    const u: Ui = env.beginFrameWith(.{});
+    const window: WindowHandle = u.window("t", .{}) orelse unreachable;
+    defer window.close();
+    const button_size: Vec2 = .{ 200, 60 };
+    const padding: Vec2 = u.ctx.style.frame_padding;
+
+    const before_first: usize = window.win.draw_list.cmds.items.len;
+    _ = u.button("Go", .{ .size = button_size });
+    const centred: DrawCmd = labelCommand(commandsSince(window, before_first), "Go").?;
+    const button_rect: Rectangle = window.win.layout.last_item_rect;
+    const label_size: Vec2 = measureTextS(u.ctx, "Go");
+    const expected_centre: Vec2 = .{
+        button_rect.x + padding[0] + (button_size[0] - 2 * padding[0] - label_size[0]) * 0.5,
+        button_rect.y + padding[1] + (button_size[1] - 2 * padding[1] - label_size[1]) * 0.5,
+    };
+    try expectEqual(expected_centre, centred.text.pos);
+
+    // Aligned to (0, 0), the label sits where every button's did before: the frame padding from the top left.
+    const before_second: usize = window.win.draw_list.cmds.items.len;
+    u.pushStyle("button_text_align", @as(Vec2, .{ 0, 0 }));
+    _ = u.button("Go again", .{ .size = button_size });
+    u.popStyle();
+    const top_left: DrawCmd = labelCommand(commandsSince(window, before_second), "Go again").?;
+    const second_rect: Rectangle = window.win.layout.last_item_rect;
+    try expectEqual(@as(Vec2, .{ second_rect.x + padding[0], second_rect.y + padding[1] }), top_left.text.pos);
+}
+
+test "button label: clipped to the button only when it does not fit" {
+    var env = TestEnv.init(testing_allocator);
+    defer env.deinit();
+    const u: Ui = env.beginFrameWith(.{});
+    const window: WindowHandle = u.window("t", .{}) orelse unreachable;
+    defer window.close();
+
+    const before_fitting: usize = window.win.draw_list.cmds.items.len;
+    _ = u.button("fits", .{ .size = .{ 200, 60 } });
+    for (commandsSince(window, before_fitting)) |command| {
+        try expect(command != .push_clip);
+    }
+
+    // The test context has no font metrics: a label measures 0 wide and a line (`font_size`) tall. So the label is
+    // made to overflow downward, in a button shorter than one line.
+    const before_short: usize = window.win.draw_list.cmds.items.len;
+    const short_height: f32 = u.ctx.style.font_size / 2;
+    _ = u.button("taller than its button", .{ .size = .{ 200, short_height } });
+    var clips_pushed: usize = 0;
+    var clips_popped: usize = 0;
+    for (commandsSince(window, before_short)) |command| {
+        if (command == .push_clip) {
+            clips_pushed += 1;
+            try expectEqual(short_height, command.push_clip.rect.height);
+        }
+        if (command == .pop_clip) {
+            clips_popped += 1;
+        }
+    }
+    try expectEqual(@as(usize, 1), clips_pushed);
+    try expectEqual(@as(usize, 1), clips_popped);
+}
+
 test "Q3: buttonBehavior fires pressed on click-then-release inside rect" {
     var env = TestEnv.init(testing_allocator);
     defer env.deinit();
@@ -26468,6 +26603,8 @@ pub const PersistedStyle = struct {
     window_padding: [2]f32 = .{ 8, 8 },
     frame_padding: [2]f32 = .{ 4, 3 },
     item_spacing: [2]f32 = .{ 8, 4 },
+    /// Added after the first saves: a save without it loads with Dear ImGui's default, centred.
+    button_text_align: [2]f32 = .{ 0.5, 0.5 },
     title_bar_height: f32 = 22,
     menu_bar_height: f32 = 22,
     disabled_alpha: f32 = 0.6,
@@ -26511,6 +26648,7 @@ pub const PersistedStyle = struct {
             .window_padding = .{ s.window_padding[0], s.window_padding[1] },
             .frame_padding = .{ s.frame_padding[0], s.frame_padding[1] },
             .item_spacing = .{ s.item_spacing[0], s.item_spacing[1] },
+            .button_text_align = .{ s.button_text_align[0], s.button_text_align[1] },
             .title_bar_height = s.title_bar_height,
             .menu_bar_height = s.menu_bar_height,
             .disabled_alpha = s.disabled_alpha,
@@ -26556,6 +26694,7 @@ pub const PersistedStyle = struct {
         target.window_padding = .{ self.window_padding[0], self.window_padding[1] };
         target.frame_padding = .{ self.frame_padding[0], self.frame_padding[1] };
         target.item_spacing = .{ self.item_spacing[0], self.item_spacing[1] };
+        target.button_text_align = .{ self.button_text_align[0], self.button_text_align[1] };
         target.title_bar_height = self.title_bar_height;
         target.menu_bar_height = self.menu_bar_height;
         target.disabled_alpha = self.disabled_alpha;
@@ -26605,6 +26744,7 @@ fn styleIsDefault(s: *const Style) bool {
         meta.eql(s.window_padding, d.window_padding) and
         meta.eql(s.frame_padding, d.frame_padding) and
         meta.eql(s.item_spacing, d.item_spacing) and
+        meta.eql(s.button_text_align, d.button_text_align) and
         s.title_bar_height == d.title_bar_height and
         s.menu_bar_height == d.menu_bar_height and
         s.disabled_alpha == d.disabled_alpha and
@@ -29376,8 +29516,7 @@ fn buttonImpl(
         ctx.style.button;
 
     drawRectFilled(ctx, rect, Color.toWire(bg));
-    const label_pos: Vec2 = .{ rect.x + padding[0], rect.y + padding[1] };
-    drawTextAtS(ctx, label_pos, label, Color.toWire(ctx.style.text));
+    drawButtonLabel(ctx, rect, label, text_size);
 
     w.layout.last_item_id = id;
     w.layout.last_item_rect = rect;
@@ -29387,6 +29526,51 @@ fn buttonImpl(
 
     advanceLayout(w, size, ctx.style.item_spacing, ctx.style.window_padding[0]);
     return r.pressed;
+}
+
+/// Where a text of `text_size` starts when it is placed in the box from `inner_min` to `inner_max` by `alignment`
+/// (0 = the box's start, 1 = its end, on each axis): the box's free space times the alignment, added to its start -
+/// but never less than the start, so a text larger than its box starts at the box's left and top edges and runs past
+/// the other two. Dear ImGui's `RenderTextClipped` places text the same way.
+fn alignedTextPosition(
+    inner_min: Vec2,
+    inner_max: Vec2,
+    text_size: Vec2,
+    alignment: Vec2,
+) Vec2 {
+    const free_space: Vec2 = inner_max - inner_min - text_size;
+    const no_space: Vec2 = .{ 0, 0 };
+    const offset: Vec2 = @max(free_space, no_space) * alignment;
+    const position: Vec2 = inner_min + offset;
+    return position;
+}
+
+/// Draws a button's label in its frame: placed by the style's `button_text_align` in the space inside the frame
+/// padding (`alignedTextPosition`), and clipped to the frame only when it does not fit there - Dear ImGui's
+/// `ButtonEx`. A label that fits needs no clip, and pushing none keeps the draw list's batches whole.
+fn drawButtonLabel(
+    ctx: *UiContext,
+    frame: Rectangle,
+    label: []const u8,
+    text_size: Vec2,
+) void {
+    const padding: Vec2 = ctx.style.frame_padding;
+    const frame_min: Vec2 = .{ frame.x, frame.y };
+    const frame_max: Vec2 = .{ frame.x + frame.width, frame.y + frame.height };
+    const inner_min: Vec2 = frame_min + padding;
+    const inner_max: Vec2 = frame_max - padding;
+    const label_pos: Vec2 = alignedTextPosition(inner_min, inner_max, text_size, ctx.style.button_text_align);
+    const label_end: Vec2 = label_pos + text_size;
+    const label_overflows: bool = label_end[0] > inner_max[0] or label_end[1] > inner_max[1];
+    const can_clip: bool = !ctx.eager_mode and ctx.current_draw_list != null;
+    const clips: bool = label_overflows and can_clip;
+    if (clips) {
+        ctx.current_draw_list.?.pushClipRect(ctx.frame_arena.allocator(), frame);
+    }
+    drawTextAtS(ctx, label_pos, label, Color.toWire(ctx.style.text));
+    if (clips) {
+        ctx.current_draw_list.?.popClipRect(ctx.frame_arena.allocator());
+    }
 }
 
 /// Compact button. Same hit-test + state machine as `buttonImpl`,
@@ -37508,7 +37692,8 @@ test " closeWindow computes scroll_max_y from content overflow" {
     w.layout.cursor_max = .{ w.pos[0] + 100, inner_y + 300 };
     handle.close();
 
-    const viewport_h: f32 = 100 - ctx.style.title_bar_height - ctx.style.window_padding[1];
+    // The viewport sits inside the padding on both sides, as closeWindow measures it.
+    const viewport_h: f32 = 100 - ctx.style.title_bar_height - 2 * ctx.style.window_padding[1];
     try expectEqual(@as(f32, 300 - viewport_h), w.scroll_max_y);
 }
 
@@ -40743,6 +40928,52 @@ test "P5.2: always_auto_resize ignores user_resized + matches content exactly" {
     // empty frame but smaller than the initial 400 we forced".
     try expect(w2.size[1] > 30);
     try expect(w2.size[1] < 200);
+}
+
+test "auto-fit: a fitted window has its padding below the last item as above the first, and nothing to scroll" {
+    var env = TestEnv.init(testing_allocator);
+    defer env.deinit();
+    const button_size: Vec2 = .{ 120, 40 };
+    var last_item_bottom: f32 = 0;
+    // Two frames: a window takes the size its content asked for in the frame before.
+    for (0..2) |_| {
+        const u: Ui = env.beginFrameWith(.{});
+        const fitting: WindowFlags = .{ .always_auto_resize = true };
+        const window: WindowHandle = u.window("fitted", .{ .flags = fitting }) orelse unreachable;
+        _ = u.button("one", .{ .size = button_size });
+        _ = u.button("two", .{ .size = button_size });
+        const last_rect: Rectangle = window.win.layout.last_item_rect;
+        last_item_bottom = last_rect.y + last_rect.height;
+        window.close();
+    }
+    const w: *Window = env.ctx.windows.get(hashStr(0, "fitted")).?;
+    const padding: Vec2 = env.ctx.style.window_padding;
+    const window_bottom: f32 = w.pos[1] + w.size[1];
+    try expectApproxEqAbs(padding[1], window_bottom - last_item_bottom, 1e-3);
+    try expectEqual(@as(f32, 0), w.scroll_max_y);
+}
+
+test "auto-fit: a fitted window keeps within its size constraints, and scrolls the content they leave out" {
+    var env = TestEnv.init(testing_allocator);
+    defer env.deinit();
+    const button_size: Vec2 = .{ 120, 40 };
+    const labels = [_][]const u8{ "one", "two", "three", "four", "five" };
+    const tallest: f32 = 100;
+    // Two frames, as above; the constraints are set before the window each frame, as they must be.
+    for (0..2) |_| {
+        const u: Ui = env.beginFrameWith(.{});
+        u.setNextWindowSizeConstraints(null, .{ 1000, tallest });
+        const fitting: WindowFlags = .{ .always_auto_resize = true };
+        const window: WindowHandle = u.window("held", .{ .flags = fitting }) orelse unreachable;
+        for (labels) |label| {
+            _ = u.button(label, .{ .size = button_size });
+        }
+        window.close();
+    }
+    // Five 40 px buttons need more than 100 px: the window stops there, and what is cut off is scrolled to.
+    const w: *Window = env.ctx.windows.get(hashStr(0, "held")).?;
+    try expectEqual(tallest, w.size[1]);
+    try expect(w.scroll_max_y > 0);
 }
 
 test "P5.2: no_saved_settings excludes the window from persistence" {
@@ -44077,6 +44308,46 @@ test "cursor_pos_prev_line: seeded at window-open inner origin" {
 //.i + d.ii (turns 321-322) - title-bar drag tracks dragging_window
 // with cumulative-motion threshold
 // ============================================================================
+
+test "user_moved: a click on the title bar does not move a window; a drag does, and the window is the person's" {
+    var ctx = UiContext.init(testing_allocator);
+    defer ctx.deinit();
+    ctx.canvas_w = 800;
+    ctx.canvas_h = 600;
+    var gl_dummy: Gl = .{};
+    const shapes_dummy: shapes2d.ShapesTextureState = .{};
+    const font_dummy: text2d.FontCache = .{};
+    {
+        const u: Ui = ctx.beginFrameRaw(.{}, null, 800, 600, &gl_dummy, &shapes_dummy, &font_dummy);
+        const h: WindowHandle = u.window("Moved", .{ .initial_pos = .{ 100, 100 } }) orelse return error.NoWindow;
+        h.close();
+    }
+    const w: *Window = ctx.windows.values()[0];
+    try expect(!w.user_moved);
+
+    // A press in the title bar, no motion: a click, not a move.
+    const press_pos: Vec2 = .{ w.pos[0] + 20, w.pos[1] + 8 };
+    ctx.input.mouse_pos = press_pos;
+    ctx.input.mouse_left_down = true;
+    ctx.input.mouse_left_clicked = true;
+    {
+        const u: Ui = ctx.beginFrameRaw(ctx.input, null, 800, 600, &gl_dummy, &shapes_dummy, &font_dummy);
+        const h: WindowHandle = u.window("Moved", .{}) orelse return error.NoWindow;
+        h.close();
+    }
+    try expect(!w.user_moved);
+
+    // The pointer moves with the button held: the window follows, and is marked as the person's.
+    ctx.input.mouse_pos = .{ press_pos[0], press_pos[1] + 300 };
+    ctx.input.mouse_left_clicked = false;
+    {
+        const u: Ui = ctx.beginFrameRaw(ctx.input, null, 800, 600, &gl_dummy, &shapes_dummy, &font_dummy);
+        const h: WindowHandle = u.window("Moved", .{}) orelse return error.NoWindow;
+        h.close();
+    }
+    try expectEqual(@as(f32, 400), w.pos[1]);
+    try expect(w.user_moved);
+}
 
 test "5.5d.ii: dock-drag threshold gates dragging_window (null below, set above)" {
     var ctx = UiContext.init(testing_allocator);

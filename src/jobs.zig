@@ -89,6 +89,11 @@ const jobs_abi = @import("jobs_abi.zig");
 const wgpu = @import("wgpu.zig");
 
 const Allocator = std.mem.Allocator;
+const bufPrint = std.fmt.bufPrint;
+const endsWith = std.mem.endsWith;
+const expect = std.testing.expect;
+const expectEqualStrings = std.testing.expectEqualStrings;
+const indexOf = std.mem.indexOf;
 const Writer = Io.Writer;
 
 pub const Error = error{
@@ -1254,6 +1259,8 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
             @export(&Worker.outPtr, .{ .name = jobs_abi.out_ptr });
             @export(&Worker.errPtr, .{ .name = jobs_abi.err_ptr });
             @export(&Worker.errLen, .{ .name = jobs_abi.err_len });
+            @export(&Worker.logPtr, .{ .name = jobs_abi.log_ptr });
+            @export(&Worker.logLen, .{ .name = jobs_abi.log_len });
 
             for (kernels) |entry| {
                 // lint:off untyped-local: each entry's kernel is its own function type - no one type fits every entry
@@ -1278,6 +1285,14 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
             /// The name of the last error, so a failure is legible instead of a bare -1.
             /// `@errorName` returns a static string, so this borrows and never owns.
             var err_name: []const u8 = "";
+            /// The log lines of the job running or last run (`workerLogFn`), `log_buffer[0..log_length]`: emptied
+            /// as each job starts, read by the worker when it ends. A line that does not fit is dropped and counted,
+            /// and room is kept at the end for the line that says so.
+            var log_buffer: [log_capacity]u8 = undefined;
+            var log_length: usize = 0;
+            var log_lines_dropped: u32 = 0;
+            const log_capacity: usize = 4096;
+            const dropped_note_room: usize = 64;
 
             fn alloc(len: u32) callconv(.c) u32 {
                 const wa: Allocator = std.heap.wasm_allocator;
@@ -1313,6 +1328,8 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
                 // still cannot leak - everything it allocated is gone the moment the
                 // next job starts.
                 _ = arena.reset(.retain_capacity);
+                log_length = 0;
+                log_lines_dropped = 0;
 
                 var out: Writer = .fixed(out_mem);
                 invoke(kernel, arena.allocator(), in_mem[0..in_len], &out) catch |err| {
@@ -1331,7 +1348,68 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
             fn errLen() callconv(.c) u32 {
                 return @intCast(err_name.len);
             }
+            fn logPtr() callconv(.c) u32 {
+                return @intFromPtr(&log_buffer);
+            }
+            /// The log's length, with the line saying how many were dropped, if any were, written at its end first.
+            fn logLen() callconv(.c) u32 {
+                if (log_lines_dropped > 0) {
+                    const note_space: []u8 = log_buffer[log_length..];
+                    const note: []const u8 = bufPrint(
+                        note_space,
+                        "warning(jobs): {d} later log lines did not fit, and were dropped\n",
+                        .{log_lines_dropped},
+                    ) catch note_space[0..0];
+                    log_length += note.len;
+                    log_lines_dropped = 0;
+                }
+                return @intCast(log_length);
+            }
+
+            /// Writes one log line into `log_buffer`, as std.log writes one: `level(scope): message`.
+            fn writeLogLine(
+                comptime level: std.log.Level,
+                comptime scope: @EnumLiteral(),
+                comptime format: []const u8,
+                args: anytype,
+            ) void {
+                const room_for_lines: usize = log_capacity - dropped_note_room;
+                const space: []u8 = log_buffer[log_length..room_for_lines];
+                const prefix: []const u8 = comptime level.asText() ++ "(" ++ @tagName(scope) ++ "): ";
+                const line: []const u8 = bufPrint(space, prefix ++ format ++ "\n", args) catch {
+                    log_lines_dropped += 1;
+                    return;
+                };
+                log_length += line.len;
+            }
         };
+
+        /// The log function of a kernel wasm (its root's `std_options.logFn`): a kernel's log lines - its own, and
+        /// the messages of asserts that fail - are kept in the kernel's memory, and the worker sends them home with
+        /// the job's reply, for the page to print where its own lines go. A kernel wasm imports nothing, so it has
+        /// no console of its own; std.log's default would write through the standard library's threaded I/O, which
+        /// a freestanding wasm does not have. Natively a kernel runs on a thread of the program and logs as the
+        /// program does, so this is a kernel wasm's alone.
+        pub fn workerLogFn(
+            comptime level: std.log.Level,
+            comptime scope: @EnumLiteral(),
+            comptime format: []const u8,
+            args: anytype,
+        ) void {
+            Worker.writeLogLine(level, scope, format, args);
+        }
+
+        /// The log lines kept so far for the job running, as the worker reads them when it ends - for the tests.
+        fn keptLogLines() []const u8 {
+            const kept_length: usize = Worker.logLen();
+            return Worker.log_buffer[0..kept_length];
+        }
+
+        /// Empties the kept log lines, as a job's start does - for the tests.
+        fn clearKeptLogLines() void {
+            Worker.log_length = 0;
+            Worker.log_lines_dropped = 0;
+        }
     };
 }
 
@@ -1461,6 +1539,38 @@ test "jobs: natively, a job runs on a thread of its own, not the one that submit
     var job_thread_id: u64 = 0;
     @memcpy(asBytes(&job_thread_id), result[0..8]);
     try testing.expect(job_thread_id != @as(u64, std.Thread.getCurrentId()));
+}
+
+test "jobs: a kernel wasm's log lines are kept for the worker to send, and the ones past the buffer counted" {
+    const LogTestKernels = struct {
+        fn echo(
+            gpa: Allocator,
+            hdr: extern struct { n: u32 },
+            payload: []const u8,
+            out: *Writer,
+        ) !void {
+            _ = gpa;
+            _ = hdr;
+            try out.writeAll(payload);
+        }
+    };
+    const registry = Registry(.{.{ "logTestEcho", LogTestKernels.echo }}, .{});
+    registry.clearKeptLogLines();
+    registry.workerLogFn(.info, .goban, "searched {d} iterations", .{5000});
+    registry.workerLogFn(.err, .default, "a fault: {s}", .{"no tree"});
+    const expected_lines: []const u8 = "info(goban): searched 5000 iterations\nerror(default): a fault: no tree\n";
+    try expectEqualStrings(expected_lines, registry.keptLogLines());
+
+    // Lines past the buffer are dropped, and the last line says how many.
+    registry.clearKeptLogLines();
+    const long_line: [200]u8 = @splat('x');
+    for (0..40) |_| {
+        registry.workerLogFn(.info, .default, "{s}", .{&long_line});
+    }
+    const kept: []const u8 = registry.keptLogLines();
+    try expect(endsWith(u8, kept, "later log lines did not fit, and were dropped\n"));
+    try expect(indexOf(u8, kept, "warning(jobs): 22 later") != null);
+    registry.clearKeptLogLines();
 }
 
 test "jobs: a kernel is just a function - call it directly, no engine involved" {

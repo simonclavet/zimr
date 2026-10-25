@@ -3,7 +3,7 @@
 //! Every recipe decision still open - the offset scale and noise, the losses, the optimiser, the world model's
 //! form - is a question about a LEARNING CURVE, and two curves are only comparable on a fixed rig: the same clip,
 //! the same characters, the same judge, the same seed. This is that rig. It trains the CPU learner on the 10-second
-//! dance with `robot_geno.supertrack_recipe` in SuperTrack's rhythm - collect a few steps, one world-model update,
+//! dance with `robot_lab.supertrack_recipe` in SuperTrack's rhythm - collect a few steps, one world-model update,
 //! one policy update - and every so often stops to LOOK: the judge in the real simulator (its 20 fixed starts, 0.5 s
 //! apart, the task's own rule) and the world model's diagnosis where the policy actually goes (trust and
 //! exploitation, `Learner.diagnose`). One CSV row per look, written the moment it is measured, so a killed run keeps
@@ -46,6 +46,7 @@ const dance = @import("robot_dance.zig");
 const track = @import("robot_track.zig");
 const latent = @import("robot_latent.zig");
 const geno = @import("robot_geno.zig");
+const lab = @import("robot_lab.zig");
 
 const Allocator = std.mem.Allocator;
 const allocPrint = std.fmt.allocPrint;
@@ -90,8 +91,8 @@ const judge_spacing: usize = 30;
 
 /// The recipe at the CPU's sizes (plan B1: hidden 64-128, batch 32-64) - every decision the plan made, with widths
 /// a one-core sandbox can iterate on. The window stays SuperTrack's 16 (the recipe's own).
-const cpu_recipe: geno.SuperTrackRecipe = blk: {
-    var recipe: geno.SuperTrackRecipe = geno.supertrack_recipe;
+const cpu_recipe: lab.SuperTrackRecipe = blk: {
+    var recipe: lab.SuperTrackRecipe = lab.supertrack_recipe;
     recipe.learner.hidden = 64;
     recipe.learner.batch = 32;
     recipe.learner.world.hidden = 64;
@@ -260,8 +261,8 @@ fn compareRuns(arena: Allocator, io: Io, pair: []const u8) !bool {
 
 /// The recipe a run trains with: `cpu_recipe` with every field the command line carries set from it - so the recipe
 /// is exactly what `--help` says, and every seed follows `--seed`.
-fn recipeFrom(args: BenchArgs) geno.SuperTrackRecipe {
-    var recipe: geno.SuperTrackRecipe = cpu_recipe;
+fn recipeFrom(args: BenchArgs) lab.SuperTrackRecipe {
+    var recipe: lab.SuperTrackRecipe = cpu_recipe;
     recipe.action_scale = args.@"--action-scale";
     const learner: *latent.LearnerOptions = &recipe.learner;
     learner.sigma = args.@"--sigma";
@@ -284,7 +285,7 @@ fn recipeFrom(args: BenchArgs) geno.SuperTrackRecipe {
 
 /// Why a run is refused before anything is built, or null: the learner's own rule (`LearnerOptions.problem`), then
 /// the bench's. A stripped assert would only log, and the bad setting would RUN.
-fn refusal(args: BenchArgs, recipe: geno.SuperTrackRecipe) ?[]const u8 {
+fn refusal(args: BenchArgs, recipe: lab.SuperTrackRecipe) ?[]const u8 {
     const run_sane: bool = args.@"--every" > 0 and args.@"--envs" > 0 and args.@"--collect" > 0 and
         args.@"--minutes" > 0.0;
     if (!run_sane) {
@@ -343,7 +344,7 @@ fn run(
     arena: Allocator,
     io: Io,
     args: BenchArgs,
-    recipe: geno.SuperTrackRecipe,
+    recipe: lab.SuperTrackRecipe,
 ) !void {
     const task: *geno.GenoTask = (try geno.GenoTask.init(gpa, io, .dance_5_15)) orelse {
         try say(io, "st_bench: the Geno model or the dance capture is missing - run from the repository root\n");
@@ -503,7 +504,7 @@ pub fn main(init: std.process.Init) !u8 {
         const agree: bool = try compareRuns(arena, io, pair);
         return if (agree) exit_ok else exit_disagree;
     }
-    const recipe: geno.SuperTrackRecipe = recipeFrom(args);
+    const recipe: lab.SuperTrackRecipe = recipeFrom(args);
     if (refusal(args, recipe)) |why| {
         try say(io, try allocPrint(arena, "st_bench: refused: {s}\n", .{why}));
         return exit_refused;

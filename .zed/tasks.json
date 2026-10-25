@@ -1989,6 +1989,98 @@
         "use_new_terminal": false
     },
     {
+        "label": "zig: build go-puzzles-hero",
+        "command": "zig",
+        "args": [
+            "build",
+            "go-puzzles-hero",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release go-puzzles-hero",
+        "command": "zig",
+        "args": [
+            "build",
+            "go-puzzles-hero",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build goban",
+        "command": "zig",
+        "args": [
+            "build",
+            "goban",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release goban",
+        "command": "zig",
+        "args": [
+            "build",
+            "goban",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build goban-outposts",
+        "command": "zig",
+        "args": [
+            "build",
+            "goban-outposts",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release goban-outposts",
+        "command": "zig",
+        "args": [
+            "build",
+            "goban-outposts",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build goban-problems",
+        "command": "zig",
+        "args": [
+            "build",
+            "goban-problems",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release goban-problems",
+        "command": "zig",
+        "args": [
+            "build",
+            "goban-problems",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
         "label": "zig: build gripper",
         "command": "zig",
         "args": [
@@ -8357,6 +8449,50 @@
         "args": [
             "build",
             "gltf-textured",
+            "-Dplatform=windows"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build go-puzzles-hero (windows)",
+        "command": "zig",
+        "args": [
+            "build",
+            "go-puzzles-hero",
+            "-Dplatform=windows"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build goban (windows)",
+        "command": "zig",
+        "args": [
+            "build",
+            "goban",
+            "-Dplatform=windows"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build goban-outposts (windows)",
+        "command": "zig",
+        "args": [
+            "build",
+            "goban-outposts",
+            "-Dplatform=windows"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build goban-problems (windows)",
+        "command": "zig",
+        "args": [
+            "build",
+            "goban-problems",
             "-Dplatform=windows"
         ],
         "reveal": "no_focus",

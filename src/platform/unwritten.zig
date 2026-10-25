@@ -281,6 +281,11 @@ pub fn epochMillis() f64 {
     return 0;
 }
 
+pub fn monotonicMilliseconds() f64 {
+    refuse("monotonicMilliseconds");
+    return 0;
+}
+
 pub fn monitorCount() u32 {
     refuse("monitorCount");
     return 0;
@@ -316,6 +321,10 @@ pub fn setWindowPosition(monitor_index: u32, x: f32, y: f32) void {
 pub fn setWindowSizeLimits(limits: contract.SizeLimits) void {
     _ = limits;
     refuse("setWindowSizeLimits");
+}
+
+pub fn requestQuit() void {
+    refuse("requestQuit");
 }
 
 pub fn keyName(key: contract.KeyboardKey, buffer: []u8) ?[]const u8 {

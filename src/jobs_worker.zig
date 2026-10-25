@@ -469,19 +469,46 @@ fn instantiateKernelWasm(kernel_wasm_bytes: JsValue) void {
     _ = globalScope().callMethod("postMessage", .{ready_reply});
 }
 
-/// Report a failure whose name is already a JavaScript string.
-fn replyWithFailureValue(job_handle: f64, failure_name: JsValue) void {
+/// Report a failure whose name is already a JavaScript string, with the log lines the kernel wrote before it failed
+/// (an empty string when no kernel ran).
+fn replyWithFailureValue(
+    job_handle: f64,
+    failure_name: JsValue,
+    kernel_log: JsValue,
+) void {
     const failure_reply: JsValue = newEmptyJsObject();
     failure_reply.setProperty("t", asJsString(message_tags.done));
     failure_reply.setNumberProperty("handle", job_handle);
     failure_reply.setNumberProperty("failed", 1);
     failure_reply.setProperty("err", failure_name);
+    failure_reply.setProperty("log", kernel_log);
     _ = globalScope().callMethod("postMessage", .{failure_reply});
 }
 
-/// Report a failure whose name we already know as a Zig string.
+/// Report a failure whose name we already know as a Zig string - one of the worker's own, before any kernel ran.
 fn replyWithFailureName(job_handle: f64, failure_name: []const u8) void {
-    replyWithFailureValue(job_handle, asJsString(failure_name));
+    replyWithFailureValue(job_handle, asJsString(failure_name), asJsString(""));
+}
+
+/// The log lines the kernel wrote during the job (`Registry.workerLogFn`), read out of its memory as a JavaScript
+/// string, for the reply to carry home: the page prints them, since the kernel has no console of its own.
+fn kernelLogText(kernel_exports: JsValue) JsValue {
+    const log_pointer: f64 = kernel_exports.callMethod(jobs_abi.log_ptr, .{}).asNumber();
+    const log_length: f64 = kernel_exports.callMethod(jobs_abi.log_len, .{}).asNumber();
+
+    // `.buffer` fresh, as everywhere in this file: the kernel ran, so its memory may have grown.
+    const kernel_memory: JsValue = kernel_exports.getProperty(jobs_abi.memory);
+    const kernel_memory_buffer: JsValue = kernel_memory.getProperty("buffer");
+    const uint8_array_constructor: JsValue = globalScope().getProperty("Uint8Array");
+    const log_bytes: JsValue = uint8_array_constructor.construct(.{
+        kernel_memory_buffer,
+        asJsNumber(log_pointer),
+        asJsNumber(log_length),
+    });
+    const text_decoder_constructor: JsValue = globalScope().getProperty("TextDecoder");
+    const text_decoder: JsValue = text_decoder_constructor.construct(.{});
+    const log_text: JsValue = text_decoder.callMethod("decode", .{log_bytes});
+    return log_text;
 }
 
 /// The kernel returned a Zig error. Fetch its NAME out of the kernel's memory and send that, so
@@ -505,7 +532,7 @@ fn replyWithKernelError(job_handle: f64, kernel_exports: JsValue) void {
     const text_decoder: JsValue = text_decoder_constructor.construct(.{});
     const error_name_string: JsValue = text_decoder.callMethod("decode", .{error_name_bytes});
 
-    replyWithFailureValue(job_handle, error_name_string);
+    replyWithFailureValue(job_handle, error_name_string, kernelLogText(kernel_exports));
 }
 
 /// Run exactly one job: copy the bytes in, call the one kernel export, copy the result out.
@@ -630,6 +657,7 @@ fn runOneJob(message_object: JsValue) void {
     // shipped once. Now neither side is able to produce it on its own.
     done_reply.setNumberProperty("failed", 0);
     done_reply.setProperty("result", result_buffer);
+    done_reply.setProperty("log", kernelLogText(kernel_exports));
 
     // The second argument to postMessage is the TRANSFER LIST. Naming a buffer there moves its
     // ownership to the host instead of copying it: O(1), however many megabytes it holds. The

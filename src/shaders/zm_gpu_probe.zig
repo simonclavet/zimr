@@ -28,6 +28,10 @@ const Vec = zm.Vec;
 const nan = zm.nan;
 const inf = zm.inf;
 const splat = zm.splat;
+const smoothStep = zm.smoothStep;
+const smoothStep01 = zm.smoothStep01;
+const smootherStep = zm.smootherStep;
+const smootherStep01 = zm.smootherStep01;
 
 export fn zmGpuProbe(
     out: *addrspace(.storage_buffer) Vec,
@@ -49,6 +53,11 @@ export fn zmGpuProbe(
     // compiling for a vector type this line would fail before anything ran.
     const poisoned: Vec = nan(Vec) + inf(Vec);
     acc = @select(f32, zm.isNan(poisoned), acc, acc + splat(1.0));
+
+    // The four easing curves on a vector, two with scalar edges: the clamp and the polynomial, lane by lane,
+    // without a branch.
+    acc += smoothStep01(x) + smootherStep01(x);
+    acc += smoothStep(0.25, 0.75, x) + smootherStep(0.75, 0.25, x);
 
     // Folded into the output so ReleaseFast cannot delete the whole thing and call it verified.
     out.* = acc;

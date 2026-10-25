@@ -83,6 +83,15 @@ pub const Composition = struct {
     cursor: u32,
 };
 
+/// What a pointer event came from: a mouse (or a touchpad), a finger on a touch screen, or a pen. A platform that
+/// cannot tell says mouse, the default. The engine keeps the kind of the latest pointer event (`pointerKind`), so an
+/// app can treat a finger as a finger - aim above it, say, since a fingertip hides the point it touches.
+pub const PointerKind = enum(u8) {
+    mouse = 0,
+    touch = 1,
+    pen = 2,
+};
+
 /// The pointer's position, and its movement since the previous move - while the pointer is locked, the movement alone
 /// means anything, the position staying put.
 pub const MouseMove = struct {
@@ -91,6 +100,8 @@ pub const MouseMove = struct {
     dx: f32,
     dy: f32,
     modifiers: Modifiers,
+    /// What moved: a mouse, a finger or a pen.
+    kind: PointerKind = .mouse,
 };
 
 /// A mouse button, in the DOM's numbering (`MouseEvent.button`): 0 the main button, usually the left; 1 the
@@ -115,6 +126,8 @@ pub const MouseButton = struct {
     /// When it happened, on the platform's clock (`now`), in milliseconds - the clock a sound's start is measured on
     /// (`mixer.LatencySample`); 0 when the platform does not say.
     time_ms: f64 = 0,
+    /// What pressed it: a mouse, a finger (the left button, as a touch is reported) or a pen.
+    kind: PointerKind = .mouse,
 };
 
 /// A wheel's turn, in notches: one per step of a stepped wheel, fractions from smooth wheels and touchpads; positive
@@ -547,7 +560,10 @@ pub const requests = [_]Request{
     // queue, the oldest copied out by `pollSocket` - dropped, and null returned, when longer than `out`; closed, the
     // handle freed. Handle 0 is no socket, and reads closed. `socketOriginUrl` is the address of the server the app
     // came from: the page's own origin in the browser; natively, the signaling server on this machine.
-    // Then the wall clock: milliseconds since the Unix epoch, UTC.
+    // Then the wall clock: milliseconds since the Unix epoch, UTC; and the monotonic clock, in milliseconds from any
+    // fixed start, which no setting of the system's time moves - for measuring how long something takes, such as the
+    // share of a frame a piece of work may spend. A headless run's is the run's own clock, which only its frames move,
+    // so that the run gives the same frames however fast its machine is.
     .{ .name = "openSocket", .signature = fn (url: []const u8) u32 },
     .{ .name = "socketState", .signature = fn (handle: u32) SocketState },
     .{ .name = "sendSocket", .signature = fn (handle: u32, bytes: []const u8) void },
@@ -555,6 +571,7 @@ pub const requests = [_]Request{
     .{ .name = "closeSocket", .signature = fn (handle: u32) void },
     .{ .name = "socketOriginUrl", .signature = fn (out: []u8) []const u8 },
     .{ .name = "epochMillis", .signature = fn () f64 },
+    .{ .name = "monotonicMilliseconds", .signature = fn () f64 },
     // The monitors: how many there are, each one's description (null past the count), and the one holding the drawing
     // area - the window's, or the page's screen.
     .{ .name = "monitorCount", .signature = fn () u32 },
@@ -574,6 +591,10 @@ pub const requests = [_]Request{
         y: f32,
     ) void },
     .{ .name = "setWindowSizeLimits", .signature = fn (limits: SizeLimits) void },
+    // The app asks to end: the loop finishes the frame it is in, tears down and the program exits, as after the close
+    // button - one way out of the program, whichever asked. A platform whose program is called by another (a page,
+    // called by its browser) has nothing to end.
+    .{ .name = "requestQuit", .signature = fn () void },
     // A key's label in the person's current layout, as UTF-8 written into `buffer`: for a letter key, the letter it
     // types there - the key at the US Q is "A" on a French keyboard - and for the others the layout's own name for
     // them; null for no key, or a label longer than `buffer`.

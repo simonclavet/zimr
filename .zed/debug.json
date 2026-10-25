@@ -947,6 +947,50 @@
     },
     {
         "adapter": "JavaScript",
+        "label": "Debug: go-puzzles-hero",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/go_puzzles_hero/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build go-puzzles-hero"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: goban",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/goban/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build goban"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: goban-outposts",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/goban_outposts/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build goban-outposts"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: goban-problems",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/goban_problems/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build goban-problems"
+    },
+    {
+        "adapter": "JavaScript",
         "label": "Debug: gripper",
         "type": "chrome",
         "request": "launch",
@@ -4572,6 +4616,54 @@
             "settings set target.use-fast-stepping false"
         ],
         "build": "zig: build gltf-textured (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: go-puzzles-hero (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/go_puzzles_hero.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build go-puzzles-hero (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: goban (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/goban.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build goban (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: goban-outposts (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/goban_outposts.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build goban-outposts (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: goban-problems (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/goban_problems.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build goban-problems (windows)"
     },
     {
         "adapter": "CodeLLDB",

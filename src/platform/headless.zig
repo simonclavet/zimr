@@ -674,6 +674,13 @@ pub fn epochMillis() f64 {
     return 0;
 }
 
+/// The run's own clock, for the same reason: the time the run's frame driver gave the last frame, which the audio
+/// output keeps (`playAudioUntil`). Within a frame it stands still, so a piece of work given a share of a frame ends
+/// on whatever other bound it has.
+pub fn monotonicMilliseconds() f64 {
+    return audio_output.clock_ms;
+}
+
 /// One monitor: the drawing area itself - the headless screen in a run - at scale 1 and 60 hertz, the rate a run's
 /// frames are given at.
 pub fn monitorCount() u32 {
@@ -727,6 +734,20 @@ pub fn focusWindow() void {}
 
 pub fn setWindowPosition(monitor_index: u32, x: f32, y: f32) void {
     window_placement = .{ .monitor_index = monitor_index, .x = x, .y = y };
+}
+
+// lint:off module-var: whether the app has asked to end the run
+var quit_requested: bool = false;
+
+/// The app asks to end: the run ends after the frame that asked, as when its script reaches `.quit`
+/// (`native_loop`'s headless frame driver asks `isQuitRequested`).
+pub fn requestQuit() void {
+    quit_requested = true;
+}
+
+/// Whether the app has asked to end the run.
+pub fn isQuitRequested() bool {
+    return quit_requested;
 }
 
 pub fn setWindowSizeLimits(limits: contract.SizeLimits) void {

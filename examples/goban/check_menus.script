@@ -1,0 +1,67 @@
+// goban's menus, end to end: the main menu, Atari Go on 9 x 9 to one capture, the victory window, Continue Playing,
+// Escape's pause window, and back to the main menu with its choices kept. A mouse.
+// `zig build goban-headless -Dscript=examples/goban/check_menus.script`. The positions were read from the frames:
+// the main menu's 9 x 9 at (325, 415), Atari Go at (282, 526), Start Game - once Atari Go is on - at (450, 663). On
+// 9 x 9 in 900 x 900 the spacing is 75, point (row, col) at (150 + 75 col, 150 + 75 row).
+.{ .advance = 3 }
+.{ .move = .{ .x = 20, .y = 20 } }
+.{ .advance = 1 }
+.{ .capture_to = "goban_menus_1_main_menu.png" }
+.{ .move = .{ .x = 325, .y = 415 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 1 }
+.{ .move = .{ .x = 282, .y = 526 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 2 }
+.{ .move = .{ .x = 450, .y = 663 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 3 }
+.{ .capture_to = "goban_menus_2_atari_go.png" }
+// the square's white (4, 3) has two liberties: black (4, 2), white elsewhere (0, 0), black (5, 3) takes it - a win
+.{ .move = .{ .x = 300, .y = 450 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 1 }
+.{ .move = .{ .x = 150, .y = 150 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 1 }
+.{ .move = .{ .x = 375, .y = 525 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 40 }
+.{ .capture_to = "goban_menus_3_victory.png" }
+// Continue Playing (the victory window's first button, about (450, 412)): the game goes on as plain Go - white plays
+.{ .move = .{ .x = 450, .y = 412 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 2 }
+.{ .move = .{ .x = 750, .y = 750 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 3 }
+.{ .capture_to = "goban_menus_4_continued.png" }
+// Escape: the pause window
+.{ .key_down = .escape }
+.{ .advance = 1 }
+.{ .key_up = .escape }
+.{ .advance = 3 }
+.{ .capture_to = "goban_menus_5_paused.png" }
+// Return to Main Menu (its third button, about (450, 329)): the menu, its choices kept - 9 x 9, Atari Go on
+.{ .move = .{ .x = 450, .y = 329 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 3 }
+.{ .capture_to = "goban_menus_6_back_to_menu.png" }

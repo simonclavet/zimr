@@ -166,6 +166,9 @@ music, which is why a fading note can stop there.</p>
 <pre class="sketch"><code>   z.audio_device.init(f.audio_device);                 starts the mixer and the platform's output
    z.audio_device.showDiagnostics(f.audio_device);      optional: the sound's state, shown over the page</code></pre>
 
+<p>Calling <code>z.audio_device.init</code> is also what puts the sound's renderer into the program. An app that never
+calls it plays no sound and carries no renderer, and in a browser its page makes no audio context (section 6.4).</p>
+
 <p>A browser lets a page make sound only after the person has interacted with it. The engine starts its audio at
 the first click, tap or key press on the page; until then the app's calls work as they will afterwards and nothing
 is heard, so an app needs no special case. A tap counts when the finger lifts.</p>
@@ -1701,6 +1704,13 @@ headless run:</p>
         |                                              |                       (the main thread pulls)
         +------------------->  audio worklet  &lt;--------+
                                (the browser's audio thread; the app's second instance)</code></pre>
+
+<p>The script processor is a way the sound plays, a little later, not a fault - some viewers open a page with an
+origin from which no worklet can load at all - so the page says it in the console as a notice
+(<code>console.info</code>), which the single-file page does not copy onto the page, and the diagnostics panel shows
+it. A page whose app never opens the audio device has no renderer to load: the renderer's entry points are exported
+from <code>z.audio_device.init</code> itself, so a module whose app never calls it carries none, and its page makes
+no audio context and loads no worklet.</p>
 
 <p>On an iPhone, Safari plays web audio in the "ambient" session, which the phone's silent mode mutes. Before making
 its audio context the page asks for the media playback session (<code>navigator.audioSession.type =

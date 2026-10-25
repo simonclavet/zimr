@@ -1,0 +1,52 @@
+// goban's overlays: six stones leave white's (6, 7) in atari (its thin red rings); the pointer then rests on (6, 8),
+// where black would capture it (the doomed ring, pulsing), and then on black's (6, 6) (its liberties in gold).
+// `zig build goban-headless -Dscript=examples/goban/check_overlays.script`. Point (row, col) is at
+// (114 + 56 col, 114 + 56 row) on the 13 x 13 board in 900 x 900.
+.{ .advance = 3 }
+// the main menu's Start Game, at (443, 586): a 13 x 13 game of plain Go
+.{ .move = .{ .x = 443, .y = 586 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 2 }
+.{ .move = .{ .x = 440, .y = 440 } }
+.{ .advance = 1 }
+// black (6, 6), white (6, 7), black (5, 7), white (3, 3), black (7, 7), white (2, 2): mouse taps
+.{ .move = .{ .x = 450, .y = 450 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 1 }
+.{ .move = .{ .x = 506, .y = 450 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 1 }
+.{ .move = .{ .x = 506, .y = 394 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 1 }
+.{ .move = .{ .x = 282, .y = 282 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 1 }
+.{ .move = .{ .x = 506, .y = 506 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 1 }
+.{ .move = .{ .x = 226, .y = 226 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 1 }
+// rest on (6, 8): black's move there captures white's (6, 7)
+.{ .move = .{ .x = 562, .y = 450 } }
+.{ .advance = 30 }
+.{ .capture_to = "goban_overlay_1_doomed.png" }
+// rest on black's (6, 6): its three liberties
+.{ .move = .{ .x = 450, .y = 450 } }
+.{ .advance = 30 }
+.{ .capture_to = "goban_overlay_2_liberties.png" }

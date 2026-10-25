@@ -4570,6 +4570,9 @@ is not credited to the decision that failed.</p>
     /// far faster from inputs near zero with unit spread - velocities in m/s next to angles in
     /// radians next to heights in metres are not that.
     normalize: bool = false,
+    /// How many deviations either side a normalised input is clamped to: the observation normaliser's clip
+    /// (`zrl.ObsNormalizer.clip`).
+    observation_clamp: f64 = 5.0,
     /// The root assist's schedule (see `Gains.assist`): this much at the first batch, fading
     /// linearly to zero over `assist_batches`. Zero, the default, is the real task throughout.
     assist_start: f32 = 0.0,
@@ -4663,7 +4666,7 @@ reference is the honest number.</p>
                 self.normalizeObservations(self.obs_scratch, false);
                 self.ppo.actMean(self.obs_scratch, slot);
                 for (slot) |*a| {
-                    a.* = clamp(a.*, -1.0, 1.0);
+                    a.* = clamp(a.*, -self.env.options.action_limit, self.env.options.action_limit);
                 }
             }
         }
@@ -4770,11 +4773,15 @@ pub fn importWeights(self: *Self, bytes: []const u8) !void {
         defer self.gpa.free(extra);
         const start: usize = @sizeOf(Header) + 3 * count * @sizeOf(f32);
         @memcpy(sliceAsBytes(extra), bytes[start..]);
-        self.obs_count = header.obs_count;
-        const n: f64 = @floatFromInt(@max(self.obs_count, 1));
+        // The file keeps each input's mean and variance; the normaliser keeps the sum of squared deviations,
+        // the variance times the count.
+        self.observation_normalizer.count = @floatFromInt(header.observations_seen);
+        const n: f64 = @max(self.observation_normalizer.count, 1);
         const means: []const f32 = extra[0..self.n_obs];
         const variances: []const f32 = extra[self.n_obs..];
-        for (self.obs_mean, self.obs_m2, means, variances) |*mean, *m2, saved_mean, saved_var| {
+        const own_means: []f64 = self.observation_normalizer.mean;
+        const own_sums: []f64 = self.observation_normalizer.m2;
+        for (own_means, own_sums, means, variances) |*mean, *m2, saved_mean, saved_var| {
             mean.* = saved_mean;
             m2.* = @as(f64, saved_var) * n;
         }
@@ -4942,30 +4949,55 @@ value, PPO's recipe on Geno, with each field defaulted to the training page's ch
 from it, joined to Geno's task and DReCon bodies, so anything else that trains or shows a Geno policy starts from the
 same settings:</p>
 
-<details class="src-fold" data-src="src/robot_geno.zig" data-decl="pub const PpoRecipe = struct {"><summary><code>PpoRecipe</code></summary><pre><code class="zig">/// PPO's recipe on Geno: every scalar of the trainer's options (`ppo_track.Options`), each defaulted to the value the
+<details class="src-fold" data-src="src/robot_lab.zig" data-decl="pub const PpoRecipe = struct {"><summary><code>PpoRecipe</code></summary><pre><code class="zig">/// PPO's recipe on Geno: every scalar of the trainer's options (`ppo_track.Options`), each defaulted to the value the
 /// training page trains with. `options` joins it to Geno's task and bodies.
+///
+/// PPO learns in BATCHES. Every character acts for `horizon` decisions with the current policy, sampling its actions
+/// around the policy's mean; the batch - `envs` x `horizon` decisions, each with its observation, action, reward and
+/// how its episode went on - is turned into ADVANTAGES (how much better each action did than the critic expected,
+/// `gamma` and `lambda`), and the policy is updated on it for `epochs` passes of `minibatch` rows. Then the batch is
+/// thrown away and the next one collected with the updated policy: PPO learns only from what its current policy did.
 pub const PpoRecipe = struct {
-    /// Characters training at once. Eight keep a decision inside a phone's frame; a desktop takes many more.
+    /// Characters acting side by side, each its own episodes - vectorised environments. More characters give each
+    /// batch more varied experience (different moments of the clip, different stumbles) and so steadier updates,
+    /// for more simulation per batch. Eight keep a batch's decisions inside a phone's frames; a desktop takes many
+    /// more.
     envs: u32 = 8,
-    /// Decisions per character per batch.
+    /// Decisions each character makes per batch: the rollout's length. With `envs` it sets the batch's size
+    /// (8 x 64 = 512 decisions). A longer rollout lets an advantage see further before it must lean on the critic at
+    /// the rollout's end, and leaves the data a little staler by the time it is learned from.
     horizon: u32 = 64,
-    /// Passes over each batch, and the minibatch each step of a pass takes.
+    /// Passes over each batch, and the rows each gradient step of a pass takes. PPO reuses a batch for several
+    /// passes - more learning from the same simulation - and its clipped objective keeps every pass's policy close to
+    /// the one that collected the data, which is what makes reuse safe.
     epochs: u32 = 4,
     minibatch: u32 = 256,
-    /// The discount and the advantage's lambda (GAE).
+    /// The DISCOUNT: a reward k decisions ahead counts gamma^k as much as one now. Credit reaches about
+    /// 1 / (1 - gamma) decisions ahead: 100 decisions, 3.3 seconds at 30 decisions a second - long enough for a
+    /// stumble's cost to reach the decision that caused it.
     gamma: f32 = 0.99,
+    /// GAE's lambda (Generalised Advantage Estimation): how an advantage blends the critic's one-step estimate - the
+    /// reward now plus the critic's value of the next state, steady but as wrong as the critic (lambda 0) - with the
+    /// whole discounted return that followed, right on average but noisy (lambda 1). 0.95 leans toward the return
+    /// while cutting most of its noise: the value nearly every PPO uses.
     lambda: f32 = 0.95,
-    /// What the clip running out counts as (`ppo_track.ClipEnd`).
+    /// What the clip running out counts as (`ppo_track.ClipEnd`): the end of the story, with nothing after it to
+    /// value, or the end of the tape while the character was doing fine, valued as if it went on.
     clip_end: ppo_track.ClipEnd = .terminal,
-    /// Both networks' width.
+    /// The width of both networks' two hidden layers - the actor's and the critic's. One clip is a small function;
+    /// small networks learn it faster at first (DReCon's figure 8).
     hidden: u32 = 48,
+    /// Adam's step size, for both networks.
     learning_rate: f32 = 3.0e-4,
     /// Exploration at the start: log sigma -1.2, a Gaussian of 0.3 action units - 0.36 rad of raw offset at
     /// `student_scale`, 4 degrees at the joint once DReCon's filter has taken its fifth.
     initial_log_std: f32 = -1.2,
-    /// Inputs scaled by their running mean and spread.
+    /// Inputs normalised by their running mean and spread (`zrl.ObsNormalizer`, Welford's statistics):
+    /// every input a Z-score of the same size, whatever its unit.
     normalize: bool = true,
-    /// The helping hand on the root: this much at the first batch, fading to none over `assist_batches`.
+    /// A CURRICULUM: a helping hand that holds the character's root up, this strong at the first batch and fading to
+    /// nothing over `assist_batches`. Early on an untrained policy falls at once and learns little from it; held up,
+    /// it lives long enough to learn what tracking is, and the hand fades before it can learn to lean on it.
     assist_start: f32 = 1.0,
     assist_batches: u32 = 300,
     /// Episodes end here even while tracking is fine, in physics steps: longer than the dance's ten seconds.
@@ -4978,31 +5010,19 @@ pub const PpoRecipe = struct {
     beta: f32 = 0.2,
     seed: u64 = 1,
 
-    /// The trainer's options for `motion`: this recipe, Geno's task and DReCon bodies, and the motion's tag.
+    /// The trainer's options for `motion`: Geno's task and DReCon bodies, the motion's tag, and every field of this
+    /// recipe - each the trainer's option of the same name, copied by one loop, so that a field added to the recipe
+    /// reaches the trainer or fails to compile, and is never left behind.
     pub fn options(recipe: PpoRecipe, motion: PpoMotion) ppo_track.Options {
-        return .{
-            .envs = recipe.envs,
-            .horizon = recipe.horizon,
-            .epochs = recipe.epochs,
-            .gamma = recipe.gamma,
-            .lambda = recipe.lambda,
-            .clip_end = recipe.clip_end,
-            .hidden = recipe.hidden,
-            .minibatch = recipe.minibatch,
-            .learning_rate = recipe.learning_rate,
-            .initial_log_std = recipe.initial_log_std,
-            .normalize = recipe.normalize,
-            .assist_start = recipe.assist_start,
-            .assist_batches = recipe.assist_batches,
-            .max_episode_steps = recipe.max_episode_steps,
-            .action_scale = recipe.action_scale,
+        var trainer_options: ppo_track.Options = .{
             .task = tracking_task,
             .bodies = drecon_bodies,
             .tag = motion.tag(),
-            .decimation = recipe.decimation,
-            .beta = recipe.beta,
-            .seed = recipe.seed,
         };
+        inline for (@typeInfo(PpoRecipe).@"struct".field_names) |field_name| {
+            @field(trainer_options, field_name) = @field(recipe, field_name);
+        }
+        return trainer_options;
     }
 };</code></pre></details>
 
@@ -5061,17 +5081,183 @@ that another program can watch it while it goes and anyone can carry it on later
        run.zon          the run's parameters: the motion, the recipe, when to save and when to stop
        weights          the newest weights, rewritten whole every few minutes
        weights_b0012000 a checkpoint: the weights after batch 12,000
+       policy           the newest policy, written with the weights: what the lab plays
+       policy_m00090    a checkpoint: the policy after 90 minutes of training
        log.csv          one line per batch, the counts above
+       judge.csv        the servo judged, then the newest policy every few minutes
        status.zon       its state, batches, minutes, the servo's and the recent time to failure
        stop             created by anyone: the trainer saves everything and exits
 
    geno_trainer --run=runs/night1</code></pre>
 
-<p>The parameters are PPO's recipe on Geno again, read from <code>run.zon</code> with every field defaulted, so a
-file names only what it changes - <code>.{ .recipe = .{ .envs = 64 }, .stop_after_hours = 10 }</code> is a whole
-run - and a folder without one gets one written with every default, so that each folder says what it trains. A
-value the training cannot work with - no characters, a minibatch larger than the batch, a filter weight outside
-(0, 1] - refuses the run before anything starts, naming the field and its range. Every
+<p>The weights and the policy are two different things. The weights are the run's <em>training state</em>: for PPO,
+both networks - the actor and the critic - Adam's two moments for every parameter, the observation normaliser's
+running statistics and the counters, everything the trainer needs to carry on. The <em>policy</em> is only what acting
+needs: the function from what a character senses to what it does. The critic, the optimiser and the exploration noise
+are tools of learning, and a policy that is deployed - watched in the lab, judged, played in a page - needs none of
+them. The policies' checkpoints are kept by the minute of training, a clock every learner shares, so that two runs can
+be compared at the same minutes. Keeping the policy apart from the training state is worth its small cost, for four
+reasons:</p>
+
+<ul>
+<li><strong>Every learner is watched and judged one way.</strong> PPO, SuperTrack and EfficientTDMPC keep very
+different training states, but each writes a policy of the same form, so one player, one show and one judge serve them
+all, and a comparison between learners compares their policies rather than the code that happens to run them.</li>
+<li><strong>The normalisation travels with the network.</strong> A network trained on normalised inputs computes
+nonsense on raw ones, and normalised by statistics other than its own it computes something subtly wrong - a classic
+bug, in which a policy that trained well looks broken when it is evaluated. The normaliser is frozen into the policy
+when it is written, and the policy normalises with the very function that normalised every observation it trained on,
+so that training and deployment agree by construction.</li>
+<li><strong>The policy acts by its mean action.</strong> While it learns, PPO's policy explores by sampling around its
+mean; shown or judged, it acts deterministically, so that what is measured is what it learned, not its noise.</li>
+<li><strong>The controller travels with it.</strong> The action's limit, its scale in radians per unit and DReCon's
+filter are part of the policy, so a policy is judged under the controller it was trained under.</li>
+</ul>
+
+<p>A policy applies one pipeline, from what a character senses to the targets its joints are driven to:</p>
+
+<pre class="sketch"><code>   observation -> normalise -> layer 1 -> layer 2 -> layer 3 -> clamp -> scale -> filter -> joint targets
+                  per input    tanh       tanh       linear     to +-1   rad per  beta 0.2
+                                                                         unit
+
+   observation   the task's own units: angles, heights, velocities
+   normalise     each input: its mean taken away, divided by its deviation, clamped to 5 deviations
+   layers        each output its bias plus its weighted inputs, through the layer's activation
+   clamp         the mean action held to the controller's range
+   scale         radians of joint offset per unit of action
+   filter        each decision, a joint's target moves a share beta of the way to the new action</code></pre>
+
+<p>Normalising works input by input. Suppose the learner saw a joint's velocity average 0.3 rad/s, with a deviation of
+0.5. A reading of 1.8 is (1.8 - 0.3) / 0.5 = 3 deviations above the mean, and the network receives 3. A reading of
+3.3 would be 6 deviations, beyond the clamp of 5, and the network receives 5: a rare extreme reading cannot push the
+network far from anything it saw while learning. Velocities in radians per second, heights in metres and angles in
+radians all become numbers of about the same size, which is what lets one network learn from all of them at once.
+The layers keep the GPU kit's layout and its order of arithmetic - each output's bias first, then its inputs in order
+- because floating-point addition is not associative: summed in another order, the same weights give slightly
+different numbers, and a policy played here would no longer act exactly as it acted while it trained.</p>
+
+<details class="src-fold" data-src="src/robot_lab.zig" data-decl="pub fn policyMeanAction("><summary><code>policyMeanAction</code></summary><pre><code class="zig">/// The action `policy` takes for `observation`, written into `action` (`GenoPolicy`): the observation normalised by
+/// the frozen normaliser, passed through the layers - `scratch` holding each layer's input and output - and the last
+/// layer's outputs clamped to the controller's range. No randomness: the policy's mean action, as the show and the
+/// judge act.
+pub fn policyMeanAction(
+    policy: *const GenoPolicy,
+    observation: []const f32,
+    scratch: PolicyScratch,
+    action: []f32,
+) void {
+    const observation_size: usize = policy.observationSize();
+    const action_size: usize = policy.actionSize();
+    const widest_layer: usize = policy.widestLayer();
+    const observation_fits: bool = observation.len == observation_size;
+    assertf(observation_fits, @src(), "policyMeanAction: an observation of {d}, the policy takes {d}", .{
+        observation.len,
+        observation_size,
+    });
+    assertf(action.len == action_size, @src(), "policyMeanAction: an action of {d}, the policy gives {d}", .{
+        action.len,
+        action_size,
+    });
+    const scratch_fits: bool = scratch.ping.len &gt;= widest_layer and scratch.pong.len &gt;= widest_layer;
+    assertf(scratch_fits, @src(), "policyMeanAction: scratch of {d} and {d}, the widest layer {d}", .{
+        scratch.ping.len,
+        scratch.pong.len,
+        widest_layer,
+    });
+    // The observation copied into the ping buffer, and normalised there by the frozen normaliser - the function that
+    // normalised every observation the policy trained on.
+    const normalized_observation: []f32 = scratch.ping[0..observation_size];
+    @memcpy(normalized_observation, observation);
+    if (policy.normalization) |normalization| {
+        normalization.applyInPlaceF32(normalized_observation) catch {
+            assertUnreachable(@src(), "policyMeanAction: a normaliser of another size than the observation", .{});
+        };
+    }
+    // The layers, ping-pong: each reads the buffer the one before it wrote. The last writes straight into `action`.
+    var layer_input: []const f32 = normalized_observation;
+    var input_is_in_ping: bool = true;
+    for (policy.layers, 0..) |layer, layer_index| {
+        const is_last_layer: bool = layer_index + 1 == policy.layers.len;
+        const output_count: usize = policy.widths[layer_index + 1];
+        const other_buffer: []f32 = if (input_is_in_ping) scratch.pong else scratch.ping;
+        const layer_output: []f32 = if (is_last_layer) action else other_buffer[0..output_count];
+        applyPolicyLayer(layer, layer_input, layer_output);
+        layer_input = layer_output;
+        input_is_in_ping = !input_is_in_ping;
+    }
+    // The mean action, held to the controller's range.
+    for (action) |*component| {
+        component.* = clamp(component.*, -policy.action_limit, policy.action_limit);
+    }
+}</code></pre></details>
+
+<p>A program that plays a policy needs nothing else. A <em>policy show</em> puts characters on a fleet of their own
+and steps them one physics step at a time, so that a viewer can draw every step. A decision lasts two physics steps -
+DReCon's k = 2, decisions at 30 Hz over 60 Hz physics: at its first step every character observes and the policy gives
+its mean action, and through both steps the controller blends that action into the joints' targets. A character whose
+episode ends starts another at once.</p>
+
+<p>The show is also the instrument the judge is built on, and it counts the way survival analysis does. Its
+<em>exposure</em> is the time at risk: a unit per character per physics step watched, whatever happens, on one clock
+that runs through every episode. A <em>failure</em> is an event on that clock: a step at which a character lost the
+reference. Exposure divided by failures is the mean time to failure, in physics steps - the number
+<a href="#phonebench">this section</a> began with. Counting this way needs no choice of where episodes begin or how long
+they last, and a policy that never fails simply has a time to failure longer than the show. Shown this way, a PPO
+policy lives exactly what PPO's own show lives, action for action and failure for failure, so the lab watches every
+learner's run in one way.</p>
+
+<p>The same decision serves the judge. The judge runs a policy from fixed starts spread across the clip - the same
+starts every time, each run until the reference is lost or the clip ends, with nothing random - and counts as the show
+counts, so that two runs judged differently differ in their policies, not in where their starts happened to fall. A
+policy file is judged through an actor that decides and filters exactly as the show does, so a run is judged as it is
+watched; the servo alone, judged on the same starts, is the baseline every policy is measured against.</p>
+
+<p>A judgement also says how sure it is. Its mean time to failure is a ratio - the steps watched over the failures,
+both summed over the starts - and its <em>standard error</em> says how far that ratio would move were the policy
+judged on other starts of the same kind; the delta method gives it from the spread of what each start adds beyond the
+ratio. Two runs whose times to failure differ by less than about twice their errors cannot be told apart, and a policy
+that never fails on the judge's starts has a time to failure longer than the clip, with no error to give. The trainer
+judges its newest policy every few minutes of training, and keeps the judgements in <code>judge.csv</code> beside the
+servo's: the raw sums of each, so that every measure and its error can be worked out from the file again.</p>
+
+<details class="src-fold" data-src="src/robot_lab.zig" data-decl="    pub fn step(show: *PolicyShow, policy: *const GenoPolicy) void {"><summary><code>PolicyShow.step</code></summary><pre><code class="zig">/// One physics step (this section's head): at the first step of a decision every character observes and the
+/// policy decides; then the filtered actions step the fleet, and the show counts what the step lived.
+pub fn step(show: *PolicyShow, policy: *const GenoPolicy) void {
+    const fleet: *robot_track.Fleet = show.fleet;
+    const decides_now: bool = show.physics_steps_until_decision == 0;
+    if (decides_now) {
+        show.decider.decide(policy, &amp;show.controller, fleet, show.character_count, show.actions);
+        show.physics_steps_until_decision = @max(show.decimation, 1);
+    }
+    // One physics step under the filtered actions.
+    const filtered_actions: []const f32 = show.controller.apply(show.actions);
+    _ = fleet.step(filtered_actions);
+    show.physics_steps_until_decision -= 1;
+    // What the step lived: a unit of exposure per character, and its failures. A character whose episode ended
+    // starts the next one fresh: its controller forgets the action it was applying.
+    for (0..show.character_count) |character| {
+        show.exposure_steps += 1;
+        if (fleet.failures[character]) {
+            show.failure_count += 1;
+        }
+        if (fleet.dones[character]) {
+            show.controller.forget(character);
+        }
+    }
+}</code></pre></details>
+
+<p>The parameters, in <code>run.zon</code>, say three things: the <em>task</em> every learner shares - the motion,
+with Geno's failure rule, physics and servo - the <em>learner</em> with its recipe, and the run's own
+<em>controls</em>: when it saves, keeps checkpoints and judges itself, and when it stops. The task is held apart from
+the learners because two runs compare only when both learned the same task. How often a learner decides, how it
+smooths its actions and how far an action reaches belong to the learner: they are a controller's design, and the
+judge compares controllers on the task they share. PPO decides every second physics step through DReCon's filter;
+SuperTrack acts at every step, unfiltered. Every field has a default, so a file
+names only what it changes - <code>.{ .learner = .{ .ppo = .{ .envs = 64 } }, .controls = .{ .stop_after_hours = 10 } }</code>
+is a whole run - and a folder without one gets one written with every default, so that each folder says what it
+trains and by which learner. A value the training cannot work with - no characters, a minibatch larger than the
+batch, a filter weight outside (0, 1] - refuses the run before anything starts, naming the field by its path and its
+range, as <code>learner.ppo.minibatch</code> or <code>learner.ppo.beta</code>. Every
 file is written whole to a new file and renamed over the old one: a reader never sees half a file, and a run stopped
 mid-write keeps the previous version. The weights are saved once the GPU's copy of them has caught up with the last
 update, so that the parameters in the file and the counters beside them - Adam's step, the batches, the normaliser's
@@ -5088,13 +5274,14 @@ fn train(
     report_interval_ms: f64,
     arena_state: *ArenaAllocator,
     folder: []const u8,
-    parameters: geno.PpoRun,
+    parameters: lab.PpoRun,
     trainer: *Trainer,
     progress: *RunProgress,
 ) !RunState {
     const decisions_per_collect: u32 = 64;
     const save_minutes: f32 = parameters.save_minutes;
     const checkpoint_minutes: f32 = parameters.checkpoint_minutes;
+    const judge_minutes: f32 = parameters.judge_minutes;
     while (true) {
         // Paths and texts of one batch's files are made in the arena, emptied every batch.
         _ = arena_state.reset(.retain_capacity);
@@ -5114,26 +5301,41 @@ fn train(
         const minutes_since_save: f32 = minutes - progress.saved_at_minutes;
         const is_save_due: bool = !progress.has_saved_this_start or minutes_since_save &gt;= save_minutes;
         if (is_save_due) {
-            try saveAll(gpa, arena, io, folder, trainer, progress, .training);
+            try saveAll(arena, io, folder, trainer, progress, .training);
+        }
+        if (progress.has_saved_this_start and !progress.has_checked_policy_this_start) {
+            if (!try policyPlaysAsTrained(arena, io, folder, trainer)) {
+                say(io, "the policy file does not play as the trainer acts - the run fails\n", .{});
+                return error.PolicyDoesNotPlayAsTrained;
+            }
+            progress.has_checked_policy_this_start = true;
         }
         const minutes_since_checkpoint: f32 = minutes - progress.checkpointed_at_minutes;
         const is_checkpoint_due: bool = checkpoint_minutes &gt; 0 and minutes_since_checkpoint &gt;= checkpoint_minutes;
         if (is_checkpoint_due) {
-            try saveCheckpoint(gpa, arena, io, folder, trainer, progress);
+            try saveCheckpoint(arena, io, folder, trainer, progress);
+        }
+        const minutes_since_judgement: f32 = minutes - progress.judged_at_minutes;
+        const is_judgement_due: bool = judge_minutes &gt; 0 and minutes_since_judgement &gt;= judge_minutes;
+        if (is_judgement_due) {
+            try judgeNewestPolicy(gpa, arena, io, folder, trainer, progress);
         }
         reportProgress(io, report_interval_ms, folder, trainer, progress, stats);
     }
 }</code></pre></details>
 
 <p>What a run has learned is watched in the training lab, <code>examples/geno_lab</code>. It lists the run folders
-in <code>runs</code>, beside its own executable; a run chosen there is loaded - its <code>run.zon</code>, then its
-newest weights into a network built to it - and shown: Geno on the floor following the dance, with the reference
-beside him, while the camera follows him around the room. The network needs one character's worth of memory: how
-many characters trained does not change its shape. While the trainer runs, <strong>reload weights</strong> reads the
-folder's newest weights again into the same network.</p>
+in <code>runs</code>, beside its own executable; a run chosen there is loaded - its <code>run.zon</code>, for the task,
+then its policy file - and shown by a policy show: Geno on the floor following the dance, with the reference beside
+him, while the camera follows him around the room. No learner is loaded to watch a run: the lab needs the policy
+alone, so it watches every learner's runs the same way. While the trainer runs, <strong>reload policy</strong> puts the
+folder's newest policy in place of the one shown, and Geno goes on dancing, now by the newer policy.</p>
 
 <p>Beside each run's name the lab shows its state, its batch and its latest time to failure, as its
-<code>status.zon</code> says; under the list, every run's learning curve on one plot, read from its log every few
+<code>status.zon</code> says, and under them the newest judgement with its standard error, beside the servo judged on
+the same starts, as its <code>judge.csv</code> says. The two times are different numbers on purpose: the first is
+training's own, measured on training's characters - early on held up by the root assist, which keeps them from falling
+- and the second is the judge's, with no help and on fixed starts, the one to compare runs by; under the list, every run's learning curve on one plot, read from its log every few
 seconds. Each curve is the time to failure over the last eight batches, against minutes of training, on a
 logarithmic scale from 1 s to 60 s - so that going from the servo's two seconds to twenty takes the same room as
 going from six to a minute. A window in which nothing failed is drawn at the top, and each run's servo, measured alone
@@ -5148,9 +5350,9 @@ before its training, is a dashed line of its colour:</p>
     1s +-------------------------------------
        0 min                              2 min</code></pre>
 
-<p>A click on a curve shows the run at that point: the checkpoint nearest the clicked batch, kept by the trainer
-as <code>weights_b</code> and the batch's number, or the newest weights for a curve's last point - so that a policy
-from before a run went wrong can be watched beside what it became. A run whose status says it trains, but whose
+<p>A click on a curve shows the run at that point: the policy checkpoint nearest the clicked minute, kept by the
+trainer as <code>policy_m</code> and the minute, or the newest policy for a curve's last point - so that a policy from
+before a run went wrong can be watched beside what it became. A run whose status says it trains, but whose
 status was written longer ago than three of its save intervals, is shown as <em>silent</em>: its trainer died, or its
 machine slept, without a word. Each status carries the wall-clock time it was written, so a lab started long after
 can tell at once.</p>
@@ -5208,8 +5410,9 @@ pub fn stepShow(self: *Self, show: *Show) void {
             );
             self.normalizeObservations(self.obs_scratch, false);
             self.ppo.actMean(self.obs_scratch, action);
+            const limit: f32 = self.env.options.action_limit;
             for (action) |*component| {
-                component.* = clamp(component.*, -1.0, 1.0);
+                component.* = clamp(component.*, -limit, limit);
             }
         }
         show.held_steps_left = steps_per_decision;

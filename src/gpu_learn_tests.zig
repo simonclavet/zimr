@@ -28,6 +28,11 @@ const clamp = zm.clamp;
 const Layer = gym.Layer;
 const AdamSet = gym.AdamSet;
 
+const lab = @import("robot_lab.zig");
+const ppo_track = @import("robot_ppo_track.zig");
+const track_env = @import("robot_track_env.zig");
+const expectEqualSlices = std.testing.expectEqualSlices;
+
 /// The learner on the kit as this file imports it.
 const GpuPpo = gym.GpuPpoOn(zn_mlp);
 
@@ -721,5 +726,74 @@ test "gpu learn: XOR on zn_train's CPU twin over long runs - does the loss stay 
         if (rate == xor_page_rate) {
             try expect(bad_runs == 0);
         }
+    }
+}
+
+test "gpu learn: a PPO actor's policy file acts as PPO acts, bit for bit - normalised, through its layers, clamped" {
+    const gpa: Allocator = testing_allocator;
+    const n_obs: usize = 7;
+    const n_act: usize = 3;
+    const hidden: usize = 16;
+    var pipe: compute_host.Compute(zn_mlp) = .initCpu();
+    defer pipe.deinit();
+    var ppo: GpuPpo = try .init(gpa, &pipe, n_obs, n_act, .{ .hidden = hidden, .rows = 8, .seed = 5 });
+    defer ppo.deinit(gpa);
+    // The normaliser's statistics, made up: a mean and a spread that differ from input to input.
+    const observations_seen: u64 = 1000;
+    var observation_means: [n_obs]f64 = undefined;
+    var observation_squared_deviation_sums: [n_obs]f64 = undefined;
+    for (&observation_means, &observation_squared_deviation_sums, 0..) |*mean, *m2, input_index| {
+        const spread: f64 = 0.5 + 0.2 * float64(input_index);
+        mean.* = 0.3 * float64(input_index) - 1.0;
+        m2.* = spread * spread * float64(observations_seen);
+    }
+    // PPO's own clamps: its normaliser's, and the controller's range.
+    const observation_clamp: f64 = (ppo_track.Options{}).observation_clamp;
+    const action_limit: f32 = (track_env.Options{}).action_limit;
+    // PPO's normaliser (`zrl.ObsNormalizer`), holding the made-up statistics.
+    const ppo_normalizer: zrl.ObsNormalizer = .{
+        .mean = &observation_means,
+        .m2 = &observation_squared_deviation_sums,
+        .count = float64(observations_seen),
+        .clip = observation_clamp,
+    };
+    var policy: lab.GenoPolicy = try lab.policyOfPpo(gpa, .{
+        .kit_parameters = ppo.cpu_params,
+        .actor_layer_offsets = ppo.p_off,
+        .observation_size = n_obs,
+        .hidden_width = hidden,
+        .action_size = n_act,
+        .observation_normalizer = ppo_normalizer,
+        .action_limit = action_limit,
+        .action_scale = 0.3,
+        .filter_beta = 0.2,
+    });
+    defer policy.deinit(gpa);
+    // Through its file, as the lab reads it.
+    const bytes: []u8 = try lab.PolicyFile.encode(gpa, &policy);
+    defer gpa.free(bytes);
+    var read_back: lab.GenoPolicy = try lab.PolicyFile.decode(gpa, bytes);
+    defer read_back.deinit(gpa);
+    var ping: [hidden]f32 = undefined;
+    var pong: [hidden]f32 = undefined;
+    const scratch: lab.PolicyScratch = .{ .ping = &ping, .pong = &pong };
+    var generator: Random.DefaultPrng = .init(11);
+    const random: Random = generator.random();
+    for (0..20) |_| {
+        var observation: [n_obs]f32 = undefined;
+        for (&observation) |*value| {
+            value.* = 4.0 * random.float(f32) - 2.0;
+        }
+        // PPO's way: its normaliser, its actor's mean, the watch's clamp.
+        var normalized: [n_obs]f32 = observation;
+        try ppo_normalizer.applyInPlaceF32(&normalized);
+        var ppo_action: [n_act]f32 = undefined;
+        ppo.actMean(&normalized, &ppo_action);
+        for (&ppo_action) |*component| {
+            component.* = clamp(component.*, -action_limit, action_limit);
+        }
+        var policy_action: [n_act]f32 = undefined;
+        lab.policyMeanAction(&read_back, &observation, scratch, &policy_action);
+        try expectEqualSlices(f32, &ppo_action, &policy_action);
     }
 }

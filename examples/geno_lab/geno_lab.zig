@@ -1,11 +1,12 @@
-//! examples/geno_lab - the training lab: a run's network, shown on Geno.
+//! examples/geno_lab - the training lab: a run's policy, shown on Geno.
 //!
-//! A training run is a folder (`tools/geno_trainer.zig`): its parameters in `run.zon`, its newest weights in
-//! `weights`, beside them its checkpoints, its log and its status. The lab lists the run folders in `runs`, beside
-//! its own executable. A run chosen there is loaded - its parameters, then its weights into a network built to them
-//! - and shown: Geno on the floor following the dance, each decision the policy's mean action through DReCon's
-//! filter (`ppo_track.Trainer.Show`), with the reference beside him. While the trainer runs, "reload" reads the
-//! newest weights again into the same network.
+//! A training run is a folder (`tools/geno_trainer.zig`): its parameters in `run.zon`, its newest weights and its
+//! newest policy, beside them their checkpoints, its log and its status. The lab lists the run folders in `runs`,
+//! beside its own executable. A run chosen there is loaded - its parameters, for the task, and its policy file - and
+//! shown: Geno on the floor following the dance, each decision the policy's mean action through DReCon's filter
+//! (`robot_lab.PolicyShow`), with the reference beside him. No learner is loaded to watch a run, so every learner's
+//! run is watched this one way. A click on the learning curves shows the policy checkpoint nearest that minute; while
+//! the trainer runs, "reload" puts its newest policy in place of the one shown, and the character goes on.
 //!
 //! Run folders are files by path, which a page does not have: in a web build the list is left out.
 
@@ -22,8 +23,8 @@ const dance = z.robot_dance;
 const ppo_track = z.robot_ppo_track;
 const track = z.robot_track;
 const geno = z.robot_geno;
+const lab = z.robot_lab;
 const native_os = z.native_os;
-const zn_mlp = @import("zn_mlp");
 
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
@@ -47,9 +48,9 @@ const bufPrint = std.fmt.bufPrint;
 const lessThan = std.mem.lessThan;
 const sortSlice = std.mem.sort;
 const eql = std.mem.eql;
+const splitScalar = std.mem.splitScalar;
 const isAlphanumeric = std.ascii.isAlphanumeric;
 
-const Trainer = ppo_track.Trainer(zn_mlp);
 const is_browser: bool = z.host.is_browser;
 const log = std.log.scoped(.lab);
 
@@ -108,7 +109,7 @@ const Floor = struct {
 /// its folder, and whether the form is open.
 const NewRunForm = struct {
     is_open: bool = false,
-    run: geno.PpoRun = .{},
+    run: lab.PpoRun = .{},
     name_buffer: [64]u8 = @splat(0),
     name_length: usize = 0,
 
@@ -133,15 +134,6 @@ const StartedTrainer = struct {
         return started.program.currentState() == .running;
     }
 };
-
-/// Every kernel of `M`, with the WGSL the build made of it.
-fn pipelineEntries(comptime M: type) [M.kernels.len]z.Compute(M).KernelWgsl {
-    var table: [M.kernels.len]z.Compute(M).KernelWgsl = undefined;
-    inline for (M.kernels, 0..) |name, i| {
-        table[i] = .{ .name = name, .wgsl = @embedFile(name ++ "_wgsl") };
-    }
-    return table;
-}
 
 // ---- Run folders ----
 
@@ -218,7 +210,7 @@ fn isRunNameFit(name: []const u8) bool {
 /// `dance-2` - written into `buffer`.
 fn freeRunName(
     runs: []const native_os.FolderEntry,
-    motion: geno.PpoMotion,
+    motion: lab.PpoMotion,
     buffer: []u8,
 ) []const u8 {
     var number: u32 = 1;
@@ -231,82 +223,117 @@ fn freeRunName(
     }
 }
 
-/// A run's parameters, from the `run.zon` in `run_folder`.
-fn readRunParameters(gpa: Allocator, io: Io, run_folder: []const u8) !geno.PpoRun {
+/// A run's parameters, from the `run.zon` in `run_folder` (`lab.GenoRun`, which reads the older `PpoRun` too).
+/// Memory: the file's text and the parser's work freed before it returns; the run is plain values.
+fn readRunParameters(gpa: Allocator, io: Io, run_folder: []const u8) !lab.GenoRun {
     var path_buffer: [1200]u8 = undefined;
-    const run_file_name: []const u8 = geno.RunFile.parameters.fileName();
+    const run_file_name: []const u8 = lab.RunFile.parameters.fileName();
     const run_path: []const u8 = pathIn(run_folder, run_file_name, &path_buffer) orelse return error.NameTooLong;
-    const source: []u8 = try native_os.readWhole(gpa, io, run_path, geno.RunFile.most_bytes) orelse
+    const source: []u8 = try native_os.readWhole(gpa, io, run_path, lab.RunFile.most_bytes) orelse
         return error.NoRunFile;
     defer gpa.free(source);
     var arena_state: ArenaAllocator = .init(gpa);
     defer arena_state.deinit();
     const arena: Allocator = arena_state.allocator();
     const terminated_source: [:0]const u8 = try arena.dupeSentinel(u8, source, 0);
-    var failure: geno.PpoRun.ParseFailure = .{ .description = "" };
-    return geno.PpoRun.parse(gpa, arena, terminated_source, &failure);
+    var failure: lab.GenoRun.ParseFailure = .{ .description = "" };
+    return lab.GenoRun.parse(gpa, arena, terminated_source, &failure);
 }
 
-/// Reads the weights file `weights_name` in `run_folder` - the newest weights, or a checkpoint - into `trainer`: the
-/// batch they were trained to.
-fn readWeights(
+/// Reads the policy file `policy_name` in `run_folder` - the newest policy, or a checkpoint of it (`lab.PolicyFile`).
+/// A folder without one - a run from before policy files, or one that has not saved yet - is `error.NoPolicyFile`.
+/// Memory: the policy's arrays are allocated with `gpa` and are the caller's to `deinit`; the file's bytes are freed
+/// before it returns.
+fn readPolicy(
     gpa: Allocator,
     io: Io,
     run_folder: []const u8,
-    weights_name: []const u8,
-    trainer: *Trainer,
-) !u64 {
+    policy_name: []const u8,
+) !lab.GenoPolicy {
     var path_buffer: [1200]u8 = undefined;
-    const weights_file_name: []const u8 = weights_name;
-    const weights_path: []const u8 = pathIn(run_folder, weights_file_name, &path_buffer) orelse
-        return error.NameTooLong;
-    const weights_bytes: []u8 = try native_os.readWhole(gpa, io, weights_path, geno.RunFile.most_bytes) orelse
-        return error.NoWeights;
-    defer gpa.free(weights_bytes);
-    try trainer.importWeights(weights_bytes);
-    return trainer.iterations;
+    const policy_path: []const u8 = pathIn(run_folder, policy_name, &path_buffer) orelse return error.NameTooLong;
+    const policy_bytes: []u8 = try native_os.readWhole(gpa, io, policy_path, lab.RunFile.most_bytes) orelse
+        return error.NoPolicyFile;
+    defer gpa.free(policy_bytes);
+    return lab.PolicyFile.decode(gpa, policy_bytes);
 }
 
-/// The weights file in `run_folder` nearest batch `batch`: the checkpoint whose batch is nearest, when the
-/// folder keeps any; else the newest weights. Written into `name_buffer`.
-fn weightsNearest(
+/// The policy file in `run_folder` nearest `minute` of training: the checkpoint whose minute is nearest, when the
+/// folder keeps any; else the newest policy. Written into `name_buffer`. Memory: the folder's listing is freed before
+/// it returns.
+fn policyNearest(
     gpa: Allocator,
     io: Io,
     run_folder: []const u8,
-    batch: u64,
-    name_buffer: []u8,
+    minute: u64,
+    name_buffer: *lab.RunFile.NameBuffer,
 ) ![]const u8 {
-    const newest_name: []const u8 = geno.RunFile.weights.fileName();
+    const newest_name: []const u8 = lab.RunFile.policy_name;
     const entries: []native_os.FolderEntry = try native_os.listFolder(gpa, io, run_folder);
     defer native_os.freeFolderEntries(gpa, entries);
-    var nearest_batch: ?u64 = null;
-    var nearest_batch_distance: u64 = 0;
+    var nearest_minute: ?u64 = null;
+    var nearest_distance: u64 = 0;
     for (entries) |entry| {
-        const checkpoint_batch: u64 = geno.RunFile.checkpointBatch(entry.name) orelse continue;
-        const is_after: bool = checkpoint_batch > batch;
-        const batch_distance: u64 = if (is_after) checkpoint_batch - batch else batch - checkpoint_batch;
-        const is_nearer: bool = nearest_batch == null or batch_distance < nearest_batch_distance;
+        const checkpoint_minute: u64 = lab.RunFile.policyCheckpointMinute(entry.name) orelse continue;
+        const is_after: bool = checkpoint_minute > minute;
+        const minute_distance: u64 = if (is_after) checkpoint_minute - minute else minute - checkpoint_minute;
+        const is_nearer: bool = nearest_minute == null or minute_distance < nearest_distance;
         if (is_nearer) {
-            nearest_batch_distance = batch_distance;
-            nearest_batch = checkpoint_batch;
+            nearest_distance = minute_distance;
+            nearest_minute = checkpoint_minute;
         }
     }
-    const chosen_batch: u64 = nearest_batch orelse return newest_name;
-    return geno.RunFile.checkpointName(chosen_batch, name_buffer);
+    const chosen_minute: u64 = nearest_minute orelse return newest_name;
+    return lab.RunFile.policyCheckpointName(chosen_minute, name_buffer);
 }
 
 // ---- The runs watched ----
 
-/// A run as the lab watches it: its learning curve, read from its log as it grows, the points the plot draws, and
-/// its status as last read.
+/// A run's judgements as the lab shows them (`lab.JudgeLog`): the servo alone, and the newest policy with the minute
+/// of training it was judged at - both on the same fixed starts, so the one is the other's baseline.
+const JudgedRun = struct {
+    servo: track.Judgement,
+    newest: track.Judgement,
+    newest_minutes: f32,
+};
+
+/// The servo's judgement and the newest one in `judge.csv`'s text: its first line of batch zero, and its last line of
+/// any later batch; null until the file holds both.
+fn judgedRunOf(judgements_text: []const u8) ?JudgedRun {
+    var servo: ?track.Judgement = null;
+    var newest: ?lab.JudgeLog.Line = null;
+    var lines: std.mem.SplitIterator(u8, .scalar) = splitScalar(u8, judgements_text, '\n');
+    while (lines.next()) |line_text| {
+        const line: lab.JudgeLog.Line = lab.JudgeLog.parseLine(line_text) orelse continue;
+        if (line.batch == 0) {
+            if (servo == null) {
+                servo = line.judgement;
+            }
+        } else {
+            newest = line;
+        }
+    }
+    const servo_judgement: track.Judgement = servo orelse return null;
+    const newest_line: lab.JudgeLog.Line = newest orelse return null;
+    const judged: JudgedRun = .{
+        .servo = servo_judgement,
+        .newest = newest_line.judgement,
+        .newest_minutes = newest_line.training_minutes,
+    };
+    return judged;
+}
+
+/// A run as the lab watches it: its learning curve, read from its log as it grows, the points the plot draws, its
+/// status as last read, and its newest judgement beside the servo's.
 const RunWatch = struct {
-    curve: geno.RunCurve = .{},
+    curve: lab.RunCurve = .{},
     /// The curve's points as the plot takes them: training minutes, and the time to failure - a window in which
     /// nothing failed drawn at the plot's top.
     xs: ArrayList(f32) = .empty,
     ys: ArrayList(f32) = .empty,
-    status: ?geno.RunStatus = null,
-    /// The run's save interval (`PpoRun.save_minutes`), read from its `run.zon` once: what silence is judged by.
+    status: ?lab.RunStatus = null,
+    judged: ?JudgedRun = null,
+    /// The run's save interval (`GenoControls.save_minutes`), read from its `run.zon` once: what silence is judged by.
     save_minutes: ?f32 = null,
 
     fn deinit(watch: *RunWatch, gpa: Allocator) void {
@@ -316,8 +343,9 @@ const RunWatch = struct {
     }
 };
 
-/// Reads the run in `run_folder` again: its log's new lines into its curve, the plot's points from the curve, and
-/// its status. A file that cannot be read leaves what was read before.
+/// Reads the run in `run_folder` again: its log's new lines into its curve, the plot's points from the curve, its
+/// judgements, and its status. A file that cannot be read leaves what was read before. Memory: every file's text is
+/// read with `gpa` and freed before it returns; the curve's and the plot's points grow with `gpa`, as `watch`'s.
 fn readRunWatch(
     gpa: Allocator,
     io: Io,
@@ -327,9 +355,9 @@ fn readRunWatch(
     watch: *RunWatch,
 ) !void {
     var path_buffer: [1200]u8 = undefined;
-    const log_name: []const u8 = geno.RunFile.log.fileName();
+    const log_name: []const u8 = lab.RunFile.log.fileName();
     const log_path: []const u8 = pathIn(run_folder, log_name, &path_buffer) orelse return;
-    if (try native_os.readWhole(gpa, io, log_path, geno.RunFile.most_bytes)) |log_text| {
+    if (try native_os.readWhole(gpa, io, log_path, lab.RunFile.most_bytes)) |log_text| {
         defer gpa.free(log_text);
         try watch.curve.readMore(gpa, log_text, physics_steps_per_second);
     }
@@ -340,79 +368,110 @@ fn readRunWatch(
         try watch.xs.append(gpa, point.training_minutes);
         try watch.ys.append(gpa, seconds_drawn);
     }
-    const status_name: []const u8 = geno.RunFile.status.fileName();
+    const judgements_name: []const u8 = lab.RunFile.judgements.fileName();
+    if (pathIn(run_folder, judgements_name, &path_buffer)) |judgements_path| {
+        if (try native_os.readWhole(gpa, io, judgements_path, lab.RunFile.most_bytes)) |judgements_text| {
+            defer gpa.free(judgements_text);
+            watch.judged = judgedRunOf(judgements_text) orelse watch.judged;
+        }
+    }
+    const status_name: []const u8 = lab.RunFile.status.fileName();
     const status_path: []const u8 = pathIn(run_folder, status_name, &path_buffer) orelse return;
-    const status_text: []u8 = try native_os.readWhole(gpa, io, status_path, geno.RunFile.most_bytes) orelse return;
+    const status_text: []u8 = try native_os.readWhole(gpa, io, status_path, lab.RunFile.most_bytes) orelse return;
     defer gpa.free(status_text);
     var arena_state: ArenaAllocator = .init(gpa);
     defer arena_state.deinit();
     const arena: Allocator = arena_state.allocator();
     const terminated_status: [:0]const u8 = try arena.dupeSentinel(u8, status_text, 0);
-    if (geno.RunStatus.parse(gpa, arena, terminated_status)) |status| {
+    if (lab.RunStatus.parse(gpa, arena, terminated_status)) |status| {
         watch.status = status;
     }
     if (watch.save_minutes == null) {
-        const parameters: ?geno.PpoRun = readRunParameters(gpa, io, run_folder) catch null;
-        watch.save_minutes = if (parameters) |known| known.save_minutes else null;
+        const parameters: ?lab.GenoRun = readRunParameters(gpa, io, run_folder) catch null;
+        watch.save_minutes = if (parameters) |known| known.controls.save_minutes else null;
     }
 }
 
 // ---- The run shown ----
 
-/// A run loaded and shown: a network built to its parameters, holding its weights, and one character living what
-/// the network does - and the run's folder name, its own copy, so that reloading reads the same run whatever the
-/// list holds by then.
+/// A run loaded and shown: its policy (`lab.GenoPolicy`, the run's newest or one of its checkpoints) and one
+/// character living what the policy does (`lab.PolicyShow`) - no learner is loaded, so every learner's run is watched
+/// this one way. With them, the run's parameters (the new-run form starts from them), the policy file's name, and the
+/// run's folder name, its own copy, so that reloading reads the same run whatever the list holds by then.
+///
+/// Memory: the show lives in `show_arena`, on the heap so that the arena stays where its allocator points when the
+/// struct moves; the policy is allocated with the lab's `gpa`, so that a newer policy can take its place while the
+/// character goes on (`reloadShownRun`).
 const ShownRun = struct {
-    parameters: geno.PpoRun,
-    trainer: *Trainer,
-    show: Trainer.Show,
+    parameters: lab.GenoRun,
+    show_arena: *ArenaAllocator,
+    policy: lab.GenoPolicy,
+    show: lab.PolicyShow,
+    policy_name_buffer: lab.RunFile.NameBuffer,
+    policy_name_length: usize,
     name_buffer: [256]u8,
     name_length: usize,
 
     fn name(self: *const ShownRun) []const u8 {
         return self.name_buffer[0..self.name_length];
     }
+
+    /// The policy file shown: `policy`, or a checkpoint's `policy_m<minute>`.
+    fn policyName(self: *const ShownRun) []const u8 {
+        return self.policy_name_buffer[0..self.policy_name_length];
+    }
 };
 
-/// Loads the run in `run_folder`: its parameters, a network built to them - one character's worth, since how many
-/// trained does not change the network - the weights file `weights_name`, and a show of one character.
+/// Loads the run in `run_folder`: its parameters - for the task the policy is shown on, its decision's length, its
+/// filter's bodies - its policy file `policy_name`, and a show of one character. Memory: as `ShownRun` says; release
+/// with `unloadRun`.
 fn loadRun(
     gpa: Allocator,
     io: Io,
-    pipe: *z.Compute(zn_mlp),
     imported: *rmj.Imported,
     clip: *const dance.Clip,
     run_folder: []const u8,
-    weights_name: []const u8,
+    policy_name: []const u8,
 ) !ShownRun {
-    const parameters: geno.PpoRun = try readRunParameters(gpa, io, run_folder);
+    const parameters: lab.GenoRun = try readRunParameters(gpa, io, run_folder);
     if (parameters.problem() != null) {
         return error.RunOutOfRange;
     }
-    var options: ppo_track.Options = parameters.recipe.options(parameters.motion);
-    options.envs = 1;
-    options.horizon = 8;
-    const clips = [_]*const dance.Clip{clip};
-    const trainer: *Trainer = try .init(gpa, pipe, &imported.model, imported.names, &clips, options);
-    errdefer trainer.deinit();
-    _ = try readWeights(gpa, io, run_folder, weights_name, trainer);
-    const show: Trainer.Show = try trainer.startShow(gpa, 1, ppo_track.evaluation_seed);
+    var policy: lab.GenoPolicy = try readPolicy(gpa, io, run_folder, policy_name);
+    errdefer policy.deinit(gpa);
+    const show_arena: *ArenaAllocator = try gpa.create(ArenaAllocator);
+    show_arena.* = ArenaAllocator.init(gpa);
+    errdefer {
+        show_arena.deinit();
+        gpa.destroy(show_arena);
+    }
+    const arena: Allocator = show_arena.allocator();
+    // The task every learner's run is on - Geno's task, DReCon's bodies - with the learner's own decision.
+    const settings: lab.PolicyShowSettings = lab.showSettingsFor(parameters);
+    const clips: []*const dance.Clip = try arena.dupe(*const dance.Clip, &.{clip});
+    const show: lab.PolicyShow = try .start(arena, &imported.model, imported.names, clips, &policy, settings);
     const folder_name: []const u8 = std.fs.path.basename(run_folder);
     var shown: ShownRun = .{
         .parameters = parameters,
-        .trainer = trainer,
+        .show_arena = show_arena,
+        .policy = policy,
         .show = show,
+        .policy_name_buffer = undefined,
+        .policy_name_length = @min(policy_name.len, lab.RunFile.name_capacity),
         .name_buffer = undefined,
         .name_length = @min(folder_name.len, 256),
     };
+    @memcpy(shown.policy_name_buffer[0..shown.policy_name_length], policy_name[0..shown.policy_name_length]);
     @memcpy(shown.name_buffer[0..shown.name_length], folder_name[0..shown.name_length]);
     return shown;
 }
 
-/// Releases a shown run: its show, then its network.
+/// Releases a shown run: its show and the arena it lives in, then its policy.
 fn unloadRun(gpa: Allocator, shown: *ShownRun) void {
-    Trainer.endShow(gpa, &shown.show);
-    shown.trainer.deinit();
+    shown.show.end();
+    shown.show_arena.deinit();
+    gpa.destroy(shown.show_arena);
+    shown.policy.deinit(gpa);
 }
 
 // ---- Drawing ----
@@ -480,15 +539,15 @@ fn drawRobot(
 /// Steps the show through the frame's whole physics steps (`ppo_track.showStepsForFrame`): one at 60 frames a
 /// second, the motion even at any frame rate.
 fn stepShowForFrame(
-    trainer: *Trainer,
-    show: *Trainer.Show,
+    show: *lab.PolicyShow,
+    policy: *const lab.GenoPolicy,
     pacing: ppo_track.ShowPacing,
     timestep: f32,
     dt: f32,
 ) void {
     const steps_to_take: u32 = ppo_track.showStepsForFrame(dt, timestep, pacing);
     for (0..steps_to_take) |_| {
-        trainer.stepShow(show);
+        show.step(policy);
     }
 }
 
@@ -521,7 +580,6 @@ const State = struct {
     clip: dance.Clip,
     /// The reference pose, posed from the clip at the shown character's frame.
     ghost: rbt.Data,
-    pipe: z.Compute(zn_mlp),
     runs_folder_buffer: [1024]u8,
     runs_folder_length: usize,
     runs: []native_os.FolderEntry,
@@ -601,12 +659,12 @@ fn refreshRuns(s: *State, io: Io) void {
     s.selected_run = runIndexNamed(s.runs, shown.name());
 }
 
-/// Shows the run at `index` of the list with the weights file `weights_name`, in place of the one shown.
+/// Shows the run at `index` of the list with the policy file `policy_name`, in place of the one shown.
 fn showRunWith(
     s: *State,
     io: Io,
     index: usize,
-    weights_name: []const u8,
+    policy_name: []const u8,
 ) void {
     if (s.shown) |*previous| {
         unloadRun(s.gpa, previous);
@@ -616,31 +674,40 @@ fn showRunWith(
     var path_buffer: [1200]u8 = undefined;
     const name: []const u8 = s.runs[index].name;
     const run_folder: []const u8 = pathIn(runsFolderOf(s), name, &path_buffer) orelse return;
-    const shown: ShownRun = loadRun(s.gpa, io, &s.pipe, &s.imported, &s.clip, run_folder, weights_name) catch |err| {
-        tell(s, .warn, "{s}: cannot show it: {s}", .{ name, @errorName(err) });
+    const shown: ShownRun = loadRun(s.gpa, io, &s.imported, &s.clip, run_folder, policy_name) catch |err| {
+        if (err == error.NoPolicyFile) {
+            tell(s, .warn, "{s}: no policy file - a run from before them, or one not saved yet", .{name});
+        } else {
+            tell(s, .warn, "{s}: cannot show it: {s}", .{ name, @errorName(err) });
+        }
         return;
     };
     s.shown = shown;
-    tell(s, .info, "showing {s}: {s}, batch {d}", .{ name, weights_name, shown.trainer.iterations });
+    tell(s, .info, "showing {s}: {s}", .{ name, policy_name });
 }
 
-/// Shows the run at `index` of the list with its newest weights, in place of the one shown.
+/// Shows the run at `index` of the list with its newest policy, in place of the one shown.
 fn showRun(s: *State, io: Io, index: usize) void {
-    showRunWith(s, io, index, geno.RunFile.weights.fileName());
+    showRunWith(s, io, index, lab.RunFile.policy_name);
 }
 
-/// Reads the shown run's newest weights again, into the same network.
+/// Reads the shown run's newest policy again and puts it in place of the one shown: the character goes on, now
+/// acting by the newer policy (the show takes its policy at every step).
 fn reloadShownRun(s: *State, io: Io) void {
     const shown: *ShownRun = if (s.shown) |*loaded| loaded else return;
     var path_buffer: [1200]u8 = undefined;
     const name: []const u8 = shown.name();
     const run_folder: []const u8 = pathIn(runsFolderOf(s), name, &path_buffer) orelse return;
-    const newest_name: []const u8 = geno.RunFile.weights.fileName();
-    const batch: u64 = readWeights(s.gpa, io, run_folder, newest_name, shown.trainer) catch |err| {
+    const newest_name: []const u8 = lab.RunFile.policy_name;
+    const newer_policy: lab.GenoPolicy = readPolicy(s.gpa, io, run_folder, newest_name) catch |err| {
         tell(s, .warn, "{s}: cannot reload: {s}", .{ name, @errorName(err) });
         return;
     };
-    tell(s, .info, "reloaded {s}: batch {d}", .{ name, batch });
+    shown.policy.deinit(s.gpa);
+    shown.policy = newer_policy;
+    shown.policy_name_length = newest_name.len;
+    @memcpy(shown.policy_name_buffer[0..newest_name.len], newest_name);
+    tell(s, .info, "reloaded {s}: its newest policy", .{name});
 }
 
 // ---- Starting and stopping runs ----
@@ -649,7 +716,8 @@ fn reloadShownRun(s: *State, io: Io) void {
 /// field - or the defaults when no run is shown, and a name no run has.
 fn openNewRunForm(s: *State) void {
     const form: *NewRunForm = &s.new_run;
-    form.run = if (s.shown) |*shown| shown.parameters else .{};
+    // The form is PPO's for now: a PPO run starts it from its own settings, another learner's from the defaults.
+    form.run = if (s.shown) |*shown| (shown.parameters.toPpoRun() orelse .{}) else .{};
     const name: []const u8 = freeRunName(s.runs, form.run.motion, &form.name_buffer);
     form.name_length = name.len;
     form.is_open = true;
@@ -709,10 +777,12 @@ fn startRun(s: *State, io: Io) void {
     };
     log.info("{s}: made {s}", .{ name, folder });
 
-    // The parameters, written as the trainer will read them.
+    // The parameters, written as the trainer will read them: the form's PPO settings as a `GenoRun`, which names its
+    // learner.
     var text: Io.Writer.Allocating = .init(s.gpa);
     defer text.deinit();
-    s.new_run.run.write(&text.writer) catch {
+    const new_run: lab.GenoRun = .fromPpoRun(s.new_run.run);
+    new_run.write(&text.writer) catch {
         tell(s, .err, "{s}: out of memory writing run.zon", .{name});
         return;
     };
@@ -721,7 +791,7 @@ fn startRun(s: *State, io: Io) void {
         return;
     };
     var run_file_buffer: [1300]u8 = undefined;
-    const run_file_name: []const u8 = geno.RunFile.parameters.fileName();
+    const run_file_name: []const u8 = lab.RunFile.parameters.fileName();
     const run_file_path: []const u8 = pathIn(folder, run_file_name, &run_file_buffer) orelse return;
     native_os.writeWhole(s.gpa, io, run_file_path, text.written()) catch |err| {
         tell(s, .err, "{s}: cannot write run.zon: {s}", .{ name, @errorName(err) });
@@ -747,7 +817,7 @@ fn requestStop(s: *State, io: Io, name: []const u8) void {
     var folder_buffer: [1200]u8 = undefined;
     const folder: []const u8 = pathIn(runsFolderOf(s), name, &folder_buffer) orelse return;
     var stop_buffer: [1300]u8 = undefined;
-    const stop_file_name: []const u8 = geno.RunFile.stop.fileName();
+    const stop_file_name: []const u8 = lab.RunFile.stop.fileName();
     const stop_path: []const u8 = pathIn(folder, stop_file_name, &stop_buffer) orelse return;
     native_os.writeWhole(s.gpa, io, stop_path, "") catch |err| {
         tell(s, .err, "{s}: cannot write its stop file: {s}", .{ name, @errorName(err) });
@@ -756,9 +826,9 @@ fn requestStop(s: *State, io: Io, name: []const u8) void {
     tell(s, .info, "{s}: asked to stop - it saves, then exits", .{name});
 }
 
-/// What a trainer's end means, from its exit code (`geno.TrainerExit`).
+/// What a trainer's end means, from its exit code (`lab.TrainerExit`).
 fn trainerEndMeaning(exit_code: u32) []const u8 {
-    const exit: geno.TrainerExit = geno.TrainerExit.fromCode(exit_code) orelse return "ended from outside";
+    const exit: lab.TrainerExit = lab.TrainerExit.fromCode(exit_code) orelse return "ended from outside";
     return switch (exit) {
         .finished => "finished or stopped, everything saved",
         .refused => "refused the run - its reason is above",
@@ -850,7 +920,6 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.imported = try rmj.build(gpa, &s.robot, physics_options);
     s.clip = try dance.Clip.fromBytes(gpa, dance_zclip);
     s.ghost = try rbt.Data.init(gpa, &s.imported.model);
-    s.pipe = try z.Compute(zn_mlp).initGpu(gpa, f.gpu.device, f.gpu.queue, &pipelineEntries(zn_mlp));
     z.profiler.freeze();
 
     s.runs = &.{};
@@ -900,7 +969,6 @@ fn deinit(gpa: Allocator, s: *State) void {
     }
     gpa.free(s.watches);
     native_os.freeFolderEntries(gpa, s.runs);
-    s.pipe.deinit();
     s.ghost.deinit();
     s.clip.deinit();
     s.imported.deinit();
@@ -921,7 +989,7 @@ fn drawRunLine(
     color: Color,
     now_seconds: i64,
 ) void {
-    const status: geno.RunStatus = watch.status orelse {
+    const status: lab.RunStatus = watch.status orelse {
         u.textColored(color, "  no status yet", .{});
         return;
     };
@@ -935,6 +1003,22 @@ fn drawRunLine(
         u.textColored(color, "  {s}, batch {d}, loses it every {d:.1} s", .{ state_name, status.batches, seconds });
     } else {
         u.textColored(color, "  {s}, batch {d}, no losses lately", .{ state_name, status.batches });
+    }
+    // The newest judgement, with its standard error, beside the servo judged on the same starts.
+    const judged: JudgedRun = watch.judged orelse return;
+    const servo_seconds: f32 = judged.servo.meanTimeToFailure();
+    const judged_seconds: f32 = judged.newest.meanTimeToFailure();
+    if (judged.newest.meanTimeToFailureError()) |error_seconds| {
+        u.textColored(color, "  judged {d:.2} +- {d:.2} s, the servo {d:.2} s", .{
+            judged_seconds,
+            error_seconds,
+            servo_seconds,
+        });
+    } else {
+        u.textColored(color, "  judged: never lost on its starts (over {d:.1} s), the servo {d:.2} s", .{
+            judged_seconds,
+            servo_seconds,
+        });
     }
 }
 
@@ -993,6 +1077,8 @@ fn decadesAboveLowest(seconds: f32, plot: CurvePlot) f32 {
 const CurvePick = struct {
     run_index: usize,
     batch: u64,
+    /// The point's minute of training: the policy checkpoint nearest it is the one shown.
+    training_minutes: f32,
     is_last: bool,
 };
 
@@ -1009,7 +1095,7 @@ fn nearestCurvePoint(
     var nearest: ?CurvePick = null;
     var nearest_squared_distance: f32 = 0;
     for (watches, 0..) |watch, run_index| {
-        const points: []const geno.RunCurve.Point = watch.curve.points.items;
+        const points: []const lab.RunCurve.Point = watch.curve.points.items;
         for (watch.xs.items, watch.ys.items, 0..) |minutes, seconds, point_index| {
             const point_decades: f32 = decadesAboveLowest(seconds, plot);
             const x_share_apart: f32 = (minutes - click.x) / most_minutes;
@@ -1021,6 +1107,7 @@ fn nearestCurvePoint(
                 nearest = .{
                     .run_index = run_index,
                     .batch = points[point_index].batch,
+                    .training_minutes = points[point_index].training_minutes,
                     .is_last = point_index + 1 == points.len,
                 };
             }
@@ -1029,19 +1116,20 @@ fn nearestCurvePoint(
     return nearest;
 }
 
-/// Shows what a click on the curves picked: the run of the nearest point, with the checkpoint nearest its batch -
-/// or the newest weights, for a run's last point (`weightsNearest`).
+/// Shows what a click on the curves picked: the run of the nearest point, with the policy checkpoint nearest its
+/// minute - or the newest policy, for a run's last point (`policyNearest`).
 fn showPickedPoint(s: *State, io: Io, pick: CurvePick) void {
     var path_buffer: [1200]u8 = undefined;
     const name: []const u8 = s.runs[pick.run_index].name;
     const run_folder: []const u8 = pathIn(runsFolderOf(s), name, &path_buffer) orelse return;
-    var weights_name_buffer: [64]u8 = undefined;
-    const newest_name: []const u8 = geno.RunFile.weights.fileName();
-    const weights_name: []const u8 = if (pick.is_last)
+    var policy_name_buffer: lab.RunFile.NameBuffer = undefined;
+    const newest_name: []const u8 = lab.RunFile.policy_name;
+    const picked_minute: u64 = @round(@max(pick.training_minutes, 0));
+    const policy_name: []const u8 = if (pick.is_last)
         newest_name
     else
-        weightsNearest(s.gpa, io, run_folder, pick.batch, &weights_name_buffer) catch newest_name;
-    showRunWith(s, io, pick.run_index, weights_name);
+        policyNearest(s.gpa, io, run_folder, picked_minute, &policy_name_buffer) catch newest_name;
+    showRunWith(s, io, pick.run_index, policy_name);
 }
 
 /// The panel: the runs, the shown run's batch, and reloading. Whether the mouse is the panel's.
@@ -1069,7 +1157,7 @@ fn drawPanel(s: *State, f: *z.Frame) bool {
                 showRun(s, io, index);
             }
             // A training run's line starts with its "stop" button, where the panel's width cannot push it out of view.
-            const state: ?geno.RunState = if (watch.status) |status| status.state else null;
+            const state: ?lab.RunState = if (watch.status) |status| status.state else null;
             const is_training: bool = state == .training or state == .measuring_servo;
             if (is_training) {
                 if (u.button("stop", .{})) {
@@ -1092,11 +1180,11 @@ fn drawPanel(s: *State, f: *z.Frame) bool {
             refreshRuns(s, io);
         }
         u.sameLine(.{});
-        if (u.button("reload weights", .{})) {
+        if (u.button("reload policy", .{})) {
             reloadShownRun(s, io);
         }
         if (s.shown) |*shown| {
-            u.text("{s}, batch {d}", .{ shown.parameters.motion.label(), shown.trainer.iterations });
+            u.text("{s}, {s}", .{ shown.parameters.task.motion.label(), shown.policyName() });
         }
         u.text("{s}", .{s.status.slice()});
     }
@@ -1122,7 +1210,7 @@ fn update(f: *z.Frame, s: *State) void {
     // The character moves evenly, whatever the frame rate (`stepShowForFrame`).
     if (s.shown) |*shown| {
         const timestep: f32 = model.opt.timestep;
-        stepShowForFrame(shown.trainer, &shown.show, s.pacing, timestep, dt);
+        stepShowForFrame(&shown.show, &shown.policy, s.pacing, timestep, dt);
     }
 
     z.clearViewport(f, s.look.background);

@@ -9,6 +9,575 @@ the recipe decisions, the world model's form, scale, the kit's parity, a gate, a
 
 ---
 
+## THE PLAN (Oct 25, rewritten): three learners in the lab, judged honestly, then the night runs
+
+**The goal (Simon, Oct 24-25).** An intuitive lab for starting training runs, watching them, judging and comparing
+them on the dance-tracking task, choosing between PPO, SuperTrack and EfficientTDMPC - all three on the GPU - and,
+soon, the best EfficientTDMPC run overnight on Windows. Later: a single-page demo that plays a trained policy.
+
+### 1. Principles (each one decided, with its reason)
+
+1. **What learners share is thin; everything else is each learner's own** (Simon, Oct 25: "very different algos
+   must work without limiting each other - no framework forcing all parts to share rigid interfaces").
+   Shared, and only this: the run file's envelope (`GenoRun`: the motion, the controls, one learner of a union);
+   the policy file, for watching and judging (`GenoPolicy`); the measurements (`judge.csv`, `status.zon`); the
+   judge's `robot_track.Actor` (a context pointer and a function). Each learner's own: its settings (a struct that
+   mirrors its own options, checked at compile time), its training loop (its own function in the trainer, reached
+   by one `switch`), its state file, its log's columns. No learner interface, no vtable, no common base.
+2. **The policy file is the common denominator, never the only way to act.** It lets the lab watch and the judge
+   judge any learner's run one way. A learner whose best acting is not a network - EfficientTDMPC's planner - keeps
+   its own actor beside it, which the lab and the judge run through `Actor`.
+3. **One honest measure.** The judge (`robot_track.judge`): fixed starts a second apart, the mean action, no help
+   (no assist, no grace, no shoves), nothing random; every measure with its standard error; the servo alone on the
+   same starts as the baseline; checked against controls before trusted (zero weights are the servo, a judgement
+   repeats exactly, a policy at its limit is judged otherwise). Training's own numbers are not comparable across
+   learners or early in a run (the root assist flatters them: 17.1 s trained vs 1.51 s judged).
+4. **A controller's design is its learner's.** The task is the motion with Geno's failure rule, physics and servo;
+   the decision interval, the filter and the action scale belong to the learner and travel with its policy.
+5. **Small, verified turns.** One step per turn; its check the narrowest test root that compiles what it touched
+   (`zbuild test-fast -Dfast-root=src/robot_lab.zig`, or `src/robot_tests.zig` for files it imports), the style
+   gate (`zbuild lint-check`), the build of what changed - the trainer and the lab for Windows when touched; no run
+   past 5 minutes; a control for every check that could pass vacuously; a scripted headless capture for what the
+   lab shows. Record in the plan and the journal, snapshot, end.
+6. **Course-quality code and tutorial.** Names that say what they hold; comments that teach the algorithm; memory
+   stated wherever a function takes two allocators; the robot-mocap tutorial kept current, without testing details.
+
+### 2. What exists (Oct 25)
+
+- **The run format** (`robot_lab.zig`): `GenoRun` = `task` (the motion) + `learner` (`ppo` / `supertrack` /
+  `efficient_tdmpc`, each its own settings) + `controls` (save, checkpoint, judge, stop). `problem()` names any
+  setting out of range by its path. The older `PpoRun` reads as a PPO run (`fromPpoRun`, `toPpoRun`).
+- **The trainer** (`tools/geno_trainer.zig`): reads `GenoRun`; trains PPO (other learners refused by name); writes
+  `weights`, `policy`, checkpoints by batch and by minute, `log.csv`, `status.zon`, `judge.csv` every
+  `judge_minutes`; checks its first policy file plays as it acts (exit 2 otherwise); resumes from the folder.
+- **The policy file**, version 2 (`GenoPolicy`, `PolicyFile`): widths and layers (tanh / linear), an optional frozen
+  `zrl.ObsNormalizer`, the action limit, scale and filter; `extern struct` headers; refused by name when damaged.
+- **Showing and judging** (`robot_lab.zig`): `PolicyDecider` (one decision for the show and the judge),
+  `PolicyShow`, `PolicyJudgeActor`, `judgePolicy`; `robot_track.Judgement` with standard errors; `JudgeLog`.
+- **The lab** (`examples/geno_lab`): lists runs, plots training's curves, shows each run's newest judgement beside
+  the servo's, watches any run's policy file (a click on the curves picks the checkpoint nearest that minute),
+  reloads the newest policy; its new-run form is PPO's.
+- **SuperTrack** trains on the GPU in the `geno_train` page (`robot_track_resident.Resident`); its run settings
+  are `SuperTrackLearner`, mirroring the GPU learner's options.
+- **EfficientTDMPC** runs on the CPU (`robot_bmpc.Bmpc(T)`, its `Trainer`) and passes the cartpole gate.
+
+### 3. The road
+
+Each step: **goal - design - code - known answers - checks - turns.** Estimated 25-35 turns in all.
+
+#### Phase A - SuperTrack in the lab (5-7 turns)
+
+**A1. The GPU learner saves and resumes its state.** *Goal:* a SuperTrack run survives a stop and a restart.
+*Design:* a state file of its own (`supertrack_state`): an `extern struct` header (magic, version, the options it
+was trained with, the counters - world and policy updates, exposure, failures - and the random stream's state),
+then both networks' parameters and Adam's first and second moments (the kit's buffers, read back after the last
+update), then the clip normaliser's means and spreads. The replay is not kept (decided Oct 24): a resumed run
+refills it before its first update. *Code:* `Resident(M).exportState(arena) ![]u8`, `importState(bytes) !void` in
+`robot_track_resident.zig`. *Known answers* (on the kit's CPU twin, in `robot_track_resident_tests.zig`): a learner
+trained some rounds, exported, imported into a fresh learner - the same parameters and moments bit for bit, the same
+policy action on the same features (`policyRow`), the same counters; a file of other options refused by name;
+CONTROL: one byte of the parameters changed, the action differs. *Checks:* `-Dfast-root=src/robot_tests.zig`
+(filtered), the gate. *Turns:* 1-2.
+
+**A2. The policy file's version 3: an observation of its own, a decision interval.** *Goal:* a SuperTrack policy
+plays in the lab and the judge exactly as it trained. *Design:* the header gains `observation: ObservationKind`
+(`drecon` - DReCon's observation through `robot_policy.observeFrom`; `supertrack_features` - the character's state
+and the reference one frame ahead, each in the root's frame, normalised by the clip's frozen normaliser, `(x - mean) /
+spread` in f32, no clamp) and `decimation`. The feature normaliser is its own block (means and spreads, f32). A
+SuperTrack policy acts on every actuated joint at every physics step, unfiltered (`filter_beta` 1) and unclamped (an
+infinite limit; non-finite actions zeroed, as the learner does). Its first layer reads `[goal | state]` as one dense
+layer in input order - the GPU's own order. `PolicyDecider` builds the observation its policy names; the show's and
+the judge's interval comes from the policy. A version-2 file reads as `drecon` with interval 2. *Code:*
+`robot_lab.zig` (`ObservationKind`, `FeatureNormalizer`, `PolicyFile` v3, `PolicyDecider`), `policyOfSuperTrack`
+(from the learner's mirror and normaliser). *Known answers:* PPO's bit-for-bit tests unchanged (a v3 file of PPO's
+policy acts as PPO); a SuperTrack policy made from a learner on the CPU twin acts as the kit's own forward pass bit
+for bit, and within rounding of `policyRow` (the CPU mirror interleaves the two blocks); its show and the learner's
+own acting give the same actions over 600 steps on one seed; the judge's zero-weights control holds for the new
+kind. *Turns:* 2.
+
+**A3. The trainer's SuperTrack path.** *Goal:* `geno_trainer --run=` trains a SuperTrack run. *Design:*
+`runSuperTrack` beside PPO's `runTraining`, reached from the same `switch` in `main`; it builds the fleet as the
+page does (Geno's task with a window's grace, the SuperTrack action scale), measures the clip normaliser, creates
+the GPU learner on Vulkan, and loops rounds (collect, then the world's and the policy's updates) until the controls
+say stop; it saves its state (A1), its policy (A2), checkpoints by minute, its status, its own log, judgements
+(`judgePolicy` on the SuperTrack kind), and checks its first policy file acts as the learner does. Its log is its
+own - rounds, minutes, steps watched, failures, the world's and the policy's losses - and `RunCurve` learns to read
+any log by its header's column names, the curves needing only minutes, steps watched and failures (principle 1:
+PPO's batch counters are not forced on SuperTrack). *Known answers:* the trainer's first rounds equal a direct
+`Resident` loop with the same seed (counters, then the policy's actions); start, stop, resume (the replay refilled);
+judge.csv's servo line identical to a PPO run's on the same clip; a CONTROL policy shifted as written fails the
+self-check (exit 2). *Checks:* a 2-minute run on lavapipe, its resume, the Windows build. *Turns:* 2.
+
+**A4. The lab shows SuperTrack's runs.** *Goal:* a SuperTrack run is listed, watched and judged like PPO's.
+*Design:* each run's line names its learner; the curves read each learner's log by column name; the watch plays the
+v3 policy; the new-run form chooses the learner first (three buttons with a line each), then that learner's settings
+(`ui.editStruct` on its struct), checked by `GenoRun.problem()` before the trainer starts. *Known answers:* headless,
+a PPO and a SuperTrack run side by side - both listed with their learners, both judged, each watched; a new
+SuperTrack run started from the form trains. *Turns:* 1-2.
+
+#### Phase B - EfficientTDMPC in the lab, on the CPU first (5-7 turns)
+
+The CPU agent exists and passes the cartpole gate; on the dance it gets a judged EfficientTDMPC run into the lab
+first, and its runs become the reference the GPU port (phase C) is held to.
+
+**B1. EfficientTDMPC on the dance, on the CPU.** *Goal:* the agent trains on Geno. *Design:* an environment for
+`Bmpc(T).Trainer` - `reset(rng, observation)` and `step(action, observation) reward` - each one character of its own
+`TrackEnv` (DReCon's observation; the learner's decision interval and filter; Geno's task). The contract gains what
+the dance needs and the cartpole did not: an episode that ENDS - a fall is terminal, the clip's end a truncation -
+the step reporting how its episode went on (the trainer marks the row terminal or truncated and resets), so that
+EfficientTDMPC's pessimism applies where episodes end early (its preset turns it on when they can). The
+`TdmpcLearner`'s settings become the agent's `Config` (the preset, then each setting the run names). *Code:*
+`robot_bmpc.zig` (the contract's episode end), a `TrackEnvironment` adapter in `robot_lab.zig` or
+`robot_track_env.zig`. *Known answers:* the cartpole gate unchanged; a few hundred decisions on the dance - every
+loss finite and falling; the same seeds the same run; a fall ends its episode as terminal, the clip's end as
+truncated. *Turns:* 2.
+
+**B2. Its state, its policy file, its trainer path.** *Design:* its state file (the networks, Adam's moments, the
+counters; the replay refilled on resume); its policy file - the encoder (`NormedDense`: linear, LayerNorm with its
+gain and bias, Mish; then SimNorm) and the policy head (NormedDense layers, a linear mean) as layers, so the policy
+file gains those layer kinds (`PolicyActivation` grows `mish`, `layer_norm_mish`, `simnorm` - each defined once,
+in zimrrl beside the agent's own, and used by both); `runTdmpcCpu` beside the others in the trainer, its own log.
+*Known answers:* the policy file's actions are the agent's policy's mean actions bit for bit (the same arithmetic in
+the same order); start, stop, resume; judgements. *Turns:* 2-3.
+
+**B3. The lab: EfficientTDMPC's runs, and its planner.** *Design:* listed, judged and watched as the others; the
+watch's switch "policy / planner" - the planner acting through the learner's own actor (its state file loaded on
+the CPU, `Actor` for the judge), default off (decided Oct 24). *Known answers:* headless, the three learners' runs
+side by side, each judged; the planner's actions on a state equal the trainer's planner's on the same state and
+seed. *Turns:* 1-2.
+
+#### Phase C - EfficientTDMPC on the GPU (10-14 turns)
+
+**C1. The kit's missing operations** (L6): NormedDense forward and backward, SimNorm, the two-hot cross-entropy (101
+bins on [-10, 10]), each with its CPU twin from the same source. *Known answers:* values and gradients against
+zimrnum's graph and the CPU agent's own. *Turns:* 3-4.
+**C2. Its update on the GPU** (L7): the encoder, the dynamics ensemble's latent rollout, the consistency, reward and
+value losses, the policy's loss (KL to the target policy, the scaled entropy), Adam, the targets' Polyak. *Known
+answers:* agreement with the CPU agent's update at reduced widths over the first steps, both converging. *Turns:* 4-5.
+**C3. Its planner on the GPU** (L8): MPPI's candidates under every head, the multi-horizon mean, the ensemble's
+score and pessimism. *Known answers:* the CPU actor's decisions on the same states. *Turns:* 2-3.
+**C4. The cartpole gate on the GPU** (L9): the GPU agent reaches the CPU gate's 0.333 in minutes. *Turns:* 1.
+**C5. The GPU learner in the trainer** (L10): the same state file and policy file as the CPU learner's, so a run can
+move between them; `runTdmpcGpu`. *Known answers:* a CPU run's state resumed on the GPU continues; losses finite and
+falling; judged. *Turns:* 1-2.
+
+#### Phase D - The lab's views (3-5 turns)
+
+**D1. Runs** (L11): a status mark (running, finished, stopped, failed, silent), the name, the learner, minutes, the
+newest judgement with its error; sort by any column. **D2. Watch** (L13): the timeline of checkpoints by minute,
+the policy or (EfficientTDMPC) the planner. **D3. Compare** (L14): the ticked runs' judgements over minutes (and
+steps), each point with its error bar beside the servo's line - error bars need a plot feature in `ui.zig`
+(OPEN, Simon to decide); a table of every run judged at the same minutes (checkpoints aligned by
+`checkpoint_minutes`); "duplicate with the next seed", and runs of one recipe drawn as their mean and spread.
+
+#### Phase E - The Windows night runs (1-2 turns)
+
+**E1** (L15): one zip - `geno_lab.exe`, `geno_trainer.exe`, a `run.zon` per learner, a readme. The first night: a
+PPO baseline, a SuperTrack run, an EfficientTDMPC run, each judged every 5 minutes; the morning: the lab's compare
+view decides which recipe the next night tries.
+
+#### Phase F - The demo page (later)
+
+A single HTML page that plays a policy file on Geno in the browser: the policy file embedded, the show
+(`PolicyShow`) and the judge's numbers - the policy file's learner-neutral form makes this a page of its own, not a
+learner's.
+
+### 4. Open decisions (Simon)
+
+- Error bars in `ui.plotCurves` - a general plot feature in `ui.zig` (D3).
+- Whether the first night runs before phase C (EfficientTDMPC on the CPU, slower) or after.
+
+### 5. The details of what was done
+
+The entries below, Oct 24-25, record each step as it was built and checked; the plan above supersedes their "next"
+lines.
+
+## The lab: three learners on the GPU, one judge, an intuitive UI - prepared Oct 24 (Simon: "Improve the plan so we
+## end up with an intutive ui in the lab for starting training runs and evaluating and comparing them on the dance
+## tracking task. We want to be able to choose between different versions of rl algos, ppo, supertrack,
+## efficienttdmpc, all on gpu.")
+
+**Where it stands.** `geno_lab` (native) lists the run folders, shows a run's policy on Geno at any checkpoint
+(`weightsNearest`), draws the runs' curves from their log.csv (RT5), and has a new-run form that writes run.zon and
+starts `geno_trainer` as a child program, and stops a run by its `stop` file (built, not yet marked done as RT6) - for
+PPO alone. The trainer runs PPO alone (`PpoRun`, `PpoRecipe`); its update is on the GPU (`kit_mlp`, natively on
+Vulkan since Oct 17). SuperTrack trains on the GPU kit in its page (`geno_train`, `SuperTrackRecipe`), not in the
+trainer. EfficientTDMPC is complete on the CPU (`Bmpc(T)`, the `efficientTdmpc` preset; N7a-N7f-2) and has no GPU
+kit: `kit_mlp` lacks LayerNorm with Mish, SimNorm and the two-hot cross-entropy. Each learner judges itself its own
+way (PPO's `evaluate` counts exposure and failures); nothing compares two learners on equal terms.
+
+**The shape.** Everything the lab shows or compares is learner-neutral, so that adding a learner touches the trainer
+and nothing in the lab:
+
+      run.zon        the task (the clip's range, decimation, the action filter, the failure criteria - the same for
+                     every learner and clip), the learner and its recipe (`.ppo`, `.supertrack`, `.efficient_tdmpc`,
+                     each a struct of defaulted fields), the run's controls (hours, checkpoint minutes, judge minutes)
+      policy         the policy the run would deploy, learner-neutral: the network (layers, activations, weights),
+                     the observation normalisation, the action scale, the filter - for EfficientTDMPC its encoder and
+                     policy head as one network; the lab and the web demo play any run's policy alike
+      policy_m<N>    the same, checkpointed at minute N
+      state          the learner's own state for resuming: every network, the optimisers, the running scales - not
+                     the replay (Simon, Oct 24): a resumed run refills it
+      log.csv        the learner's own columns, one line per update batch
+      judge.csv      the judge's columns, the same for every learner: minutes, environment steps, its measures
+      status.zon     running, finished, stopped or failed; minutes; the latest judge line
+      stop           made by the lab (or by hand): the trainer saves and exits
+
+**The judge** (one definition, used by the trainer every `judge_minutes` and by the lab on any checkpoint): the
+dance played from fixed start frames across the clip, fixed seeds, the policy's mean action through the filter,
+the same failure criteria, no pushes (Simon, Oct 24: pushes later). Its measures: the share of the clip tracked
+before a fall, the mean time to failure, the mean body position error (cm) and the root's, falls per minute - and,
+once R5.9's judge is built, its pushes and the body's limits. The x-axes the lab offers: minutes of training (speed, the main target) and environment steps (sample
+efficiency).
+
+**The path** - one short turn each, verified headless on lavapipe; Windows waits for Simon:
+
+  Shared ground, PPO first (no change in what PPO learns):
+  L1 THE RUN, LEARNER-NEUTRAL. `GenoRun`: the task, `learner: union(enum) { ppo, supertrack, efficient_tdmpc }` with
+     each recipe, the controls; ZON read and written with every field defaulted; an older PPO run.zon (no `learner`)
+     read as `.ppo`. KNOWN ANSWERS: defaults, a partial file, a misspelt field refused by name, the old file read,
+     round trips for all three.
+     L1 DONE (Oct 24). In `robot_geno.zig`, after `PpoRun`: `GenoRunTask` (the motion, `decimation`, `beta` - what
+     the environment and the judge share; `GenoTask` was taken, the task built from them); `PpoLearner` (PpoRecipe's
+     own fields, `recipe(task)` back to a `PpoRecipe`), `SuperTrackLearner` (SuperTrackRecipe's scalars and its
+     world model's six settings - the `noise` hook is code no file carries, the world's normaliser buffers are
+     state; `recipe(task)` back, the task's clock and filter in its options), `TdmpcLearner` (`TdmpcPreset`
+     efficient_tdmpc or bmpc, the action scale, widths, dynamics heads, both horizons, pessimism, learning rate,
+     windows, seed - Table 2's values; the rest stays the preset's, mapped at L10); `GenoLearner`, the union;
+     `GenoControls` (save, checkpoint and judge minutes, stop after hours or updates); `GenoRun` with `parse` - a
+     text that is no `GenoRun` tried as an older `PpoRun` and converted (`fromPpoRun`), else the GenoRun parser's
+     description - and `write`. The new defaults are taken from `PpoRecipe{}`, `PpoRun{}` and `supertrack_recipe`,
+     one source each until L4 retires the older types. Three tests: an empty file (PPO on the dance) and a partial
+     one (EfficientTDMPC, one horizon changed, the rest Table 2's); a misspelt field refused by name and an older
+     PPO file read (values in their places, PPO's recipe made back); each learner's run written and read back equal,
+     SuperTrack's recipe made back with the task's filter. A control: an assertion made wrong fails the step (3 of
+     4 then). Lint and test-fast green. The users - trainer, lab, page - still read `PpoRun`: L4 moves them, and the
+     robot-mocap tutorial's run folder with them.
+  O1 THE LAB'S OWN FILE, BEFORE L2 (Oct 24 review: Simon, "make sure zimrrl and the lab and the mocap tracking files
+     are organised logically"). `robot_geno.zig` is Geno's body (10,440 lines, its header "Geno's own measurements")
+     and also holds the run format and the recipes (`PpoMotion`, `PpoRecipe`, `PpoRun`, `SuperTrackRecipe`, L1's
+     `GenoRun` with its task, learners and controls) - and L2-L4 would land there too. PROPOSED: `robot_lab.zig`,
+     the lab's shared ground - the run folder, the recipes, the policy file (L2), the judge (L3), the learner switch
+     (L4) - for its users (`geno_trainer`, `geno_lab`, `geno_ppo`, `geno_train`, `st_bench`), with a test root of its
+     own so a lab step compiles that file alone (L1's three tests took 245 s through test-fast, nearly all of it
+     building the other roots). Also for Simon: `robot_bmpc.zig` is a general agent (its one user the cartpole gate)
+     - into zimrrl beside the ingredients it is assembled from, or kept a robot file until L10 gives it the dance;
+     `robot_world.zig` is used by tests and the tutorial alone (the code uses `robot_latent` and `robot_latent_kit`)
+     - kept as the tutorial's teaching model, or retired; `robot_sac_track.zig` (187 lines, tests only) - kept until
+     a SAC learner joins the lab, or folded into `robot_track_env.zig`.
+     O1 DONE (Oct 24; built by a turn that stopped before reporting, checked by the next). `src/robot_lab.zig` (1,202
+     lines; `robot_geno.zig` 10,440 -> 9,268): `SuperTrackRecipe`, `supertrack_recipe`, `PpoMotion`, `PpoRecipe`, `PpoRun`, `GenoRunTask`, `PpoLearner`, `SuperTrackLearner`, `TdmpcPreset`, `TdmpcLearner`, `GenoLearner`, `GenoControls`, `GenoRun`, `RunFile`, `TrainerExit`, `RunState`, `RunStatus`, `RunLog`, `RunCurve` - the run
+     folder's parameters with L1's three tests; its users (`geno_trainer`, `geno_lab`, `geno_ppo`, `geno_train`,
+     `st_bench`) import it. `test-fast -Dfast-root=<file>` runs one file of the fast list alone - a file
+     `robot_tests.zig` imports (`robot_geno.zig` among them) is run through that root instead:
+     `-Dfast-root=src/robot_tests.zig`. Checked: the lab's root passes; `robot_tests.zig` 642 pass, 119 skipped; the
+     trainer, the lab for Windows, both pages for the web and `st_bench` build; the tutorials' folds regenerated (one
+     out of date, the trainer's `train`). BMPC, `robot_world` and `robot_sac_track` stay where they are (Simon to
+     decide).
+  L2 THE POLICY FILE. Written by PPO's trainer beside its state; read by one player (`GenoPolicy`: the network's
+     forward pass, the normalisation, the filter) that the lab's watch uses instead of PPO's own. KNOWN ANSWERS:
+     the player's actions equal PPO's mean actions on the same observations, bit for bit; a file of another shape
+     refused by name.
+     L2a DONE (Oct 24): the policy and its file, in `robot_lab.zig`. `GenoPolicy` (the layers - `PolicyLayer`, the
+     kit's layout, `PolicyActivation` none or tanh - the normalisation in f64, the observation's and the action's
+     clamps, the action scale and the filter), `policyMeanAction` (the arithmetic in the kit's CPU layer's order),
+     `policyOfPpo` from `PpoPolicyParts`, `PolicyFile.encode`/`.decode` (little-endian, versioned; refused by name:
+     not a policy, unknown version, truncated, unknown activation, layers that do not chain). PPO's normalisation is
+     one static function, `robot_ppo_track.normalizeByStatistics`, which its trainer calls as before. Tests: the
+     file reads back as itself and acts the same, three refusals (the lab's root); a PPO actor on the kit's CPU twin
+     with made-up normaliser statistics acts through its file as PPO acts - its normaliser, `actMean`, the clamp -
+     bit for bit on 20 observations (`gpu_learn_tests.zig`, run through `robot_tests.zig`: 659 pass). Left of L2:
+     the trainer writes `policy` (and `policy_m<N>`) beside its state; the lab's watch plays it.
+     L2a REVIEWED (Oct 24). Found and fixed: the reader trusted the file's counts - a damaged layer count or layer
+     size asked for an allocation as large as it said, and a layer's weight count could overflow a 32-bit `usize`
+     (the web's) - now every count is checked against the bytes left, with overflow-checked arithmetic, before
+     anything is allocated; a file too long and one with no layer were reported as truncated - now
+     `PolicyHasTrailingBytes` and `PolicyHasNoLayers`; unknown flags were ignored - now `PolicyFlagsUnknown`; a
+     deviation of zero would make an input not a number - now `PolicyDeviationInvalid`; `policyMeanAction` read
+     slices of any length - now it asserts the observation's, the action's and the scratch's; `encode` wrote any
+     policy - now it asserts one `decode` reads back (and so caught the earlier test's unchained policy, now made by
+     damaging the file's bytes). Two tests: the damaged files refused before allocating, and both clamps reached.
+     FOR L2b: the weights file is built from `pipe.readLatest(.params)`, not the actor's CPU copy (`cpu_params`,
+     refreshed from the readback a frame or more after an update) - the policy file must be built from the same
+     parameters, after `waitForReadback`, or the two files can differ by an update. NOTED, NOT CHANGED: the policy's
+     clamps (5 deviations, an action of 1) are PPO's literals repeated in `policyOfPpo` - one source would keep them
+     from drifting apart.
+     L1 REVIEWED (Oct 24). Found and fixed: `TdmpcLearner` stated EfficientTDMPC's values as its defaults (widths
+     512, four dynamics heads, horizons 6 and 3, pessimism 10, the learning rate, the windows), so a run that chose
+     the BMPC preset still trained EfficientTDMPC's heads and horizons under BMPC's name, and the numbers had two
+     sources; every setting a preset decides is now optional, null meaning the preset's own value - the round-trip
+     test writes a BMPC run as its preset alone, and an EfficientTDMPC run with two settings changed. The file reads
+     in order: the recipes, `GenoRun`, the run folder's files, the policy, each followed by its tests (the policy had
+     been put between the SuperTrack recipe and its tests); its header names the parts. FOR L4: `GenoRun` has no
+     `problem()` yet - `PpoRun`'s names a value out of its range before training; the trainer reading `GenoRun` needs
+     one per learner.
+  L3 THE JUDGE. `judgeGenoPolicy`: the protocol above, deterministic; judge.csv written by the trainer. KNOWN ANSWERS:
+     a policy of zeros scores the servo baseline's known time to failure; the same policy twice scores the same;
+     a control that judges with exploration noise scores differently.
+  L4 THE TRAINER BY LEARNER. `geno_trainer`'s loop calls the learner's static functions through one switch on the
+     run's learner (start, resume from state, train a slice, save state, write the policy, log columns); PPO
+     behind it first. A learner with a replay resumes with it empty: it collects with the resumed policy - no
+     random actions - and its updates wait until the replay holds what its first update needs. KNOWN ANSWERS: PPO's
+     run from an L1 run.zon matches today's run batch for batch; start, resume, stop.
+
+  SuperTrack into the trainer (it is on the GPU already):
+  L5 SUPERTRACK AS A LEARNER: `geno_train`'s training moved behind L4's switch (its recipe, its state, its policy
+     file). KNOWN ANSWERS: the trainer's SuperTrack run matches the page's over its first batches; start, resume,
+     stop; its policy file plays in the lab.
+
+  EfficientTDMPC onto the GPU (this morning's E1-E5):
+  L6 (T4, N9a) THE KIT'S MISSING OPERATIONS, with CPU twins from the same source: NormedDense (Linear, LayerNorm with
+     its gain and bias, Mish - forward and backward), SimNorm (softmax in groups of 8), the two-hot categorical
+     cross-entropy (101 bins on [-10, 10]). KNOWN ANSWERS: values and gradients against zimrnum's Graph operations.
+  L7 (T5, N9b) ITS UPDATE ON THE GPU: encoder, the dynamics ensemble's latent rollout, the consistency, reward and
+     value losses, the policy's loss (KL to the target policy, the scaled entropy), Adam, the targets' Polyak -
+     against `Bmpc(T)`'s CPU update at reduced widths (agreement over the first steps, both converging).
+  L8 (T6, N9c) ITS PLANNER ON THE GPU: MPPI's candidates under every head, the multi-horizon mean, the ensemble's
+     score and pessimism - against the CPU actor's decisions on the same states.
+  L9 (N8, short) THE CARTPOLE GATE ON THE GPU: the GPU agent reaches the CPU gate's 0.333 here, in minutes.
+  L10 EFFICIENTTDMPC AS A LEARNER: the dance task (`TrackEnv` on Geno, one decision step and one update - per-step
+     insertion - episodes ended by falls so beta applies), its recipe (Table 2's values defaulted), its state, its
+     policy file (the encoder and the policy head as one network). KNOWN ANSWERS: a few hundred steps run, every loss
+     finite and falling; start, resume, stop; its policy file plays in the lab.
+
+  The lab's UI, one view at a time:
+  L11 RUNS. The runs as a list: a status mark (running, finished, stopped, failed), the name, the learner, minutes
+      trained, the latest judge score; a click shows a run, a tick adds it to the comparison; buttons beside it:
+      Stop, Resume, Duplicate (a new run with the same settings, its name suggested).
+  L12 NEW RUN. The learner chosen first - three buttons, each with its one line (PPO: on-policy, steady; SuperTrack:
+      a world model and the tracking loss's exact gradient, fastest on clean tracking; EfficientTDMPC: a world model
+      and planning, made hard to exploit). Then a short form: the name (suggested), the clip's range, hours, seed;
+      presets ("the paper's settings", "a five-minute check"); "More" opens every field of the learner's recipe -
+      the form made from the recipe struct itself (its fields, defaults and doc comments as tooltips), so a recipe
+      field added is in the form without lab code. Start writes run.zon and starts the trainer.
+  L13 WATCH. The chosen run's policy on Geno beside the reference, a timeline of its checkpoints to pick one, play,
+      pause and speed, a push button (one fixed shove) to see it recover; while the run trains, the newest policy
+      reloaded. For an EfficientTDMPC run, a switch "Plan" (off by default - Simon, Oct 24): the run's state loaded
+      (every network, not the policy file alone) and each decision made by L8's planner on the GPU, the acting
+      budget of its recipe, so the policy's moves and the planner's can be watched against each other.
+  L14 COMPARE. The ticked runs' judge curves over each other - a measure chosen, the x-axis minutes or steps,
+      smoothing; a table of them (learner, minutes, best and latest scores, error, time to failure); two runs side
+      by side on the floor from the same start and seed.
+  L15 (RT8) THE WINDOWS PACKAGE: one zip - geno_lab.exe, geno_trainer.exe, a run.zon per learner, a readme (start,
+      watch, compare, stop, resume) - then Simon's first nights.
+
+**The next turns, precisely (Oct 25).** One small turn each. Each turn's check is the narrowest root that compiles
+what it touched - `zbuild test-fast -Dfast-root=src/robot_lab.zig` (about 2 minutes), or
+`-Dfast-root=src/robot_tests.zig` (about 3) for a file `robot_tests.zig` imports, `gpu_learn_tests.zig` among them -
+plus the style gate, `zbuild lint-check` (seconds: every rule, the layout included, over every source - the trainer's
+build does NOT apply every rule to the files it compiles), and the build of what the turn changed; never the whole
+suite, no run past 5 minutes. A cached run prints no counts and has passed; to see the counts, change the filter by a character.
+
+  N1 THE TRAINER WRITES THE POLICY (L2, its writing half). At every save, `geno_trainer` writes `policy` beside
+     `weights` (a new file, renamed over the old), and at every checkpoint `policy_m<N>` (N its minute of training);
+     `RunFile` names both, and a checkpoint's minute reads back from its name. The parts are the SAME parameters the
+     weights file holds - `pipe.readLatest(.params)` after `waitForReadback` - never the actor's CPU copy, which lags
+     an update. One source for the clamps: PPO's 5 deviations and its action's 1 move into `ppo_track.Options` (as
+     `observation_clamp`, `action_clamp`), read by `normalizeByStatistics`' callers, the show, the judge and
+     `policyOfPpo`. KNOWN ANSWERS: a 2-batch run on lavapipe writes `policy`; it decodes; its input and action counts
+     are the trainer's; its action on an observation equals the trainer's own (normaliser, `actMean`, clamp) on the
+     same parameters, bit for bit - the trainer checks this itself after writing its first policy and exits 2 if not.
+     N1a DONE (Oct 25): the clamps, one definition each, and the policy files' names. The action's limit is the
+     controller's range, so it is `robot_track_env.Options.action_limit` (1), read by `TrackEnv.decide`, PPO's show
+     and its judge (`evaluate`), and `PpoPolicyParts.action_limit`; the observation's clamp is PPO's normaliser's,
+     `ppo_track.Options.observation_clamp` (5), passed to `normalizeByStatistics` and `PpoPolicyParts`.
+     `RunFile.policy_name` ("policy"); `policyCheckpointName`/`policyCheckpointMinute` (`policy_m<minute>`, five
+     digits: minutes, a learner-neutral clock, where the weights' checkpoints count batches). Checked: the lab's root
+     491 pass, the robot root 662 (PPO's tests, the environment's, the bit-for-bit test), the trainer's build with
+     lint. Left of N1 (N1b): the trainer writes `policy` and `policy_m<N>`, and checks the first one itself.
+     N1b DONE (Oct 25): `geno_trainer` - `trainerPolicy` (PPO's actor from `pipe.readLatest(.params)`, the weights
+     file's parameters, with the normaliser, the limit, the scale and the filter), `savePolicy` (a new file, renamed
+     over the old), `saveAll` writing `policy` with the weights, `saveCheckpoint` writing `policy_m<minute>` beside
+     `weights_b<batch>` (both names now `RunFile`'s, one definition), and `policyPlaysAsTrained` after a start's first
+     save: the file read back, its action on every environment's observation against the trainer's own (the CPU copy
+     synced to the readback, the normaliser, `actMean`, the limit), bit for bit - otherwise the run fails, exit 2.
+     Checked on lavapipe: a 2-batch run exits 0 with `policy` and `policy_m00000` beside the weights; a CONTROL (one
+     weight shifted as written) exits 2, "the policy file does not play as the trainer acts"; the trainer builds for
+     the host and for Windows, with lint. The robot-mocap tutorial's run folder lists the policy files and says what
+     a policy is.
+  N2 THE SHOW, LEARNER-NEUTRAL. `PolicyShow` in `robot_lab.zig`: characters on a fleet of their own, each decision
+     the policy's mean action (`policyMeanAction`) through DReCon's filter at the policy's `filter_beta` and
+     `action_scale`, held `decimation` physics steps, one physics step per call (for drawing), counting exposure and
+     failures - what `ppo_track.Trainer.Show` does, with a policy file in place of the trainer. KNOWN ANSWER: on the
+     same seed and characters, a PPO trainer's policy shown by `PolicyShow` and by `Trainer.Show` takes the same
+     actions and counts the same exposure and failures over 600 physics steps, bit for bit; CONTROL: one weight
+     changed, the actions differ (`robot_ppo_track_tests.zig`, through `robot_tests.zig`).
+     N2 DONE (Oct 25): `PolicyShow` in `robot_lab.zig` (`PolicyShowSettings`: characters, seed, decimation, episode
+     cap, task, bodies - what a policy file does not carry; `start` in the caller's arena, `step` one physics step,
+     `end` the fleet). KNOWN ANSWER (`robot_ppo_track_tests.zig`, not slow-gated: about a second): a PPO trainer
+     that has collected 8 decisions, its policy made from its parameters - PPO's `Trainer.Show` and `PolicyShow` on
+     the same seed, 2 characters, 600 physics steps: every decision's actions equal, the exposure and the failures
+     equal; CONTROL: one weight of the last layer changed, the first decision's actions differ. Robot root 663 pass,
+     the lab's root 491, the style gate clean, the trainer's 2-batch run exits 0. The gate, run this turn for the
+     first time since L2a, found what the trainer's build had not: `std.math` in the lab file (the policy reader's
+     checked arithmetic, now zimrmath's `mulChecked`/`addChecked`/`maxInt`), its layout, two bare `.init` in a struct
+     literal, a redundant float conversion in a test, an unused alias and a use before declaration in the trainer,
+     `@intFromFloat(@floor(x))` - all fixed.
+  V2 ONE NORMALISER, AND THE POLICY'S SECOND VERSION (Oct 25, Simon: "more bug free by construction"). Three
+     definitions of observation normalisation existed: zimrrl's `ObsNormalizer` (SAC's), PPO's trainer's own, and the
+     policy player's. V2a DONE: `ObsNormalizer.observeF32` and `.applyInPlaceF32` - f32 widened, the same arithmetic,
+     narrowed once (zimrrl test: identical statistics and numbers to `observe`/`apply` on the widened values; nothing
+     observed leaves an observation as it is - PPO's own normaliser clamped everything to 5 instead, the one change
+     V2b brings, never reached in training). V2b DONE (Oct 25): PPO's trainer holds an `ObsNormalizer` (clip = its
+     `observation_clamp`) in place of its three fields; the weights file's import and export, the trainer's policy
+     parts and the tests follow; both bit-for-bit tests prove nothing else moved - robot root 663 pass, a run and its
+     resumption exit 0 (the self-check passing each start), the PPO page builds; `normalizeByStatistics` is gone. V2c: the policy file's second
+     version - the policy carries `normalization: ?ObsNormalizer`, frozen, normalised by `applyInPlaceF32`; layers
+     chained by construction (the observation's size once, each layer its outputs); the header and each layer's an
+     `extern struct`, the flags a `packed struct(u32)`. V2c DONE (Oct 25): `GenoPolicy` is `widths` (the
+     observation's size, each layer's outputs - chained by construction, the "layers do not chain" error gone),
+     `layers` (activation, weights and biases), `normalization: ?zrl.ObsNormalizer` (frozen; the player normalises
+     with `applyInPlaceF32`, the function PPO trains through - the policy's own copy of the arithmetic gone),
+     and the controller's limit, scale and filter; `PpoPolicyParts` carries the trainer's normaliser. The file's
+     version 2: `PolicyFile.Header` and `LayerHeader` are `extern struct`s written and read as they lie in memory
+     (`asBytes`, `bytesToValue`; a comptime check that the target is little-endian), `Flags` a `packed struct(u32)`;
+     a version-1 file is refused by its version; `PolicyNormalizationInvalid` for a normaliser that cannot be. The
+     tests find a field's place by `@offsetOf`. A double free in the reader's error path, caught by the testing
+     allocator, fixed by giving the normaliser's arrays one owner. Lab root 491, robot root 663, a run exits 0 with a
+     version-2 policy (180 inputs, 3 layers, normalised), the lab builds for Windows.
+  N3 THE LAB WATCHES THE FILE. `geno_lab`'s watch plays a run's `policy` (or the checkpoint chosen) through
+     `PolicyShow` - no learner loaded to watch; a run from before policy files is told as such. KNOWN ANSWER: a
+     headless lab capture of a run folder with a policy shows Geno following the dance, the run's name and minute.
+     N3 DONE (Oct 25): `geno_lab` watches a run by its policy file - `readPolicy`, `policyNearest` (the checkpoint
+     nearest a clicked minute), `ShownRun` holding the policy (the lab's `gpa`) and a `PolicyShow` of one character
+     (its own heap arena), the task from the run's `run.zon` through the recipe's options; reload puts the newest
+     policy in place and the character goes on; a folder without a policy file is told as such. The lab no longer
+     starts a GPU compute pipe or builds a trainer to watch: its kernels' table, `readWeights`, `weightsNearest` and
+     the `Trainer` alias are gone. KNOWN ANSWER: headless, a run folder from the trainer beside the lab's executable
+     - the lab lists it and shows it at once ("showing dance_v2: policy"), Geno following the dance beside the
+     reference. The robot-mocap tutorial's lab paragraphs say so; the button is "reload policy".
+  N4 THE JUDGE, AND ITS CONTROLS (L3). `judgePolicy` in `robot_lab.zig`, on `PolicyShow`'s stepping: the dance from
+     fixed start frames (every second of the clip), a fixed seed per start, the policy's mean action, no pushes.
+     Its verdict: the share of the clip tracked before a fall, the mean time to failure, the mean body and root
+     position errors (cm), falls per minute - EACH WITH ITS STANDARD ERROR over the starts, so a comparison knows its
+     noise. Before it is trusted, its controls (goban's arena measured noise for a day before its controls showed the
+     instrument broken): a policy of zeros scores the servo's own time to failure, as the trainer measures it; the
+     same policy judged twice gives the same verdict; the judge with exploration noise gives a different one. The
+     trainer writes judge.csv every `judge_minutes`.
+     N4a DONE (Oct 25): the judge existed - `robot_track.judge` (plan F1: fixed starts, the mean action through an
+     `Actor`, nothing random, the servo alone as baseline, `Judgement`). Policy files now reach it: `PolicyDecider`
+     (DReCon's subset and the observation's scratch, one `decide` for the show and the judge alike), `PolicyShow` on a
+     decider, `PolicyJudgeActor` (a decider, a controller, a countdown: decided every `decimation` steps, filtered,
+     a restarted character forgotten), `judgePolicy` (a policy, or none for the servo). CONTROLS
+     (`robot_ppo_track_tests.zig`, seconds): a policy of zeros judged exactly as the servo alone - failures, ends,
+     steps watched, reward; judged twice the same; a policy at its limit judged otherwise.
+     N4b DONE (Oct 25): standard errors without a per-start record - `robot_track.Judgement` keeps, beside its
+     totals, the sum of each start's first-episode length squared, the steps of the starts that failed, and each
+     start's tracked share of the clip with its square (`Judging.recordStart`). `meanTimeToFailureError`: the delta
+     method for the ratio sum(t)/sum(f), its residual sum expanded so the sums suffice; null with no failure (the
+     time is then a lower bound) or one start. `meanTrackedShare` and its error. KNOWN ANSWERS: the formulas on four
+     hand-made starts against the per-start computation; on the fixture, all starts judged together hold exactly the
+     sums of each judged alone, and a start that reached the clip's end tracked a share of exactly 1. Robot root 666.
+     Left of N4: the trainer writing judge.csv every `judge_minutes`; the lab showing the judgements.
+     N4c DONE (Oct 25): `judge.csv` (`RunFile.judgements`; `lab.JudgeLog`: a header, the servo's line at batch 0,
+     then a line per judgement - every field of `robot_track.Judgement`, written as the shortest decimal that reads
+     back the same, so a reader rebuilds the judgement and its errors). `PpoRun.judge_minutes` (5; carried into
+     `GenoControls`). The trainer's `judgeNewestPolicy`: starts a second apart over the clip, the servo once, the
+     newest policy (the latest readback) every `judge_minutes`, the file rewritten whole; a resumed run reads it
+     back and keeps the cadence (`lastJudgedMinutes`). Checked: the round trip (lab root 493); a 3-batch run with
+     judgements every 0.01 minutes wrote the servo (10 starts, 1.45 s) and batch 2 (1.56 s, standard error 0.13 s);
+     resumed to batch 5, it added batch 4 and no second servo line; the trainer builds for Windows. The tutorial's
+     run folder lists judge.csv, and says how sure a judgement is. Left of N4: the lab showing the judgements.
+     N4d DONE (Oct 25): the lab reads each run's `judge.csv` at every refresh (`judgedRunOf`: the servo's line and
+     the newest) and shows, under the run's status, "judged 1.51 +- 0.14 s, the servo 1.45 s" (or "never lost on its
+     starts", a lower bound). Headless with the judged run: shown so - beside training's own "loses it every 17.1 s",
+     held up by the root assist, which is why runs are compared by the judge. NOT YET: error bars on the curves -
+     `ui.plotCurves` draws curves and a dashed baseline only; a plot of points with error bars is an engine feature
+     to add to `ui.zig` (Simon to decide).
+  N5 THE TRAINER READS `GenoRun` (L4). `GenoRun.problem()` - each learner's ranges named, as `PpoRun.problem`
+     names PPO's; the trainer's loop behind one switch on the learner, PPO the only one yet; a new run's run.zon
+     written as a `GenoRun`, an older `PpoRun` still read; the lab's new-run form writes `GenoRun`. KNOWN ANSWERS:
+     PPO from a `GenoRun` trains batch for batch as from the older file; start, resume, stop; a value out of range
+     refused by name before training.
+     N5a DONE (Oct 25): `GenoRun.problem()` - the task (`taskProblem`), the learner's settings by its tag
+     (`ppoProblem` on the learner's full recipe, `superTrackProblem`, `tdmpcProblem` checking only the settings a run
+     names), the controls (`controlsProblem`, judge_minutes now among them) - each check one definition with a
+     comptime prefix, so `PpoRun.problem` is the same chain under its own paths ("recipe.beta: ...") and a
+     `GenoRun`'s names its own ("task.beta: ...", "learner.supertrack.batch: ..."). `GenoControls.judge_minutes`
+     takes `PpoRun`'s default. Lab root 494.
+     N5b DONE (Oct 25): the trainer reads `run.zon` as a `GenoRun` (which reads the older `PpoRun` too) and
+     checks it (`GenoRun.problem`); `main` switches on its learner - PPO becomes the older `PpoRun` its path takes
+     (`GenoRun.toPpoRun`, `fromPpoRun`'s inverse: tested both ways), the others are refused by name ("learner.
+     supertrack is not in the trainer yet", exit 1). A folder without `run.zon` still gets the older form, which the
+     lab reads. KNOWN ANSWERS: the same run from either format trains to byte-identical weights and policy files, and
+     logs identical but for the minutes; lab root 495; the trainer builds for Windows. Left of N5: the lab reading
+     `GenoRun`, then the writers (the trainer's default, the lab's new-run form) writing it.
+     N5c DONE (Oct 25): the lab reads `run.zon` as a `GenoRun`; a shown run's show takes `lab.showSettingsFor(task)`
+     (Geno's task, DReCon's bodies, the run's decision - one definition for any learner); the caption, silence and
+     the new-run form follow (the form is PPO's until L12: a PPO run starts it from its settings, another learner's
+     from the defaults). Then the writers: the trainer's default `run.zon` and the lab's new runs are `GenoRun`s.
+     Checked: headless, a run of each format listed and shown, their curves one; a run started in an empty folder
+     wrote a `GenoRun` and trained; the lab builds for Windows. The tutorial's run.zon paragraph says task, learner,
+     controls. N5 DONE.
+     THE ORDER FROM HERE (Simon, Oct 25: "do it all in the best order, review as you go"): N5's rest, then SuperTrack
+     (L5: it trains on the GPU already, the shortest road into the lab), then EfficientTDMPC on the CPU on the dance
+     (the CPU agent passes the cartpole gate; its runs become the reference the GPU port is held to), then the GPU
+     port (L6-L9), then L10's GPU learner.
+     THE ROAD TO THE LAB (Oct 25 estimate, at today's turn size): SuperTrack in the lab 7-9 turns - N5's switch
+     with PPO behind it (2 more), L5 (4-6: SuperTrack's state saved and resumed, its policy file - a third version
+     naming its observation, SuperTrack's features, and acting every physics step). EfficientTDMPC 13-19 turns more
+     on the GPU (L6 kit operations 3-4, L7 its update 4-6, L8 the planner 2-3, L9 the cartpole gate 1-2, L10 the
+     dance 3-4) - or 4-5 turns on the CPU first (the CPU agent passes the cartpole gate today), the GPU port after.
+  L5 SUPERTRACK, PRECISELY (Oct 25 review). The SuperTrack the lab runs is the GPU learner the `geno_train` page
+     trains (`robot_track_resident.Resident`), not the CPU learner `SuperTrackRecipe` describes (`robot_latent`, the
+     bench's). Its policy differs from PPO's: it observes SuperTrack's FEATURES (the character's state and the
+     reference one frame ahead, each in the root's frame, both normalised by a normaliser measured once from the
+     clip - not DReCon's observation, not Welford's); its first layer reads [goal | state] (one dense layer over the
+     two, in input order - the GPU's own order; the CPU mirror interleaves them and agrees only to rounding); it acts
+     at EVERY physics step on EVERY actuated joint, unfiltered and unclamped. The learner keeps no saved state yet.
+       L5a DONE (Oct 25): `SuperTrackLearner` is the GPU learner's options (`resident.Options`) and the action scale,
+          defaulted to the page's values, copied by one loop, held to the options at compile time both ways; its
+          checks (`superTrackProblem`) rewritten; the page takes its options from it - one definition. Lab root 495,
+          the page builds.
+       DECIDED (Simon, Oct 25: "I agree"; and "very different algos must work without limiting each other - no
+          framework forcing all parts to share rigid interfaces"). DONE: `GenoRunTask` is the motion alone (with Geno's
+          rule, physics and servo); `PpoLearner` holds PPO's whole recipe, its `decimation` and `beta` included (the
+          mirror check now both ways against `PpoRecipe`); `TdmpcLearner` its own (DReCon's defaults); SuperTrack none
+          (`GenoLearner.decimation()` gives 1); `decisionProblem` checks each under its learner's path;
+          `showSettingsFor(run)`. Checked: lab root 495; the same run in either format, the filter at 0.25, trains to
+          identical weights; the default `run.zon` is `.task = .{ .motion = .dance }` with the learner's decision; the
+          lab builds for Windows; the tutorial says the decision is the learner's. A `run.zon` written in the new
+          format before this change (only test folders) no longer reads.
+       WHAT DIFFERENT LEARNERS SHARE, KEPT THIN (Simon's concern): the run file's envelope (motion, controls, one
+          learner of a union - each learner's settings its own struct, mirroring its own options); the measurements
+          (`judge.csv`, the status - learner-neutral; the judge acts through `Actor`, a context and a function, so any
+          learner's own acting code is judged without the judge knowing its type); the policy file, the common
+          denominator for watching and judging - NOT the only way to act: EfficientTDMPC acts best by planning, which
+          no network file holds, so the lab must also run a learner's own actor (its planning version, as decided).
+          Each learner's training loop is its own function, its state file its own. COMING CORNER TO AVOID: the
+          training log's columns are PPO's batch counters - each learner writes its own log, sharing only what the
+          curves need (minutes, steps watched, failures), when the second learner's log lands (L5d).
+       (Superseded:) the decision interval and DReCon's filter sit in the shared task (`GenoRunTask`), on the
+          principle that runs compare only on the same task; but they are a controller's design, not the task's -
+          SuperTrack decides every step, unfiltered - and the judge compares controllers fairly on what is truly
+          shared (the clip, the failure rule, the physics, the servo). PROPOSED: move `decimation` and `beta` from the
+          task to each learner (PPO's recipe has them; SuperTrack's are 1 and 1; EfficientTDMPC's its own) and into the
+          policy file (which carries the filter already), so that a policy plays without its run's files.
+       L5b the resident learner's state saved and resumed (both networks, Adam's moments, the counters; the replay
+          refilled on resuming, as decided). L5c the policy file's version 3: the observation it reads (DReCon's, or
+          SuperTrack's features with the clip's frozen normaliser), and its decision interval. L5d the trainer's
+          SuperTrack path (`run.toPpoRun` beside a SuperTrack branch; its policy files, judgements, self-check). L5e the
+          lab shows and judges a SuperTrack run.
+  N6 SUPERTRACK IN THE TRAINER (L5), then the GPU kit for EfficientTDMPC (L6 on).
+
+**What makes the comparison honest** (for the views of L11-L14, built on N4):
+  - Equal budgets: checkpoints at the same minutes for every learner (`checkpoint_minutes` 10 by default), so the
+    compare view's table can judge every run at the same minute - and an x-axis of environment steps beside minutes.
+  - Seeds: one run is one draw. A Duplicate with the next seed is one click, and runs of the same settings and
+    different seeds are drawn as their mean with their spread.
+  - The judge's own noise: every measure with its standard error; two runs whose difference is within it are told
+    apart by no one.
+
+**Decisions (Simon, Oct 24).** A checkpoint does not keep the replay: a resumed run refills it (L4). Watching an
+EfficientTDMPC run shows its policy alone by default, planning a switch away (L13). The judge pushes later, with
+R5.9's judge; the watch's push button is the eye's test meanwhile (L3, L13).
+
+**After the first nights** (designs below): R5's merge (SuperTrack's pathwise loss with BMPC's pessimistic value
+tail) as a fourth learner beside the three; N10's jumpy dynamics; RT9 (the trainer's characters on the CPU's cores);
+RT10 (the training wheels); RT7 (the web viewer and the single-file demo, playing L2's policy file).
+
+---
+
 ## Resumption, prepared Oct 17 (Simon: "Look at where we are with the reinforcement learning plan. What are the next
 ## steps? ... prepare more precisely the next few turns")
 

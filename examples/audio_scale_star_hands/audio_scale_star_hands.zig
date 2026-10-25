@@ -133,7 +133,7 @@ const cosTurns = zm.cosTurns;
 const length = zm.length;
 const assert = zm.assert;
 const clamp = zm.clamp;
-const smoothstep = zm.smoothstep;
+const smoothStep = zm.smoothStep;
 const exp = zm.exp;
 const exp2 = zm.exp2;
 const log2 = zm.log2;
@@ -1429,7 +1429,7 @@ fn warpAt(offset_from_bottom: f32) f32 {
     if (turns_from_bottom <= seventh) {
         return 1;
     }
-    return 1 - smoothstep(seventh, 2 * seventh, turns_from_bottom);
+    return 1 - smoothStep(seventh, 2 * seventh, turns_from_bottom);
 }
 
 /// The star's turn with nothing chosen: the place of 3 at the bottom of the screen (half a turn from the top), so that

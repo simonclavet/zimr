@@ -102,6 +102,11 @@ pub fn environmentVariable(comptime name: []const u8, buffer: []u8) ?[]const u8 
     if (comptime is_windows) {
         return win32.environmentVariable(name, buffer);
     }
+    // Elsewhere the environment is read through the C library's `getenv`. A build that links no C library - the host's
+    // test builds on Linux - has none, and sees no variable set; every native program links it.
+    if (comptime !builtin.link_libc) {
+        return null;
+    }
     const value: [*:0]const u8 = std.c.getenv(name ++ "\x00") orelse return null;
     const text: []const u8 = span(value);
     if (text.len > buffer.len) {
