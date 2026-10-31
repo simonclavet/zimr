@@ -44,7 +44,7 @@ const vec_zero = zm.vec_zero;
 const quat_identity = zm.quat_identity;
 const splat = zm.splat;
 const allocPrint = std.fmt.allocPrint;
-const ArrayListUnmanaged = std.ArrayListUnmanaged;
+const ArrayList = std.ArrayList;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const testing_allocator = std.testing.allocator;
 
@@ -102,10 +102,10 @@ pub const Scene = struct {
         defer scratch.deinit();
         const a: Allocator = scratch.allocator();
 
-        var bodies: ArrayListUnmanaged(rbt.BodySpec) = .empty;
-        var actuators: ArrayListUnmanaged(rbt.ActuatorSpec) = .empty;
-        var tendons: ArrayListUnmanaged(rbt.TendonSpec) = .empty;
-        var sensors: ArrayListUnmanaged(rbt.SensorSpec) = .empty;
+        var bodies: ArrayList(rbt.BodySpec) = .empty;
+        var actuators: ArrayList(rbt.ActuatorSpec) = .empty;
+        var tendons: ArrayList(rbt.TendonSpec) = .empty;
+        var sensors: ArrayList(rbt.SensorSpec) = .empty;
 
         // * NAMES MUST STAY UNIQUE ACROSS ROBOTS, and two copies of the same arm is the
         // obvious case that breaks it. A second KUKA brings a second `lbr_iiwa_joint_4`, and

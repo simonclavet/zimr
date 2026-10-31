@@ -21,7 +21,7 @@ const vec_zero = zm.vec_zero;
 const length3 = zm.length3;
 const allocPrint = std.fmt.allocPrint;
 const Io = std.Io;
-const ArrayListUnmanaged = std.ArrayListUnmanaged;
+const ArrayList = std.ArrayList;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const testing_allocator = std.testing.allocator;
 const eql = std.mem.eql;
@@ -268,8 +268,8 @@ pub fn buildMultiScene(
     defer scratch.deinit();
     const a: Allocator = scratch.allocator();
 
-    var bodies: ArrayListUnmanaged(rbt.BodySpec) = .empty;
-    var actuators: ArrayListUnmanaged(rbt.ActuatorSpec) = .empty;
+    var bodies: ArrayList(rbt.BodySpec) = .empty;
+    var actuators: ArrayList(rbt.ActuatorSpec) = .empty;
 
     for (placed) |entry| {
         const robot: *const mjcf.Robot = entry.robot;
@@ -277,7 +277,7 @@ pub fn buildMultiScene(
             // * SITES BELONG TO THEIR BODY, gathered here rather than in a second pass - the
             // spec nests them under the body they are mounted on, and every frame-relative
             // sensor resolves through one.
-            var body_sites: ArrayListUnmanaged(rbt.SiteSpec) = .empty;
+            var body_sites: ArrayList(rbt.SiteSpec) = .empty;
             for (robot.sites) |site| {
                 if (site.body != body_index) {
                     continue;
@@ -302,7 +302,7 @@ pub fn buildMultiScene(
                     joints[k].name = try allocPrint(a, "{s}{s}", .{ entry.prefix, joints[k].name });
                 }
             }
-            var geoms: ArrayListUnmanaged(rbt.GeomSpec) = .empty;
+            var geoms: ArrayList(rbt.GeomSpec) = .empty;
             for (0..body.geom_count) |k| {
                 // A geom this engine cannot represent is SKIPPED, not fatal. Real models carry
                 // visual-only geometry and decorative meshes that contribute nothing to dynamics,
@@ -421,7 +421,7 @@ pub fn buildMultiScene(
     // The engine's `SensorKind` and MJCF's element names line up closely because both describe
     // the same instruments; what differs is that MJCF names the target with a different
     // attribute per kind. That was resolved during parsing, so this is a straight mapping.
-    var sensors: ArrayListUnmanaged(rbt.SensorSpec) = .empty;
+    var sensors: ArrayList(rbt.SensorSpec) = .empty;
     for (placed) |entry| {
         for (entry.robot.sensors) |sensor| {
             try sensors.append(a, .{
@@ -448,7 +448,7 @@ pub fn buildMultiScene(
     // `<connect anchor="...">`, arrived at from the other direction: MuJoCo derives because
     // the format only offers one anchor, and this derives because stating two is a typo
     // waiting to happen.
-    var equalities: ArrayListUnmanaged(rbt.EqualitySpec) = .empty;
+    var equalities: ArrayList(rbt.EqualitySpec) = .empty;
     for (placed) |entry| {
         for (entry.robot.equalities) |closure| {
             // * THE JOINT FORM NAMES JOINTS, NOT BODIES, so it takes a different path - and

@@ -536,7 +536,14 @@ further would return the next field's data.</p>
         },
         .gpu =&gt; {
             const gp: *Gpu = &amp;self.gpu.?;
-            if (gp.read != .invalid and wgpu.bufferReadPoll(gp.read)) {
+            const copy_has_landed: bool = gp.read != .invalid and wgpu.bufferReadPoll(gp.read);
+            if (copy_has_landed and gp.discard_copy_in_flight) {
+                // A copy of what an upload has since replaced (`discardReadback`): released
+                // unread. The block below encodes a fresh one, after the upload.
+                wgpu.bufferReadRelease(gp.read);
+                gp.read = .invalid;
+                gp.discard_copy_in_flight = false;
+            } else if (copy_has_landed) {
                 const mirror_bytes: []u8 = asBytes(gp.mirror);
                 wgpu.bufferReadInto(gp.read, mirror_bytes[0..gp.read_bytes]);
                 unpackPrefixes(mirror_bytes, gp.read_count);

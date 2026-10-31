@@ -6583,21 +6583,23 @@ const train_clip_path: []const u8 = "examples/geno_train/dance.zclip";
 const lab_clip_frames: usize = 2 * train_clip_frames;
 
 const lab_clip_path: []const u8 = "examples/geno_ppo/dance.zclip";
+/// The second clip of a two-clip run (`robot_lab.GenoMotion.dance_and_getup`): LAFAN1's fall and get-up, the whole
+/// take - 18 s of standing, falling, lying and getting up again - beside the lab's dance.
+const getup_clip_frames: usize = 1080;
+const getup_clip_path: []const u8 = "examples/geno_ppo/getup.zclip";
 
-test "robot_geno: the pages' clips - the dance from 5 s, for 10 s and for 20 s, lifted onto the floor, baked" {
+test "robot_geno: Geno's clips - the dance, the whole get-up, walking and running, on the floor, baked" {
     // The GPU page trains SuperTrack on Geno over the stretch where the servo alone falls within a second or so
     // (its first 5 s it already keeps up with) - so learning has room to show; the training lab trains PPO from
-    // the same moment, for twice as long. Copied, cut, lifted onto the floor frame by frame, and baked as the
-    // pages embed them. Held byte-equal like the model fixture: when missing or stale a clip is rewritten here
-    // and the test fails once, so a changed clip arrives as a diff.
+    // the same moment, for twice as long; and a two-clip run trains SuperTrack on that dance and on the whole fall
+    // and get-up take at once. Each capture copied onto Geno, cut, lifted onto the floor frame by frame, and baked as
+    // the pages and the trainer embed them. Held byte-equal like the model fixture: when missing or stale a clip is
+    // rewritten here and the test fails once, so a changed clip arrives as a diff.
     const gpa: Allocator = testing_allocator;
     var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const model_text: []u8 = readAsset(gpa, threaded.io(), model_fixture_path) catch return error.SkipZigTest;
     defer gpa.free(model_text);
-    const dance_bytes: []u8 = readAsset(gpa, threaded.io(), "assets/lafan1/dance1_subject2.bvh") catch
-        return error.SkipZigTest;
-    defer gpa.free(dance_bytes);
     var doc: codecs.xml.Document = try codecs.xml.parse(gpa, model_text, null);
     defer doc.deinit();
     var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
@@ -6611,38 +6613,59 @@ test "robot_geno: the pages' clips - the dance from 5 s, for 10 s and for 20 s, 
     const m: *const rbt.Model = &imported.model;
     var bind: Posed = try readPose(gpa, bind_bvh);
     defer bind.deinit(gpa);
-    var capture: codecs.bvh.Data = try codecs.bvh.parse(gpa, dance_bytes, null);
-    defer capture.deinit();
-    var whole: dance.Clip = try copyClip(gpa, &imported, bind, capture);
-    defer whole.deinit();
     var probe: rbt.Data = try .init(gpa, m);
     defer probe.deinit();
-    // Each cut: frames [first, first + count), and the file it is baked to.
-    const cuts = [_]struct { first: usize, count: usize, path: []const u8 }{
-        .{ .first = train_clip_first, .count = train_clip_frames, .path = train_clip_path },
-        .{ .first = train_clip_first, .count = lab_clip_frames, .path = lab_clip_path },
+    // Each capture's cuts: frames [first, first + count) of the take copied onto Geno, and the file each is baked to.
+    // Both takes are subject 2's, Geno's skeleton, so one bind pose copies both.
+    const Cut = struct { first: usize, count: usize, path: []const u8 };
+    const Capture = struct { path: []const u8, cuts: []const Cut };
+    const captures = [_]Capture{
+        .{ .path = "assets/lafan1/dance1_subject2.bvh", .cuts = &.{
+            .{ .first = train_clip_first, .count = train_clip_frames, .path = train_clip_path },
+            .{ .first = train_clip_first, .count = lab_clip_frames, .path = lab_clip_path },
+        } },
+        .{ .path = "assets/lafan1/fallAndGetUp2_subject2.bvh", .cuts = &.{
+            .{ .first = 0, .count = getup_clip_frames, .path = getup_clip_path },
+        } },
+        // The rest of the minute (`robot_lab.GenoMotion.one_minute`): 11 s of walking and 11 s of running, from the
+        // second second of each take - its first is the capture's start, standing still. With the dance's 20 and
+        // the get-up's 18, sixty seconds of motion.
+        .{ .path = "assets/lafan1/walk1_subject2.bvh", .cuts = &.{
+            .{ .first = 120, .count = 660, .path = "examples/geno_ppo/walk.zclip" },
+        } },
+        .{ .path = "assets/lafan1/run1_subject2.bvh", .cuts = &.{
+            .{ .first = 120, .count = 660, .path = "examples/geno_ppo/run.zclip" },
+        } },
     };
     var all_current: bool = true;
-    for (cuts) |cut_spec| {
-        var cut: dance.Clip = try whole.window(cut_spec.first, cut_spec.count);
-        defer cut.deinit();
-        _ = restClipOnFloor(m, &probe, &cut, 0.001);
-        const baked: []u8 = try cut.toBytes(gpa);
-        defer gpa.free(baked);
-        const stored: ?[]u8 = readAsset(gpa, threaded.io(), cut_spec.path) catch null;
-        defer if (stored) |bytes| gpa.free(bytes);
-        const current: bool = if (stored) |bytes| eql(u8, bytes, baked) else false;
-        if (!current) {
-            const file: Io.File = try Io.Dir.cwd().createFile(threaded.io(), cut_spec.path, .{});
-            defer file.close(threaded.io());
-            try file.writeStreamingAll(threaded.io(), baked);
-            report.print("\n  {s} was {s} - rebaked ({d} bytes); review the diff and run again\n", .{
-                cut_spec.path,
-                if (stored == null) "missing" else "stale",
-                baked.len,
-            });
+    for (captures) |capture_spec| {
+        const capture_bytes: []u8 = readAsset(gpa, threaded.io(), capture_spec.path) catch return error.SkipZigTest;
+        defer gpa.free(capture_bytes);
+        var capture: codecs.bvh.Data = try codecs.bvh.parse(gpa, capture_bytes, null);
+        defer capture.deinit();
+        var whole: dance.Clip = try copyClip(gpa, &imported, bind, capture);
+        defer whole.deinit();
+        for (capture_spec.cuts) |cut_spec| {
+            var cut: dance.Clip = try whole.window(cut_spec.first, cut_spec.count);
+            defer cut.deinit();
+            _ = restClipOnFloor(m, &probe, &cut, 0.001);
+            const baked: []u8 = try cut.toBytes(gpa);
+            defer gpa.free(baked);
+            const stored: ?[]u8 = readAsset(gpa, threaded.io(), cut_spec.path) catch null;
+            defer if (stored) |bytes| gpa.free(bytes);
+            const current: bool = if (stored) |bytes| eql(u8, bytes, baked) else false;
+            if (!current) {
+                const file: Io.File = try Io.Dir.cwd().createFile(threaded.io(), cut_spec.path, .{});
+                defer file.close(threaded.io());
+                try file.writeStreamingAll(threaded.io(), baked);
+                report.print("\n  {s} was {s} - rebaked ({d} bytes); review the diff and run again\n", .{
+                    cut_spec.path,
+                    if (stored == null) "missing" else "stale",
+                    baked.len,
+                });
+            }
+            all_current = all_current and current;
         }
-        all_current = all_current and current;
     }
     try expect(all_current);
 }

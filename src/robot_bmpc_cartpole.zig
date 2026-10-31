@@ -29,11 +29,14 @@ const zm = @import("zm");
 const zn = @import("zn");
 const zrl = @import("zrl");
 const robot_bmpc = @import("robot_bmpc.zig");
+const robot_bmpc_kit = @import("robot_bmpc_kit.zig");
+const zn_mlp = @import("gpu/zn_mlp.zig");
 
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const testing_allocator = std.testing.allocator;
 const Rng = zn.Rng;
+const Io = std.Io;
 const assertUnreachable = zm.assertUnreachable;
 const float64 = zm.float64;
 const pi = zm.pi;
@@ -42,36 +45,51 @@ const Bmpc = robot_bmpc.Bmpc(f64);
 /// The force, in newtons, of a full push: the cartpole's own discrete pushes are +/-10 N.
 const full_push_newtons: f64 = 10;
 
-/// The cartpole as a balance task of fixed length, in the form the training loop asks for.
-const CartpoleBalance = struct {
-    state: zrl.CartpoleState(f64) = .{ .cart = 0, .cart_rate = 0, .pole_rad = 0, .pole_rate_rad = 0 },
-    /// The steps of the current episode with the pole up: what the gate judges.
-    upright_steps: usize = 0,
+/// The cartpole as a balance task of fixed length, in the form the training loop asks for - in `T`, the number type
+/// of the agent it trains: f64 for the CPU agent, f32 for the GPU learning kit's.
+fn CartpoleBalanceOf(comptime T: type) type {
+    return struct {
+        const Self = @This();
+        state: zrl.CartpoleState(T) = .{ .cart = 0, .cart_rate = 0, .pole_rad = 0, .pole_rate_rad = 0 },
+        /// The steps of the current episode with the pole up: what the gate judges.
+        upright_steps: usize = 0,
 
-    pub fn reset(self: *CartpoleBalance, rng: Rng, observation: []f64) void {
-        self.state = zrl.cartpoleReset(f64, rng, 0);
-        self.upright_steps = 0;
-        // The observation is four numbers by construction, so the width check cannot fail.
-        zrl.cartpoleObserve(f64, self.state, observation) catch |err| {
-            assertUnreachable(@src(), "cartpole observation: {s}", .{@errorName(err)});
-        };
-    }
-
-    pub fn step(self: *CartpoleBalance, action: []const f64, observation: []f64) f64 {
-        const force: f64 = full_push_newtons * action[0];
-        const stepped: zrl.CartpoleStep(f64) = zrl.cartpoleContinuousStep(f64, self.state, force);
-        self.state = stepped.state;
-        zrl.cartpoleObserve(f64, self.state, observation) catch |err| {
-            assertUnreachable(@src(), "cartpole observation: {s}", .{@errorName(err)});
-        };
-        // `failed` is the cartpole's own test - the pole past 12 degrees, or the cart past 2.4 m - and what the gate
-        // judges. The reward is DMC's, computed after the step, as DMC computes it.
-        if (!stepped.failed) {
-            self.upright_steps += 1;
+        pub fn reset(self: *Self, rng: Rng, observation: []T) void {
+            self.state = zrl.cartpoleReset(T, rng, 0);
+            self.upright_steps = 0;
+            // The observation is four numbers by construction, so the width check cannot fail.
+            zrl.cartpoleObserve(T, self.state, observation) catch |err| {
+                assertUnreachable(@src(), "cartpole observation: {s}", .{@errorName(err)});
+            };
         }
-        return zrl.cartpoleBalanceReward(f64, self.state, action[0]);
-    }
-};
+
+        pub fn step(
+            self: *Self,
+            action: []const T,
+            observation: []T,
+        ) robot_bmpc.Bmpc(T).StepOutcome {
+            const full_push: T = full_push_newtons;
+            const force: T = full_push * action[0];
+            const stepped: zrl.CartpoleStep(T) = zrl.cartpoleContinuousStep(T, self.state, force);
+            self.state = stepped.state;
+            zrl.cartpoleObserve(T, self.state, observation) catch |err| {
+                assertUnreachable(@src(), "cartpole observation: {s}", .{@errorName(err)});
+            };
+            // `failed` is the cartpole's own test - the pole past 12 degrees, or the cart past 2.4 m - and what the
+            // gate judges. The reward is DMC's, computed after the step, as DMC computes it.
+            if (!stepped.failed) {
+                self.upright_steps += 1;
+            }
+            // DMC's balance task never ends an episode itself: a pole past its limit just earns less, and every
+            // episode runs to the loop's length.
+            const reward: T = zrl.cartpoleBalanceReward(T, self.state, action[0]);
+            return .{ .reward = reward };
+        }
+    };
+}
+
+/// The cartpole the CPU agent's gate trains on.
+const CartpoleBalance = CartpoleBalanceOf(f64);
 
 const CartpoleTrainer = Bmpc.Trainer(CartpoleBalance);
 
@@ -272,4 +290,222 @@ test "bmpc cartpole diagnosis: losses, the model's view of canonical states, the
         highest,
         trainer.decision.actions[0],
     });
+}
+
+// ---- THE GATE ON THE GPU LEARNING KIT ----
+//
+// The same task, settings, schedule and judgement, the agent trained by `robot_bmpc_kit.KitTrainer` on the kit's CPU
+// twin - every network, the learning and the planning in the kit's kernels, the host keeping only the cartpoles and
+// the replay. One difference in settings: reanalyze plans its 60 stored states in chunks of 4, so a chunk's
+// activations fit the kit's buffer (chunks decide exactly as one decision over all of them would). Run alone:
+// `zig build bmpc-cartpole -Dtest-filter="kit cartpole"`.
+
+const KitBmpc = robot_bmpc.Bmpc(f32);
+const KitCartpole = CartpoleBalanceOf(f32);
+const KitCartpoleTrainer = robot_bmpc_kit.KitTrainer(zn_mlp, KitCartpole);
+const kit_gate_planner: KitBmpc.PlannerConfig = .{
+    .horizon = gate_planner.horizon,
+    .iterations = gate_planner.iterations,
+    .candidates = gate_planner.candidates,
+    .policy_candidates = gate_planner.policy_candidates,
+    .elites = gate_planner.elites,
+};
+const kit_gate_config: KitBmpc.Config = .{
+    .latent_width = gate_config.latent_width,
+    .hidden_width = gate_config.hidden_width,
+    .encoder_hidden_width = gate_config.encoder_hidden_width,
+    .simnorm_group = gate_config.simnorm_group,
+    .horizon = gate_config.horizon,
+    .acting = kit_gate_planner,
+    .reanalyzing = kit_gate_planner,
+    .windows = gate_config.windows,
+    .discount = KitBmpc.discountFor(gate_episode_length),
+};
+const kit_gate_schedule: KitBmpc.Schedule = .{
+    .seed_frames = gate_schedule.seed_frames,
+    .burst_updates = gate_schedule.burst_updates,
+    .updates_per_frame = gate_schedule.updates_per_frame,
+};
+const kit_learner_options: robot_bmpc_kit.KitLearner(zn_mlp).Options = .{ .reanalyze_chunk_states = 4 };
+
+/// The kit's trainer for the gate, its starting weights from `seed`.
+fn kitGateTrainer(
+    arena: Allocator,
+    environments: []KitCartpole,
+    seed: u32,
+) !KitCartpoleTrainer {
+    const state_width: u32 = zrl.cartpole_state_dim;
+    const networks: KitBmpc.Networks = try .init(arena, Rng.init(seed), state_width, 1, kit_gate_config);
+    return KitCartpoleTrainer.init(
+        arena,
+        environments,
+        networks,
+        state_width,
+        1,
+        kit_gate_config,
+        kit_gate_schedule,
+        gate_episode_length,
+        4096,
+        Rng.init(seed + 1),
+        kit_learner_options,
+    );
+}
+
+/// The kit's trained planner judged as the CPU gate judges: one episode in each of the gate's cartpoles, evaluating
+/// (the drawn elite, no exploration), the fraction of steps with the pole up.
+fn kitUprightFraction(
+    trainer: *KitCartpoleTrainer,
+    pipe: *KitCartpoleTrainer.Pipe,
+    arena: Allocator,
+    seed: u32,
+) !f64 {
+    var environments: [gate_environments]KitCartpole = @splat(.{});
+    const width: usize = zrl.cartpole_state_dim;
+    const observations: []f32 = try arena.alloc(f32, gate_environments * width);
+    const next_observations: []f32 = try arena.alloc(f32, gate_environments * width);
+    var first_steps: [gate_environments]bool = @splat(true);
+    const rng: Rng = .init(seed);
+    for (&environments, 0..) |*environment, index| {
+        environment.reset(rng.split(@intCast(index)), observations[index * width ..][0..width]);
+    }
+    for (0..gate_episode_length) |frame| {
+        const frame_rng: Rng = rng.split(1000 + @as(u32, @intCast(frame)));
+        try trainer.decide(pipe, observations, &first_steps, .evaluate, frame_rng);
+        for (&environments, 0..) |*environment, index| {
+            _ = environment.step(trainer.actions[index..][0..1], next_observations[index * width ..][0..width]);
+        }
+        @memcpy(observations, next_observations);
+        @memset(&first_steps, false);
+    }
+    var upright: usize = 0;
+    for (environments) |environment| {
+        upright += environment.upright_steps;
+    }
+    return float64(upright) / float64(gate_environments * gate_episode_length);
+}
+
+/// The agent's uncertainty signals (`KitPlanner.Signals`) along one evaluated episode of the trained kit agent, logged
+/// every tenth step for the first cartpole - beside the pole's angle, so each signal can be read against how close the
+/// pole is to falling. A record of what they look like on a task the agent learns.
+fn logKitSignals(
+    trainer: *KitCartpoleTrainer,
+    pipe: *KitCartpoleTrainer.Pipe,
+    arena: Allocator,
+) !void {
+    var environments: [gate_environments]KitCartpole = @splat(.{});
+    const width: usize = zrl.cartpole_state_dim;
+    const observations: []f32 = try arena.alloc(f32, gate_environments * width);
+    const next_observations: []f32 = try arena.alloc(f32, gate_environments * width);
+    var first_steps: [gate_environments]bool = @splat(true);
+    const rng: Rng = .init(77);
+    for (&environments, 0..) |*environment, index| {
+        environment.reset(rng.split(@intCast(index)), observations[index * width ..][0..width]);
+    }
+    std.log.warn("kit cartpole signals: step  pole (deg)  score  disagreement  reward width  value width  " ++
+        "latent entropy  inverse spread", .{});
+    const simnorm_group: u32 = @intCast(kit_gate_config.simnorm_group);
+    for (0..gate_episode_length) |frame| {
+        const frame_rng: Rng = rng.split(1000 + @as(u32, @intCast(frame)));
+        try trainer.decide(pipe, observations, &first_steps, .evaluate, frame_rng);
+        if (frame % 10 == 0) {
+            const device_acts: []const f32 = pipe.readLatest(.acts) orelse return error.NoReadback;
+            const Signals: type = robot_bmpc_kit.KitPlanner(zn_mlp).Signals;
+            const signals: Signals = trainer.actor.readSignals(device_acts, 0, simnorm_group);
+            const pole_degrees: f32 = environments[0].state.pole_rad * 180 / pi;
+            const row_format: []const u8 = "kit cartpole signals: {d:>4}  {d:>10.2}  {d:>5.2}  {d:>12.4}  " ++
+                "{d:>12.3}  {d:>11.3}  {d:>14.3}  {d:>14.3}";
+            std.log.warn(row_format, .{
+                frame,
+                pole_degrees,
+                signals.plan_score,
+                signals.heads_disagreement,
+                signals.reward_width,
+                signals.value_width,
+                signals.latent_entropy,
+                signals.first_layer_inverse_spread,
+            });
+        }
+        for (&environments, 0..) |*environment, index| {
+            _ = environment.step(trainer.actions[index..][0..1], next_observations[index * width ..][0..width]);
+        }
+        @memcpy(observations, next_observations);
+        @memset(&first_steps, false);
+    }
+}
+
+test "kit cartpole timing: what the gate's frames cost on the kit's CPU twin" {
+    // Not the gate: its first frames, each kind timed - the seed frames (random actions, no learning), pretraining
+    // updates, and planned frames with their update (one of them reanalyzing) - and the whole gate's time estimated
+    // from them, so the gate is known to fit its budget before it runs.
+    var arena_state: ArenaAllocator = .init(testing_allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    const io: Io = std.testing.io;
+    var environments: [gate_environments]KitCartpole = @splat(.{});
+    var trainer: KitCartpoleTrainer = try kitGateTrainer(arena, &environments, 7);
+    var pipe: KitCartpoleTrainer.Pipe = .initCpu();
+    defer pipe.deinit();
+    trainer.uploadStart(&pipe);
+    // The seed frames: random actions into the replay.
+    for (0..gate_schedule.seed_frames) |_| {
+        _ = try trainer.runFrame(&pipe);
+    }
+    // Pretraining updates, timed.
+    const probe_updates: u32 = 20;
+    const updates_started: Io.Timestamp = Io.Clock.now(.awake, io);
+    for (0..probe_updates) |update_number| {
+        const update_rng: Rng = Rng.init(5).split(@intCast(update_number));
+        try trainer.learner.update(&pipe, &trainer.replay, update_rng, @intCast(update_number), true, null);
+    }
+    const update_ns: i96 = Io.Clock.now(.awake, io).nanoseconds - updates_started.nanoseconds;
+    // Planned frames with their update, timed - ten real updates, so the tenth reanalyzes.
+    trainer.frame = gate_schedule.seed_frames + 1;
+    const probe_frames: u32 = 10;
+    const frames_started: Io.Timestamp = Io.Clock.now(.awake, io);
+    for (0..probe_frames) |_| {
+        _ = try trainer.runFrame(&pipe);
+    }
+    const frames_ns: i96 = Io.Clock.now(.awake, io).nanoseconds - frames_started.nanoseconds;
+    const seconds_per_update: f64 = float64(update_ns) / 1e9 / float64(probe_updates);
+    const seconds_per_frame: f64 = float64(frames_ns) / 1e9 / float64(probe_frames);
+    const planned_frames: usize = gate_frames - gate_schedule.seed_frames;
+    const estimated_seconds: f64 = seconds_per_update * float64(gate_schedule.burst_updates) +
+        seconds_per_frame * float64(planned_frames);
+    std.log.warn("kit cartpole timing: {d:.3} s per pretraining update, {d:.3} s per planned frame " ++
+        "(with its update, reanalyze every tenth); the gate's run about {d:.0} s", .{
+        seconds_per_update,
+        seconds_per_frame,
+        estimated_seconds,
+    });
+}
+
+test "kit cartpole gate: trained on the GPU learning kit, the planner learns as the CPU agent does" {
+    // The CPU gate's run on the kit: the same 700 frames - seeding, the burst of pretraining updates, then planning
+    // with an update every frame - judged the same way on fresh episodes, against the same random control. What it
+    // asks is the CPU agent's own level at this budget, LEARNING rather than mastery: the CPU gate measures 0.333 to
+    // 0.52 of the steps up across seeds (its own bar of 0.9, mastery, needs BMPC's tens of thousands of updates), so
+    // the kit's agent must reach 0.333, at least 0.15 above acting at random.
+    var arena_state: ArenaAllocator = .init(testing_allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    var environments: [gate_environments]KitCartpole = @splat(.{});
+    var trainer: KitCartpoleTrainer = try kitGateTrainer(arena, &environments, 7);
+    var pipe: KitCartpoleTrainer.Pipe = .initCpu();
+    defer pipe.deinit();
+    trainer.uploadStart(&pipe);
+    for (0..gate_frames) |_| {
+        _ = try trainer.runFrame(&pipe);
+    }
+    const trained: f64 = try kitUprightFraction(&trainer, &pipe, arena, 99);
+    const random: f64 = randomUprightFraction(99);
+    try logKitSignals(&trainer, &pipe, arena);
+    const cpu_gate_level: f64 = 0.333;
+    const passed: bool = trained >= cpu_gate_level and random <= 0.5 and trained - random >= 0.15;
+    std.log.warn("kit cartpole gate: the pole up {d:.3} of the steps trained on the kit, {d:.3} acting at random", .{
+        trained,
+        random,
+    });
+    if (!passed) {
+        return error.GateFailed;
+    }
 }

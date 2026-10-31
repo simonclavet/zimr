@@ -13,7 +13,6 @@ const common = @import("example_common");
 const cosRad = zm.cosRad;
 const sinRad = zm.sinRad;
 const clamp = zm.clamp;
-const distance = zm.distance;
 const float = zm.float;
 const rad_per_deg = zm.rad_per_deg;
 const Vec2 = zm.Vec2;
@@ -125,7 +124,7 @@ fn update(f: *z.Frame, s: *State) void {
         s.dragged = false;
     }
     if (down) {
-        if (distance(mouse, s.press) > 8.0) {
+        if (zm.distance(mouse, s.press) > 8.0) {
             s.dragged = true;
         }
         if (s.dragged) {

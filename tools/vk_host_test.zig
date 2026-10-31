@@ -25,6 +25,10 @@
 //!             file's SPIR-V and judged against its CPU reference, as the `zimrnum_field` example judges it
 //!     pipelines  every pipeline of zimrnum's training kernel files (`zn_train`, `zn_mlp`) made and released, the
 //!             validation layer judging each
+//!     kit     EfficientTDMPC's kernels of `zn_mlp` - the normed layer forward and backward (Mish and SimNorm), the
+//!             two-hot loss, its gradient and its decode - run on the device and on the CPU twin from the same data,
+//!             in the same order, and compared value by value: the row accessors, the shared row statistics and the
+//!             uniform's newer fields, compiled for the device, compute what the host computes
 //!     constant   a kernel writing storage-buffer elements by constant indices, at one level and at two, read back:
 //!             the written elements hold their values and every other element its zero
 //!     lifetimes  a texture view and a sampler released while a bind group holds them, and in the other order: the
@@ -65,6 +69,8 @@ const asBytes = std.mem.asBytes;
 const indexOf = std.mem.indexOf;
 const fieldNames = std.meta.fieldNames;
 const FieldEnum = std.meta.FieldEnum;
+const float = zm.float;
+const inf = zm.inf;
 const sliceAsBytes = std.mem.sliceAsBytes;
 const sort = sortSlice;
 
@@ -534,6 +540,567 @@ fn makeTrainingPipelines(
     two_layer.deinit();
     var dense_layers: z.Compute(zn_mlp) = try .initGpu(gpa, device, queue, &spirvEntries(zn_mlp, zn_mlp_spirv));
     dense_layers.deinit();
+}
+
+/// One dispatch of the kit's check: the kernel, its uniform, its thread count.
+const KitStep = struct {
+    kernel: []const u8,
+    params: zn_mlp.Params,
+    threads: u32,
+};
+
+/// The kit check (this file's head): its sizes, where its values live, and its sequences of dispatches. A normed
+/// layer of 6 inputs and 16 outputs on 3 rows (SimNorm in groups of 8), and a two-hot head of BMPC's 101 bins on 5
+/// rows. Params hold W, b, the gains, the norm biases; acts the input, the pre-activations, the normalised rows, the
+/// scaled values, the outputs, the inverse spreads, the targets, then the two-hot head's logits, targets, losses and
+/// values; dacts the gradients at the output, at the scaled values, at the pre-activations, at the input, and at the
+/// two-hot head's logits - as `gpu_learn_tests.zig`'s known answers place them.
+const KitCheck = struct {
+    const rows: u32 = 3;
+    const inputs: u32 = 6;
+    const outputs: u32 = 16;
+    const group: u32 = 8;
+    const bins: u32 = 101;
+    const two_hot_rows: u32 = 5;
+
+    const block: u32 = rows * outputs;
+    const gains: u32 = inputs * outputs + outputs;
+    const params_end: u32 = gains + 2 * outputs;
+    const input: u32 = 0;
+    const linear: u32 = rows * inputs;
+    const normalised: u32 = linear + block;
+    const scaled: u32 = normalised + block;
+    const output: u32 = scaled + block;
+    const inverse_spreads: u32 = output + block;
+    const targets: u32 = inverse_spreads + rows;
+    const logits: u32 = targets + block;
+    const two_hot_targets: u32 = logits + two_hot_rows * bins;
+    const losses: u32 = two_hot_targets + two_hot_rows;
+    const values: u32 = losses + two_hot_rows;
+    // The flow policy's kernels on 3 rows of 2 actions, their wide rows [condition 4 | x 2 | time 6] 12 wide: the
+    // wide rows, a velocity as the network would leave it, the rows an Euler step writes into, and each row's action,
+    // noise, time, path velocity and cost gradient.
+    const flow_rows: u32 = 3;
+    const flow_actions: u32 = 2;
+    const flow_width: u32 = 12;
+    const flow_point_column: u32 = 4;
+    const flow_time_column: u32 = 6;
+    const flow_wide: u32 = values + two_hot_rows;
+    const flow_velocity: u32 = flow_wide + flow_rows * flow_width;
+    const flow_next: u32 = flow_velocity + flow_rows * flow_actions;
+    const flow_action_values: u32 = flow_next + flow_rows * flow_width;
+    const flow_noise: u32 = flow_action_values + flow_rows * flow_actions;
+    const flow_times: u32 = flow_noise + flow_rows * flow_actions;
+    const flow_path_velocities: u32 = flow_times + flow_rows;
+    const flow_cost_gradients: u32 = flow_path_velocities + flow_rows * flow_actions;
+    // The tracking planner's kernels: MPPI's warm start (2 states, a plan of 4 steps of 2 actions, shifted by 2), its
+    // elites weighed relative to their spread (2 states, 8 candidates, 4 elites), and the planner's gather (2 states x
+    // 2 rows, 3 steps, wide rows [goal 4 | state 4 | reference 3 | action 2], a reference table of 6 rows).
+    const plan_states: u32 = 2;
+    const plan_horizon: u32 = 4;
+    const plan_actions: u32 = 2;
+    const warm_flags: u32 = flow_cost_gradients + flow_rows * flow_actions;
+    const warm_means: u32 = warm_flags + plan_states;
+    const warm_spreads: u32 = warm_means + plan_states * plan_horizon * plan_actions;
+    const elite_candidates: u32 = 8;
+    const elite_count: u32 = 4;
+    const elite_scores: u32 = warm_spreads + plan_states * plan_horizon * plan_actions;
+    const elite_numbers: u32 = elite_scores + plan_states * elite_candidates;
+    const elite_weights: u32 = elite_numbers + plan_states * elite_count;
+    const gather_features: u32 = 4;
+    const gather_references: u32 = 3;
+    const gather_actions: u32 = 2;
+    const gather_steps: u32 = 3;
+    const gather_rows: u32 = 4;
+    const gather_rows_per_state: u32 = 2;
+    const gather_width: u32 = 2 * gather_features + gather_references + gather_actions;
+    const gather_table_rows: u32 = 6;
+    const gather_table: u32 = elite_weights + plan_states * elite_count;
+    const gather_normaliser: u32 = gather_table + gather_table_rows * (gather_features + gather_references);
+    const gather_inputs: u32 = gather_normaliser + 2 * gather_features;
+    const gather_blocks: u32 = gather_inputs + plan_states * (gather_features + 2);
+    const gather_goals: u32 = gather_blocks + (gather_steps + 1) * gather_rows * gather_width;
+    const acts_end: u32 = gather_goals + gather_steps * gather_rows * gather_features;
+    const output_gradient: u32 = 0;
+    const scaled_gradient: u32 = block;
+    const linear_gradient: u32 = 2 * block;
+    const input_gradient: u32 = 3 * block;
+    const logit_gradient: u32 = input_gradient + rows * inputs;
+    const flow_velocity_gradient: u32 = logit_gradient + two_hot_rows * bins;
+    const dacts_end: u32 = flow_velocity_gradient + flow_rows * flow_actions;
+
+    /// A normed layer forward and backward, its activation's kernels named: Mish's or SimNorm's.
+    fn normedLayerSteps(
+        comptime forward_kernel: []const u8,
+        comptime backward_kernel: []const u8,
+        comptime activation_threads: u32,
+    ) [9]KitStep {
+        const steps = [9]KitStep{
+            .{
+                .kernel = "dense_fwd",
+                .params = .{
+                    .rows = rows,
+                    .in_dim = inputs,
+                    .out_dim = outputs,
+                    .act = @backingInt(zn_mlp.Act.linear),
+                    .x_off = input,
+                    .y_off = linear,
+                    .w_off = 0,
+                },
+                .threads = block,
+            },
+            .{
+                .kernel = "norm_fwd",
+                .params = .{
+                    .rows = rows,
+                    .out_dim = outputs,
+                    .x_off = linear,
+                    .w_off = gains,
+                    .z_off = normalised,
+                    .y_off = scaled,
+                    .l_off = inverse_spreads,
+                },
+                .threads = rows,
+            },
+            .{
+                .kernel = forward_kernel,
+                .params = .{
+                    .rows = rows,
+                    .out_dim = outputs,
+                    .x_off = scaled,
+                    .y_off = output,
+                    .simnorm_group = group,
+                },
+                .threads = activation_threads,
+            },
+            .{
+                .kernel = "mse_bwd",
+                .params = .{
+                    .rows = rows,
+                    .out_dim = outputs,
+                    .y_off = output,
+                    .t_off = targets,
+                    .dy_off = output_gradient,
+                },
+                .threads = block,
+            },
+            .{
+                .kernel = backward_kernel,
+                .params = .{
+                    .rows = rows,
+                    .out_dim = outputs,
+                    .x_off = scaled,
+                    .y_off = output,
+                    .dy_off = output_gradient,
+                    .dx_off = scaled_gradient,
+                    .simnorm_group = group,
+                },
+                .threads = activation_threads,
+            },
+            .{
+                .kernel = "norm_params_bwd",
+                .params = .{
+                    .rows = rows,
+                    .out_dim = outputs,
+                    .dy_off = scaled_gradient,
+                    .z_off = normalised,
+                    .w_off = gains,
+                },
+                .threads = 2 * outputs,
+            },
+            .{
+                .kernel = "norm_bwd",
+                .params = .{
+                    .rows = rows,
+                    .out_dim = outputs,
+                    .dy_off = scaled_gradient,
+                    .w_off = gains,
+                    .z_off = normalised,
+                    .l_off = inverse_spreads,
+                    .dx_off = linear_gradient,
+                },
+                .threads = rows,
+            },
+            .{
+                .kernel = "dense_bwd_w",
+                .params = .{
+                    .rows = rows,
+                    .in_dim = inputs,
+                    .out_dim = outputs,
+                    .x_off = input,
+                    .dy_off = linear_gradient,
+                    .w_off = 0,
+                },
+                .threads = inputs * outputs + outputs,
+            },
+            .{
+                .kernel = "dense_bwd_x",
+                .params = .{
+                    .rows = rows,
+                    .in_dim = inputs,
+                    .out_dim = outputs,
+                    .dy_off = linear_gradient,
+                    .w_off = 0,
+                    .dx_off = input_gradient,
+                },
+                .threads = rows * inputs,
+            },
+        };
+        return steps;
+    }
+
+    /// The two-hot head's dispatches (BMPC's bins: symlog, [-10, 10]), the mean's divisor its rows.
+    fn twoHotStep(
+        comptime kernel: []const u8,
+        comptime y_off: u32,
+        comptime dy_off: u32,
+    ) KitStep {
+        const params: zn_mlp.Params = .{
+            .rows = two_hot_rows,
+            .out_dim = bins,
+            .x_off = logits,
+            .t_off = two_hot_targets,
+            .y_off = y_off,
+            .dy_off = dy_off,
+            .twohot_divisor = two_hot_rows,
+        };
+        return .{ .kernel = kernel, .params = params, .threads = two_hot_rows };
+    }
+
+    /// The sequences, run in this order on each pipe: the Mish layer, then the SimNorm layer (whose dispatches
+    /// overwrite the first's values - each comparison is of what its sequence leaves), then the two-hot head.
+    const simnorm_groups: u32 = rows * (outputs / group);
+    const mish_layer_steps: [9]KitStep = normedLayerSteps("mish_fwd", "mish_bwd", block);
+    const simnorm_layer_steps: [9]KitStep = normedLayerSteps("simnorm_fwd", "simnorm_bwd", simnorm_groups);
+    const two_hot_steps = [3]KitStep{
+        twoHotStep("twohot_fwd", losses, 0),
+        twoHotStep("twohot_bwd", 0, logit_gradient),
+        twoHotStep("twohot_decode", values, 0),
+    };
+
+    /// The flow policy's kernels in the order a rollout's turn and a training step run them: the training times drawn
+    /// and the base noise written (both hashed, so the device's integer hashing is compared with the twin's), the
+    /// condition copied into the next rows, each row's time features at its own time, its point on the straight path
+    /// and the path's velocity, one Euler step into the next rows, FlowDPG's gradient at the velocity, and that
+    /// gradient carried back into acts.
+    const flow_steps = [8]KitStep{
+        .{
+            .kernel = "hashed_uniforms",
+            .params = .{
+                .rows = flow_rows,
+                .y_off = flow_times,
+                .lat_seed = 55,
+            },
+            .threads = flow_rows,
+        },
+        .{
+            .kernel = "hashed_noise",
+            .params = .{
+                .rows = flow_rows,
+                .count = flow_actions,
+                .y_off = flow_wide,
+                .stride = flow_width,
+                .col = flow_point_column,
+                .lat_sigma = 0.3,
+                .lat_seed = 77,
+            },
+            .threads = flow_rows * flow_actions,
+        },
+        .{
+            .kernel = "copy_columns",
+            .params = .{
+                .rows = flow_rows,
+                .count = flow_point_column,
+                .x_off = flow_wide,
+                .stride = flow_width,
+                .col = 0,
+                .y_off = flow_next,
+                .destination_stride = flow_width,
+                .destination_column = 0,
+            },
+            .threads = flow_rows * flow_point_column,
+        },
+        .{
+            .kernel = "flow_time_features",
+            .params = .{
+                .rows = flow_rows,
+                .y_off = flow_wide,
+                .stride = flow_width,
+                .col = flow_time_column,
+                .t_off = flow_times,
+                .flow_time_per_row = 1,
+                .flow_frequencies = 3,
+            },
+            .threads = flow_rows * 3,
+        },
+        .{
+            .kernel = "flow_path_points",
+            .params = .{
+                .rows = flow_rows,
+                .count = flow_actions,
+                .x_off = flow_action_values,
+                .z_off = flow_noise,
+                .t_off = flow_times,
+                .y_off = flow_wide,
+                .stride = flow_width,
+                .col = flow_point_column,
+                .u_off = flow_path_velocities,
+            },
+            .threads = flow_rows * flow_actions,
+        },
+        .{
+            .kernel = "flow_euler_step",
+            .params = .{
+                .rows = flow_rows,
+                .count = flow_actions,
+                .x_off = flow_wide,
+                .stride = flow_width,
+                .col = flow_point_column,
+                .z_off = flow_velocity,
+                .y_off = flow_next,
+                .flow_step = 0.25,
+                .destination_stride = flow_width,
+                .destination_column = flow_point_column,
+            },
+            .threads = flow_rows * flow_actions,
+        },
+        .{
+            .kernel = "flow_dpg_bwd",
+            .params = .{
+                .rows = flow_rows,
+                .count = flow_actions,
+                .x_off = flow_velocity,
+                .u_off = flow_path_velocities,
+                .v_off = flow_cost_gradients,
+                .t_off = flow_times,
+                .dy_off = flow_velocity_gradient,
+                .flow_step_share = 0.3,
+                .flow_step_floor = 0.2,
+                .flow_anchor = 0.5,
+            },
+            .threads = flow_rows,
+        },
+        .{
+            .kernel = "copy_columns_from_gradients",
+            .params = .{
+                .rows = flow_rows,
+                .count = flow_actions,
+                .x_off = flow_velocity_gradient,
+                .stride = flow_actions,
+                .col = 0,
+                .y_off = flow_next,
+                .destination_stride = flow_width,
+                .destination_column = flow_point_column,
+            },
+            .threads = flow_rows * flow_actions,
+        },
+    };
+
+    /// The tracking planner's kernels: a warm start moving each warm plan forward two steps, the elites weighed
+    /// relative to their own spread, and the planner's gather - whose table rows are integers carried as floats, the
+    /// kind of arithmetic a device may round differently.
+    const planner_steps = [3]KitStep{
+        .{
+            .kernel = "mppi_begin",
+            .params = .{
+                .rows = plan_states,
+                .out_dim = plan_actions,
+                .plan_horizon = plan_horizon,
+                .mppi_max_spread = 1.5,
+                .mppi_warm_shift = 2,
+                .x_off = warm_flags,
+                .t_off = warm_means,
+                .u_off = warm_spreads,
+            },
+            .threads = plan_states * plan_actions,
+        },
+        .{
+            .kernel = "mppi_elites",
+            .params = .{
+                .rows = plan_states,
+                .plan_candidates = elite_candidates,
+                .mppi_elites = elite_count,
+                .mppi_temperature = 2,
+                .mppi_temperature_mode = 1,
+                .x_off = elite_scores,
+                .y_off = elite_numbers,
+                .z_off = elite_weights,
+            },
+            .threads = plan_states,
+        },
+        .{
+            .kernel = "plan_gather",
+            .params = .{
+                .rows = gather_rows,
+                .lat_features = gather_features,
+                .lat_references = gather_references,
+                .lat_actions = gather_actions,
+                .lat_steps = gather_steps,
+                .lat_lead = gather_features,
+                .plan_candidates = gather_rows_per_state,
+                .table_off = gather_table,
+                .norm_off = gather_normaliser,
+                .starts_off = gather_inputs,
+                .blocks_off = gather_blocks,
+                .goals_off = gather_goals,
+            },
+            .threads = gather_rows * (gather_steps + 1) * gather_width,
+        },
+    };
+
+    /// The data both pipes start from: weights, inputs, gains and targets by formulas of their indices - spread
+    /// enough that every kernel's arithmetic is exercised (a softmax far from uniform, gains away from 1) - and two-hot
+    /// targets inside a pair of bins, on one, and past both ends.
+    fn fillData(parameters: []f32, acts: []f32) void {
+        @memset(parameters, 0);
+        @memset(acts, 0);
+        for (parameters[0..gains], 0..) |*value, index| {
+            value.* = 0.4 * @sin(0.7 * float(index) + 0.3);
+        }
+        const gain_values: []f32 = parameters[gains..][0..outputs];
+        const norm_bias_values: []f32 = parameters[gains + outputs ..][0..outputs];
+        for (gain_values, norm_bias_values, 0..) |*gain, *norm_bias, feature| {
+            gain.* = 0.5 + 0.1 * float(feature);
+            norm_bias.* = 0.2 - 0.03 * float(feature);
+        }
+        for (acts[input..][0 .. rows * inputs], 0..) |*value, index| {
+            value.* = 1.5 * @cos(0.9 * float(index));
+        }
+        for (acts[targets..][0..block], 0..) |*value, index| {
+            value.* = 0.3 * @sin(float(index));
+        }
+        for (acts[logits..][0 .. two_hot_rows * bins], 0..) |*logit, index| {
+            logit.* = 2.0 * @sin(0.37 * float(index)) + 0.5 * @cos(0.11 * float(index));
+        }
+        const target_values = [two_hot_rows]f32{ 0.5, -3.0, 0.0, 1.0e9, -1.0e9 };
+        @memcpy(acts[two_hot_targets..][0..two_hot_rows], &target_values);
+        // The flow's: a velocity, actions, noise, cost gradients by formulas, and times spread over [0, 1).
+        const flow_packed: u32 = flow_rows * flow_actions;
+        for (0..flow_packed) |index| {
+            acts[flow_velocity + index] = 0.6 * @sin(0.8 * float(index) + 0.2);
+            acts[flow_action_values + index] = 0.5 * @cos(0.6 * float(index));
+            acts[flow_noise + index] = 0.9 * @sin(1.1 * float(index) + 0.4);
+            acts[flow_cost_gradients + index] = 0.7 * @cos(0.5 * float(index) + 0.9);
+        }
+        const flow_time_values = [flow_rows]f32{ 0.1, 0.45, 0.8 };
+        @memcpy(acts[flow_times..][0..flow_rows], &flow_time_values);
+        // The planner's: one warm state and one cold, plans, scores and a reference table by formulas, a normaliser,
+        // and each gathered state's start - its features, then its start row and its clip's last row, exact integers.
+        acts[warm_flags] = 1;
+        acts[warm_flags + 1] = 0;
+        for (0..plan_states * plan_horizon * plan_actions) |index| {
+            acts[warm_means + index] = 0.4 * @sin(0.9 * float(index) + 0.3);
+        }
+        for (0..plan_states * elite_candidates) |index| {
+            acts[elite_scores + index] = -0.05 * (1.0 + @sin(1.7 * float(index)));
+        }
+        const table_floats: u32 = gather_table_rows * (gather_features + gather_references);
+        for (0..table_floats) |index| {
+            acts[gather_table + index] = @sin(0.37 * float(index) + 0.2);
+        }
+        for (0..gather_features) |column| {
+            acts[gather_normaliser + column] = 0.1 * float(column);
+            acts[gather_normaliser + gather_features + column] = 0.5 + 0.1 * float(column);
+        }
+        const start_rows = [plan_states]f32{ 1, 4 };
+        for (0..plan_states) |state| {
+            const inputs_at: usize = gather_inputs + state * (gather_features + 2);
+            for (0..gather_features) |column| {
+                acts[inputs_at + column] = 0.3 * float(state + 1) - 0.05 * float(column);
+            }
+            acts[inputs_at + gather_features] = start_rows[state];
+            acts[inputs_at + gather_features + 1] = float(gather_table_rows - 1);
+        }
+    }
+};
+
+fn runKitSteps(pipe: *z.Compute(zn_mlp), comptime steps: []const KitStep) void {
+    inline for (steps) |step| {
+        pipe.params = step.params;
+        pipe.run(step.kernel, step.threads);
+    }
+}
+
+/// The largest difference between two runs of values, relative to the CPU twin's magnitude where it is above 1 - the
+/// conformance sweep's measure. A value that is not finite on either side is no gap at all but a failure, and is
+/// reported as an infinite one: `@max` returns its other operand when one is NaN, so a kernel writing NaN on the
+/// device would otherwise pass as a gap of zero.
+fn largestRelativeGap(device_values: []const f32, twin_values: []const f32) f32 {
+    var largest: f32 = 0;
+    for (device_values, twin_values) |device_value, twin_value| {
+        const both_finite: bool = zm.isFinite(device_value) and zm.isFinite(twin_value);
+        if (!both_finite) {
+            return inf(f32);
+        }
+        const scale: f32 = @max(1.0, @abs(twin_value));
+        largest = @max(largest, @abs(device_value - twin_value) / scale);
+    }
+    return largest;
+}
+
+/// The kit's buffers the check reads back.
+const KitField = FieldEnum(zn_mlp.Buffers);
+
+/// The device's readback of `field`, once it holds every dispatch so far - polled as `runEngineCompute` polls.
+fn deviceReadback(pipe: *z.Compute(zn_mlp), comptime field: KitField) ?[]const f32 {
+    const dispatched: u64 = pipe.readGeneration().submitted;
+    var polls: u32 = 0;
+    while (polls < engine_poll_limit) : (polls += 1) {
+        const latest: ?[]const f32 = pipe.readLatest(field);
+        const holds_every_dispatch: bool = pipe.readGeneration().mirrored >= dispatched;
+        if (latest != null and holds_every_dispatch) {
+            return latest;
+        }
+    }
+    return null;
+}
+
+/// EfficientTDMPC's kernels of the kit on the device and on its CPU twin, from the same data, in the same order (this
+/// file's head): every value each sequence leaves, compared. The two run the same Zig source, but the device's
+/// transcendental functions are zimrmath's portable forms where the twin's are the host's, and its compiler may fuse
+/// a multiply into an add - so the bar is a relative 1e-5, not equality. Returns the largest gap seen, or null when a
+/// readback never came.
+fn runKitKernels(
+    gpa: Allocator,
+    device: wgpu.DeviceHandle,
+    queue: wgpu.QueueHandle,
+) !?f32 {
+    var on_device: z.Compute(zn_mlp) = try .initGpu(gpa, device, queue, &spirvEntries(zn_mlp, zn_mlp_spirv));
+    defer on_device.deinit();
+    var twin: z.Compute(zn_mlp) = .initCpu();
+    defer twin.deinit();
+    const parameters: []f32 = try gpa.alloc(f32, KitCheck.params_end);
+    defer gpa.free(parameters);
+    const acts: []f32 = try gpa.alloc(f32, KitCheck.acts_end);
+    defer gpa.free(acts);
+    KitCheck.fillData(parameters, acts);
+    const pipes = [2]*z.Compute(zn_mlp){ &on_device, &twin };
+    for (pipes) |pipe| {
+        pipe.element_count = KitCheck.acts_end;
+        pipe.upload(.params, parameters);
+        pipe.upload(.acts, acts);
+    }
+    var largest_gap: f32 = 0;
+    const sequences = [5][]const KitStep{
+        &KitCheck.mish_layer_steps,
+        &KitCheck.simnorm_layer_steps,
+        &KitCheck.two_hot_steps,
+        &KitCheck.flow_steps,
+        &KitCheck.planner_steps,
+    };
+    const fields = [3]KitField{ .acts, .dacts, .grads };
+    const field_ends = [3]u32{ KitCheck.acts_end, KitCheck.dacts_end, KitCheck.params_end };
+    inline for (sequences) |sequence| {
+        runKitSteps(&on_device, sequence);
+        runKitSteps(&twin, sequence);
+        inline for (fields, field_ends) |field, field_end| {
+            const device_values: []const f32 = deviceReadback(&on_device, field) orelse return null;
+            const twin_values: []const f32 = twin.readLatest(field) orelse return null;
+            const gap: f32 = largestRelativeGap(device_values[0..field_end], twin_values[0..field_end]);
+            largest_gap = @max(largest_gap, gap);
+        }
+    }
+    return largest_gap;
 }
 
 const constant_index_spirv: []const u8 = @embedFile("constant_index_spv");
@@ -1045,6 +1612,7 @@ pub fn main() !u8 {
     const engine_doubles: bool = try runEngineCompute(debug_allocator.allocator(), device, queue);
     const zimrnum_failures: u32 = try runZimrnumSweep(debug_allocator.allocator(), device, queue);
     try makeTrainingPipelines(debug_allocator.allocator(), device, queue);
+    const kit_gap: ?f32 = try runKitKernels(debug_allocator.allocator(), device, queue);
     const constants_land: bool = try runConstantIndex(debug_allocator.allocator(), device, queue);
     const engine_leaked: bool = debug_allocator.deinit() == .leak;
     const sort_matches: bool = runCountingSort(device, queue);
@@ -1083,6 +1651,15 @@ pub fn main() !u8 {
         });
         return 1;
     }
+    const kit_gap_limit: f32 = 1.0e-5;
+    const kit_matches: bool = if (kit_gap) |gap| gap <= kit_gap_limit else false;
+    if (kit_gap) |gap| {
+        print("vk-host-test: the kit's learning kernels: largest relative gap {e} from the CPU twin\n", .{gap});
+    }
+    if (!kit_matches) {
+        print("vk-host-test: FAILED - the kit's learning kernels differ from their CPU twin\n", .{});
+        return 1;
+    }
     if (!constants_land) {
         print("vk-host-test: FAILED - an element written by a constant index came back wrong\n", .{});
         return 1;
@@ -1101,7 +1678,7 @@ pub fn main() !u8 {
     }
     if (counts.errors == 0 and counts.warnings == 0) {
         print(
-            "vk-host-test: clear, targets, read, copy, screen, views, compute, engine, zimrnum, pipelines, " ++
+            "vk-host-test: clear, targets, read, copy, screen, views, compute, engine, zimrnum, pipelines, kit, " ++
                 "constant, lifetimes, sort, churn and large writes" ++
                 " - no validation errors, no warnings\n",
             .{},

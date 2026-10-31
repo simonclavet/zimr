@@ -2231,13 +2231,20 @@ pub fn GpuPpoOn(comptime M: type) type {
             p.dispatch("dense_bwd_w", v1, no * h + h);
             // One Adam step over everything.
             p.adam_step += 1;
-            const s: f32 = float(p.adam_step);
+            // Adam's bias corrections as zimrnum's Adam forms them, for the betas the kernel uses (its defaults).
+            const kernel_defaults: M.Params = .{};
+            const corrections: zn.AdamCorrections(f32) = zn.adamCorrectionMultipliers(
+                f32,
+                kernel_defaults.beta1,
+                kernel_defaults.beta2,
+                p.adam_step,
+            );
             p.dispatch("adam", .{
                 .w_off = 0,
                 .count = p.param_count,
                 .rate = p.options.learning_rate,
-                .correction1 = 1.0 / (1.0 - @exp(s * @log(@as(f32, 0.9)))),
-                .correction2 = 1.0 / (1.0 - @exp(s * @log(@as(f32, 0.999)))),
+                .correction1 = corrections.first,
+                .correction2 = corrections.second,
             }, p.param_count);
             p.pipe.submitRecording();
         }
@@ -2368,14 +2375,20 @@ pub fn GpuPpoOn(comptime M: type) type {
             }, rows * na);
             p.policyBackward();
             p.adam_step += 1;
-            const s: f32 = @floatFromInt(p.adam_step);
+            const kernel_defaults: M.Params = .{};
+            const corrections: zn.AdamCorrections(f32) = zn.adamCorrectionMultipliers(
+                f32,
+                kernel_defaults.beta1,
+                kernel_defaults.beta2,
+                p.adam_step,
+            );
             const count: u32 = p.log_std_off - p.p_off[0];
             p.dispatch("adam", .{
                 .w_off = p.p_off[0],
                 .count = count,
                 .rate = p.options.learning_rate,
-                .correction1 = 1.0 / (1.0 - @exp(s * @log(@as(f32, 0.9)))),
-                .correction2 = 1.0 / (1.0 - @exp(s * @log(@as(f32, 0.999)))),
+                .correction1 = corrections.first,
+                .correction2 = corrections.second,
             }, count);
             p.pipe.submitRecording();
         }
@@ -2797,13 +2810,19 @@ pub fn GpuSacOn(comptime M: type) type {
         }
 
         fn adam(p: *Self, start: u32, count: u32) void {
-            const s: f32 = float(p.adam_step);
+            const kernel_defaults: M.Params = .{};
+            const corrections: zn.AdamCorrections(f32) = zn.adamCorrectionMultipliers(
+                f32,
+                kernel_defaults.beta1,
+                kernel_defaults.beta2,
+                p.adam_step,
+            );
             p.run("adam", .{
                 .w_off = start,
                 .count = count,
                 .rate = @floatCast(p.options.learning_rate),
-                .correction1 = 1.0 / (1.0 - @exp(s * @log(@as(f32, 0.9)))),
-                .correction2 = 1.0 / (1.0 - @exp(s * @log(@as(f32, 0.999)))),
+                .correction1 = corrections.first,
+                .correction2 = corrections.second,
             }, count);
         }
 

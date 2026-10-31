@@ -54,7 +54,7 @@
 //!   active            : []u32            // body indices that are awake and move
 
 const std = @import("std");
-const ArrayListUnmanaged = std.ArrayListUnmanaged;
+const ArrayList = std.ArrayList;
 const AutoHashMapUnmanaged = std.AutoHashMapUnmanaged;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
@@ -1372,7 +1372,7 @@ pub fn buildConvexHull(gpa: Allocator, input_points: []const Vec) !ConvexHull {
     const tol: f32 = 1.0e-4;
 
     // 1) De-duplicate the input points.
-    var pts: ArrayListUnmanaged(Vec) = .empty;
+    var pts: ArrayList(Vec) = .empty;
     defer pts.deinit(gpa);
     for (input_points) |p| {
         var duplicate: bool = false;
@@ -1400,9 +1400,9 @@ pub fn buildConvexHull(gpa: Allocator, input_points: []const Vec) !ConvexHull {
 
     // 2) Enumerate distinct hull-face planes: a plane through three points is a face
     //    iff every other point lies on or below it. Dedup by (normal, offset).
-    var face_normals: ArrayListUnmanaged(Vec) = .empty;
+    var face_normals: ArrayList(Vec) = .empty;
     defer face_normals.deinit(gpa);
-    var face_offsets: ArrayListUnmanaged(f32) = .empty;
+    var face_offsets: ArrayList(f32) = .empty;
     defer face_offsets.deinit(gpa);
 
     var i: usize = 0;
@@ -1452,13 +1452,13 @@ pub fn buildConvexHull(gpa: Allocator, input_points: []const Vec) !ConvexHull {
 
     // 3) For each face plane, gather the points lying on it and order them CCW about
     //    the normal, building the flattened face-vertex index loops.
-    var faces: ArrayListUnmanaged(HullFace) = .empty;
+    var faces: ArrayList(HullFace) = .empty;
     defer faces.deinit(gpa);
-    var face_verts: ArrayListUnmanaged(u32) = .empty;
+    var face_verts: ArrayList(u32) = .empty;
     defer face_verts.deinit(gpa);
-    var on_plane: ArrayListUnmanaged(u32) = .empty;
+    var on_plane: ArrayList(u32) = .empty;
     defer on_plane.deinit(gpa);
-    var angles: ArrayListUnmanaged(f32) = .empty;
+    var angles: ArrayList(f32) = .empty;
     defer angles.deinit(gpa);
 
     for (face_normals.items, face_offsets.items) |normal, offset| {
@@ -1631,7 +1631,7 @@ const mesh_bvh_leaf: u32 = 4; // triangles per leaf (small => tighter culling)
 /// returning the index of the node just built.
 fn buildMeshBvhNode(
     gpa: Allocator,
-    nodes: *ArrayListUnmanaged(MeshBvhNode),
+    nodes: *ArrayList(MeshBvhNode),
     tri_order: []u32,
     centroids: []const Vec,
     tri_bounds: []const Aabb,
@@ -1807,7 +1807,7 @@ pub fn buildMeshWithMaterials(
         slot.* = @intCast(idx);
     }
 
-    var nodes: ArrayListUnmanaged(MeshBvhNode) = .empty;
+    var nodes: ArrayList(MeshBvhNode) = .empty;
     errdefer nodes.deinit(gpa);
     _ = try buildMeshBvhNode(gpa, &nodes, out_tri_order, centroids, tri_bounds, 0, triangles_in.len);
     const out_nodes: []MeshBvhNode = try nodes.toOwnedSlice(gpa);
@@ -2043,7 +2043,7 @@ pub fn buildHeightFieldWithMaterials(
 
 /// Shapes are shared and immutable. A flat append-only store is the simplest pool.
 pub const ShapeStore = struct {
-    items: ArrayListUnmanaged(Shape) = .empty,
+    items: ArrayList(Shape) = .empty,
 
     pub fn add(self: *ShapeStore, gpa: Allocator, shape: Shape) !ShapeId {
         const id: ShapeId = @intCast(self.items.items.len);
@@ -2363,7 +2363,7 @@ pub fn buildCompound(
 fn queryMeshBvh(
     mesh: *const Mesh,
     local_aabb: Aabb,
-    out: *ArrayListUnmanaged(u32),
+    out: *ArrayList(u32),
     scratch: Allocator,
 ) !void {
     if (mesh.nodes.len == 0) {
@@ -4843,7 +4843,7 @@ pub const BroadPhase = struct {
         height: i32, // 0 = leaf, -1 = free, else internal
     };
 
-    nodes: ArrayListUnmanaged(Node) = .empty,
+    nodes: ArrayList(Node) = .empty,
     root: u32 = null_node,
     free_list: u32 = null_node,
     margin: f32 = 0.1, // fattening (> speculative_distance, so no contact is missed)
@@ -5139,7 +5139,7 @@ pub const BroadPhase = struct {
     pub fn findPairs(
         self: *BroadPhase,
         gpa: Allocator,
-        out: *ArrayListUnmanaged(BodyPair),
+        out: *ArrayList(BodyPair),
     ) !void {
         if (self.root == null_node) {
             return;
@@ -5190,7 +5190,7 @@ pub const BroadPhase = struct {
         self: *const BroadPhase,
         gpa: Allocator,
         aabb: Aabb,
-        out: *ArrayListUnmanaged(BodyIndex),
+        out: *ArrayList(BodyIndex),
     ) !void {
         if (self.root == null_node) {
             return;
@@ -8400,7 +8400,7 @@ fn purgeCacheMap(
     gpa: Allocator,
     idx: BodyIndex,
 ) void {
-    var to_remove: ArrayListUnmanaged(K) = .empty;
+    var to_remove: ArrayList(K) = .empty;
     defer to_remove.deinit(gpa);
     var it: AutoHashMapUnmanaged(K, V).Iterator = map.iterator();
     while (it.next()) |entry| {
@@ -8529,7 +8529,7 @@ pub const ContactListener = struct {
 /// type with `body_a` / `body_b: BodyIndex` (point, six-DOF, path).
 fn removeConstraintsReferencing(
     comptime C: type,
-    list: *ArrayListUnmanaged(C),
+    list: *ArrayList(C),
     idx: BodyIndex,
 ) void {
     var i: usize = list.items.len;
@@ -8555,12 +8555,12 @@ pub const World = struct {
     // static/kinematic); this holds what the body would have as a dynamic body.
     mass_props: []MassProperties,
     shapes: ShapeStore,
-    active: ArrayListUnmanaged(BodyIndex),
-    constraints: ArrayListUnmanaged(Constraint), // joints (persist across frames)
-    vehicles: ArrayListUnmanaged(*Vehicle), // registered vehicles (not owned; see addVehicle)
-    six_dof: ArrayListUnmanaged(SixDofConstraint), // 6-DOF joints (persist across frames)
-    paths: ArrayListUnmanaged(PathConstraint), // path (rail) joints (persist across frames)
-    soft_bodies: ArrayListUnmanaged(SoftBody), // soft bodies (cloth / volumetric)
+    active: ArrayList(BodyIndex),
+    constraints: ArrayList(Constraint), // joints (persist across frames)
+    vehicles: ArrayList(*Vehicle), // registered vehicles (not owned; see addVehicle)
+    six_dof: ArrayList(SixDofConstraint), // 6-DOF joints (persist across frames)
+    paths: ArrayList(PathConstraint), // path (rail) joints (persist across frames)
+    soft_bodies: ArrayList(SoftBody), // soft bodies (cloth / volumetric)
 
     broadphase: BroadPhase,
     cache: ManifoldCache,
@@ -11857,7 +11857,7 @@ fn collidePlaneLeaf(
     convex_rot: Quat,
     plane_is_a: bool,
     speculative_distance: f32,
-    out: *ArrayListUnmanaged(SubCollision),
+    out: *ArrayList(SubCollision),
     scratch: Allocator,
 ) !void {
     const n: Vec = rotate(plane_rot, plane.normal); // world outward plane normal
@@ -11953,7 +11953,7 @@ fn collideMeshLeaf(
     mesh_is_a: bool,
     speculative_distance: f32,
     back_face_mode: BackFaceMode,
-    out: *ArrayListUnmanaged(SubCollision),
+    out: *ArrayList(SubCollision),
     scratch: Allocator,
 ) !void {
     const other_local: Aabb = shapeLocalBounds(other);
@@ -11962,7 +11962,7 @@ fn collideMeshLeaf(
     );
     const query_local: Aabb = transformAabbInverse(other_world, mesh_pos, mesh_rot);
 
-    var tris: ArrayListUnmanaged(u32) = .empty;
+    var tris: ArrayList(u32) = .empty;
     defer tris.deinit(scratch);
     try queryMeshBvh(mesh, query_local, &tris, scratch);
 
@@ -12041,7 +12041,7 @@ fn collideTriangleLeaf(
     active_edges: u8, // bit e set => edge e is active; inactive seams snap to face_normal
     speculative_distance: f32,
     back_face_mode: BackFaceMode,
-    out: *ArrayListUnmanaged(SubCollision),
+    out: *ArrayList(SubCollision),
     scratch: Allocator,
 ) !void {
     const tri_shape: Shape = .{ .triangle = .{ .v0 = v0, .v1 = v1, .v2 = v2 } };
@@ -12085,7 +12085,7 @@ fn collideHeightFieldLeaf(
     hf_is_a: bool,
     speculative_distance: f32,
     back_face_mode: BackFaceMode,
-    out: *ArrayListUnmanaged(SubCollision),
+    out: *ArrayList(SubCollision),
     scratch: Allocator,
 ) !void {
     const other_local: Aabb = shapeLocalBounds(other);
@@ -12173,7 +12173,7 @@ fn collideShapes(
     rot_b: Quat,
     speculative_distance: f32,
     back_face_mode: BackFaceMode,
-    out: *ArrayListUnmanaged(SubCollision),
+    out: *ArrayList(SubCollision),
     scratch: Allocator,
 ) !void {
     // Empty shapes never collide.
@@ -12603,10 +12603,10 @@ pub fn overlapAabb(
     world: *const World,
     scratch: Allocator,
     box: Aabb,
-    out: *ArrayListUnmanaged(BodyIndex),
+    out: *ArrayList(BodyIndex),
     filter: QueryFilter,
 ) !void {
-    var candidates: ArrayListUnmanaged(BodyIndex) = .empty;
+    var candidates: ArrayList(BodyIndex) = .empty;
     defer candidates.deinit(scratch);
     try world.broadphase.queryAabb(scratch, box, &candidates);
     for (candidates.items) |idx| {
@@ -12622,7 +12622,7 @@ pub fn overlapPoint(
     world: *const World,
     scratch: Allocator,
     point: Vec,
-    out: *ArrayListUnmanaged(BodyIndex),
+    out: *ArrayList(BodyIndex),
     filter: QueryFilter,
 ) !void {
     const bp: *const BroadPhase = &world.broadphase;
@@ -12663,12 +12663,12 @@ pub fn overlapShape(
     shape: *const Shape,
     pos: Vec,
     rot: Quat,
-    out: *ArrayListUnmanaged(BodyIndex),
+    out: *ArrayList(BodyIndex),
     filter: QueryFilter,
 ) !void {
     const local_bounds: Aabb = shapeLocalBounds(shape);
     const world_bounds: Aabb = transformAabb(local_bounds, pos, rot);
-    var candidates: ArrayListUnmanaged(BodyIndex) = .empty;
+    var candidates: ArrayList(BodyIndex) = .empty;
     defer candidates.deinit(scratch);
     try world.broadphase.queryAabb(scratch, world_bounds, &candidates);
     for (candidates.items) |idx| {
@@ -12718,7 +12718,7 @@ fn castConvexVsMesh(
     const swept_world: Aabb = start.combine(end).expandedBy(tolerance + r1);
     const query_local: Aabb = transformAabbInverse(swept_world, mesh_pos, mesh_rot);
 
-    var tris: ArrayListUnmanaged(u32) = .empty;
+    var tris: ArrayList(u32) = .empty;
     defer tris.deinit(scratch);
     try queryMeshBvh(mesh, query_local, &tris, scratch);
 
@@ -13061,7 +13061,7 @@ pub fn castShapeClosest(
     };
     const swept: Aabb = start_bounds.combine(end_bounds).expandedBy(world.settings.speculative_distance);
 
-    var candidates: ArrayListUnmanaged(BodyIndex) = .empty;
+    var candidates: ArrayList(BodyIndex) = .empty;
     defer candidates.deinit(scratch);
     try world.broadphase.queryAabb(scratch, swept, &candidates);
 
@@ -13297,8 +13297,8 @@ pub const CharacterVirtual = struct {
     ground_velocity: Vec = vec_zero,
     ground_material: u16 = 0, // opaque surface id of the ground contact (Jolt's GetGroundMaterial)
     last_dt: f32 = 0.0,
-    active_contacts: ArrayListUnmanaged(CharacterContact) = .empty,
-    contact_keys_prev: ArrayListUnmanaged(CharContactKey) = .empty,
+    active_contacts: ArrayList(CharacterContact) = .empty,
+    contact_keys_prev: ArrayList(CharContactKey) = .empty,
 
     pub fn deinit(char: *CharacterVirtual, gpa: Allocator) void {
         char.active_contacts.deinit(gpa);
@@ -13394,7 +13394,7 @@ fn cvCharacterGroundVelocity(
 fn cvAddOrReduceHit(
     char: *const CharacterVirtual,
     gpa: Allocator,
-    out: *ArrayListUnmanaged(CharacterContact),
+    out: *ArrayList(CharacterContact),
     hit: CharacterContact,
 ) !void {
     if (out.items.len >= char.max_num_hits and char.hit_reduction_cos_max_angle > -1.0) {
@@ -13443,7 +13443,7 @@ fn cvGetContactsAtPosition(
     char: *const CharacterVirtual,
     pos: Vec,
     scratch: Allocator,
-    out: *ArrayListUnmanaged(CharacterContact),
+    out: *ArrayList(CharacterContact),
 ) !void {
     out.clearRetainingCapacity();
     const shape: *const Shape = world.shapes.get(char.shape);
@@ -13452,10 +13452,10 @@ fn cvGetContactsAtPosition(
     const query_bounds: Aabb =
         transformAabb(shapeLocalBounds(shape), shape_pos, char.rotation).expandedBy(margin);
 
-    var nearby: ArrayListUnmanaged(BodyIndex) = .empty;
+    var nearby: ArrayList(BodyIndex) = .empty;
     defer nearby.deinit(scratch);
     try world.broadphase.queryAabb(scratch, query_bounds, &nearby);
-    var subs: ArrayListUnmanaged(SubCollision) = .empty;
+    var subs: ArrayList(SubCollision) = .empty;
     defer subs.deinit(scratch);
 
     for (nearby.items) |bi| {
@@ -13522,8 +13522,8 @@ fn cvGetContactsAtPosition(
 fn cvRemoveConflictingContacts(
     char: *const CharacterVirtual,
     scratch: Allocator,
-    contacts: *ArrayListUnmanaged(CharacterContact),
-    ignored: *ArrayListUnmanaged(CharContactKey),
+    contacts: *ArrayList(CharacterContact),
+    ignored: *ArrayList(CharContactKey),
 ) !void {
     const min_pen: f32 = 1.25 * char.character_padding;
     var c1: usize = 0;
@@ -13592,7 +13592,7 @@ fn cvDetermineConstraints(
     scratch: Allocator,
     contacts: []CharacterContact,
     dt: f32,
-    out: *ArrayListUnmanaged(CharConstraint),
+    out: *ArrayList(CharConstraint),
 ) !void {
     var ci: usize = 0;
     while (ci < contacts.len) : (ci += 1) {
@@ -13728,7 +13728,7 @@ fn cvSolveConstraints(
     in_time_remaining: f32,
     constraints: []CharConstraint,
     contacts: []CharacterContact,
-    ignored: *ArrayListUnmanaged(CharContactKey),
+    ignored: *ArrayList(CharContactKey),
     scratch: Allocator,
 ) !CvSolveResult {
     var time_remaining: f32 = in_time_remaining;
@@ -13950,7 +13950,7 @@ fn cvGetFirstContactForSweep(
     const sweep_margin: f32 = char.character_padding + char.collision_tolerance;
     const swept: Aabb = start_bounds.combine(end_bounds).expandedBy(sweep_margin);
 
-    var candidates: ArrayListUnmanaged(BodyIndex) = .empty;
+    var candidates: ArrayList(BodyIndex) = .empty;
     defer candidates.deinit(scratch);
     try world.broadphase.queryAabb(scratch, swept, &candidates);
 
@@ -14056,11 +14056,11 @@ fn cvMoveShape(
     store_active: bool,
     scratch: Allocator,
 ) !void {
-    var contacts: ArrayListUnmanaged(CharacterContact) = .empty;
+    var contacts: ArrayList(CharacterContact) = .empty;
     defer contacts.deinit(scratch);
-    var ignored: ArrayListUnmanaged(CharContactKey) = .empty;
+    var ignored: ArrayList(CharContactKey) = .empty;
     defer ignored.deinit(scratch);
-    var constraints: ArrayListUnmanaged(CharConstraint) = .empty;
+    var constraints: ArrayList(CharConstraint) = .empty;
     defer constraints.deinit(scratch);
 
     var time_remaining: f32 = dt;
@@ -14233,13 +14233,13 @@ fn cvUpdateSupportingContact(
         } else {
             // We may be wedged between sliding contacts so that we cannot slide off: solve a
             // straight-down move and if it barely moves, treat us as supported.
-            var wedge_contacts: ArrayListUnmanaged(CharacterContact) = .empty;
+            var wedge_contacts: ArrayList(CharacterContact) = .empty;
             defer wedge_contacts.deinit(scratch);
             try wedge_contacts.appendSlice(scratch, char.active_contacts.items);
-            var constraints: ArrayListUnmanaged(CharConstraint) = .empty;
+            var constraints: ArrayList(CharConstraint) = .empty;
             defer constraints.deinit(scratch);
             try cvDetermineConstraints(char, scratch, wedge_contacts.items, char.last_dt, &constraints);
-            var ignored: ArrayListUnmanaged(CharContactKey) = .empty;
+            var ignored: ArrayList(CharContactKey) = .empty;
             defer ignored.deinit(scratch);
             const solve: CvSolveResult = try cvSolveConstraints(
                 world,
@@ -14286,7 +14286,7 @@ fn cvMoveToContact(
     scratch: Allocator,
 ) !void {
     char.position = pos;
-    var contacts: ArrayListUnmanaged(CharacterContact) = .empty;
+    var contacts: ArrayList(CharacterContact) = .empty;
     defer contacts.deinit(scratch);
     try cvGetContactsAtPosition(world, char, pos, scratch, &contacts);
 
@@ -14314,7 +14314,7 @@ fn cvFireContactEvents(
     gpa: Allocator,
     scratch: Allocator,
 ) !void {
-    var current: ArrayListUnmanaged(CharContactKey) = .empty;
+    var current: ArrayList(CharContactKey) = .empty;
     defer current.deinit(scratch);
     for (char.active_contacts.items) |c| {
         if (!c.had_collision or c.was_discarded) {
@@ -14499,7 +14499,7 @@ fn cvWalkStairs(
     const character_velocity: Vec = step_forward / splat(dt);
     const cv_up: f32 = dot3(character_velocity, char.up);
     const horizontal_velocity: Vec = character_velocity - char.up * splat(cv_up);
-    var steep_normals: ArrayListUnmanaged(Vec) = .empty;
+    var steep_normals: ArrayList(Vec) = .empty;
     defer steep_normals.deinit(scratch);
     for (char.active_contacts.items) |c| {
         if (c.had_collision and !c.was_discarded and
@@ -14741,9 +14741,9 @@ pub fn characterPostSimulation(
     const margin: f32 = max_separation_distance + char.predictive_distance;
     const query_bounds: Aabb = transformAabb(shapeLocalBounds(shape), char_pos, char_rot).expandedBy(margin);
 
-    var nearby: ArrayListUnmanaged(BodyIndex) = .empty;
+    var nearby: ArrayList(BodyIndex) = .empty;
     try world.broadphase.queryAabb(scratch, query_bounds, &nearby);
-    var subs: ArrayListUnmanaged(SubCollision) = .empty;
+    var subs: ArrayList(SubCollision) = .empty;
 
     var best_dot: f32 = -2.0;
     var found: bool = false;
@@ -16532,7 +16532,7 @@ fn solveConstraintPosition(world: *World, c: *Constraint, baumgarte: f32) void {
 /// original single-contact path exactly. Reads POST-gravity, PRE-warm-start velocities.
 fn setupContactFromManifold(
     world: *World,
-    contacts: *ArrayListUnmanaged(Contact),
+    contacts: *ArrayList(Contact),
     scratch: Allocator,
     a: BodyIndex,
     b: BodyIndex,
@@ -16774,9 +16774,9 @@ pub fn createClothGrid(
     compliance: f32,
     pin_top_row: bool,
 ) !SoftBodyShared {
-    var verts: ArrayListUnmanaged(SoftVertexDef) = .empty;
-    var edges: ArrayListUnmanaged(SoftEdge) = .empty;
-    var faces: ArrayListUnmanaged(SoftFace) = .empty;
+    var verts: ArrayList(SoftVertexDef) = .empty;
+    var edges: ArrayList(SoftEdge) = .empty;
+    var faces: ArrayList(SoftFace) = .empty;
     defer verts.deinit(gpa);
     defer edges.deinit(gpa);
     defer faces.deinit(gpa);
@@ -16884,7 +16884,7 @@ pub fn createSoftBodyFromMesh(
     opts: SoftMeshOptions,
 ) !SoftBodyShared {
     const EdgeHelper = struct { v: [2]u32, edge_idx: u32 };
-    var edges: ArrayListUnmanaged(EdgeHelper) = .empty;
+    var edges: ArrayList(EdgeHelper) = .empty;
     defer edges.deinit(gpa);
     for (faces, 0..) |f, fi| {
         var i: u32 = 0;
@@ -16908,7 +16908,7 @@ pub fn createSoftBodyFromMesh(
         fn add(
             g: Allocator,
             verts: []const SoftVertexDef,
-            list: *ArrayListUnmanaged(SoftEdge),
+            list: *ArrayList(SoftEdge),
             a: u32,
             b: u32,
             comp: f32,
@@ -16919,8 +16919,8 @@ pub fn createSoftBodyFromMesh(
         }
     }.add;
 
-    var out_edges: ArrayListUnmanaged(SoftEdge) = .empty;
-    var out_bends: ArrayListUnmanaged(SoftDihedralBend) = .empty;
+    var out_edges: ArrayList(SoftEdge) = .empty;
+    var out_bends: ArrayList(SoftDihedralBend) = .empty;
     defer out_edges.deinit(gpa);
     defer out_bends.deinit(gpa);
 
@@ -17088,7 +17088,7 @@ fn collectSoftLeaves(
     rot: Quat,
     body_idx: u32,
     scratch: Allocator,
-    leaves: *ArrayListUnmanaged(SoftLeaf),
+    leaves: *ArrayList(SoftLeaf),
 ) !bool {
     const r: ResolvedShape = resolveDecorated(store, shape, pos, rot);
     switch (r.shape.*) {
@@ -17122,8 +17122,8 @@ fn softBodyDetermineCollidingShapes(
     sb: *const SoftBody,
     dt: f32,
     scratch: Allocator,
-    bodies: *ArrayListUnmanaged(SoftCollidingBody),
-    leaves: *ArrayListUnmanaged(SoftLeaf),
+    bodies: *ArrayList(SoftCollidingBody),
+    leaves: *ArrayList(SoftLeaf),
 ) !void {
     var box: Aabb = .empty;
     for (sb.vertices) |v| {
@@ -17133,7 +17133,7 @@ fn softBodyDetermineCollidingShapes(
     }
     const query_bounds: Aabb = box.expandedBy(sb.vertex_radius + 0.02);
 
-    var nearby: ArrayListUnmanaged(BodyIndex) = .empty;
+    var nearby: ArrayList(BodyIndex) = .empty;
     try world.broadphase.queryAabb(scratch, query_bounds, &nearby);
 
     for (nearby.items) |bi| {
@@ -17714,8 +17714,8 @@ pub fn softBodyUpdate(
         v.colliding_body = -1;
         v.has_contact = false;
     }
-    var bodies: ArrayListUnmanaged(SoftCollidingBody) = .empty;
-    var leaves: ArrayListUnmanaged(SoftLeaf) = .empty;
+    var bodies: ArrayList(SoftCollidingBody) = .empty;
+    var leaves: ArrayList(SoftLeaf) = .empty;
     try softBodyDetermineCollidingShapes(world, sb, dt, scratch, &bodies, &leaves);
     softBodyDetermineCollisionPlanes(sb, leaves.items);
 
@@ -17868,7 +17868,7 @@ pub fn step(world: *World, dt: f32) !void {
     const active: []const BodyIndex = world.active.items;
     const warm_start_ratio: f32 = if (world.prev_dt > 0.0) dt / world.prev_dt else 0.0;
 
-    var contacts: ArrayListUnmanaged(Contact) = .empty;
+    var contacts: ArrayList(Contact) = .empty;
 
     // -------------------------------------------------------------------------
     // PHASE 1 - bake world-space inverse inertia for active bodies (one mat3 each).
@@ -17933,7 +17933,7 @@ pub fn step(world: *World, dt: f32) !void {
     // -------------------------------------------------------------------------
     // PHASE 3 - refit moved bodies in the broad phase, collect candidate pairs.
     // -------------------------------------------------------------------------
-    var pairs: ArrayListUnmanaged(BodyPair) = .empty;
+    var pairs: ArrayList(BodyPair) = .empty;
     {
         const zp3: profiler.Zone = profiler.zoneNamed(@src(), "broadphase");
         defer zp3.end();
@@ -18031,7 +18031,7 @@ pub fn step(world: *World, dt: f32) !void {
         const zp4: profiler.Zone = profiler.zoneNamed(@src(), "narrowphase");
         defer zp4.end();
         // Reused across pairs: the leaf manifolds collideShapes produces for a pair.
-        var submanifolds: ArrayListUnmanaged(SubCollision) = .empty;
+        var submanifolds: ArrayList(SubCollision) = .empty;
         for (pairs.items) |pair| {
             const a: BodyIndex = pair.a;
             const b: BodyIndex = pair.b;
@@ -18321,7 +18321,7 @@ pub fn step(world: *World, dt: f32) !void {
     {
         const zp6: profiler.Zone = profiler.zoneNamed(@src(), "integrate");
         defer zp6.end();
-        var ccd_candidates: ArrayListUnmanaged(BodyIndex) = .empty;
+        var ccd_candidates: ArrayList(BodyIndex) = .empty;
 
         for (world.active.items) |idx| {
             const body: *Body = &world.bodies.data[idx];

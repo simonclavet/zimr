@@ -1170,6 +1170,7 @@ test "PolicyShow: a PPO trainer's policy, shown without its trainer, lives what 
         .action_limit = trainer.env.options.action_limit,
         .action_scale = trainer.env.options.action_scale,
         .filter_beta = trainer.env.options.beta,
+        .decimation = trainer.env.options.decimation,
     });
     const characters: usize = 2;
     var show: Trainer(zn_mlp).Show = try trainer.startShow(gpa, characters, ppo_track.evaluation_seed);
@@ -1178,7 +1179,6 @@ test "PolicyShow: a PPO trainer's policy, shown without its trainer, lives what 
     var policy_show: lab.PolicyShow = try .start(arena, m, setup.imported.names, &clips, &policy, .{
         .character_count = characters,
         .seed = ppo_track.evaluation_seed,
-        .decimation = options.decimation,
         .max_episode_steps = 600,
         .task = options.task,
         .bodies = options.bodies,
@@ -1196,7 +1196,6 @@ test "PolicyShow: a PPO trainer's policy, shown without its trainer, lives what 
     const control_settings: lab.PolicyShowSettings = .{
         .character_count = characters,
         .seed = ppo_track.evaluation_seed,
-        .decimation = options.decimation,
         .task = options.task,
         .bodies = options.bodies,
     };
@@ -1225,8 +1224,9 @@ fn zeroPolicy(
     widths[1] = @intCast(hidden);
     widths[2] = @intCast(action_size);
     const layers: []lab.PolicyLayer = try arena.alloc(lab.PolicyLayer, 2);
-    const first_parameters: []f32 = try arena.alloc(f32, lab.PolicyLayer.parameterCount(observation_size, hidden));
-    const second_parameters: []f32 = try arena.alloc(f32, lab.PolicyLayer.parameterCount(hidden, action_size));
+    const first_parameter_count: usize = lab.PolicyLayer.parameterCount(.tanh, observation_size, hidden);
+    const first_parameters: []f32 = try arena.alloc(f32, first_parameter_count);
+    const second_parameters: []f32 = try arena.alloc(f32, lab.PolicyLayer.parameterCount(.none, hidden, action_size));
     @memset(first_parameters, 0.0);
     @memset(second_parameters, 0.0);
     layers[0] = .{ .activation = .tanh, .weights_and_biases = first_parameters };
@@ -1238,6 +1238,8 @@ fn zeroPolicy(
         .action_limit = 1.0,
         .action_scale = options.action_scale,
         .filter_beta = options.beta,
+        .observation = .drecon,
+        .decimation = options.decimation,
     };
     return policy;
 }
@@ -1269,7 +1271,6 @@ test "judgePolicy: zero weights are judged as the servo alone, twice the same; a
     const starts: []usize = try track.evenStarts(arena, &setup.clip, 30);
     const settings: lab.PolicyJudgeSettings = .{
         .starts = starts,
-        .decimation = options.decimation,
         .task = options.task,
         .bodies = bodies,
     };
@@ -1345,4 +1346,118 @@ test "judgePolicy: a judgement's sums are its starts' own - each start judged al
     try expectApproxEqRel(failed_starts_steps, together.failed_starts_steps, 1.0e-12);
     try expectApproxEqRel(tracked_share_sum, together.tracked_share_sum, 1.0e-12);
     try expectApproxEqRel(tracked_share_squares, together.tracked_share_squares, 1.0e-12);
+}
+
+test "Fleet: a lost character lives on through its aftermath - the failure once, at the loss - then is cut" {
+    // Two fleets of one character on the same seed, the servo alone (zero actions), under a failure rule tight enough
+    // that the reference is lost within a few steps: one fleet keeps no aftermath, the other an aftermath of 30 steps.
+    //
+    //     step          ...   s-1    s      s+1  ...  s+30   s+31
+    //     no aftermath        -      LOST|  (a new episode)
+    //     aftermath 30        -      lost   in its aftermath  cut|  (a new episode)
+    //
+    // What must hold: up to the loss the two fleets are the same simulation, bit for bit (the aftermath changes nothing
+    // before it); at step s both count the failure, but only the first ends its episode; the second lives on for 30
+    // steps - every one in its aftermath, rewarded, no further failure - and ends at the 30th as `.aftermath`, the
+    // state it ended in captured, its failures still one; the step after, it is in a fresh episode.
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    var setup: Setup = undefined;
+    setup.init(gpa, threaded.io(), "assets/lafan1/walk1_subject2.bvh", walk_first) catch return error.SkipZigTest;
+    defer setup.deinit();
+    const m: *rbt.Model = &setup.imported.model;
+    const clips = [_]*const dance.Clip{&setup.clip};
+    // A rule only a perfect copy of the reference could keep: the servo alone drifts past 2 cm within a few steps.
+    var tight_task: track.Task = .{};
+    tight_task.termination = .{ .pose_position = 0.02 };
+    const aftermath_steps: u32 = 30;
+    const without_aftermath: *track.Fleet = try .init(gpa, m, &clips, .{
+        .envs = 1,
+        .capacity = 16,
+        .seed = 5,
+        .task = tight_task,
+    });
+    defer without_aftermath.deinit();
+    const with_aftermath: *track.Fleet = try .init(gpa, m, &clips, .{
+        .envs = 1,
+        .capacity = 16,
+        .seed = 5,
+        .task = tight_task,
+        .aftermath_steps = aftermath_steps,
+    });
+    defer with_aftermath.deinit();
+    const zero_actions: []f32 = try gpa.alloc(f32, track.actionSize(m));
+    defer gpa.free(zero_actions);
+    @memset(zero_actions, 0.0);
+
+    // Up to and including the loss: the same simulation.
+    var steps_to_loss: usize = 0;
+    while (!without_aftermath.dones[0]) : (steps_to_loss += 1) {
+        try expect(steps_to_loss < 600);
+        _ = without_aftermath.step(zero_actions);
+        _ = with_aftermath.step(zero_actions);
+        try expectEqual(without_aftermath.rewards[0], with_aftermath.rewards[0]);
+        try expect(!with_aftermath.in_aftermath[0]);
+    }
+    try expectEqual(track.End.lost, without_aftermath.ends[0]);
+    try expect(without_aftermath.failures[0] and with_aftermath.failures[0]);
+    try expect(!with_aftermath.dones[0]);
+    try expectEqual(@as(u64, 1), with_aftermath.failed);
+    const frame_at_loss: u32 = with_aftermath.frame[0];
+
+    // The aftermath: 30 steps lived on, the last of them its end.
+    for (1..aftermath_steps + 1) |aftermath_step| {
+        _ = with_aftermath.step(zero_actions);
+        const is_last_aftermath_step: bool = aftermath_step == aftermath_steps;
+        try expect(with_aftermath.in_aftermath[0]);
+        try expect(!with_aftermath.failures[0]);
+        try expect(with_aftermath.rewards[0] >= 0.0);
+        try expectEqual(is_last_aftermath_step, with_aftermath.dones[0]);
+    }
+    try expectEqual(track.End.aftermath, with_aftermath.ends[0]);
+    try expectEqual(@as(u64, 1), with_aftermath.failed);
+    try expectEqual(@as(u64, 1), with_aftermath.episodes);
+    // The state it ended in is the aftermath's last, 30 frames after the loss.
+    try expectEqual(frame_at_loss + aftermath_steps, with_aftermath.terminal_frame[0]);
+    // The step after: a fresh episode, not in any aftermath.
+    _ = with_aftermath.step(zero_actions);
+    try expect(!with_aftermath.in_aftermath[0]);
+}
+
+test "probePolicy: a policy probed where some starts have no room - it acts on the probe's fleet alone" {
+    // The judge's starts across the whole clip, every half second, so the last of them have no room for a push and
+    // the watch after it before the clip ends: the probe keeps only the starts that do, and its fleet is smaller than
+    // the starts. The policy's actor, built for every start, must act on the fleet it is given and no more: the probe
+    // completes, and every band pushes only starts with room.
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    var setup: Setup = undefined;
+    setup.init(gpa, threaded.io(), "assets/lafan1/walk1_subject2.bvh", walk_first) catch return error.SkipZigTest;
+    defer setup.deinit();
+    const m: *rbt.Model = &setup.imported.model;
+    const names: []const []const u8 = setup.imported.names;
+    const options: Options = .{};
+    var arena_state: ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    const bodies: robot_policy.Bodies = options.bodies;
+    const subset: robot_policy.Subset = try robot_policy.subsetFor(arena, m, names, bodies.watched, bodies.actuated);
+    const observation_size: usize = robot_policy.observationSize(subset);
+    const policy: lab.GenoPolicy = try zeroPolicy(arena, observation_size, 8, subset.dofs, options);
+    const starts: []usize = try track.evenStarts(arena, &setup.clip, 30);
+    const settings: lab.PolicyJudgeSettings = .{ .starts = starts, .task = options.task, .bodies = bodies };
+    const probe: track.RecoveryProbe = .{};
+    const probe_frames: usize = probe.settle_steps + probe.watch_steps;
+    var with_room: usize = 0;
+    for (starts) |start| {
+        with_room += @intFromBool(start + probe_frames + 1 < setup.clip.frame_count);
+    }
+    try expect(with_room < starts.len);
+    const bands: []track.RecoveryBand = try arena.alloc(track.RecoveryBand, probe.speeds.len);
+    try lab.probePolicy(gpa, arena, m, names, &setup.clip, &policy, settings, probe, bands);
+    for (bands) |band| {
+        try expect(band.pushes <= with_room);
+    }
 }

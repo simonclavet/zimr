@@ -32,7 +32,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
-const ArrayListUnmanaged = std.ArrayListUnmanaged;
+const ArrayList = std.ArrayList;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const testing_allocator = std.testing.allocator;
 const trim = std.mem.trim;
@@ -282,7 +282,7 @@ pub fn hullPoints(
     }
     const point_count: usize = vertices.len / 3;
 
-    var kept: ArrayListUnmanaged(Vec) = .empty;
+    var kept: ArrayList(Vec) = .empty;
     errdefer kept.deinit(gpa);
 
     // * THE SIX AXES FIRST, then the spread. A Fibonacci spiral distributes directions
@@ -487,8 +487,8 @@ const Reader = struct {
             return self.fail(Error.NotARobot, "root element is not <robot>", root.line);
         }
 
-        var links: ArrayListUnmanaged(RawLink) = .empty;
-        var joints: ArrayListUnmanaged(RawJoint) = .empty;
+        var links: ArrayList(RawLink) = .empty;
+        var joints: ArrayList(RawJoint) = .empty;
 
         for (self.doc.childrenOf(root)) |*element| {
             if (eql(u8, element.name, "link")) {
@@ -577,7 +577,7 @@ const Reader = struct {
 
         // Breadth-first from the root gives parent-before-child ordering for free, and
         // visiting each link exactly once detects a cycle hanging off the tree.
-        var order: ArrayListUnmanaged(u32) = .empty;
+        var order: ArrayList(u32) = .empty;
         var new_index: []u32 = try self.arena.alloc(u32, links.len);
         @memset(new_index, maxInt(u32));
         try order.append(self.arena, root);
@@ -656,7 +656,7 @@ const Reader = struct {
         const name: []const u8 = self.doc.attribute(element, "name") orelse
             return self.fail(Error.BadName, "a <link> has no name", element.line);
 
-        var geoms: ArrayListUnmanaged(Geom) = .empty;
+        var geoms: ArrayList(Geom) = .empty;
         for (self.doc.childrenOf(element)) |*child| {
             // Only <collision> becomes a geom. <visual> describes appearance and would
             // double the contact geometry if imported - real models give them different
@@ -1252,7 +1252,7 @@ test "hullPoints: a cube reduces to its eight corners, whatever the cloud" {
     // face-centre vertices the mesh carried. Anything more means the deduplication is
     // broken; anything less means the sampling missed a corner.
     const gpa: Allocator = testing_allocator;
-    var vertices: ArrayListUnmanaged(f32) = .empty;
+    var vertices: ArrayList(f32) = .empty;
     defer vertices.deinit(gpa);
 
     // Eight corners...

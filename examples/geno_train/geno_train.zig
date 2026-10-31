@@ -75,9 +75,8 @@ const ground_col: Color = .{ .r = 74, .g = 80, .b = 92, .a = 255 };
 
 /// Characters stepped together. Every one of them is another sample per step and another row the
 /// ring carries, so this is the page's main dial on a device's appetite.
-/// Four characters, not the old robot's eight: Geno's physics step costs about 0.6 ms on a phone, and a round of
-/// eight (16 collected steps each) overran the frame's budget before the GPU had done anything.
-const envs: usize = 4;
+/// The run file's default (`robot_lab.SuperTrackLearner.characters`), sized for a phone.
+const envs: usize = (lab.SuperTrackLearner{}).characters;
 
 /// How long a callback may take, by mode. Shown, that is the 20 fps this panel is perfectly happy
 /// at; training only, it is as long as a page can go without feeling stuck when the toggle is tapped.
@@ -92,15 +91,9 @@ const training_budget: f32 = 0.250;
 /// recipe as a run file defaults it (`robot_lab.SuperTrackLearner`), one definition for the page and the trainer.
 const learner_options: resident.Options = (lab.SuperTrackLearner{}).options();
 
-/// Geno's task (`geno.tracking_task`: servo, floor, floor rest, the gated reward, the task's failure rule) with
-/// one change the LEARNER needs: a training window's grace after every reset. Every episode then yields at least
-/// one window however bad the policy - without it, a policy failing within a window's length leaves nothing to
-/// train on, and training stops for good.
-const training_task: track.Task = blk: {
-    var graced: track.Task = geno.tracking_task;
-    graced.termination.grace_steps = learner_options.window;
-    break :blk graced;
-};
+/// Geno's task with a training window's grace after every reset (`robot_lab.superTrackTrainingTask`), as the trainer
+/// trains on it too.
+const training_task: track.Task = lab.superTrackTrainingTask(.{});
 
 /// Steps of servo-only simulation before the learner exists: the normaliser is measured from them, so
 /// the networks see features in sensible units from their very first update.
@@ -121,7 +114,6 @@ const State = struct {
     cam: z.OrbitCamera,
     cube: z.Mesh,
     sphere: z.Mesh,
-    cylinder: z.Mesh,
     transform: [1]Mat,
 
     doc: codecs.xml.Document,
@@ -187,7 +179,6 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .cam = z.OrbitCamera.init(vec(0.0, 0.7, 0), 4.0),
         .cube = try z.genMeshCube(gpa, 1.0, 1.0, 1.0),
         .sphere = try z.genMeshSphere(gpa, 1.0, 10, 8),
-        .cylinder = try z.genMeshCylinder(gpa, 1.0, 1.0, 16, 2),
         .transform = .{zm.identity()},
         .doc = undefined,
         .robot = undefined,
@@ -228,7 +219,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const clips = [_]*const dance.Clip{&s.clip};
     const fleet: *track.Fleet = try .init(gpa, m, &clips, .{
         .envs = envs,
-        .capacity = 256,
+        .capacity = (lab.SuperTrackLearner{}).replay_steps,
         .action_scale = geno.supertrack_action_scale,
         .task = training_task,
         // Geno's task exempts its feet from unexpected contact BY NAME; the fleet resolves them through these.
@@ -269,7 +260,6 @@ fn deinit(gpa: Allocator, s: *State) void {
     s.imported.deinit();
     s.robot.deinit();
     s.doc.deinit();
-    z.unloadMesh(gpa, s.cylinder);
     z.unloadMesh(gpa, s.sphere);
     z.unloadMesh(gpa, s.cube);
     s.ui_host.deinit();
@@ -370,11 +360,20 @@ fn drawRobot(s: *State, gl: *z.WgpuGl, d: *const rbt.Data, tint: Color) void {
                 z.drawMeshInstanced(gl, &s.cube, &s.transform, tint);
             },
             .capsule => |cap| {
-                s.transform[0] = mulMat(
-                    mulMat(place, translation(0, -cap.half_height, 0)),
-                    scaling(cap.radius, 2.0 * cap.half_height, cap.radius),
-                );
-                z.drawMeshInstanced(gl, &s.cylinder, &s.transform, tint);
+                // A capsule is its cylinder part AND a hemisphere of its radius at each end: Geno's spine is mostly
+                // caps (`Spine3`: radius 0.13, a cylinder part 0.09 long), so the cylinder alone draws a flat disk.
+                // zimr's capsule runs along its geom's LOCAL Y (`GeomShape`); its two segment ends, in the world
+                // where z is up, then in the drawing where y is up - (x, y, z) to (x, z, -y), as `zUpToYUp` turns.
+                const geom_quaternion: Quat = qmul(body_rot, m.geom_rot[g]);
+                const half_axis_local: Vec = vec(0, cap.half_height, 0);
+                const half_axis_z_up: Vec = zm.rotate(geom_quaternion, half_axis_local);
+                const half_axis_drawn: Vec = vec(half_axis_z_up[0], half_axis_z_up[2], -half_axis_z_up[1]);
+                const centre_drawn: Vec = vec(world_pos[0], world_pos[2], -world_pos[1]);
+                const segment_start: Vec = centre_drawn - half_axis_drawn;
+                const segment_end: Vec = centre_drawn + half_axis_drawn;
+                const capsule_slices: i32 = 12;
+                const capsule_rings: i32 = 6;
+                z.drawCapsule(gl, segment_start, segment_end, cap.radius, capsule_slices, capsule_rings, tint);
             },
             else => {},
         }

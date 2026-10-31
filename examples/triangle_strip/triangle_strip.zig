@@ -14,7 +14,6 @@ const cosRad = zm.cosRad;
 const sinRad = zm.sinRad;
 const tau = zm.tau;
 const clamp = zm.clamp;
-const distance = zm.distance;
 const float = zm.float;
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
@@ -55,7 +54,7 @@ fn update(f: *z.Frame, s: *State) void {
         s.dragged = false;
     }
     if (down) {
-        if (distance(mouse, s.press) > 8.0) {
+        if (zm.distance(mouse, s.press) > 8.0) {
             s.dragged = true;
         }
         if (s.dragged) {

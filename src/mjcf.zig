@@ -33,7 +33,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const ArrayListUnmanaged = std.ArrayListUnmanaged;
+const ArrayList = std.ArrayList;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const testing_allocator = std.testing.allocator;
 const eql = std.mem.eql;
@@ -599,7 +599,7 @@ fn readClass(
     doc: *const codecs.xml.Document,
     element: *const codecs.xml.Element,
     into: u32,
-    classes: *ArrayListUnmanaged(Class),
+    classes: *ArrayList(Class),
     depth: usize,
 ) Error!void {
     if (depth >= max_depth) {
@@ -635,7 +635,7 @@ fn readClass(
         // has more element types than this importer reads, and a file using one it does not
         // understand is not thereby invalid.
         const kind: Kind = Kind.fromTag(child.name) orelse continue;
-        var merged: ArrayListUnmanaged(Attributes.Pair) = .empty;
+        var merged: ArrayList(Attributes.Pair) = .empty;
         try merged.appendSlice(a, classes.items[into].by_kind.get(kind).pairs);
         for (doc.attributes[child.attribute_start..][0..child.attribute_count]) |attr| {
             const attr_name: []const u8 = attr.name;
@@ -670,7 +670,7 @@ pub fn readDefaults(gpa: Allocator, doc: *const codecs.xml.Document) Error!Defau
     errdefer arena.deinit();
     const a: Allocator = arena.allocator();
 
-    var classes: ArrayListUnmanaged(Class) = .empty;
+    var classes: ArrayList(Class) = .empty;
     // The root class always exists, even in a file with no `<default>` at all - that keeps
     // every caller on one path instead of branching on "are there defaults".
     try classes.append(a, .{
@@ -738,7 +738,7 @@ fn readFloatsUpTo(text: []const u8, out: []f32) !void {
 /// this reader's, and a keyframe legitimately states a different number per model.
 fn readFloatList(a: Allocator, text: ?[]const u8) Error![]const f32 {
     const source: []const u8 = text orelse return &.{};
-    var out: ArrayListUnmanaged(f32) = .empty;
+    var out: ArrayList(f32) = .empty;
     var it = std.mem.tokenizeAny(u8, source, " \t\n\r");
     while (it.next()) |token| {
         try out.append(a, parseFloat(f32, token) catch return Error.MalformedNumberList);
@@ -1097,10 +1097,10 @@ fn readBody(
     inherited_class: []const u8,
     defaults: *const Defaults,
     compiler: Compiler,
-    bodies: *ArrayListUnmanaged(Body),
-    joints: *ArrayListUnmanaged(Joint),
-    geoms: *ArrayListUnmanaged(Geom),
-    sites: *ArrayListUnmanaged(Site),
+    bodies: *ArrayList(Body),
+    joints: *ArrayList(Joint),
+    geoms: *ArrayList(Geom),
+    sites: *ArrayList(Site),
     depth: usize,
 ) Error!void {
     if (depth >= max_depth) {
@@ -1184,7 +1184,7 @@ pub fn readActuators(
     doc: *const codecs.xml.Document,
     defaults: *const Defaults,
 ) Error![]Actuator {
-    var out: ArrayListUnmanaged(Actuator) = .empty;
+    var out: ArrayList(Actuator) = .empty;
     const block: *const codecs.xml.Element =
         doc.child(doc.rootElement(), "actuator") orelse return out.toOwnedSlice(a);
 
@@ -1228,7 +1228,7 @@ pub fn readActuators(
 /// happens to carry one this engine cannot compute should still import. The alternative is an
 /// importer that refuses whole robots over an instrument nobody asked to read.
 pub fn readSensors(a: Allocator, doc: *const codecs.xml.Document) Error![]Sensor {
-    var out: ArrayListUnmanaged(Sensor) = .empty;
+    var out: ArrayList(Sensor) = .empty;
     const block: *const codecs.xml.Element =
         doc.child(doc.rootElement(), "sensor") orelse return out.toOwnedSlice(a);
 
@@ -1286,7 +1286,7 @@ pub fn readEqualities(
     sites: []const Site,
     bodies: []const Body,
 ) Error![]Equality {
-    var out: ArrayListUnmanaged(Equality) = .empty;
+    var out: ArrayList(Equality) = .empty;
     const block: *const codecs.xml.Element =
         doc.child(doc.rootElement(), "equality") orelse return out.toOwnedSlice(a);
 
@@ -1354,7 +1354,7 @@ pub fn readKeyframes(
     a: Allocator,
     doc: *const codecs.xml.Document,
 ) Error![]Keyframe {
-    var out: ArrayListUnmanaged(Keyframe) = .empty;
+    var out: ArrayList(Keyframe) = .empty;
     const block: *const codecs.xml.Element =
         doc.child(doc.rootElement(), "keyframe") orelse return out.toOwnedSlice(a);
 
@@ -1378,7 +1378,7 @@ fn readExcludes(
     a: Allocator,
     doc: *const codecs.xml.Document,
 ) Error![]const Exclude {
-    var out: ArrayListUnmanaged(Exclude) = .empty;
+    var out: ArrayList(Exclude) = .empty;
     const block: *const codecs.xml.Element =
         doc.child(doc.rootElement(), "contact") orelse return out.toOwnedSlice(a);
     for (doc.childrenOf(block)) |*child| {
@@ -1407,7 +1407,7 @@ fn stemOf(path: []const u8) []const u8 {
 
 /// Read `<asset>`'s `<mesh>` entries.
 pub fn readMeshAssets(a: Allocator, doc: *const codecs.xml.Document) Error![]MeshAsset {
-    var out: ArrayListUnmanaged(MeshAsset) = .empty;
+    var out: ArrayList(MeshAsset) = .empty;
     const block: *const codecs.xml.Element =
         doc.child(doc.rootElement(), "asset") orelse return out.toOwnedSlice(a);
 
@@ -1508,10 +1508,10 @@ pub fn readRobot(gpa: Allocator, doc: *const codecs.xml.Document) Error!Robot {
     defer defaults.deinit();
 
     const compiler: Compiler = .read(doc);
-    var bodies: ArrayListUnmanaged(Body) = .empty;
-    var joints: ArrayListUnmanaged(Joint) = .empty;
-    var geoms: ArrayListUnmanaged(Geom) = .empty;
-    var sites: ArrayListUnmanaged(Site) = .empty;
+    var bodies: ArrayList(Body) = .empty;
+    var joints: ArrayList(Joint) = .empty;
+    var geoms: ArrayList(Geom) = .empty;
+    var sites: ArrayList(Site) = .empty;
 
     const root: *const codecs.xml.Element = doc.rootElement();
     if (doc.child(root, "worldbody")) |world| {

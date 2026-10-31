@@ -8,7 +8,6 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const clamp = zm.clamp;
-const distance = zm.distance;
 const common = @import("example_common");
 
 const Vec2 = zm.Vec2;
@@ -57,7 +56,7 @@ fn update(f: *z.Frame, s: *State) void {
     if ((left_down or right_down) and have_prev) {
         var col: Color = common.palette.bg; // right-drag erases (paints the background)
         if (left_down) {
-            s.hue = @mod(s.hue + distance(s.prev, mouse) / 3.0, 360.0);
+            s.hue = @mod(s.hue + zm.distance(s.prev, mouse) / 3.0, 360.0);
             col = z.colorFromHSV(s.hue, 0.85, 1.0);
         }
         const r: f32 = s.thickness * 0.5;

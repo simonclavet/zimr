@@ -44,7 +44,7 @@ const float = zm.float;
 comptime {
     @setEvalBranchQuota(400_000);
     // Audited: each computes one expression, with no `is_gpu` branch that could diverge.
-    const branch_free = [_][]const u8{
+    const listed_branch_free = [_][]const u8{
         "relu", "exp",   "abs",   "floor", "ceil",  "square", "expm1", "log1p",
         "sinh", "cosh",  "asinh", "atanh", "rsqrt", "sign",   "trunc", "round",
         "log2", "log10",
@@ -71,6 +71,22 @@ comptime {
         // a `*` or `/` peer - the compiler rejects that outright.
         "float",
     };
+    // zimrmath's row statistics, which the row kernels share with zimrnum's host functions and the
+    // GPU learning kit: read before adding. They are built of `@max`, `@exp`, `@log` and `@sqrt` and
+    // of `CompensatedSum`, whose one branch is on the DATA (which addend is the larger), the same on
+    // both backends; none has an `is_gpu` branch. `requireRowAccess` and the statistics types are
+    // comptime only.
+    const row_statistics = [_][]const u8{
+        "softmaxGroupStatistics",
+        "softmaxGroupValue",
+        "softmaxLogDenominator",
+        "SoftmaxGroupStatistics",
+        "layerNormRowStatistics",
+        "layerNormValue",
+        "LayerNormStatistics",
+        "requireRowAccess",
+    };
+    const branch_free: [listed_branch_free.len + row_statistics.len][]const u8 = listed_branch_free ++ row_statistics;
     // Known to branch on `is_gpu`, and deliberately allowed: their two routes are measured on the
     // device and agree inside their rows' bars - `sin` 1.8e-7, `cos` 1.9e-7, `tanh` and `sigmoid`
     // one ULP each.
@@ -396,6 +412,17 @@ pub fn scale(id: u32) void {
     bout[id] = bx[id] * params.scalar;
 }
 
+/// A row of the input buffer read as a row accessor (`zm.requireRowAccess`): the values from `start` on - what the
+/// row kernels hand zimrmath's row statistics, so a row is reduced on the device as zimrnum reduces it on the host.
+const InputRow = struct {
+    start: u32,
+
+    pub fn at(row: InputRow, index: usize) f32 {
+        const offset: u32 = row.start + @as(u32, @intCast(index));
+        return bx[offset];
+    }
+};
+
 /// Softmax along each row: `out[r][c] = e^(x[r][c] - max_r) / sum_r`.
 ///
 /// -- *** ONE THREAD PER ROW, AND THAT IS A KNOWN LIMITATION --
@@ -427,82 +454,67 @@ pub fn log_sum_exp_rows(id: u32) void {
     if (id >= rows) {
         return;
     }
-    const base: u32 = id * params.cols;
-
-    var largest: f32 = bx[base];
-    var i: u32 = 1;
-    while (i < params.cols) : (i += 1) {
-        largest = @max(largest, bx[base + i]);
-    }
-
-    var total: f32 = 0;
-    i = 0;
-    while (i < params.cols) : (i += 1) {
-        total += @exp(bx[base + i] - largest);
-    }
-    bout[id] = largest + @log(total);
+    const row_values: InputRow = .{ .start = id * params.cols };
+    // The row's largest value and its compensated sum of shifted exponentials: zimrmath's one definition, which
+    // zimrnum's `rowLogSumExp` reads too (`zm.softmaxGroupStatistics`).
+    const statistics: zm.SoftmaxGroupStatistics(f32) = zm.softmaxGroupStatistics(
+        f32,
+        InputRow,
+        row_values,
+        0,
+        params.cols,
+    );
+    bout[id] = zm.softmaxLogDenominator(f32, statistics);
 }
 
+/// Each row's softmax, ONE THREAD PER ROW: zimrnum's `softmaxRows`, by the same statistics
+/// (`zm.softmaxGroupStatistics`) and the same probabilities (`zm.softmaxGroupValue`).
 pub fn softmax_rows(id: u32) void {
     const rows: u32 = params.count / params.cols;
     if (id >= rows) {
         return;
     }
-    const base: u32 = id * params.cols;
-
-    var largest: f32 = bx[base];
-    var i: u32 = 1;
-    while (i < params.cols) : (i += 1) {
-        largest = @max(largest, bx[base + i]);
-    }
-
-    var total: f32 = 0;
-    i = 0;
-    while (i < params.cols) : (i += 1) {
-        const e: f32 = @exp(bx[base + i] - largest);
-        bout[base + i] = e;
-        total += e;
-    }
-
-    i = 0;
-    while (i < params.cols) : (i += 1) {
-        bout[base + i] = bout[base + i] / total;
+    const row_start: u32 = id * params.cols;
+    const row_values: InputRow = .{ .start = row_start };
+    const statistics: zm.SoftmaxGroupStatistics(f32) = zm.softmaxGroupStatistics(
+        f32,
+        InputRow,
+        row_values,
+        0,
+        params.cols,
+    );
+    var column: u32 = 0;
+    while (column < params.cols) : (column += 1) {
+        const value: f32 = bx[row_start + column];
+        bout[row_start + column] = zm.softmaxGroupValue(f32, value, statistics);
     }
 }
 
-/// Normalise each row to zero mean and unit variance. Matches `zn.layerNormRows`.
+/// Normalise each row to zero mean and unit variance - zimrnum's `layerNormRows`, by the same statistics.
 ///
-/// * Three passes over the row - mean, variance, write - exactly as the CPU does. A single-pass
-/// form using E[x^2] - E[x]^2 exists and is NOT used: it subtracts two large nearly-equal numbers
-/// and loses most of its significant digits when the mean is large relative to the spread, which
-/// is the normal case for an unnormalised activation. The two sides must also agree, and the CPU
-/// version is the two-pass one.
+/// * Three passes over the row - the mean, the variance, the write - and both sums compensated: zimrmath's one
+/// definition (`zm.layerNormRowStatistics`, `zm.layerNormValue`), which zimrnum's `layerNormRows` and the GPU learning
+/// kit's `norm_fwd` read too. A single-pass form using E[x^2] - E[x]^2 exists and is NOT used: it subtracts two large
+/// nearly-equal numbers and loses most of its significant digits when the mean is large relative to the spread, which
+/// is the normal case for an unnormalised activation.
 pub fn layernorm_rows(id: u32) void {
     const rows: u32 = params.count / params.cols;
     if (id >= rows) {
         return;
     }
-    const base: u32 = id * params.cols;
-    const width: f32 = @floatFromInt(params.cols);
-
-    var total: f32 = 0;
-    var i: u32 = 0;
-    while (i < params.cols) : (i += 1) {
-        total += bx[base + i];
-    }
-    const mean: f32 = total / width;
-
-    var sq: f32 = 0;
-    i = 0;
-    while (i < params.cols) : (i += 1) {
-        const d: f32 = bx[base + i] - mean;
-        sq += d * d;
-    }
-    const inv: f32 = 1.0 / @sqrt(sq / width + params.epsilon);
-
-    i = 0;
-    while (i < params.cols) : (i += 1) {
-        bout[base + i] = (bx[base + i] - mean) * inv;
+    const row_start: u32 = id * params.cols;
+    const row_values: InputRow = .{ .start = row_start };
+    const statistics: zm.LayerNormStatistics(f32) = zm.layerNormRowStatistics(
+        f32,
+        InputRow,
+        row_values,
+        params.cols,
+        params.epsilon,
+    );
+    var column: u32 = 0;
+    while (column < params.cols) : (column += 1) {
+        const value: f32 = bx[row_start + column];
+        bout[row_start + column] = zm.layerNormValue(f32, value, statistics);
     }
 }
 

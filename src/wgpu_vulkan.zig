@@ -360,6 +360,10 @@ const Gpu = struct {
     max_memory_allocations: u32,
     /// How many descriptor sets a pipeline may bind: WebGPU's group number is the set number, up to 3 in zimr.
     max_bound_descriptor_sets: u32,
+    /// The most bytes one storage-buffer binding may span (`VkPhysicalDeviceLimits::maxStorageBufferRange`): 128 MB on
+    /// some devices, gigabytes on most desktops. A binding past it is refused loudly (`createBindGroup`) - the device
+    /// would otherwise read and write past what it bound, with no error unless validation is on.
+    max_storage_buffer_range: u32,
 };
 
 /// A command buffer waiting for the timeline to pass `serial`, after which it is reset and reused.
@@ -1004,6 +1008,7 @@ fn chooseGpu(self: *Host) BringUpError!Gpu {
             .queue_family = family,
             .max_memory_allocations = properties.limits.max_memory_allocation_count,
             .max_bound_descriptor_sets = properties.limits.max_bound_descriptor_sets,
+            .max_storage_buffer_range = properties.limits.max_storage_buffer_range,
         };
         if (choice) |wanted| {
             const index_wanted: ?usize = parseInt(usize, wanted, 10) catch null;
@@ -2714,6 +2719,18 @@ fn createBindGroup(
         switch (entry.resource) {
             .buffer => {
                 const buffer: *BufferSlot = self.buffers.get(entry.handle, "buffer");
+                // A storage binding no wider than the device can bind: past it, the device reads and writes beyond
+                // the binding with no error - a silent wrong answer, traded here for a loud stop.
+                const is_storage: bool = descriptorType(kind) == .storage_buffer;
+                const bound_bytes: u64 = if (entry.size == 0) buffer.size - entry.offset else entry.size;
+                if (is_storage and bound_bytes > self.gpu.max_storage_buffer_range) {
+                    panic("vulkan host: bind group `{s}`: a storage binding of {d} bytes; {s} binds at most {d}", .{
+                        label,
+                        bound_bytes,
+                        vk.fixedName(&self.gpu.name),
+                        self.gpu.max_storage_buffer_range,
+                    });
+                }
                 buffer_infos[index] = .{
                     .buffer = buffer.buffer,
                     .offset = entry.offset,

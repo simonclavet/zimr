@@ -2179,6 +2179,437 @@ pub fn gelu(x: anytype) @TypeOf(x) {
     return x * sigmoid(2.0 * inner);
 }
 
+// ===== Row reductions for layer kernels =====
+//
+// WHY THESE LIVE HERE. A layer norm and a grouped softmax each reduce a ROW before they write any value of it, and
+// the same row is reduced in three places: zimrnum's tensors on the host (`layerNormRows`, `simNormRows` - and
+// through them the graph and the policy player), and the GPU learning kit's kernels on the device and its CPU twin.
+// If the three computed their statistics each in its own way, a policy trained on the device and played from its
+// file would differ in the last bits for no reason but bookkeeping. So the arithmetic is written ONCE, here, in the
+// shader-safe tier every kernel already imports, over a ROW ACCESSOR: any type with
+//
+//     pub fn at(row: Row, index: usize) T
+//
+// - a tensor's row on the host, a run of floats in a storage buffer on the device. The functions never write: each
+// returns the row's statistics, and the caller writes the values (`layerNormValue`, `softmaxGroupValue`), so the
+// writing - to a tensor, or to a buffer - stays the caller's own.
+
+/// A summation that keeps the low bits a plain running total loses - Neumaier's: each addition's rounding error is
+/// kept in a second total and added back at the end.
+///
+/// A naive sum loses the low bits of every addend once the running total grows past them: summing a million values
+/// near 1.0 in f32, the total reaches 10^6 while each addend is about 1, and most of every addend's mantissa falls off
+/// the end. The correction term recovers exactly what each addition rounded away. Neumaier rather than Kahan: the
+/// branch handles an addend larger than the running total, which plain Kahan gets wrong. The cost is three more
+/// floating-point operations per element. For integers there is nothing to compensate - integer addition is exact -
+/// and the correction stays zero.
+///
+/// zimrnum re-exports this as its `CompensatedSum`: every accumulation in zimrnum, and every row reduction here, sums
+/// through it.
+pub fn CompensatedSum(comptime T: type) type {
+    const is_numeric: bool = switch (@typeInfo(T)) {
+        .float, .int, .comptime_float, .comptime_int => true,
+        else => false,
+    };
+    if (comptime !is_numeric) {
+        @compileError("zm.CompensatedSum: expected a number type, got " ++ @typeName(T));
+    }
+    const is_float: bool = switch (@typeInfo(T)) {
+        .float, .comptime_float => true,
+        else => false,
+    };
+    return struct {
+        total: T = 0,
+        compensation: T = 0,
+
+        pub fn add(self: *@This(), x: T) void {
+            if (comptime !is_float) {
+                self.total += x;
+                return;
+            }
+            const t: T = self.total + x;
+            if (@abs(self.total) >= @abs(x)) {
+                self.compensation += (self.total - t) + x;
+            } else {
+                self.compensation += (x - t) + self.total;
+            }
+            self.total = t;
+        }
+
+        pub fn value(self: @This()) T {
+            return self.total + self.compensation;
+        }
+    };
+}
+
+/// `T` is a float type of one lane - f16, f32 or f64, the widths a device and the host both have - as a row's values
+/// and a tensor's elements are. `requireFloatLike` also takes vectors and `comptime_float`; a row reduction converts
+/// its width to `T`, which neither allows. zimrnum's `requireFloat` is this check.
+pub fn requireFloatScalar(comptime T: type) void {
+    const is_float_scalar: bool = T == f16 or T == f32 or T == f64;
+    if (comptime !is_float_scalar) {
+        @compileError("expected f16, f32 or f64, got " ++ @typeName(T));
+    }
+}
+
+/// `Row` reads values of `T` by index (this section's head): `pub fn at(row: Row, index: usize) T`.
+pub fn requireRowAccess(comptime T: type, comptime Row: type) void {
+    if (comptime !@hasDecl(Row, "at")) {
+        @compileError("zm: a row accessor needs `pub fn at(row: " ++ @typeName(Row) ++ ", index: usize) " ++
+            @typeName(T) ++ "` - " ++ @typeName(Row) ++ " has no `at`");
+    }
+    const At: type = @TypeOf(Row.at);
+    if (comptime At != fn (Row, usize) T) {
+        @compileError("zm: " ++ @typeName(Row) ++ ".at must be `fn (" ++ @typeName(Row) ++ ", usize) " ++
+            @typeName(T) ++ "`, found `" ++ @typeName(At) ++ "`");
+    }
+}
+
+/// What a layer norm needs to know of a row: its mean, and the inverse of its spread - 1 / sqrt(variance + epsilon),
+/// the variance being the MEAN of the squared deviations (the biased variance, as a layer norm takes it).
+pub fn LayerNormStatistics(comptime T: type) type {
+    return struct {
+        mean: T,
+        inverse_spread: T,
+    };
+}
+
+/// The layer-norm statistics of the `width` values of `row` (`LayerNormStatistics`): one definition for every layer
+/// norm in zimr. Two passes, both compensated (`CompensatedSum`): the mean, then the sum of squared deviations from
+/// it - a wide row is exactly the sum that loses its low bits, and here it feeds a divisor. `epsilon` is added to the
+/// variance inside the root, so a constant row normalises to zeros instead of dividing by zero. `width` is at least 1:
+/// a row of none has no mean (zimrnum refuses one with `DomainError`; a kernel is never dispatched on one).
+pub fn layerNormRowStatistics(
+    comptime T: type,
+    comptime Row: type,
+    row: Row,
+    width: usize,
+    epsilon: T,
+) LayerNormStatistics(T) {
+    requireFloatScalar(T);
+    requireRowAccess(T, Row);
+    const width_value: T = @floatFromInt(width);
+    // `while` loops, as every kernel writes them: the device runs this too (this section's head).
+    var total: CompensatedSum(T) = .{};
+    var index: usize = 0;
+    while (index < width) : (index += 1) {
+        total.add(row.at(index));
+    }
+    const mean: T = total.value() / width_value;
+    var squared_deviations: CompensatedSum(T) = .{};
+    index = 0;
+    while (index < width) : (index += 1) {
+        const deviation: T = row.at(index) - mean;
+        const squared_deviation: T = deviation * deviation;
+        squared_deviations.add(squared_deviation);
+    }
+    const variance: T = squared_deviations.value() / width_value;
+    const inverse_spread: T = 1.0 / @sqrt(variance + epsilon);
+    const statistics: LayerNormStatistics(T) = .{ .mean = mean, .inverse_spread = inverse_spread };
+    return statistics;
+}
+
+/// One normalised value of a row with these statistics: its deviation from the mean, over the spread.
+pub fn layerNormValue(comptime T: type, x: T, statistics: LayerNormStatistics(T)) T {
+    const deviation: T = x - statistics.mean;
+    return deviation * statistics.inverse_spread;
+}
+
+/// What a softmax needs to know of a group of values: the largest of them - subtracted before every exponential, so
+/// the largest exponential is e^0 = 1 and none can overflow - and the sum of the shifted exponentials.
+pub fn SoftmaxGroupStatistics(comptime T: type) type {
+    return struct {
+        largest: T,
+        sum_of_exponentials: T,
+    };
+}
+
+/// The softmax statistics of the `count` values of `row` from `start` (`SoftmaxGroupStatistics`): one definition for
+/// every softmax in zimr - a SimNorm group, a whole row (`zimrnum.softmaxRows`, and a cross-entropy's log-sum-exp),
+/// on the host and in the GPU kit alike. The sum is compensated (`CompensatedSum`): a row of 101 bins is a wide sum,
+/// and its result divides every probability. `count` is at least 1: the group's first value starts the search for its
+/// largest.
+pub fn softmaxGroupStatistics(
+    comptime T: type,
+    comptime Row: type,
+    row: Row,
+    start: usize,
+    count: usize,
+) SoftmaxGroupStatistics(T) {
+    requireFloatScalar(T);
+    requireRowAccess(T, Row);
+    const end: usize = start + count;
+    var largest: T = row.at(start);
+    var index: usize = start + 1;
+    while (index < end) : (index += 1) {
+        largest = @max(largest, row.at(index));
+    }
+    var sum_of_exponentials: CompensatedSum(T) = .{};
+    index = start;
+    while (index < end) : (index += 1) {
+        const shifted: T = row.at(index) - largest;
+        sum_of_exponentials.add(@exp(shifted));
+    }
+    const statistics: SoftmaxGroupStatistics(T) = .{
+        .largest = largest,
+        .sum_of_exponentials = sum_of_exponentials.value(),
+    };
+    return statistics;
+}
+
+/// The log of a group's softmax denominator, in the original units: log(sum of exp(x_j)) = largest + log(sum of the
+/// shifted exponentials) - safe from overflow for the reason `SoftmaxGroupStatistics` shifts. A cross-entropy's
+/// log-probabilities are each logit less this.
+pub fn softmaxLogDenominator(comptime T: type, statistics: SoftmaxGroupStatistics(T)) T {
+    return statistics.largest + @log(statistics.sum_of_exponentials);
+}
+
+/// One probability of a group with these statistics: the value's shifted exponential over the group's sum. The
+/// exponential is the same one `softmaxGroupStatistics` summed - the same input to `@exp`, so the same bits.
+pub fn softmaxGroupValue(
+    comptime T: type,
+    x: T,
+    statistics: SoftmaxGroupStatistics(T),
+) T {
+    const shifted: T = x - statistics.largest;
+    const exponential: T = @exp(shifted);
+    return exponential / statistics.sum_of_exponentials;
+}
+
+/// What the backward of a layer norm needs to know of a row's arriving gradient g and its normalised values n: the
+/// two means that couple every element of the row to every other - mean(g), the mean's own dependence on each
+/// element, and mean(g x n), the spread's.
+pub fn LayerNormGradientCouplings(comptime T: type) type {
+    return struct {
+        mean_gradient: T,
+        mean_gradient_times_normalised: T,
+    };
+}
+
+/// The couplings of a row's layer-norm backward (`LayerNormGradientCouplings`), from the gradient arriving at the
+/// normalised values (`gradients`) and those values themselves (`normalised`, the forward's n), `width` of each - one
+/// definition for every layer norm's backward in zimr. Both means compensated, as the forward's are.
+///
+/// Layer norm subtracts the row's mean and divides by its spread, so moving one input moves the mean and the spread,
+/// and with them every OTHER normalised value. The gradient is not elementwise:
+///
+///     dx = inverse_spread * (g - mean(g) - n * mean(g n))
+///
+/// the two subtracted means being exactly those couplings (`layerNormInputGradient` writes one element of it).
+pub fn layerNormGradientCouplings(
+    comptime T: type,
+    comptime GradientRow: type,
+    comptime NormalisedRow: type,
+    gradients: GradientRow,
+    normalised: NormalisedRow,
+    width: usize,
+) LayerNormGradientCouplings(T) {
+    requireFloatScalar(T);
+    requireRowAccess(T, GradientRow);
+    requireRowAccess(T, NormalisedRow);
+    const width_value: T = @floatFromInt(width);
+    var gradient_sum: CompensatedSum(T) = .{};
+    var gradient_times_normalised_sum: CompensatedSum(T) = .{};
+    var index: usize = 0;
+    while (index < width) : (index += 1) {
+        const gradient: T = gradients.at(index);
+        const gradient_times_normalised: T = gradient * normalised.at(index);
+        gradient_sum.add(gradient);
+        gradient_times_normalised_sum.add(gradient_times_normalised);
+    }
+    const couplings: LayerNormGradientCouplings(T) = .{
+        .mean_gradient = gradient_sum.value() / width_value,
+        .mean_gradient_times_normalised = gradient_times_normalised_sum.value() / width_value,
+    };
+    return couplings;
+}
+
+/// One input's gradient through a layer norm: its arriving gradient less the row's two couplings, over the spread
+/// (`layerNormGradientCouplings` gives the formula).
+pub fn layerNormInputGradient(
+    comptime T: type,
+    gradient: T,
+    normalised: T,
+    couplings: LayerNormGradientCouplings(T),
+    inverse_spread: T,
+) T {
+    const through_spread: T = normalised * couplings.mean_gradient_times_normalised;
+    const decoupled: T = gradient - couplings.mean_gradient - through_spread;
+    return decoupled * inverse_spread;
+}
+
+/// The probability-weighted sum of a group's arriving gradients, sum over j of g_j p_j - what a softmax's backward
+/// subtracts from every member (`softmaxGroupInputGradient`). For a group with output probabilities p, the Jacobian
+/// is dp_j / dx_k = p_j (delta_jk - p_k), so the gradient passed back to input k is p_k (g_k - sum over j of g_j p_j):
+/// the Jacobian is never formed. A plain running total, as the forward's sum is: a group is a handful of values.
+pub fn softmaxGroupGradientDot(
+    comptime T: type,
+    comptime GradientRow: type,
+    comptime OutputRow: type,
+    gradients: GradientRow,
+    outputs: OutputRow,
+    start: usize,
+    count: usize,
+) T {
+    requireFloatScalar(T);
+    requireRowAccess(T, GradientRow);
+    requireRowAccess(T, OutputRow);
+    const end: usize = start + count;
+    var weighted_sum: T = 0;
+    var index: usize = start;
+    while (index < end) : (index += 1) {
+        weighted_sum += gradients.at(index) * outputs.at(index);
+    }
+    return weighted_sum;
+}
+
+/// One input's gradient through a softmax group: its probability, times how far its arriving gradient is from the
+/// group's probability-weighted sum (`softmaxGroupGradientDot`).
+pub fn softmaxGroupInputGradient(
+    comptime T: type,
+    gradient: T,
+    probability: T,
+    weighted_sum: T,
+) T {
+    const from_average: T = gradient - weighted_sum;
+    return probability * from_average;
+}
+
+/// A row accessor over a slice: the tests' row, and the shape a caller's own accessor takes.
+const SliceRow = struct {
+    values: []const f64,
+
+    pub fn at(row: SliceRow, index: usize) f64 {
+        return row.values[index];
+    }
+};
+
+test "zm layerNormRowStatistics: the mean and the inverse spread of a row, epsilon inside the root" {
+    // 1, 2, 3, 4: the mean 2.5; the squared deviations 2.25, 0.25, 0.25, 2.25, their mean 1.25; with epsilon 0.75
+    // the spread is sqrt(2) and its inverse 1 / sqrt(2).
+    const row: SliceRow = .{ .values = &.{ 1, 2, 3, 4 } };
+    const statistics: LayerNormStatistics(f64) = layerNormRowStatistics(f64, SliceRow, row, 4, 0.75);
+    try expectEqual(@as(f64, 2.5), statistics.mean);
+    try expectApproxEqAbs(1.0 / @sqrt(2.0), statistics.inverse_spread, 1e-15);
+    // The normalised values: deviations over the spread.
+    try expectApproxEqAbs(-1.5 / @sqrt(2.0), layerNormValue(f64, 1, statistics), 1e-15);
+    // A constant row normalises to zeros: epsilon keeps the divisor finite.
+    const constant_row: SliceRow = .{ .values = &.{ 7, 7, 7 } };
+    const constant: LayerNormStatistics(f64) = layerNormRowStatistics(f64, SliceRow, constant_row, 3, 1e-5);
+    try expectEqual(@as(f64, 0), layerNormValue(f64, 7, constant));
+}
+
+test "zm layerNormGradientCouplings: the backward of a layer norm by its couplings, against central differences" {
+    // The row 1, 2, 4, 7 normalised (epsilon 0.1), a loss L = sum w_i n_i with fixed weights w: the gradient at the
+    // normalised values is w, and each input's gradient by the couplings must match (L(x + h) - L(x - h)) / 2h.
+    const inputs = [_]f64{ 1, 2, 4, 7 };
+    const weights = [_]f64{ 0.5, -1.0, 2.0, 0.25 };
+    const epsilon: f64 = 0.1;
+    const row: SliceRow = .{ .values = &inputs };
+    const statistics: LayerNormStatistics(f64) = layerNormRowStatistics(f64, SliceRow, row, 4, epsilon);
+    var normalised: [4]f64 = undefined;
+    for (&normalised, inputs) |*value, input| {
+        value.* = layerNormValue(f64, input, statistics);
+    }
+    const couplings: LayerNormGradientCouplings(f64) = layerNormGradientCouplings(
+        f64,
+        SliceRow,
+        SliceRow,
+        .{ .values = &weights },
+        .{ .values = &normalised },
+        4,
+    );
+    const difference_step: f64 = 1e-6;
+    for (0..4) |moved| {
+        var loss_at = [2]f64{ 0, 0 };
+        for ([2]f64{ difference_step, -difference_step }, 0..) |offset, side| {
+            var shifted: [4]f64 = inputs;
+            shifted[moved] += offset;
+            const shifted_row: SliceRow = .{ .values = &shifted };
+            const shifted_statistics: LayerNormStatistics(f64) = layerNormRowStatistics(
+                f64,
+                SliceRow,
+                shifted_row,
+                4,
+                epsilon,
+            );
+            for (shifted, weights) |input, weight| {
+                loss_at[side] += weight * layerNormValue(f64, input, shifted_statistics);
+            }
+        }
+        const central_difference: f64 = (loss_at[0] - loss_at[1]) / (2 * difference_step);
+        const by_couplings: f64 = layerNormInputGradient(
+            f64,
+            weights[moved],
+            normalised[moved],
+            couplings,
+            statistics.inverse_spread,
+        );
+        try expectApproxEqAbs(central_difference, by_couplings, 1e-7);
+    }
+}
+
+test "zm softmaxGroupGradientDot: the backward of a softmax group, against central differences" {
+    // The group 0.5, -1, 2 softmaxed, a loss L = sum w_i p_i: each input's gradient p_i (w_i - sum w_j p_j).
+    const inputs = [_]f64{ 0.5, -1.0, 2.0 };
+    const weights = [_]f64{ 1.0, -2.0, 0.5 };
+    const row: SliceRow = .{ .values = &inputs };
+    const statistics: SoftmaxGroupStatistics(f64) = softmaxGroupStatistics(f64, SliceRow, row, 0, 3);
+    var probabilities: [3]f64 = undefined;
+    for (&probabilities, inputs) |*probability, input| {
+        probability.* = softmaxGroupValue(f64, input, statistics);
+    }
+    const weighted_sum: f64 = softmaxGroupGradientDot(
+        f64,
+        SliceRow,
+        SliceRow,
+        .{ .values = &weights },
+        .{ .values = &probabilities },
+        0,
+        3,
+    );
+    const difference_step: f64 = 1e-6;
+    for (0..3) |moved| {
+        var loss_at = [2]f64{ 0, 0 };
+        for ([2]f64{ difference_step, -difference_step }, 0..) |offset, side| {
+            var shifted: [3]f64 = inputs;
+            shifted[moved] += offset;
+            const shifted_row: SliceRow = .{ .values = &shifted };
+            const shifted_statistics: SoftmaxGroupStatistics(f64) = softmaxGroupStatistics(
+                f64,
+                SliceRow,
+                shifted_row,
+                0,
+                3,
+            );
+            for (shifted, weights) |input, weight| {
+                loss_at[side] += weight * softmaxGroupValue(f64, input, shifted_statistics);
+            }
+        }
+        const central_difference: f64 = (loss_at[0] - loss_at[1]) / (2 * difference_step);
+        const by_formula: f64 = softmaxGroupInputGradient(f64, weights[moved], probabilities[moved], weighted_sum);
+        try expectApproxEqAbs(central_difference, by_formula, 1e-8);
+    }
+}
+
+test "zm softmaxGroupStatistics: a group's probabilities sum to one, the group alone, and its largest is shifted out" {
+    // The group 1, 2, 3 inside a row that holds other values: the probabilities e^-2, e^-1, 1 over their sum.
+    const row: SliceRow = .{ .values = &.{ 100, 1, 2, 3, -100 } };
+    const statistics: SoftmaxGroupStatistics(f64) = softmaxGroupStatistics(f64, SliceRow, row, 1, 3);
+    try expectEqual(@as(f64, 3), statistics.largest);
+    const expected_sum: f64 = @exp(-2.0) + @exp(-1.0) + 1.0;
+    try expectApproxEqAbs(expected_sum, statistics.sum_of_exponentials, 1e-15);
+    var probability_total: f64 = 0;
+    for (1..4) |index| {
+        probability_total += softmaxGroupValue(f64, row.values[index], statistics);
+    }
+    try expectApproxEqAbs(1.0, probability_total, 1e-15);
+    // Large values do not overflow: the shift keeps every exponential at most 1.
+    const large_row: SliceRow = .{ .values = &.{ 1000, 1001 } };
+    const large: SoftmaxGroupStatistics(f64) = softmaxGroupStatistics(f64, SliceRow, large_row, 0, 2);
+    try expectApproxEqAbs(1.0 / (1.0 + @exp(-1.0)), softmaxGroupValue(f64, 1001, large), 1e-15);
+}
+
 /// int -> f64. Comptime-asserts `x` is an integer (a float/bool/etc is a
 /// COMPILE error, so this can't silently hide a bad conversion the way bare
 /// @floatFromInt can - and the f64 output is PINNED, not context-inferred).
@@ -3951,6 +4382,369 @@ pub fn clampFast(
     var result: T = maxFast(vmin, v);
     result = minFast(vmax, result);
     return result;
+}
+
+// ---- A policy's draw ----
+
+/// One action drawn from BMPC's policy head (`zimrrl.TanhMeanGaussian`): the squashed mean plus a standard normal
+/// `noise` times the head's spread, clamped to [-1, 1] - not a squashed sample, so no Jacobian anywhere. Everything the
+/// Gaussian puts past the range lands ON its end, so the head is N(tanh m, s^2) inside it. Worked through: mean 0.8,
+/// spread e^(log s) = 0.3, noise 1.5 -> 0.8 + 0.45 = 1.25 -> exactly 1. The one definition, for the host's head and
+/// the GPU kit's `policy_draw`.
+pub fn tanhMeanGaussianDraw(comptime T: type, mean: T, log_std: T, noise: T) T {
+    const spread: T = @exp(log_std);
+    const unclamped: T = mean + spread * noise;
+    return clamp(unclamped, -1, 1);
+}
+
+// ---- A smooth hinge: a barrier with a slope ----
+
+/// A HINGE made smooth: how far `value` lies past `margin`, rounded off over `width` -
+///
+///     width x softplus((value - margin) / width)
+///
+/// About 0 well inside the margin, width x ln 2 at it, and value - margin well past it, in the value's own units (a
+/// metre past a height margin costs about a metre). A hard limit is a cliff a gradient cannot see coming; this turns
+/// it into a slope that starts a few widths before the edge (`smoothHingeSlope`). The one definition, for the host
+/// and for SuperTrack's failure barrier on the kit (`lat_barrier_bwd`).
+pub fn smoothHinge(comptime T: type, value: T, margin: T, width: T) T {
+    // How far past the margin, counted in widths: softplus rounds the hinge's corner over about one of them.
+    const widths_past_margin: T = (value - margin) / width;
+    return width * softplus(widths_past_margin);
+}
+
+/// The smooth hinge's slope in `value` (`smoothHinge`): the logistic sigmoid of (value - margin) / width - 0 well
+/// inside the margin, 1/2 at it, 1 well past it.
+pub fn smoothHingeSlope(comptime T: type, value: T, margin: T, width: T) T {
+    // d/dv of width x softplus((v - margin) / width) = softplus' at that point = the logistic sigmoid: the width
+    // outside and the 1 / width of the inner derivative cancel.
+    const widths_past_margin: T = (value - margin) / width;
+    return sigmoid(widths_past_margin);
+}
+
+test "smoothHinge: about zero inside, width ln 2 at the margin, the distance past beyond; its slope numerically" {
+    try expectApproxEqAbs(@as(f64, 0), smoothHinge(f64, 0.0, 0.25, 0.05), 1e-3);
+    try expectApproxEqAbs(0.05 * @log(2.0), smoothHinge(f64, 0.25, 0.25, 0.05), 1e-12);
+    try expectApproxEqAbs(@as(f64, 0.75), smoothHinge(f64, 1.0, 0.25, 0.05), 1e-6);
+    const difference_step: f64 = 1e-6;
+    for ([_]f64{ 0.1, 0.24, 0.25, 0.27, 0.6 }) |value| {
+        const ahead: f64 = smoothHinge(f64, value + difference_step, 0.25, 0.05);
+        const behind: f64 = smoothHinge(f64, value - difference_step, 0.25, 0.05);
+        const numeric: f64 = (ahead - behind) / (2 * difference_step);
+        try expectApproxEqAbs(numeric, smoothHingeSlope(f64, value, 0.25, 0.05), 1e-8);
+    }
+}
+
+// ---- A score a search can rank ----
+
+/// A score a population search can rank (MPPI's, `zimrrl.Mppi`), made the way BMPC's `nan_to_num(0)` makes it: a number
+/// that is not a number counts as 0, and an infinite score becomes the largest finite score of its sign - so a plan
+/// whose score overflowed downward still ranks LAST, and one that overflowed upward still ranks first. The one
+/// definition, for the host's refit and the GPU kit's `mppi_elites`.
+///
+///     raw score     NaN     -inf             +inf             finite
+///     rankable      0       lowest finite    highest finite   itself
+pub fn rankableScore(comptime T: type, raw_score: T) T {
+    if (isFinite(raw_score)) {
+        return raw_score;
+    }
+    if (isNan(raw_score)) {
+        return 0;
+    }
+    // The largest FINITE value of the sign (`floatMax`) - not `highest`, which is infinity for a float: an infinite
+    // best score would leave the refit's weights exp(temperature x (score - best)) at exp(inf - inf), not a number.
+    const largest_finite: T = floatMax(T);
+    return if (raw_score > 0) largest_finite else -largest_finite;
+}
+
+test "rankableScore: NaN as 0, an infinity as the largest finite score of its sign, a finite score as itself" {
+    try expectEqual(@as(f32, 0), rankableScore(f32, nan(f32)));
+    try expectEqual(floatMax(f32), rankableScore(f32, inf(f32)));
+    try expectEqual(-floatMax(f32), rankableScore(f32, -inf(f32)));
+    try expectEqual(@as(f32, -2.5), rankableScore(f32, -2.5));
+    // What the refit then computes stays a number: the best weighs exp(0) = 1, a finite score beside it 0.
+    const best: f32 = rankableScore(f32, inf(f32));
+    const best_weight: f32 = @exp(0.5 * (best - best));
+    const finite_weight: f32 = @exp(0.5 * (rankableScore(f32, 1.2) - best));
+    try expectEqual(@as(f32, 1), best_weight);
+    try expectEqual(@as(f32, 0), finite_weight);
+}
+
+// ---- A sorted sample's quantile, and a running scale ----
+
+/// The value below which a fraction `q` of a SORTED sample lies, by linear interpolation between the two order
+/// statistics around position q x (count - 1) - torch's and numpy's default quantile, and the one definition of it in
+/// zimr: zimrnum's `quantileSorted` (for slices) and the GPU kit's running scale (for a buffer) read the sample through
+/// a row accessor (`requireRowAccess`) and call this. `count` is at least 1 and `q` is in [0, 1]: the callers check
+/// both. A worked example: 0, 10, 20, 30, 40 at q = 0.3 is position 1.2 - between 10 and 20, a fifth of the way -
+/// so 12.
+pub fn quantileOfSorted(
+    comptime T: type,
+    comptime Row: type,
+    sorted: Row,
+    count: usize,
+    q: T,
+) T {
+    requireFloatScalar(T);
+    requireRowAccess(T, Row);
+    if (count == 1) {
+        return sorted.at(0);
+    }
+    const last_index: usize = count - 1;
+    const position: T = q * @as(T, @floatFromInt(last_index));
+    // @floor rather than a bare cast: the rounding named, and for a position that is non-negative by construction
+    // the two agree.
+    const below: usize = @floor(position);
+    if (below + 1 >= count) {
+        return sorted.at(last_index);
+    }
+    const weight: T = position - @as(T, @floatFromInt(below));
+    const lower_value: T = sorted.at(below);
+    const upper_value: T = sorted.at(below + 1);
+    return lower_value + weight * (upper_value - lower_value);
+}
+
+/// One step of BMPC's RUNNING SCALE (zimrnum's `RunningScale`): the value moves a fraction `rate` (BMPC's tau) of the
+/// way toward this batch's spread, the spread counted as at least 1 BEFORE it is averaged in - torch BMPC's order:
+///
+///     value  <-  value + rate x ( max(1, spread) - value )
+///
+/// so a loss that is already small is never divided by something smaller and blown up. The one definition, for the
+/// host's `RunningScale.update` and the GPU kit's `running_scale_update`.
+pub fn runningScaleStep(comptime T: type, value: T, rate: T, spread: T) T {
+    const floored_spread: T = @max(1, spread);
+    return value + rate * (floored_spread - value);
+}
+
+// ---- A slow copy's step: Polyak averaging ----
+
+/// One step of a slow copy toward its original - Polyak averaging, a target network's `follow`: the held value moves
+/// a fraction `follow` of the way to the online one, `held + follow x (online - held)`.
+///
+/// THE INCREMENT FORM, NOT `(1 - follow) x held + follow x online`: the same algebra, not the same arithmetic. This
+/// one adds a small correction to a value already in hand and rounds twice; the other scales two full-sized terms and
+/// rounds three times. zimrnum measured it (`polyakUpdate`): over 200 000 random pairs against f64, 26% less total
+/// error, and the closer of the two in 49 716 cases against 812. THE ENDPOINTS EXACT: a follow of 0 keeps the held
+/// value and a follow of 1 copies the online one - freeze and initialise, the two settings chosen on purpose - which
+/// the increment form would each round. One definition for the host (`zimrnum.polyakUpdate`) and the GPU kit's
+/// `polyak` kernel, so a target network followed on either gives the same bits.
+pub fn polyakFollow(comptime T: type, held: T, online: T, follow: T) T {
+    if (follow == 0) {
+        return held;
+    }
+    if (follow == 1) {
+        return online;
+    }
+    const gap: T = online - held;
+    return held + follow * gap;
+}
+
+// ---- Values as distributions over bins: the two-hot ----
+//
+// A head that predicts one number - a reward, a value - outputs logits over `bin_count` bins spread evenly from `low`
+// to `high` on an AXIS (by default the symlog of the value), and is trained toward a TWO-HOT target: the number placed
+// on the axis and shared between the two bins around it. zimrnum's `CategoricalScalar` holds the settings and the
+// GPU kit's two-hot kernels read them from a uniform; both place a value by the functions here.
+
+/// SYMLOG, the "symmetric logarithm" (DreamerV3, Hafner et al. 2023): sign(x) * log(1 + |x|).
+///
+/// It squashes large magnitudes and leaves small ones almost alone: its slope at zero is 1, so near zero it is the
+/// identity; 10 becomes 2.4, 1000 becomes 6.9, 22025 becomes 10. It is odd, defined for every number, and exactly
+/// inverted by `symexp`. Why a learner wants it: a network asked to predict returns of 0.5 in one task and 5000 in
+/// another cannot use one scale for both - in symlog space they are 0.41 and 8.5, ordinary numbers for one set of
+/// settings (one bin range, one learning rate) across every task. `log1p` keeps it exact for tiny values.
+pub fn symlog(comptime T: type, x: T) T {
+    requireFloatScalar(T);
+    const squashed_magnitude: T = log1p(@abs(x));
+    return if (x < 0) -squashed_magnitude else squashed_magnitude;
+}
+
+/// SYMEXP, the inverse of `symlog`: sign(y) * (exp(|y|) - 1), so symexp(symlog(x)) = x. `expm1` keeps it exact near 0.
+pub fn symexp(comptime T: type, y: T) T {
+    requireFloatScalar(T);
+    const expanded_magnitude: T = expm1(@abs(y));
+    return if (y < 0) -expanded_magnitude else expanded_magnitude;
+}
+
+/// The slope of `symexp` at `y`: d/dy of sign(y) (e^|y| - 1) is e^|y| on either side of 0 (the sign and the
+/// derivative of |y| cancel), 1 at 0 itself - so symexp is smooth through 0, and its slope grows as fast as it does.
+pub fn symexpSlope(comptime T: type, y: T) T {
+    requireFloatScalar(T);
+    return @exp(@abs(y));
+}
+
+test "symexpSlope: symexp's slope, by central differences either side of 0 and at it" {
+    const difference_step: f64 = 1e-6;
+    for ([_]f64{ -2.5, -0.3, 0.0, 0.4, 3.0 }) |y| {
+        const ahead: f64 = symexp(f64, y + difference_step);
+        const behind: f64 = symexp(f64, y - difference_step);
+        const numeric: f64 = (ahead - behind) / (2 * difference_step);
+        try expectApproxEqAbs(numeric, symexpSlope(f64, y), 1e-6);
+    }
+}
+
+/// The distance between neighbouring bins on the axis: `bin_count` bins from `low` (bin 0) to `high` (the last), at
+/// least two of them.
+pub fn binSpacing(comptime T: type, low: T, high: T, bin_count: usize) T {
+    const last_index: T = @floatFromInt(bin_count - 1);
+    return (high - low) / last_index;
+}
+
+/// Where bin `index` sits on the axis.
+pub fn binPosition(
+    comptime T: type,
+    low: T,
+    high: T,
+    bin_count: usize,
+    index: usize,
+) T {
+    const spacing: T = binSpacing(T, low, high, bin_count);
+    const index_value: T = @floatFromInt(index);
+    return low + index_value * spacing;
+}
+
+// ---- How sure a distribution is ----
+
+/// The standard deviation of a two-hot head's bin positions under its softmax: how WIDE the head's predicted
+/// distribution is, on the bins' axis. `logits` are the head's outputs for one row; bin k sits at `binPosition(low,
+/// high, logits.len, k)`. With p the softmax of the logits and x_k the positions,
+///
+///     mean = sum p_k x_k          spread = sqrt( sum p_k (x_k - mean)^2 )
+///
+/// A head sure of its value puts its mass on a bin or two (a spread of about one bin's spacing or less); a head that
+/// has learned nothing spreads it over the whole axis. The exponentials are shifted by the largest logit, as every
+/// softmax is, so none overflows.
+pub fn binsSpreadUnderSoftmax(comptime T: type, logits: []const T, low: T, high: T) T {
+    const bin_count: usize = logits.len;
+    var largest_logit: T = logits[0];
+    for (logits) |logit| {
+        largest_logit = @max(largest_logit, logit);
+    }
+    var weight_sum: T = 0;
+    var weighted_position_sum: T = 0;
+    for (logits, 0..) |logit, bin| {
+        const unnormalised_probability: T = @exp(logit - largest_logit);
+        weight_sum += unnormalised_probability;
+        weighted_position_sum += unnormalised_probability * binPosition(T, low, high, bin_count, bin);
+    }
+    const mean_position: T = weighted_position_sum / weight_sum;
+    var weighted_square_sum: T = 0;
+    for (logits, 0..) |logit, bin| {
+        const unnormalised_probability: T = @exp(logit - largest_logit);
+        const deviation: T = binPosition(T, low, high, bin_count, bin) - mean_position;
+        weighted_square_sum += unnormalised_probability * deviation * deviation;
+    }
+    return @sqrt(weighted_square_sum / weight_sum);
+}
+
+/// The mean ENTROPY, in nats, of `probabilities` taken as groups of `group` entries, each group a probability vector
+/// (a SimNorm latent's groups, for one): -sum p ln p per group, averaged over the groups. A group spread evenly over
+/// its entries has the most, ln(group); a group all on one entry has none.
+pub fn meanGroupEntropy(comptime T: type, probabilities: []const T, group: usize) T {
+    const group_count: usize = probabilities.len / group;
+    var entropy_sum: T = 0;
+    for (0..group_count) |group_index| {
+        for (probabilities[group_index * group ..][0..group]) |probability| {
+            // 0 ln 0 is 0 in the limit: an entry with no mass adds nothing.
+            if (probability > 0) {
+                entropy_sum -= probability * @log(probability);
+            }
+        }
+    }
+    const group_count_value: T = @floatFromInt(group_count);
+    return entropy_sum / group_count_value;
+}
+
+test "binsSpreadUnderSoftmax and meanGroupEntropy: known distributions" {
+    // Two equal logits on the first two of three bins at 0, 1, 2 (all others far below): positions 0 and 1 with half
+    // the mass each - a spread of one half. One bin far above the others: a spread of about nothing.
+    const two_bins = [_]f64{ 0, 0, -1000 };
+    try expectApproxEqAbs(@as(f64, 0.5), binsSpreadUnderSoftmax(f64, &two_bins, 0, 2), 1e-12);
+    const one_bin = [_]f64{ -1000, 50, -1000 };
+    try expectApproxEqAbs(@as(f64, 0), binsSpreadUnderSoftmax(f64, &one_bin, 0, 2), 1e-9);
+    // A uniform group of four: ln 4. A one-hot group: 0. Their mean over the two groups: ln 4 / 2.
+    const groups = [_]f64{ 0.25, 0.25, 0.25, 0.25, 0, 1, 0, 0 };
+    try expectApproxEqAbs(@log(4.0) / 2.0, meanGroupEntropy(f64, &groups, 4), 1e-12);
+}
+
+/// Where an axis position sits among the bins, counted in bins - a FRACTIONAL index in [0, bin_count - 1]: the
+/// position clamped to what the bins cover, then measured from `low` in bin spacings.
+pub fn gridPosition(
+    comptime T: type,
+    axis_position: T,
+    low: T,
+    high: T,
+    bin_count: usize,
+) T {
+    const covered: T = clamp(axis_position, low, high);
+    const spacing: T = binSpacing(T, low, high, bin_count);
+    const last_index: T = @floatFromInt(bin_count - 1);
+    return clamp((covered - low) / spacing, 0, last_index);
+}
+
+/// How a point at a fractional `grid_position` shares itself between the two bins around it, in proportion to
+/// closeness: at 2.25, bin 2 gets 3/4 and bin 3 gets 1/4. The sharing keeps the mean - 3/4 * 2 + 1/4 * 3 = 2.25 - which
+/// is why a two-hot decodes back to its value.
+pub fn GridShares(comptime T: type) type {
+    return struct {
+        lower_index: usize,
+        upper_index: usize,
+        lower_share: T,
+        upper_share: T,
+    };
+}
+
+/// The two bins `mass` at `grid_position` lands on among `bin_count`, and each one's share (`GridShares`): the one
+/// definition of how a point lands on a grid, for a distributional projection's every atom and for a two-hot alike.
+/// The upper neighbour is always the NEXT bin (clamped at the top) and the lower share is the mass less the fraction
+/// toward it, so a point exactly on a bin gives all of its mass to that bin. (Written with `floor` and `ceil` as the
+/// two neighbours, an exact landing has floor = ceil, both shares come out zero, and the mass vanishes - the textbook
+/// version's bug.)
+pub fn gridShares(
+    comptime T: type,
+    grid_position: T,
+    bin_count: usize,
+    mass: T,
+) GridShares(T) {
+    const last_index: usize = bin_count - 1;
+    const lower_position: T = @floor(grid_position);
+    const lower_index: usize = @floor(grid_position);
+    const upper_index: usize = @min(lower_index + 1, last_index);
+    const fraction_toward_upper: T = grid_position - lower_position;
+    const shares: GridShares(T) = .{
+        .lower_index = lower_index,
+        .upper_index = upper_index,
+        .lower_share = mass * (1 - fraction_toward_upper),
+        .upper_share = mass * fraction_toward_upper,
+    };
+    return shares;
+}
+
+test "zm gridShares: a two-hot keeps its value's place; a point on a bin is one-hot; the top bin is its own next" {
+    // 101 bins on [-10, 10]: spacing 0.2. symlog(3) = log 4 = 1.386...: grid position (1.386 + 10) / 0.2 = 56.93, so
+    // bins 56 and 57 share it, 7% and 93% - and the shares' mean is the position again.
+    const bin_count: usize = 101;
+    const axis_position: f64 = symlog(f64, 3);
+    try expectApproxEqAbs(@log(4.0), axis_position, 1e-15);
+    const position: f64 = gridPosition(f64, axis_position, -10, 10, bin_count);
+    const shares: GridShares(f64) = gridShares(f64, position, bin_count, 1);
+    try expectEqual(@as(usize, 56), shares.lower_index);
+    try expectEqual(@as(usize, 57), shares.upper_index);
+    const lower_value: f64 = binPosition(f64, -10, 10, bin_count, 56);
+    const upper_value: f64 = binPosition(f64, -10, 10, bin_count, 57);
+    const mean: f64 = shares.lower_share * lower_value + shares.upper_share * upper_value;
+    try expectApproxEqAbs(axis_position, mean, 1e-12);
+    try expectApproxEqAbs(3.0, symexp(f64, mean), 1e-11);
+    // Exactly on a bin: all of it there.
+    const on_bin: GridShares(f64) = gridShares(f64, 40, bin_count, 1);
+    try expectEqual(@as(f64, 1), on_bin.lower_share);
+    try expectEqual(@as(f64, 0), on_bin.upper_share);
+    // Past the top: clamped onto the last bin, which is its own next.
+    const past_top: f64 = gridPosition(f64, 50, -10, 10, bin_count);
+    const top: GridShares(f64) = gridShares(f64, past_top, bin_count, 1);
+    try expectEqual(@as(usize, 100), top.lower_index);
+    try expectEqual(@as(usize, 100), top.upper_index);
+    try expectEqual(@as(f64, 1), top.lower_share + top.upper_share);
 }
 test "zm.clampFast" {
     {

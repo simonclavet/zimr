@@ -48,7 +48,7 @@ const Allocator = std.mem.Allocator;
 const expectEqual = std.testing.expectEqual;
 const expectEqualStrings = std.testing.expectEqualStrings;
 const expect = std.testing.expect;
-const ArrayListUnmanaged = std.ArrayListUnmanaged;
+const ArrayList = std.ArrayList;
 const AutoHashMapUnmanaged = std.AutoHashMapUnmanaged;
 const testing_allocator = std.testing.allocator;
 const eql = std.mem.eql;
@@ -75,7 +75,7 @@ pub const Entry = struct {
 pub const LeakWatch = struct {
     child: Allocator,
     live: AutoHashMapUnmanaged(usize, Entry),
-    scopes: ArrayListUnmanaged([]const u8),
+    scopes: ArrayList([]const u8),
     bookkeeping: Allocator,
     next_ordinal: u64,
     /// Set to a byte count to trace every allocation of exactly that size - the fastest way to
@@ -162,7 +162,7 @@ pub const LeakWatch = struct {
         std.log.err(who ++ ": {d} live allocations, {d} bytes", .{ self.live.count(), self.liveBytes() });
         // Ordered by ordinal: allocation order reconstructs the call sequence better than
         // address order, which is whatever the allocator happened to hand out.
-        var ordered: ArrayListUnmanaged(Entry) = .empty;
+        var ordered: ArrayList(Entry) = .empty;
         defer ordered.deinit(self.bookkeeping);
         var it: @TypeOf(self.live).ValueIterator = self.live.valueIterator();
         while (it.next()) |entry| {
@@ -194,7 +194,7 @@ pub const LeakWatch = struct {
     /// with its side, phase, scope and - when it looks like one - the container growth that
     /// made it. Returns how many there were.
     pub fn reportSinceMark(self: *const LeakWatch, comptime who: []const u8) usize {
-        var ordered: ArrayListUnmanaged(Entry) = .empty;
+        var ordered: ArrayList(Entry) = .empty;
         defer ordered.deinit(self.bookkeeping);
         var it: @TypeOf(self.live).ValueIterator = self.live.valueIterator();
         while (it.next()) |entry| {
@@ -408,7 +408,7 @@ test "leakwatch: a grown buffer is attributed to where it GREW, and why" {
     const a: Allocator = watch.allocator();
 
     watch.push("born here");
-    var list: ArrayListUnmanaged(u32) = .empty;
+    var list: ArrayList(u32) = .empty;
     // * `defer` BEFORE THE ASSERTIONS. A failed expectation would otherwise skip the cleanup
     // and report a LEAK on top of the mismatch - two failures for one cause, the second
     // pointing somewhere else entirely. The first version of this test did exactly that, and it

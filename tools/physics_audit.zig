@@ -19,7 +19,7 @@ const pi = zm.pi;
 const float = zm.float;
 
 const bufPrint = std.fmt.bufPrint;
-const ArrayListUnmanaged = std.ArrayListUnmanaged;
+const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const Vec = zm.Vec;
@@ -334,7 +334,7 @@ fn queryAabbScenario(rep: *Report, gpa: Allocator) !void {
     _ = try world.addBody(gpa, .{ .shape = sphere, .position = vec(0, 0, 0), .motion_type = .static });
     _ = try world.addBody(gpa, .{ .shape = sphere, .position = vec(10, 0, 0), .motion_type = .static });
     try simulate(&world, gpa, 2);
-    var hits: ArrayListUnmanaged(zp.BodyIndex) = .empty;
+    var hits: ArrayList(zp.BodyIndex) = .empty;
     try world.broadphase.queryAabb(gpa, .{ .min = vec(-1, -1, -1), .max = vec(1, 1, 1) }, &hits);
     var buf: [96]u8 = undefined;
     const detail: []const u8 = bufPrint(&buf, "found {d} in region (want 1)", .{hits.items.len}) catch "fmt";

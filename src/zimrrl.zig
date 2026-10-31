@@ -45,6 +45,7 @@ const zn = @import("zn");
 
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
+const Random = std.Random;
 const ArrayList = std.ArrayList;
 const eql = std.mem.eql;
 const indexOfScalar = std.mem.indexOfScalar;
@@ -64,6 +65,7 @@ const isNan = zm.isNan;
 const nan = zm.nan;
 const testing_allocator = std.testing.allocator;
 const clamp = zm.clamp;
+const assertf = zm.assertf;
 const cosRad = zm.cosRad;
 const pi = zm.pi;
 const radFromDeg = zm.radFromDeg;
@@ -982,6 +984,17 @@ pub fn SequenceReplay(comptime T: type) type {
             unreachable; // `sample` draws eligible_rank below the number of eligible environments
         }
 
+        /// Whether some environment holds at least `window_length` steps - whether `sample` can draw a window of
+        /// that length. A learner resumed with an empty replay waits for this before its first update.
+        pub fn holdsWindow(self: *const Self, window_length: usize) bool {
+            for (self.environment_rings) |environment_ring| {
+                if (environment_ring.len >= window_length) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         /// Fill `windows_out` with windows of `window_length` consecutive steps, STEP-MAJOR (output row =
         /// step * window_count + window - the layout above), `finished_out` with each output row's finished
         /// flag, and `origins_out` with where each window lives (for `writeBack`). As many windows as fit:
@@ -1845,7 +1858,8 @@ pub fn TanhMeanGaussian(comptime T: type) type {
         /// Worked through: mean tanh(m) = 0.8, spread e^(log s) = 0.3, noise 1.5 -> 0.8 + 0.45 = 1.25 -> exactly 1.
         /// Everything the Gaussian puts past the range lands ON its end, so the head is N(tanh m, s^2) inside it.
         pub fn draw(mean: T, log_std: T, noise: T) T {
-            return clamp(mean + @exp(log_std) * noise, -1, 1);
+            // zimrmath's one definition (`zm.tanhMeanGaussianDraw`), which the GPU kit's `policy_draw` calls too.
+            return zm.tanhMeanGaussianDraw(T, mean, log_std, noise);
         }
     };
 }
@@ -2211,6 +2225,543 @@ pub const Temperature = struct {
         return -self.alpha() * (mean_log_prob + self.target_entropy);
     }
 };
+
+/// PERSISTENT EXPLORATION NOISE - an Ornstein-Uhlenbeck process: noise that drifts instead of jumping, so an agent
+/// keeps exploring in one direction for a while instead of shaking around a point. Each step,
+///
+///     e_(t+1) = rho e_t + sqrt(1 - rho^2) xi_t          xi_t ~ N(0, 1), drawn fresh each step
+///     rho     = exp(-dt / tau)                           tau the noise's correlation time, in seconds
+///
+/// ITS STATIONARY DISTRIBUTION IS N(0, 1), whatever rho: if e_t has variance 1, then e_(t+1) has variance
+/// rho^2 x 1 + (1 - rho^2) x 1 = 1. So a process started at a standard normal stays one, every step - the same spread
+/// as fresh noise, only correlated in time: e_t and e_(t+k) have correlation rho^k = exp(-k dt / tau), so the noise
+/// remembers about tau seconds of itself. At tau -> 0, rho -> 0 and it is fresh noise each step; at tau -> infinity,
+/// one draw held forever.
+///
+/// WHY IT MATTERS TO A FLOW POLICY. A flow maps each noise to an action - different noises, perhaps, to different ways
+/// back after a push. Fresh noise each step would hop between them every step, committing to none; noise that drifts
+/// keeps a character on the one way back it began, while still, over seconds, trying others.
+///
+/// Worked: at 60 Hz with tau = 0.5 s, rho = exp(-1/30) = 0.967; the fresh share is sqrt(1 - 0.967^2) = 0.256 of a
+/// standard normal per step; after half a second (30 steps) the noise keeps rho^30 = e^-1 = 0.37 of its correlation
+/// with where it was.
+pub fn ouCorrelation(comptime T: type, step_seconds: T, correlation_seconds: T) T {
+    // A negative correlation time would make rho above 1, and the step's fresh share the root of a negative number;
+    // 0 is allowed - rho is then 0, fresh noise every step.
+    const is_valid: bool = correlation_seconds >= 0;
+    assertf(is_valid, @src(), "a noise's correlation time cannot be negative: {d}", .{correlation_seconds});
+    return @exp(-step_seconds / correlation_seconds);
+}
+
+/// One step of the process (`ouCorrelation`) for every number of `state`, from `standard_normals` - one fresh draw per
+/// number, the caller's (so the same step serves a seeded test, a learner's random stream, a hashed one).
+pub fn ouStep(
+    comptime T: type,
+    state: []T,
+    correlation: T,
+    standard_normals: []const T,
+) void {
+    const fresh_share: T = @sqrt(1 - correlation * correlation);
+    for (state, standard_normals) |*value, fresh| {
+        value.* = correlation * value.* + fresh_share * fresh;
+    }
+}
+
+/// ACTION SYNERGIES - a few directions in action space that carry most of what a body does. A body's joints do not
+/// move independently: in a stride the hips, knees and ankles move together, and a recovery is a few such coordinated
+/// movements - a step, a lean, a crouch - rather than every joint on its own. A synergy is one such direction, a unit
+/// vector over all the actions; a handful of them, combined, make most of the actions a body takes:
+///
+///     action = c_1 s_1 + c_2 s_2 + ... + c_k s_k          s_j the synergies, c_j the coefficients
+///
+/// so a policy can choose k coefficients instead of every action - 8 instead of 35 - and the actions follow.
+///
+/// ---- FITTED ABOUT ZERO ----
+///
+/// The synergies are fitted to a set of actions - corrections, offsets from a reference - as the directions that
+/// carry most of their ENERGY about zero (their sum of squares), not their variance about a mean: an action of
+/// zero must stay "no correction", whatever the set's average, and so must coefficients of zero.
+///
+/// ---- WHY AN SVD ----
+///
+/// Stack the actions as the rows of a matrix A, one action per row. Its singular value decomposition A = U S V^T
+/// gives, in V's columns, orthonormal directions ordered by how much of A's energy lies along each - the j-th
+/// carries s_j^2 of the total, sum of s^2 - and the first k of them are the k directions that, together, carry the
+/// most: no other k directions reconstruct the rows better in the sum of squares. They are the synergies; each one's
+/// share of the energy, s_j^2 / sum of s^2, says what it is worth, and the shares the first k leave over say what the
+/// synergies cannot express.
+///
+/// Worked: four actions of two numbers, (2, 0), (-2, 0), (0, 1), (0, -1). Their energy is 8 along the first axis and
+/// 2 along the second, 10 in all: the first synergy is (1, 0) with a share of 0.8, the second (0, 1) with 0.2. One
+/// synergy keeps four fifths of the energy - the first two actions exactly, the last two not at all.
+///
+/// ENCODE AND DECODE. With the synergies as the rows of a matrix B (k x actions), orthonormal, an action's
+/// coefficients are its components along them, c = B a, and coefficients make the action B^T c. Decoding what was
+/// encoded gives back the action's part within the synergies - all of it, for an action the synergies span.
+pub fn ActionSynergies(comptime T: type) type {
+    return struct {
+        const Self = @This();
+
+        /// The synergies, [synergy][action]: row j is synergy j, a unit vector, every row orthogonal to the others.
+        directions: Tensor(T),
+        /// Each synergy's share of the fitted actions' energy, largest first. They add up to at most 1; what they
+        /// leave is the energy the synergies do not express.
+        energy_shares: []T,
+
+        /// The `synergy_count` synergies of `actions` - [example][action], at least as many examples as actions -
+        /// fitted about zero by its SVD (this type's head). Memory: `gpa`; the caller owns the result and frees it with
+        /// `deinit` (the SVD's working space is freed before returning).
+        pub fn fit(gpa: Allocator, actions: Tensor(T), synergy_count: usize) Error!Self {
+            const example_count: usize = actions.shape[0];
+            const action_width: usize = actions.shape[1];
+            const has_enough_examples: bool = example_count >= action_width;
+            assertf(has_enough_examples, @src(), "synergies need at least as many examples ({d}) as actions ({d})", .{
+                example_count,
+                action_width,
+            });
+            const has_room: bool = synergy_count >= 1 and synergy_count <= action_width;
+            assertf(has_room, @src(), "{d} synergies of {d} actions", .{ synergy_count, action_width });
+            // The SVD's working space: U (examples x actions), the singular values, V (actions x actions).
+            const left: Tensor(T) = try .alloc(gpa, &.{ example_count, action_width });
+            defer gpa.free(left.data);
+            const singular_values: []T = try gpa.alloc(T, action_width);
+            defer gpa.free(singular_values);
+            const right: Tensor(T) = try .alloc(gpa, &.{ action_width, action_width });
+            defer gpa.free(right.data);
+            try zn.svd(T, left, singular_values, right, actions);
+            // The synergies: V's first columns, as rows. Their shares: each squared singular value over the sum.
+            const directions: Tensor(T) = try .alloc(gpa, &.{ synergy_count, action_width });
+            errdefer gpa.free(directions.data);
+            for (0..synergy_count) |synergy| {
+                for (0..action_width) |action| {
+                    directions.data[synergy * action_width + action] = right.data[action * action_width + synergy];
+                }
+            }
+            var total_energy: T = 0;
+            for (singular_values) |singular_value| {
+                total_energy += singular_value * singular_value;
+            }
+            const energy_shares: []T = try gpa.alloc(T, synergy_count);
+            for (energy_shares, singular_values[0..synergy_count]) |*share, singular_value| {
+                share.* = if (total_energy > 0) singular_value * singular_value / total_energy else 0;
+            }
+            const synergies: Self = .{ .directions = directions, .energy_shares = energy_shares };
+            return synergies;
+        }
+
+        pub fn deinit(synergies: Self, gpa: Allocator) void {
+            gpa.free(synergies.directions.data);
+            gpa.free(synergies.energy_shares);
+        }
+
+        /// How many synergies, and how many actions each spans.
+        pub fn count(synergies: Self) usize {
+            return synergies.directions.shape[0];
+        }
+
+        pub fn actionWidth(synergies: Self) usize {
+            return synergies.directions.shape[1];
+        }
+
+        /// An action's coefficients: its component along each synergy, c = B a.
+        pub fn encode(synergies: Self, action: []const T, coefficients: []T) void {
+            const action_width: usize = synergies.actionWidth();
+            for (coefficients, 0..) |*coefficient, synergy| {
+                const direction: []const T = synergies.directions.data[synergy * action_width ..][0..action_width];
+                var component: T = 0;
+                for (direction, action) |direction_value, action_value| {
+                    component += direction_value * action_value;
+                }
+                coefficient.* = component;
+            }
+        }
+
+        /// The action coefficients make: B^T c, each synergy times its coefficient, summed.
+        pub fn decode(synergies: Self, coefficients: []const T, action: []T) void {
+            const action_width: usize = synergies.actionWidth();
+            @memset(action, 0);
+            for (coefficients, 0..) |coefficient, synergy| {
+                const direction: []const T = synergies.directions.data[synergy * action_width ..][0..action_width];
+                for (action, direction) |*action_value, direction_value| {
+                    action_value.* += coefficient * direction_value;
+                }
+            }
+        }
+    };
+}
+
+/// A FLOW POLICY: an action made from noise by following a learned velocity field - the way image generators turn
+/// noise into images (flow matching: Lipman et al. 2023), applied to a policy (FPO, McAllister et al. 2026; FlowDPG,
+/// Shi et al. 2026).
+///
+/// ---- WHY A FLOW, AND NOT A GAUSSIAN ----
+///
+/// A Gaussian policy has ONE mode. Where two different actions are both good - after a push, a step to the left or a
+/// step to the right - its mean lies between them, and between a step left and a step right is no step at all. A flow
+/// policy can hold both: the same network maps some noises to the one and some to the other.
+///
+/// ---- THE PATH, THE VELOCITY, THE SAMPLER ----
+///
+/// Flow time t runs from 0 to 1. At t = 0 is a noise x_0 ~ N(0, s^2 I) (s = `Options.noise_scale`), at t = 1 an
+/// action a, and between them the STRAIGHT path
+///
+///     x_t = (1 - t) x_0 + t a          whose velocity is   d x_t / dt = a - x_0   (the same all along it)
+///
+/// A network v(c, x, t) - the VELOCITY, given the condition c (what the policy observes), a point x on a path and the
+/// time - is trained to give that velocity wherever such paths pass. To act, the policy follows it from a fresh noise,
+/// by K Euler steps of size 1/K:
+///
+///     x_0 = noise,    x_(k+1) = x_k + (1/K) v(c, x_k, k/K),    the action = x_K
+///
+/// Deterministic once the noise is drawn, so the action has a gradient with respect to the network's weights (through
+/// the K steps), and the same noise always gives the same action - which is what lets a character keep one noise, and
+/// so one way back, for as long as it needs it.
+///
+/// ---- THE FLOW MATCHING LOSS ----
+///
+/// For an action a to be learned, at a draw (t, x_0): the point x_t on its path, and the velocity the path has there.
+///
+///     L_fm = | v(c, x_t, t) - (a - x_0) |^2          (the mean over the rows and the action's dimensions)
+///
+/// Averaged over many draws, its minimum is the field whose flow carries the noise distribution onto the actions' -
+/// several modes included, if the actions have several.
+///
+/// ---- FLOWDPG: AN ACTION GRADIENT INTO THE FLOW ----
+///
+/// A critic, or a world model's backward, says how a cost changes with the action: g = d cost / d a. FlowDPG turns it
+/// into a better target without differentiating through the sampler: from x_t, one velocity evaluation estimates the
+/// clean action, a^ = x_t + (1 - t) v^ (v^ = v(c, x_t, t), held fixed); a step against g, scaled to the local
+/// velocity's size, improves it, a* = a^ - alpha (|v^| / |g|) g; and the velocity is regressed toward the straight
+/// path's velocity from x_0 to a*:
+///
+///     u* = a* - x_0 = t (a - x_0) + (1 - t) v^ - alpha (|v^| / |g|) g          (as x_t = (1 - t) x_0 + t a)
+///
+///     L_dpg = | v(c, x_t, t) - u* |^2  +  anchor x L_fm
+///
+/// Scaling the step by |v^| / |g| makes alpha a fraction of the flow's own motion rather than a learning rate in the
+/// gradient's units, whatever the cost's scale. A flow that starts at zero velocity has no motion of its own, though:
+/// v^ = 0 and, its action being its noise, a - x_0 = 0 too, so the step and the anchor would both be zero and the
+/// flow could never begin to learn. The step is therefore scaled by the larger of |v^| and a FLOOR - the typical
+/// length of the flow's noise, s sqrt(action width) - so a flow at rest takes noise-sized steps down the cost, and one
+/// that moves more than its noise takes FlowDPG's own. (FlowDPG's consistency term |a^ - a|^2 is, on the straight path,
+/// (1 - t)^2 times the flow matching term, so the anchor carries it.) At alpha = 0 and v^ = a - x_0, u* is the flow
+/// matching target exactly: the improvement is a correction added to it.
+///
+/// ---- WORKED, BY HAND ----
+///
+/// THE SAMPLER, K = 4, on a field that is 0.5 everywhere: from x_0 = -0.75 the four steps are
+///     -0.75  ->  -0.625  ->  -0.5  ->  -0.375  ->  -0.25          each x_(k+1) = x_k + 0.25 x 0.5
+/// so the action is x_0 + 0.5 - on a constant field the flow moves every noise by the same amount; a field that
+/// varies with x is what bends different noises toward different actions.
+///
+/// FLOWDPG'S TARGET, for one action of two numbers: a = (0.6, -0.2), x_0 = (0.1, 0.3), at t = 0.4 with the velocity
+/// there v^ = (0.3, -0.4) - its length 0.5 - and the cost's gradient g = (0, 2) - its length 2 - and alpha = 0.2:
+///     the path's velocity      a - x_0               = ( 0.5, -0.5)
+///     the estimate's share     0.4 (a - x_0) + 0.6 v^ = ( 0.38, -0.44)
+///     the step                 0.2 x 0.5 / 2 = 0.05 per unit of g:  0.05 g = (0, 0.1)
+///     u*                       ( 0.38, -0.44) - (0, 0.1) = ( 0.38, -0.54)
+/// The second number of the target falls - against g's - and the first, which g does not touch, keeps the estimate's.
+///
+/// ---- THE TIME, AS THE NETWORK SEES IT ----
+///
+/// The network reads t as sines and cosines - [sin(pi f t), cos(pi f t)] for f = 1, 2, 4, ... (`time_frequencies`
+/// pairs) - smooth in t, and at the lowest frequency half a cycle over [0, 1], so no two times in it look alike (a
+/// whole cycle would make t = 0 and t = 1 the same input).
+///
+/// Its input row is [condition | x | time features]: the network is an ordinary `Mlp` of that input width, and its
+/// output is a velocity of the action's width.
+pub fn FlowPolicy(comptime T: type) type {
+    return struct {
+        const Self = @This();
+
+        pub const Options = struct {
+            /// Euler steps from the noise to the action (K). They decide how sharply the flow keeps its modes apart:
+            /// a flow carrying one noise distribution onto two actions bends its paths - the noise split at a boundary
+            /// midway - and straight steps cut across the bends, leaving noises near the boundary between the modes.
+            /// Learning two actions 1.2 apart, four steps left a tenth of the samples between them, eight about one in
+            /// seventy. One mode needs few steps; several, more.
+            euler_steps: usize = 4,
+            /// How many sine-cosine pairs describe the flow time.
+            time_frequencies: usize = 3,
+            /// The noise's standard deviation, s. With the velocity network starting at zero, the flow's first
+            /// actions are this noise itself: a policy that starts as "no correction, plus exploration noise of s".
+            noise_scale: T = 1.0,
+            /// Whether the velocity network's last layer starts at zero - a field of zero velocity everywhere, so
+            /// every first action is its noise unchanged. The policy then begins as exactly what a residual
+            /// controller wants to begin as: no correction, and exploration of `noise_scale`.
+            starts_at_zero_velocity: bool = true,
+        };
+
+        velocity: Mlp(T),
+        condition_width: usize,
+        action_width: usize,
+        options: Options,
+
+        /// A flow policy for `condition_width` observed numbers and `action_width` actions, its velocity network
+        /// drawn from `rng` with `hidden` layers (and its last layer at zero, as `options` says). Memory: `allocator`.
+        pub fn init(
+            allocator: Allocator,
+            rng: Rng,
+            condition_width: usize,
+            action_width: usize,
+            hidden: []const usize,
+            options: Options,
+        ) Error!Self {
+            // At least one Euler step: with none, the action would be its noise however the flow learned.
+            assertf(options.euler_steps >= 1, @src(), "a flow needs at least one Euler step", .{});
+            const velocity_input_width: usize = condition_width + action_width + 2 * options.time_frequencies;
+            const velocity: Mlp(T) = try .init(allocator, rng, .{
+                .input = velocity_input_width,
+                .hidden = hidden,
+                .output = action_width,
+                .zero_last = options.starts_at_zero_velocity,
+            });
+            const policy: Self = .{
+                .velocity = velocity,
+                .condition_width = condition_width,
+                .action_width = action_width,
+                .options = options,
+            };
+            return policy;
+        }
+
+        /// The velocity network's input width: the condition, the point, the time features.
+        pub fn inputWidth(policy: Self) usize {
+            return policy.condition_width + policy.action_width + 2 * policy.options.time_frequencies;
+        }
+
+        /// The flow time `t` as the network reads it, into `out` (2 x `time_frequencies` numbers): for f = 1, 2, 4,
+        /// ..., sin(pi f t) then cos(pi f t).
+        pub fn timeFeatures(policy: Self, t: T, out: []T) void {
+            assertf(out.len == 2 * policy.options.time_frequencies, @src(), "{d} time features, want {d}", .{
+                out.len,
+                2 * policy.options.time_frequencies,
+            });
+            var frequency: T = 1;
+            for (0..policy.options.time_frequencies) |pair| {
+                const angle_rad: T = pi * frequency * t;
+                out[2 * pair] = sinRad(angle_rad);
+                out[2 * pair + 1] = cosRad(angle_rad);
+                frequency *= 2;
+            }
+        }
+
+        /// The velocity network's input rows [condition | x | time features] for `rows` rows: `conditions` [rows,
+        /// condition], `points` [rows, action] and one time per row, into a new tensor. Memory: `allocator`.
+        pub fn velocityInputs(
+            policy: Self,
+            allocator: Allocator,
+            conditions: []const T,
+            points: []const T,
+            times: []const T,
+        ) Error!Tensor(T) {
+            const rows: usize = times.len;
+            const width: usize = policy.inputWidth();
+            const inputs: Tensor(T) = try .alloc(allocator, &.{ rows, width });
+            const condition_width: usize = policy.condition_width;
+            const action_width: usize = policy.action_width;
+            for (0..rows) |row| {
+                const input_row: []T = inputs.data[row * width ..][0..width];
+                @memcpy(input_row[0..condition_width], conditions[row * condition_width ..][0..condition_width]);
+                @memcpy(input_row[condition_width..][0..action_width], points[row * action_width ..][0..action_width]);
+                policy.timeFeatures(times[row], input_row[condition_width + action_width ..]);
+            }
+            return inputs;
+        }
+
+        /// The velocity at the input rows `inputs` (`velocityInputs`), on `graph`, with the network's parameters bound
+        /// as `parameters` (`Mlp.bind`): [rows, action].
+        pub fn velocityAt(
+            policy: Self,
+            graph: *Graph(T),
+            parameters: []const Var,
+            inputs: Var,
+        ) Error!Var {
+            return policy.velocity.apply(graph, parameters, inputs, null);
+        }
+
+        /// THE SAMPLER on `graph`: K Euler steps from `noise` [rows, action] (already at the noise's scale) for the
+        /// `conditions` [rows, condition] - every step's input built as `velocityInputs` builds it - and the action
+        /// reached, [rows, action]: differentiable in the parameters through every step. Memory: `allocator`.
+        pub fn sample(
+            policy: Self,
+            allocator: Allocator,
+            graph: *Graph(T),
+            parameters: []const Var,
+            conditions: Tensor(T),
+            noise: Tensor(T),
+        ) Error!Var {
+            const rows: usize = noise.shape[0];
+            const time_feature_width: usize = 2 * policy.options.time_frequencies;
+            const step_count: usize = policy.options.euler_steps;
+            const step_size: T = 1.0 / @as(T, @floatFromInt(step_count));
+            const condition_var: Var = try graph.constant(conditions);
+            var point: Var = try graph.constant(noise);
+            for (0..step_count) |step| {
+                const step_time: T = @as(T, @floatFromInt(step)) * step_size;
+                const time_features: Tensor(T) = try .alloc(allocator, &.{ rows, time_feature_width });
+                for (0..rows) |row| {
+                    const row_features: []T = time_features.data[row * time_feature_width ..][0..time_feature_width];
+                    policy.timeFeatures(step_time, row_features);
+                }
+                const time_var: Var = try graph.constant(time_features);
+                const condition_and_point: Var = try graph.concat(condition_var, point, 1);
+                const inputs: Var = try graph.concat(condition_and_point, time_var, 1);
+                const step_velocity: Var = try policy.velocityAt(graph, parameters, inputs);
+                const step_motion: Var = try graph.scale(step_velocity, step_size);
+                point = try graph.add(point, step_motion);
+            }
+            return point;
+        }
+
+        /// One draw's point on each row's path and the path's velocity there - x_t = (1 - t) x_0 + t a and a - x_0 -
+        /// into `points` and `path_velocities` [rows, action], for `actions`, `noise` (x_0) and one time per row.
+        pub fn pathPointsAndVelocities(
+            policy: Self,
+            actions: []const T,
+            noise: []const T,
+            times: []const T,
+            points: []T,
+            path_velocities: []T,
+        ) void {
+            const action_width: usize = policy.action_width;
+            for (times, 0..) |t, row| {
+                for (0..action_width) |dimension| {
+                    const at: usize = row * action_width + dimension;
+                    points[at] = (1 - t) * noise[at] + t * actions[at];
+                    path_velocities[at] = actions[at] - noise[at];
+                }
+            }
+        }
+
+        /// THE FLOW MATCHING LOSS on `graph` (this type's head) for `actions` [rows, action], their `noise` (x_0)
+        /// and one draw's time per row: each row's point on its path and the path's velocity there
+        /// (`pathPointsAndVelocities`), the network's velocity at the point, and the mean squared difference.
+        /// Memory: `allocator`.
+        pub fn flowMatchingLoss(
+            policy: Self,
+            allocator: Allocator,
+            graph: *Graph(T),
+            parameters: []const Var,
+            conditions: []const T,
+            actions: []const T,
+            noise: []const T,
+            times: []const T,
+        ) Error!Var {
+            const rows: usize = times.len;
+            const action_width: usize = policy.action_width;
+            const points: []T = try allocator.alloc(T, rows * action_width);
+            const path_velocities: Tensor(T) = try .alloc(allocator, &.{ rows, action_width });
+            policy.pathPointsAndVelocities(actions, noise, times, points, path_velocities.data);
+            const inputs: Tensor(T) = try policy.velocityInputs(allocator, conditions, points, times);
+            const input_var: Var = try graph.constant(inputs);
+            const velocity_var: Var = try policy.velocityAt(graph, parameters, input_var);
+            const target_var: Var = try graph.constant(path_velocities);
+            return graph.mseLoss(velocity_var, target_var);
+        }
+
+        /// Each action's flow matching loss AVERAGED OVER ITS DRAWS, on `graph` - FPO's stand-in for the action's
+        /// negative log-likelihood (`fpoLoss`): for action b and its draws i = 1 .. N of a time t and a noise x_0,
+        ///
+        ///     L(b) = (1/N) sum over i of | v(c_b, x_t, t) - (a_b - x_0) |^2          x_t = (1 - t) x_0 + t a_b
+        ///
+        /// the squared error SUMMED over the action's dimensions, as a log-likelihood sums over independent ones, so
+        /// its scale does not depend on how many there are. Low where the flow readily carries noise to the action,
+        /// high where it does not. `conditions` [actions][condition], `actions` [actions][action], `draw_noise`
+        /// [actions][draws][action] - drawn at the flow's own noise scale, or the losses measure paths the flow never
+        /// follows - `draw_times` [actions][draws], uniform in [0, 1); the result is [actions, 1]. A reference: its
+        /// average over the draws is a constant matrix, actions x (actions x draws), fine for small batches.
+        /// Memory: `allocator` (the graph's constants).
+        pub fn drawLosses(
+            policy: Self,
+            allocator: Allocator,
+            graph: *Graph(T),
+            parameters: []const Var,
+            conditions: []const T,
+            actions: []const T,
+            draw_noise: []const T,
+            draw_times: []const T,
+        ) Error!Var {
+            const action_count: usize = actions.len / policy.action_width;
+            const draw_count: usize = draw_times.len / action_count;
+            const draw_rows: usize = action_count * draw_count;
+            const action_width: usize = policy.action_width;
+            const condition_width: usize = policy.condition_width;
+            // One row per (action, draw): its condition, its draw's point on the path and the path's velocity.
+            const row_conditions: []T = try allocator.alloc(T, draw_rows * condition_width);
+            const row_actions: []T = try allocator.alloc(T, draw_rows * action_width);
+            for (0..action_count) |action_index| {
+                for (0..draw_count) |draw| {
+                    const draw_row: usize = action_index * draw_count + draw;
+                    const condition: []const T = conditions[action_index * condition_width ..][0..condition_width];
+                    @memcpy(row_conditions[draw_row * condition_width ..][0..condition_width], condition);
+                    const action: []const T = actions[action_index * action_width ..][0..action_width];
+                    @memcpy(row_actions[draw_row * action_width ..][0..action_width], action);
+                }
+            }
+            const points: []T = try allocator.alloc(T, draw_rows * action_width);
+            const path_velocities: Tensor(T) = try .alloc(allocator, &.{ draw_rows, action_width });
+            policy.pathPointsAndVelocities(row_actions, draw_noise, draw_times, points, path_velocities.data);
+            const inputs: Tensor(T) = try policy.velocityInputs(allocator, row_conditions, points, draw_times);
+            const velocity: Var = try policy.velocityAt(graph, parameters, try graph.constant(inputs));
+            const errors: Var = try graph.sub(velocity, try graph.constant(path_velocities));
+            const draw_losses: Var = try graph.squaredRowNorm(errors);
+            // Each action's mean over its own draws: a constant averaging matrix, 1/N where row b owns the column.
+            const averaging: Tensor(T) = try .alloc(allocator, &.{ action_count, draw_rows });
+            @memset(averaging.data, 0);
+            const draw_share: T = 1.0 / @as(T, @floatFromInt(draw_count));
+            for (0..action_count) |action_index| {
+                for (0..draw_count) |draw| {
+                    averaging.data[action_index * draw_rows + action_index * draw_count + draw] = draw_share;
+                }
+            }
+            return graph.matmul(try graph.constant(averaging), draw_losses);
+        }
+
+        /// FLOWDPG'S TARGET VELOCITY per row (this type's head):
+        ///     u* = t (a - x_0) + (1 - t) v^ - alpha (max(|v^|, floor) / |g|) g
+        /// for the actions `actions` (a), their noise (x_0), the draw's times, the velocity there `velocities_there`
+        /// (v^, held fixed) and the cost's gradient at each action `cost_gradients` (g), into `targets` [rows,
+        /// action]. `step_floor` is the length the step is scaled by when the flow moves less (0 for FlowDPG's rule
+        /// alone). A row whose gradient is zero gets no step: there is nothing to improve by.
+        pub fn flowDpgTargets(
+            policy: Self,
+            actions: []const T,
+            noise: []const T,
+            times: []const T,
+            velocities_there: []const T,
+            cost_gradients: []const T,
+            step_share: T,
+            step_floor: T,
+            targets: []T,
+        ) void {
+            const action_width: usize = policy.action_width;
+            for (times, 0..) |t, row| {
+                const row_start: usize = row * action_width;
+                const velocity_row: []const T = velocities_there[row_start..][0..action_width];
+                const gradient_row: []const T = cost_gradients[row_start..][0..action_width];
+                var velocity_square_sum: T = 0;
+                var gradient_square_sum: T = 0;
+                for (velocity_row, gradient_row) |velocity_value, gradient_value| {
+                    velocity_square_sum += velocity_value * velocity_value;
+                    gradient_square_sum += gradient_value * gradient_value;
+                }
+                const gradient_length: T = @sqrt(gradient_square_sum);
+                const velocity_length: T = @sqrt(velocity_square_sum);
+                // The step against the gradient, scaled to the local velocity's length.
+                const has_gradient: bool = gradient_length > 0;
+                const step_length: T = @max(velocity_length, step_floor);
+                const step_per_gradient: T = if (has_gradient) step_share * step_length / gradient_length else 0;
+                for (0..action_width) |dimension| {
+                    const at: usize = row_start + dimension;
+                    const straight_velocity: T = actions[at] - noise[at];
+                    const toward_estimate: T = t * straight_velocity + (1 - t) * velocities_there[at];
+                    targets[at] = toward_estimate - step_per_gradient * cost_gradients[at];
+                }
+            }
+        }
+    };
+}
 
 // =============================================================================
 // R05  VALUE TARGETS
@@ -2902,6 +3453,49 @@ pub fn PpoClipLoss(comptime T: type) type {
             @memcpy(self.advantages.data, advantages);
         }
     };
+}
+
+/// FPO'S LOSS (Flow Policy Optimization, McAllister et al.) - PPO for a flow policy (`FlowPolicy`), whose likelihood
+/// has no formula.
+/// PPO needs each action's likelihood under the new policy over the old; a flow's flow matching loss on the
+/// action stands in for its negative log-likelihood (`drawLosses`), so the ratio is
+///
+///     ratio = exp(L_old - L_new)          the SAME draws for both, so it is exactly 1 at the old weights
+///
+/// and the rest is PPO's clipped surrogate, unchanged (`PpoClipLoss` with log-probabilities -L_new and -L_old):
+/// an action that did better than expected (positive advantage) has its loss lowered - the flow carries more
+/// noise to it - until the ratio passes 1 + clip; one that did worse has its loss raised, likewise.
+///
+/// Worked, clip 0.2, advantage 2: L_old 0.50, L_new 0.40 - ratio e^0.1 = 1.105, inside the clip, objective
+/// 1.105 x 2 = 2.21. L_new 0.20 - ratio e^0.3 = 1.35, past 1.2: the objective is the clipped 1.2 x 2 = 2.4, and
+/// lowering the loss further earns nothing - the trust region that keeps one update from going too far.
+///
+/// `old_losses` are each action's `drawLosses` at the weights it was taken with, on these same draws;
+/// `advantages` one per action. Returns the loss to minimise (minus the mean surrogate). Memory: `allocator`.
+pub fn fpoLoss(
+    comptime T: type,
+    policy: FlowPolicy(T),
+    allocator: Allocator,
+    graph: *Graph(T),
+    parameters: []const Var,
+    conditions: []const T,
+    actions: []const T,
+    draw_noise: []const T,
+    draw_times: []const T,
+    old_losses: []const T,
+    advantages: []const T,
+    clip: T,
+) Error!Var {
+    const new_losses: Var =
+        try policy.drawLosses(allocator, graph, parameters, conditions, actions, draw_noise, draw_times);
+    const log_likelihoods_new: Var = try graph.scale(new_losses, -1);
+    const log_likelihoods_old: []T = try allocator.alloc(T, old_losses.len);
+    for (log_likelihoods_old, old_losses) |*log_likelihood, old_loss| {
+        log_likelihood.* = -old_loss;
+    }
+    const clip_loss: PpoClipLoss(T) =
+        try .build(graph, log_likelihoods_new, log_likelihoods_old, advantages, clip);
+    return clip_loss.loss;
 }
 
 /// Everything a PPO update needs to know about the caller's network.
@@ -4153,7 +4747,8 @@ pub fn PolicyDistillationLoss(comptime T: type) type {
 ///     mean_over_depths   rewards 1, 0.6, 0.27      values 0.3, 0.27, 0.243
 ///
 /// At H = 1 the two coincide: one prefix, the whole plan.
-pub const PlanObjective = enum { final, mean_over_depths };
+/// Its tag is a fixed width so a learner's saved settings (an `extern struct`) can hold it.
+pub const PlanObjective = enum(u32) { final, mean_over_depths };
 
 /// The weights `objective` puts on a plan's rewards and values: `reward_weights[u]` on the reward at step u, and
 /// `value_weights[h - 1]` on the value at depth h, for a plan of `reward_weights.len` actions. The discounts are
@@ -5026,21 +5621,9 @@ pub fn LatentValueTargets(comptime T: type) type {
     };
 }
 
-/// A score MPPI can rank, made the way BMPC's `nan_to_num(0)` makes it: a number that is not a number counts as 0, and
-/// an infinite score becomes the largest finite score of its sign - so a plan whose score overflowed downward (a
-/// pessimistic score whose spread overflowed, say) still ranks LAST, and one that overflowed upward still ranks first.
-///
-///     raw score     NaN     -inf             +inf             finite
-///     rankable      0       lowest finite    highest finite   itself
-fn rankableScore(comptime T: type, raw_score: T) T {
-    if (isFinite(raw_score)) {
-        return raw_score;
-    }
-    if (isNan(raw_score)) {
-        return 0;
-    }
-    return if (raw_score > 0) zm.highest(T) else zm.lowest(T);
-}
+/// A score MPPI can rank: zimrmath's one definition (`zm.rankableScore` - NaN counts as 0, an infinite score as the
+/// largest finite score of its sign), which the GPU kit's elites read too.
+const rankableScore = zm.rankableScore;
 
 /// MPPI - MODEL PREDICTIVE PATH INTEGRAL control, in the form the TD-MPC family plans with (TD-MPC2's and BMPC's
 /// `_plan`): a population search over action sequences that keeps a Gaussian around a best guess and, iteration after
@@ -11325,4 +11908,333 @@ test "zrl cartpoleBalanceReward: 1 balanced at rest, 1/2 level, 0 hanging, each 
     var spinning: CartpoleState(f64) = rest;
     spinning.pole_rate_rad = 5;
     try expectApproxEqAbs(@as(f64, 0.55), cartpoleBalanceReward(f64, spinning, 0), 1e-12);
+}
+
+test "zimrrl: a flow policy's sampler is exact on a constant field, and its flow matching loss is the hand's" {
+    // A velocity network whose last layer is zero but for its bias, 0.5: the velocity is 0.5 everywhere, so four
+    // Euler steps of 1/4 carry any noise to noise + 0.5 exactly - 0.125 a step, every number exact in binary. The flow
+    // matching loss of that field against an action a from noise x_0 is the mean of (0.5 - (a - x_0))^2, by hand.
+    var arena_state: ArenaAllocator = .init(testing_allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    const Flow = FlowPolicy(f64);
+    const hidden: []const usize = &.{4};
+    const flow: Flow = try .init(arena, Rng.init(3), 2, 2, hidden, .{ .euler_steps = 4 });
+    const tensors: []const Tensor(f64) = (try flow.velocity.params(arena)).tensors;
+    @memset(tensors[tensors.len - 1].data, 0.5);
+    var graph: Graph(f64) = .init(arena);
+    const parameters: []const Var = try flow.velocity.bind(&graph, .frozen, arena);
+    const conditions: Tensor(f64) = try .fromSlice(try arena.dupe(f64, &.{ 0.3, -0.2, 1.1, 0.4 }), &.{ 2, 2 });
+    const noise_values = [_]f64{ -0.75, 0.25, 1.5, -2.0 };
+    const noise: Tensor(f64) = try .fromSlice(try arena.dupe(f64, &noise_values), &.{ 2, 2 });
+    const action_var: Var = try flow.sample(arena, &graph, parameters, conditions, noise);
+    for (graph.valueOf(action_var).data, noise_values) |action_value, noise_value| {
+        try expectEqual(noise_value + 0.5, action_value);
+    }
+    // The loss by hand: a - x_0 for each value, its difference from 0.5, squared, averaged.
+    const actions = [_]f64{ 0.5, 0.5, 2.0, -1.0 };
+    const times = [_]f64{ 0.25, 0.75 };
+    const condition_values: []const f64 = conditions.data;
+    const loss_var: Var =
+        try flow.flowMatchingLoss(arena, &graph, parameters, condition_values, &actions, &noise_values, &times);
+    var expected_sum: f64 = 0;
+    for (actions, noise_values) |action_value, noise_value| {
+        const difference: f64 = 0.5 - (action_value - noise_value);
+        expected_sum += difference * difference;
+    }
+    try expectApproxEqAbs(expected_sum / 4.0, graph.valueOf(loss_var).data[0], 1e-12);
+}
+
+test "zimrrl: FlowDPG's target velocity - the path's and the estimate's, less a scaled step down the cost" {
+    // One row of two actions, by hand: a = (0.6, -0.2), x_0 = (0.1, 0.3), t = 0.4, v^ = (0.3, -0.4) (|v^| = 0.5), the
+    // cost's gradient g = (0, 2) (|g| = 2), alpha = 0.2: the step per unit of gradient is 0.2 x 0.5 / 2 = 0.05, and
+    //     u* = 0.4 (a - x_0) + 0.6 v^ - 0.05 g = 0.4 (0.5, -0.5) + 0.6 (0.3, -0.4) - (0, 0.1) = (0.38, -0.54)
+    // A second row with no gradient gets no step: u* = 0.4 (a - x_0) + 0.6 v^ alone.
+    var arena_state: ArenaAllocator = .init(testing_allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    const Flow = FlowPolicy(f64);
+    const hidden: []const usize = &.{4};
+    const flow: Flow = try .init(arena, Rng.init(5), 1, 2, hidden, .{});
+    const actions = [_]f64{ 0.6, -0.2, 0.6, -0.2 };
+    const noise = [_]f64{ 0.1, 0.3, 0.1, 0.3 };
+    const times = [_]f64{ 0.4, 0.4 };
+    const velocities_there = [_]f64{ 0.3, -0.4, 0.3, -0.4 };
+    const cost_gradients = [_]f64{ 0, 2, 0, 0 };
+    var targets: [4]f64 = undefined;
+    flow.flowDpgTargets(&actions, &noise, &times, &velocities_there, &cost_gradients, 0.2, 0, &targets);
+    try expectApproxEqAbs(@as(f64, 0.38), targets[0], 1e-12);
+    try expectApproxEqAbs(@as(f64, -0.54), targets[1], 1e-12);
+    try expectApproxEqAbs(@as(f64, 0.38), targets[2], 1e-12);
+    try expectApproxEqAbs(@as(f64, -0.44), targets[3], 1e-12);
+    // A flow at rest - v^ = 0 - with a floor of 0.4: the step per unit of gradient is 0.2 x 0.4 / 2 = 0.04, so
+    //     u* = 0.4 (a - x_0) - 0.04 g = (0.2, -0.2) - (0, 0.08) = (0.2, -0.28)
+    // where without the floor it would be 0.4 (a - x_0) alone, and a flow that never moves would never learn to.
+    const at_rest = [_]f64{ 0, 0 };
+    var floored_targets: [2]f64 = undefined;
+    const one_time = [_]f64{0.4};
+    const first_row_gradient: []const f64 = cost_gradients[0..2];
+    const first_row_action: []const f64 = actions[0..2];
+    const first_row_noise: []const f64 = noise[0..2];
+    const step_share: f64 = 0.2;
+    const step_floor: f64 = 0.4;
+    flow.flowDpgTargets(
+        first_row_action,
+        first_row_noise,
+        &one_time,
+        &at_rest,
+        first_row_gradient,
+        step_share,
+        step_floor,
+        &floored_targets,
+    );
+    try expectApproxEqAbs(@as(f64, 0.2), floored_targets[0], 1e-12);
+    try expectApproxEqAbs(@as(f64, -0.28), floored_targets[1], 1e-12);
+}
+
+test "zimrrl: persistent noise keeps a unit spread and remembers rho of itself each step" {
+    // Started at standard normals, 40,000 steps of the process with rho = exp(-1/30) (tau 0.5 s at 60 Hz) over 4
+    // numbers: their spread stays 1 (the stationary variance, by the algebra in `ouCorrelation`'s head) and each
+    // step's correlation with the last is rho - both estimated from the run, so within the estimates' own noise.
+    var generator: Random.DefaultPrng = .init(81);
+    const random: Random = generator.random();
+    const correlation: f64 = ouCorrelation(f64, 1.0 / 60.0, 0.5);
+    try expectApproxEqAbs(@exp(-1.0 / 30.0), correlation, 1e-15);
+    var state: [4]f64 = undefined;
+    for (&state) |*value| {
+        value.* = random.floatNorm(f64);
+    }
+    var square_sum: f64 = 0;
+    var lagged_product_sum: f64 = 0;
+    const step_count: usize = 40_000;
+    var fresh: [4]f64 = undefined;
+    for (0..step_count) |_| {
+        const previous: [4]f64 = state;
+        for (&fresh) |*draw| {
+            draw.* = random.floatNorm(f64);
+        }
+        ouStep(f64, &state, correlation, &fresh);
+        for (state, previous) |value, previous_value| {
+            square_sum += value * value;
+            lagged_product_sum += value * previous_value;
+        }
+    }
+    const sample_count: f64 = @floatFromInt(step_count * 4);
+    try expectApproxEqAbs(@as(f64, 1.0), square_sum / sample_count, 0.05);
+    try expectApproxEqAbs(correlation, lagged_product_sum / square_sum, 0.01);
+}
+
+test "zimrrl: synergies of four actions by hand - shares 0.8 and 0.2, along the axes" {
+    // `ActionSynergies`' worked example: (2, 0), (-2, 0), (0, 1), (0, -1). Energy 8 along the first axis, 2 along the
+    // second: the first synergy is the first axis, with a share of 0.8, the second the other axis, with 0.2 (each up to
+    // its sign, which an SVD may choose either way).
+    const gpa: Allocator = testing_allocator;
+    var values = [_]f64{ 2, 0, -2, 0, 0, 1, 0, -1 };
+    const actions: Tensor(f64) = try .fromSlice(&values, &.{ 4, 2 });
+    const synergies: ActionSynergies(f64) = try .fit(gpa, actions, 2);
+    defer synergies.deinit(gpa);
+    try expectApproxEqAbs(@as(f64, 0.8), synergies.energy_shares[0], 1e-12);
+    try expectApproxEqAbs(@as(f64, 0.2), synergies.energy_shares[1], 1e-12);
+    const first: []const f64 = synergies.directions.data[0..2];
+    const second: []const f64 = synergies.directions.data[2..4];
+    try expectApproxEqAbs(@as(f64, 1), @abs(first[0]), 1e-12);
+    try expectApproxEqAbs(@as(f64, 0), first[1], 1e-12);
+    try expectApproxEqAbs(@as(f64, 0), second[0], 1e-12);
+    try expectApproxEqAbs(@as(f64, 1), @abs(second[1]), 1e-12);
+}
+
+test "zimrrl: three synergies of actions made of three directions reproduce every one, and are orthonormal" {
+    // Twenty actions of six numbers, each a random combination of three fixed directions: three synergies carry all
+    // of their energy (the shares add up to 1), are orthonormal, and decode(encode(a)) gives back every action.
+    const gpa: Allocator = testing_allocator;
+    var generator: Random.DefaultPrng = .init(17);
+    const random: Random = generator.random();
+    const action_width: usize = 6;
+    const example_count: usize = 20;
+    var hidden_directions: [3][action_width]f64 = undefined;
+    for (&hidden_directions) |*direction| {
+        for (direction) |*value| {
+            value.* = random.floatNorm(f64);
+        }
+    }
+    var values: [example_count * action_width]f64 = undefined;
+    for (0..example_count) |example| {
+        const action: []f64 = values[example * action_width ..][0..action_width];
+        @memset(action, 0);
+        for (hidden_directions) |direction| {
+            const weight: f64 = random.floatNorm(f64);
+            for (action, direction) |*action_value, direction_value| {
+                action_value.* += weight * direction_value;
+            }
+        }
+    }
+    const actions: Tensor(f64) = try .fromSlice(&values, &.{ example_count, action_width });
+    const synergies: ActionSynergies(f64) = try .fit(gpa, actions, 3);
+    defer synergies.deinit(gpa);
+    var share_sum: f64 = 0;
+    for (synergies.energy_shares) |share| {
+        share_sum += share;
+    }
+    try expectApproxEqAbs(@as(f64, 1), share_sum, 1e-10);
+    // Orthonormal: every pair's dot product 0, every length 1.
+    for (0..3) |first| {
+        for (0..3) |second| {
+            var inner_product: f64 = 0;
+            for (0..action_width) |action| {
+                inner_product += synergies.directions.data[first * action_width + action] *
+                    synergies.directions.data[second * action_width + action];
+            }
+            const expected: f64 = if (first == second) 1 else 0;
+            try expectApproxEqAbs(expected, inner_product, 1e-10);
+        }
+    }
+    var coefficients: [3]f64 = undefined;
+    var decoded: [action_width]f64 = undefined;
+    for (0..example_count) |example| {
+        const action: []const f64 = values[example * action_width ..][0..action_width];
+        synergies.encode(action, &coefficients);
+        synergies.decode(&coefficients, &decoded);
+        for (decoded, action) |decoded_value, action_value| {
+            try expectApproxEqAbs(action_value, decoded_value, 1e-9);
+        }
+    }
+}
+
+test "zimrrl: FPO's ratio is exactly 1 at the old weights, and its loss minus the mean advantage" {
+    // Three actions, four draws each: their losses at these weights are the "old" losses, so at the same weights every
+    // ratio is exp(0) = 1, inside any clip, and the loss is minus the mean advantage, exactly.
+    var arena_state: ArenaAllocator = .init(testing_allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    const Flow = FlowPolicy(f64);
+    const hidden: []const usize = &.{8};
+    const flow: Flow = try .init(arena, Rng.init(51), 2, 2, hidden, .{ .starts_at_zero_velocity = false });
+    var generator: Random.DefaultPrng = .init(52);
+    const random: Random = generator.random();
+    const action_count: usize = 3;
+    const draw_count: usize = 4;
+    var conditions: [action_count * 2]f64 = undefined;
+    var actions: [action_count * 2]f64 = undefined;
+    var draw_noise: [action_count * draw_count * 2]f64 = undefined;
+    var draw_times: [action_count * draw_count]f64 = undefined;
+    for (&conditions) |*value| {
+        value.* = random.floatNorm(f64);
+    }
+    for (&actions) |*value| {
+        value.* = random.floatNorm(f64);
+    }
+    for (&draw_noise) |*value| {
+        value.* = random.floatNorm(f64);
+    }
+    for (&draw_times) |*value| {
+        value.* = random.float(f64);
+    }
+    var old_graph: Graph(f64) = .init(arena);
+    const frozen: []const Var = try flow.velocity.bind(&old_graph, .frozen, arena);
+    const old_var: Var = try flow.drawLosses(
+        arena,
+        &old_graph,
+        frozen,
+        &conditions,
+        &actions,
+        &draw_noise,
+        &draw_times,
+    );
+    const old_losses: []const f64 = old_graph.valueOf(old_var).data;
+    const advantages = [action_count]f64{ 1, -2, 0.5 };
+    var graph: Graph(f64) = .init(arena);
+    const parameters: []const Var = try flow.velocity.bind(&graph, .trained, arena);
+    const loss: Var = try fpoLoss(
+        f64,
+        flow,
+        arena,
+        &graph,
+        parameters,
+        &conditions,
+        &actions,
+        &draw_noise,
+        &draw_times,
+        old_losses,
+        &advantages,
+        0.2,
+    );
+    const mean_advantage: f64 = (1.0 - 2.0 + 0.5) / 3.0;
+    try expectEqual(-mean_advantage, graph.valueOf(loss).data[0]);
+}
+
+test "zimrrl: an FPO step lowers the loss of an action that did well, and raises it for one that did badly" {
+    // Two actions in two situations, advantages +1 and -1; one gradient step on FPO's loss. On the same draws, the
+    // first action's flow matching loss falls (the flow now carries more noise to it), the second's rises.
+    var arena_state: ArenaAllocator = .init(testing_allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    const Flow = FlowPolicy(f64);
+    const hidden: []const usize = &.{16};
+    const flow: Flow = try .init(arena, Rng.init(61), 2, 2, hidden, .{ .starts_at_zero_velocity = false });
+    var generator: Random.DefaultPrng = .init(62);
+    const random: Random = generator.random();
+    const action_count: usize = 2;
+    const draw_count: usize = 8;
+    const conditions = [action_count * 2]f64{ 1.0, 0.0, -1.0, 0.5 };
+    const actions = [action_count * 2]f64{ 0.4, -0.2, -0.3, 0.6 };
+    var draw_noise: [action_count * draw_count * 2]f64 = undefined;
+    var draw_times: [action_count * draw_count]f64 = undefined;
+    for (&draw_noise) |*value| {
+        value.* = random.floatNorm(f64);
+    }
+    for (&draw_times) |*value| {
+        value.* = random.float(f64);
+    }
+    var old_graph: Graph(f64) = .init(arena);
+    const frozen: []const Var = try flow.velocity.bind(&old_graph, .frozen, arena);
+    const old_var: Var = try flow.drawLosses(
+        arena,
+        &old_graph,
+        frozen,
+        &conditions,
+        &actions,
+        &draw_noise,
+        &draw_times,
+    );
+    const old_losses: []const f64 = try arena.dupe(f64, old_graph.valueOf(old_var).data);
+    const advantages = [action_count]f64{ 1, -1 };
+    var graph: Graph(f64) = .init(arena);
+    const parameters: []const Var = try flow.velocity.bind(&graph, .trained, arena);
+    const loss: Var = try fpoLoss(
+        f64,
+        flow,
+        arena,
+        &graph,
+        parameters,
+        &conditions,
+        &actions,
+        &draw_noise,
+        &draw_times,
+        old_losses,
+        &advantages,
+        0.2,
+    );
+    try graph.backward(loss);
+    // One plain gradient step on the flow's own weights.
+    const tensors: []const Tensor(f64) = (try flow.velocity.params(arena)).tensors;
+    for (tensors, parameters) |tensor, parameter| {
+        const parameter_gradient: Tensor(f64) = try graph.gradOf(parameter);
+        for (tensor.data, parameter_gradient.data) |*weight, weight_gradient| {
+            weight.* -= 0.05 * weight_gradient;
+        }
+    }
+    var new_graph: Graph(f64) = .init(arena);
+    const stepped: []const Var = try flow.velocity.bind(&new_graph, .frozen, arena);
+    const new_var: Var = try flow.drawLosses(
+        arena,
+        &new_graph,
+        stepped,
+        &conditions,
+        &actions,
+        &draw_noise,
+        &draw_times,
+    );
+    const new_losses: []const f64 = new_graph.valueOf(new_var).data;
+    try expect(new_losses[0] < old_losses[0]);
+    try expect(new_losses[1] > old_losses[1]);
 }

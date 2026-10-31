@@ -8518,51 +8518,15 @@ it:</p>
 for (values) |x| total.add(x);
 const sum = total.value();</code></pre>
 <div class="zn-source">
-<details class="src-fold"><summary><code>CompensatedSum</code></summary><pre><code class="zig">/// A running sum that carries the rounding error of every addition in a second accumulator.
+<details class="src-fold"><summary><code>CompensatedSum</code></summary><pre><code class="zig">/// ONE IMPLEMENTATION OF NEUMAIER SUMMATION, USED BY EVERY ACCUMULATION IN THIS FILE
 ///
-/// ONE IMPLEMENTATION OF NEUMAIER SUMMATION, USED BY EVERY ACCUMULATION IN THIS FILE
-///
-/// The eight lines below had been copied into ten places - `sumAll`, `matmul`'s inner product,
-/// `layerNormRows` twice, `variance`, `covariance`, `dotAll`, `mseLoss`, `rootMeanSquare` - and the five
-/// losses written later had none of them, because copying eight lines is exactly the kind of
-/// thing that gets skipped. A type with an `add` is what makes compensation the default rather
-/// than a discipline.
-///
-/// Neumaier rather than Kahan: the branch handles an addend larger than the running total,
-/// which plain Kahan gets wrong. The cost is three extra floating-point operations per element.
-pub fn CompensatedSum(comptime T: type) type {
-    comptime requireNumeric(T);
-    return struct {
-        total: T = 0,
-        compensation: T = 0,
-
-        /// THE COMPENSATION IS A NO-OP FOR INTEGERS, AND THAT IS WHY IT LIVES HERE
-        ///
-        /// Integer addition is EXACT - there is no rounding, so there is nothing to compensate
-        /// and the correction term would be zero at every step. Branching here rather than at
-        /// every call site means each of the dozen reductions built on this type widens to
-        /// integers for free, instead of a dozen copies of the same comptime `if`.
-        ///
-        /// The same lesson as `Walk`: **a type with a method makes the right thing the default**.
-        pub fn add(self: *@This(), x: T) void {
-            if (comptime !isFloat(T)) {
-                self.total += x;
-                return;
-            }
-            const t: T = self.total + x;
-            if (@abs(self.total) &gt;= @abs(x)) {
-                self.compensation += (self.total - t) + x;
-            } else {
-                self.compensation += (x - t) + self.total;
-            }
-            self.total = t;
-        }
-
-        pub fn value(self: @This()) T {
-            return self.total + self.compensation;
-        }
-    };
-}
+/// Eight lines had been copied into ten places - `sumAll`, `matmul`'s inner product, `layerNormRows` twice,
+/// `variance`, `covariance`, `dotAll`, `mseLoss`, `rootMeanSquare` - and the losses written later had none of them,
+/// because copying eight lines is exactly the kind of thing that gets skipped. A type with an `add` is what makes
+/// compensation the default rather than a discipline. It is zimrmath's (`zm.CompensatedSum`), in the shader-safe tier,
+/// because the GPU learning kit's row reductions sum through it too (`zm.layerNormRowStatistics`): one summation for
+/// the host and the device.
+pub const CompensatedSum = zm.CompensatedSum;
 </code></pre></details>
 </div><!--/zn-source-->
 
@@ -10729,7 +10693,12 @@ try zn.lstsq(f64, x, q, r, a, b);  // q and r are scratch and come back as the f
 /// answer, but a transposed VIEW makes the inner loop stride across memory; naming the variant
 /// lets the loop read both operands the way they are stored. The test asserts it against the
 /// materialised form, which is what makes the name safe to reach for.
-pub fn matmulNT(comptime T: type, out: Tensor(T), a: Tensor(T), b: Tensor(T)) Error!void {
+pub fn matmulNT(
+    comptime T: type,
+    out: Tensor(T),
+    a: Tensor(T),
+    b: Tensor(T),
+) Error!void {
     comptime requireFloat(T);
     if (a.rank != 2 or b.rank != 2 or out.rank != 2) {
         return Error.UnsupportedShape;
@@ -10752,7 +10721,12 @@ pub fn matmulNT(comptime T: type, out: Tensor(T), a: Tensor(T), b: Tensor(T)) Er
 }
 </code></pre></details>
 <details class="src-fold"><summary><code>matmulTN</code></summary><pre><code class="zig">/// `out = aT * b`.
-pub fn matmulTN(comptime T: type, out: Tensor(T), a: Tensor(T), b: Tensor(T)) Error!void {
+pub fn matmulTN(
+    comptime T: type,
+    out: Tensor(T),
+    a: Tensor(T),
+    b: Tensor(T),
+) Error!void {
     comptime requireFloat(T);
     if (a.rank != 2 or b.rank != 2 or out.rank != 2) {
         return Error.UnsupportedShape;
@@ -11649,28 +11623,14 @@ pub fn softmaxRows(comptime T: type, out: Tensor(T), a: Tensor(T)) Error!void {
 
     var row: usize = 0;
     while (row &lt; rows) : (row += 1) {
-        var largest: T = a.at2(row, 0);
-        var col: usize = 1;
+        // The row's largest value and its compensated sum of shifted exponentials, by the one definition every
+        // softmax shares - SimNorm's groups and the GPU kit's kernels among them (`zm.softmaxGroupStatistics`).
+        const input_row: TensorRow(T) = .{ .tensor = a, .row = row };
+        const statistics: zm.SoftmaxGroupStatistics(T) = zm.softmaxGroupStatistics(T, TensorRow(T), input_row, 0, cols);
+        var col: usize = 0;
         while (col &lt; cols) : (col += 1) {
-            const x: T = a.at2(row, col);
-            if (x &gt; largest) {
-                largest = x;
-            }
-        }
-        // Compensated, like every other accumulation here: a wide row is exactly the sum that
-        // loses its low bits, and the result is a denominator every element is divided by.
-        var total: CompensatedSum(T) = .{};
-        col = 0;
-        while (col &lt; cols) : (col += 1) {
-            const e: T = @exp(a.at2(row, col) - largest);
-            out.setAt2(row, col, e);
-            total.add(e);
-        }
-        const denominator: T = total.value();
-        col = 0;
-        while (col &lt; cols) : (col += 1) {
-            const e: T = out.at2(row, col);
-            out.setAt2(row, col, e / denominator);
+            const probability: T = zm.softmaxGroupValue(T, a.at2(row, col), statistics);
+            out.setAt2(row, col, probability);
         }
     }
 }
@@ -11721,33 +11681,22 @@ pub fn layerNormRows(
     if (cols == 0) {
         return Error.DomainError;
     }
-    const width: T = @floatFromInt(cols);
-
     var row: usize = 0;
     while (row &lt; rows) : (row += 1) {
-        // Both accumulations are compensated, for the reason recorded with `sumAll`: a wide row
-        // is exactly the sum that loses its low bits, and here it feeds a DIVISOR.
-        var total: CompensatedSum(T) = .{};
+        // The row's statistics by the one definition every layer norm shares - the GPU kit's kernel among them
+        // (`zm.layerNormRowStatistics`: both sums compensated, epsilon inside the root).
+        const tensor_row: TensorRow(T) = .{ .tensor = a, .row = row };
+        const statistics: zm.LayerNormStatistics(T) = zm.layerNormRowStatistics(
+            T,
+            TensorRow(T),
+            tensor_row,
+            cols,
+            epsilon,
+        );
         var col: usize = 0;
         while (col &lt; cols) : (col += 1) {
             const x: T = a.at2(row, col);
-            total.add(x);
-        }
-        const mean: T = total.value() / width;
-
-        var sq: CompensatedSum(T) = .{};
-        col = 0;
-        while (col &lt; cols) : (col += 1) {
-            const d: T = a.at2(row, col) - mean;
-            const term: T = d * d;
-            sq.add(term);
-        }
-        const inv: T = 1.0 / @sqrt(sq.value() / width + epsilon);
-
-        col = 0;
-        while (col &lt; cols) : (col += 1) {
-            const x: T = a.at2(row, col);
-            out.setAt2(row, col, (x - mean) * inv);
+            out.setAt2(row, col, zm.layerNormValue(T, x, statistics));
         }
     }
 }
@@ -11763,6 +11712,24 @@ the spread, which is the normal case for an unnormalised activation.</p>
 <p>Epsilon is a parameter because frameworks disagree about its value &mdash; PyTorch defaults to
 1e-5, JAX to 1e-6 &mdash; and the difference is visible in <code>f32</code>. A row of identical
 values has zero variance, and epsilon is what keeps its result finite.</p>
+
+<p>The row's statistics &mdash; the compensated mean, the compensated sum of squared deviations, the inverse spread
+&mdash; are not computed here but by zimrmath's <code>layerNormRowStatistics</code>, which reads the row through an
+accessor: any type with <code>at(row, index)</code>. A tensor's row is one such accessor; a run of floats in a GPU
+storage buffer is another. The GPU learning kit's layer-norm kernel calls the same function, so a row normalised on
+the host and on the device goes through one piece of arithmetic, and the two agree to the bit wherever the device
+does not fuse a multiply into an add. <code>CompensatedSum</code> itself lives in zimrmath for the same reason, and
+zimrnum names it as its own. Every softmax shares its statistics the same way, through
+<code>softmaxGroupStatistics</code> - the largest value, and the compensated sum of the shifted exponentials -
+whether over a SimNorm group (<code>simNormRows</code>), a whole row (<code>softmaxRows</code>), or a
+cross-entropy's log-sum-exp. The backward passes (<code>layerNormRowsBackward</code>, <code>simNormRowsGrad</code>)
+take their couplings from zimrmath as well, and the two-hot's arithmetic - <code>symlog</code>, where a value lands
+among the bins, how it shares itself between the two around it - lives there too, so that a GPU kernel and
+<code>CategoricalScalar</code> place a value identically.</p>
+
+<pre><code>const statistics = zm.layerNormRowStatistics(T, TensorRow(T), tensor_row, cols, epsilon);
+out[c] = zm.layerNormValue(T, a[c], statistics);     // (a[c] - mean) * inverse_spread</code></pre>
+
 
 <h3 id="loss">10.3 Loss and the update step<a class="anchor" href="#loss">#</a></h3>
 
@@ -21234,7 +21201,7 @@ design; for an elementwise or row-wise operation it means a kernel has not been 
 <tr><th>Declaration</th><th>Signature</th><th>GPU</th><th>Notes</th></tr>
 <tr><td><code>Error</code></td><td><code>Error = error</code></td><td><span class="host">host</span></td><td>One error set for the whole library.</td></tr>
 <tr><td><code>isFloat</code></td><td><code>isFloat(comptime T: type) bool</code></td><td><span class="host">host</span></td><td>True for f16, f32, f64.</td></tr>
-<tr><td><code>requireFloat</code></td><td><code>requireFloat(comptime T: type) void</code></td><td><span class="host">host</span></td><td>Compile-time guard; fails at the call site with the offending type named.</td></tr>
+<tr><td><code>requireFloat</code></td><td><code>requireFloat = zm.requireFloatScalar;</code></td><td><span class="host">host</span></td><td>Compile-time guard; fails at the call site with the offending type named.</td></tr>
 <tr><td><code>requireInt</code></td><td><code>requireInt(comptime T: type) void</code></td><td><span class="host">host</span></td><td>Whole numbers only.</td></tr>
 <tr><td><code>requireNumeric</code></td><td><code>requireNumeric(comptime T: type) void</code></td><td><span class="host">host</span></td><td>Integers welcome. Only where the widening is TESTED at both widths.</td></tr>
 <tr><td><code>Ddof</code></td><td><code>Ddof = enum</code></td><td><span class="host">host</span></td><td>population or sample.</td></tr>
@@ -21292,9 +21259,7 @@ design; for an elementwise or row-wise operation it means a kernel has not been 
 <tr><td><code>Pair</code></td><td><code>Pair = struct</code></td><td><span class="host">method</span></td><td>The two positions of one Walk2 step.</td></tr>
 <tr><td><code>over</code></td><td><code>over(first_shape: []const usize, second_shape: []const usize) Walk2</code></td><td><span class="host">method</span></td><td>Start a Walk over a shape.</td></tr>
 <tr><td><code>next</code></td><td><code>next(self: *Walk2) ?Pair</code></td><td><span class="host">method</span></td><td>The next position, or null.</td></tr>
-<tr><td><code>CompensatedSum</code></td><td><code>CompensatedSum(comptime T: type) type</code></td><td><span class="host">host</span></td><td>Neumaier accumulator. Every sum in the library goes through it.</td></tr>
-<tr><td><code>add</code></td><td><code>add(self: *@This(), x: T) void</code></td><td><span class="host">method</span></td><td></td></tr>
-<tr><td><code>value</code></td><td><code>value(self: @This()) T</code></td><td><span class="host">method</span></td><td>total + compensation.</td></tr>
+<tr><td><code>CompensatedSum</code></td><td><code>CompensatedSum = zm.CompensatedSum;</code></td><td><span class="host">host</span></td><td>Neumaier accumulator. Every sum in the library goes through it.</td></tr>
 <tr><td><code>sumAll</code></td><td><code>sumAll(comptime T: type, a: Tensor(T)) T</code></td><td><span class="host">host</span></td><td>Compensated (Neumaier).</td></tr>
 <tr><td><code>sumAllFast</code></td><td><code>sumAllFast(comptime T: type, a: Tensor(T)) T</code></td><td><span class="host">host</span></td><td>Pairwise. Faster, wrong under cancellation.</td></tr>
 <tr><td><code>meanAll</code></td><td><code>meanAll(comptime T: type, a: Tensor(T)) Error!T</code></td><td><span class="host">host</span></td><td>DomainError when empty.</td></tr>
@@ -21367,8 +21332,8 @@ design; for an elementwise or row-wise operation it means a kernel has not been 
 <tr><td><code>stdDevAxis</code></td><td><code>stdDevAxis(comptime T: type, out: Tensor(T), a: Tensor(T), axis: usize, ddof: Ddof) Error!void</code></td><td><span class="host">host</span></td><td>The square root of varianceAxis, without a second pass.</td></tr>
 <tr><td><code>polyakUpdate</code></td><td><code>polyakUpdate(comptime T: type, target: Tensor(T), online: Tensor(T), follow: T) Error!void</code></td><td><span class="host">host</span></td><td>Affine, not lerp: `follow = 1` is an exact copy. Not called `tau`.</td></tr>
 <tr><td><code>addPointMassToGrid</code></td><td><code>addPointMassToGrid(comptime T: type, bins: []T, grid_position: T, mass: T) void</code></td><td><span class="host">host</span></td><td>Spread a point's mass onto the two grid bins around it.</td></tr>
-<tr><td><code>symlog</code></td><td><code>symlog(comptime T: type, x: T) T</code></td><td><span class="host">host</span></td><td>sign(x) log(1 + |x|): squashes large magnitudes, the identity near zero.</td></tr>
-<tr><td><code>symexp</code></td><td><code>symexp(comptime T: type, y: T) T</code></td><td><span class="host">host</span></td><td>The inverse of symlog: sign(y) (exp(|y|) - 1).</td></tr>
+<tr><td><code>symlog</code></td><td><code>symlog = zm.symlog;</code></td><td><span class="host">host</span></td><td>sign(x) log(1 + |x|): squashes large magnitudes, the identity near zero.</td></tr>
+<tr><td><code>symexp</code></td><td><code>symexp = zm.symexp;</code></td><td><span class="host">host</span></td><td>The inverse of symlog: sign(y) (exp(|y|) - 1).</td></tr>
 <tr><td><code>CategoricalScalar</code></td><td><code>CategoricalScalar(comptime T: type) type</code></td><td><span class="host">host</span></td><td>One number predicted as a distribution over bins: two-hot encode, decode by the mean.</td></tr>
 <tr><td><code>Axis</code></td><td><code>Axis = enum</code></td><td><span class="host">method</span></td><td>CategoricalScalar's axis: symlog (TD-MPC2, BMPC) or identity (C51 / TD4 atoms).</td></tr>
 <tr><td><code>check</code></td><td><code>check(self: Self) Error!void</code></td><td><span class="host">method</span></td><td>CategoricalScalar: refuse settings that describe no grid.</td></tr>
@@ -21445,6 +21410,8 @@ design; for an elementwise or row-wise operation it means a kernel has not been 
 <tr><td><code>pctChange</code></td><td><code>pctChange(comptime T: type, out: Tensor(T), a: Tensor(T)) Error!void</code></td><td><span class="host">host</span></td><td>As diff, and NaN where the previous value is zero.</td></tr>
 <tr><td><code>argmaxAxis</code></td><td><code>argmaxAxis(comptime T: type, comptime Index: type, out: Tensor(Index), a: Tensor(T), axis: usize) Error!void</code></td><td><span class="host">host</span></td><td>Index along an axis, as a float. NaN never wins.</td></tr>
 <tr><td><code>argminAxis</code></td><td><code>argminAxis(comptime T: type, comptime Index: type, out: Tensor(Index), a: Tensor(T), axis: usize) Error!void</code></td><td><span class="host">host</span></td><td>Ties go to the first.</td></tr>
+<tr><td><code>at</code></td><td><code>at(tensor_row: @This(), index: usize) T</code></td><td><span class="host">method</span></td><td>Bounds-checked read.</td></tr>
+<tr><td><code>at</code></td><td><code>at(normalised_row: @This(), index: usize) T</code></td><td><span class="host">method</span></td><td>Bounds-checked read.</td></tr>
 <tr><td><code>layerNormRowsBackward</code></td><td><code>layerNormRowsBackward(comptime T: type, dx: Tensor(T), a: Tensor(T), dy: Tensor(T), epsilon: T) Error!void</code></td><td><span class="host">host</span></td><td>Every element of a row appears in every other element's gradient.</td></tr>
 <tr><td><code>argminAll</code></td><td><code>argminAll(comptime T: type, a: Tensor(T)) Error!usize</code></td><td><span class="host">host</span></td><td>Ties to the first. NaN never wins.</td></tr>
 <tr><td><code>flip</code></td><td><code>flip(comptime T: type, out: Tensor(T), a: Tensor(T), axis: usize) Error!void</code></td><td><span class="host">host</span></td><td>Reverses one axis.</td></tr>
@@ -21622,6 +21589,9 @@ design; for an elementwise or row-wise operation it means a kernel has not been 
 <tr><td><code>eig</code></td><td><code>eig(comptime T: type, out: []ComplexNumber(T), a: Tensor(T)) Error!void</code></td><td><span class="host">host</span></td><td>General real matrices, so eigenvalues may be complex. Real Schur form: a 2x2 block IS a conjugate pair. Values only, not vectors.</td></tr>
 <tr><td><code>sgdMomentum</code></td><td><code>sgdMomentum(comptime T: type, out: Tensor(T), weight: Tensor(T), grad: Tensor(T), velocity: Tensor(T), rate: T, momentum: T) Error!void</code></td><td><span class="host">host</span></td><td>velocity updated in place. momentum 0 equals sgdStep.</td></tr>
 <tr><td><code>Adam</code></td><td><code>Adam = struct</code></td><td><span class="host">host</span></td><td>Hyperparameters, defaulting to the paper's values.</td></tr>
+<tr><td><code>powInt</code></td><td><code>powInt(comptime T: type, base: T, exponent: usize) T</code></td><td><span class="host">host</span></td><td>A whole-number power by squaring: how Adam's bias corrections are formed.</td></tr>
+<tr><td><code>AdamCorrections</code></td><td><code>AdamCorrections(comptime T: type) type</code></td><td><span class="host">host</span></td><td>Adam's two bias corrections at one step, as multipliers.</td></tr>
+<tr><td><code>adamCorrectionMultipliers</code></td><td><code>adamCorrectionMultipliers(comptime T: type, beta1: T, beta2: T, step: usize) AdamCorrections(T)</code></td><td><span class="host">host</span></td><td>1 / (1 - beta^step) for both moments, by `powInt` - what every GPU kit's Adam multiplies by.</td></tr>
 <tr><td><code>adamStep</code></td><td><code>adamStep(comptime T: type, out: Tensor(T), weight: Tensor(T), grad: Tensor(T), moment: Tensor(T), velocity: Tensor(T), hyper: Adam, step: usize) Error!void</code></td><td><span class="host">host</span></td><td>moment and velocity updated in place. step is 1-based, for the bias correction.</td></tr>
 <tr><td><code>adamWStep</code></td><td><code>adamWStep(comptime T: type, out: Tensor(T), weight: Tensor(T), grad: Tensor(T), moment: Tensor(T), velocity: Tensor(T), hyper: Adam, decay: T, step: usize) Error!void</code></td><td><span class="host">host</span></td><td>Decay applied to the WEIGHT, not the gradient.</td></tr>
 <tr><td><code>rmspropStep</code></td><td><code>rmspropStep(comptime T: type, out: Tensor(T), weight: Tensor(T), grad: Tensor(T), mean_square: Tensor(T), rate: T, rho: T, epsilon: T) Error!void</code></td><td><span class="host">host</span></td><td>Adam without the first moment or bias correction.</td></tr>

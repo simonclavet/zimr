@@ -113,9 +113,14 @@ const Floor = struct {
 /// its folder, and whether the form is open.
 const NewRunForm = struct {
     is_open: bool = false,
-    run: lab.PpoRun = .{},
+    /// The whole run, whichever learner it chose (`lab.GenoRun`): the form edits the task, the chosen learner's own
+    /// settings and the controls.
+    run: lab.GenoRun = .{},
     name_buffer: [64]u8 = @splat(0),
     name_length: usize = 0,
+    /// Whether the name was typed by hand: a typed name is kept, while a generated one follows the learner and the
+    /// motion as they change (`freeRunName`).
+    is_name_typed: bool = false,
 
     fn name(form: *const NewRunForm) []const u8 {
         return form.name_buffer[0..form.name_length];
@@ -212,16 +217,21 @@ fn isRunNameFit(name: []const u8) bool {
     return true;
 }
 
-/// A name no listed run has, for a new run of `motion`: its label and the first free number - `dance-1`,
-/// `dance-2` - written into `buffer`.
+/// A name no listed run has, for a new run of `learner` on `motion`: the learner, the motion's label and the first
+/// free number - `supertrack-dance-1`, `ppo-dance-2` - written into `buffer`, so that runs of different learners side
+/// by side in the list say which is which.
 fn freeRunName(
     runs: []const native_os.FolderEntry,
-    motion: lab.PpoMotion,
+    learner: lab.GenoLearner,
+    motion: lab.GenoMotion,
     buffer: []u8,
 ) []const u8 {
+    const learner_name: []const u8 = @tagName(learner);
     var number: u32 = 1;
     while (true) : (number += 1) {
-        const name: []const u8 = bufPrint(buffer, "{s}-{d}", .{ motion.label(), number }) catch return "";
+        const name: []const u8 = bufPrint(buffer, "{s}-{s}-{d}", .{ learner_name, motion.label(), number }) catch {
+            return "";
+        };
         const is_taken: bool = runIndexNamed(runs, name) != null;
         if (!is_taken) {
             return name;
@@ -229,7 +239,7 @@ fn freeRunName(
     }
 }
 
-/// A run's parameters, from the `run.zon` in `run_folder` (`lab.GenoRun`, which reads the older `PpoRun` too).
+/// A run's parameters, from the `run.zon` in `run_folder` (`lab.GenoRun`).
 /// Memory: the file's text and the parser's work freed before it returns; the run is plain values.
 fn readRunParameters(gpa: Allocator, io: Io, run_folder: []const u8) !lab.GenoRun {
     var path_buffer: [1200]u8 = undefined;
@@ -247,9 +257,8 @@ fn readRunParameters(gpa: Allocator, io: Io, run_folder: []const u8) !lab.GenoRu
 }
 
 /// Reads the policy file `policy_name` in `run_folder` - the newest policy, or a checkpoint of it (`lab.PolicyFile`).
-/// A folder without one - a run from before policy files, or one that has not saved yet - is `error.NoPolicyFile`.
-/// Memory: the policy's arrays are allocated with `gpa` and are the caller's to `deinit`; the file's bytes are freed
-/// before it returns.
+/// A folder without one - a run that has not saved yet - is `error.NoPolicyFile`. Memory: the policy's arrays are
+/// allocated with `gpa` and are the caller's to `deinit`; the file's bytes are freed before it returns.
 fn readPolicy(
     gpa: Allocator,
     io: Io,
@@ -339,8 +348,9 @@ const RunWatch = struct {
     ys: ArrayList(f32) = .empty,
     status: ?lab.RunStatus = null,
     judged: ?JudgedRun = null,
-    /// The run's save interval (`GenoControls.save_minutes`), read from its `run.zon` once: what silence is judged by.
-    save_minutes: ?f32 = null,
+    /// The run's parameters, read from its `run.zon` once: its learner names what a log line counts and its save
+    /// interval (`GenoControls.save_minutes`) is what silence is judged by. Null when the file could not be read.
+    parameters: ?lab.GenoRun = null,
 
     fn deinit(watch: *RunWatch, gpa: Allocator) void {
         watch.curve.deinit(gpa);
@@ -352,8 +362,8 @@ const RunWatch = struct {
     /// so never for a run with no status yet, or whose `run.zon` could not be read.
     fn isSilent(watch: *const RunWatch, now_seconds: i64) bool {
         const status: lab.RunStatus = watch.status orelse return false;
-        const save_minutes: f32 = watch.save_minutes orelse return false;
-        return status.isSilent(now_seconds, save_minutes);
+        const parameters: lab.GenoRun = watch.parameters orelse return false;
+        return status.isSilent(now_seconds, parameters.controls.save_minutes);
     }
 };
 
@@ -400,9 +410,8 @@ fn readRunWatch(
     if (lab.RunStatus.parse(gpa, arena, terminated_status)) |status| {
         watch.status = status;
     }
-    if (watch.save_minutes == null) {
-        const parameters: ?lab.GenoRun = readRunParameters(gpa, io, run_folder) catch null;
-        watch.save_minutes = if (parameters) |known| known.controls.save_minutes else null;
+    if (watch.parameters == null) {
+        watch.parameters = readRunParameters(gpa, io, run_folder) catch null;
     }
 }
 
@@ -463,8 +472,8 @@ fn loadRun(
         gpa.destroy(show_arena);
     }
     const arena: Allocator = show_arena.allocator();
-    // The task every learner's run is on - Geno's task, DReCon's bodies - with the learner's own decision.
-    const settings: lab.PolicyShowSettings = lab.showSettingsFor(parameters);
+    // The task every learner's run is on - Geno's task, DReCon's bodies; the policy brings its own decision interval.
+    const settings: lab.PolicyShowSettings = lab.genoShowSettings();
     const clips: []*const dance.Clip = try arena.dupe(*const dance.Clip, &.{clip});
     const show: lab.PolicyShow = try .start(arena, &imported.model, imported.names, clips, &policy, settings);
     const folder_name: []const u8 = std.fs.path.basename(run_folder);
@@ -498,7 +507,6 @@ fn unloadRun(gpa: Allocator, shown: *ShownRun) void {
 const Meshes = struct {
     sphere: z.Mesh,
     cube: z.Mesh,
-    cylinder: z.Mesh,
 };
 
 /// A point of the robot's world, where z is up, in the drawing's, where y is up: the quarter turn about x that
@@ -542,12 +550,19 @@ fn drawRobot(
                 z.drawMeshInstanced(gl, &meshes.cube, transform, tint);
             },
             .capsule => |capsule| {
-                // The cylinder mesh rises from its base: its base moved down half the capsule's length, then the
-                // mesh stretched to the capsule's radius and whole length.
-                const capsule_length: f32 = 2.0 * capsule.half_height;
-                const base_lowered: Mat = mulMat(place, translation(0, -capsule.half_height, 0));
-                transform[0] = mulMat(base_lowered, scaling(capsule.radius, capsule_length, capsule.radius));
-                z.drawMeshInstanced(gl, &meshes.cylinder, transform, tint);
+                // A capsule is its cylinder part AND a hemisphere of its radius at each end: Geno's spine is mostly
+                // caps (`Spine3`: radius 0.13, a cylinder part 0.09 long), so the cylinder alone draws a flat disk.
+                // zimr's capsule runs along its geom's LOCAL Y (`GeomShape`); its two segment ends, in the world
+                // where z is up, then in the drawing where y is up.
+                const half_axis_local: Vec = vec(0, capsule.half_height, 0);
+                const half_axis_z_up: Vec = zm.rotate(world_quaternion, half_axis_local);
+                const half_axis_drawn: Vec = yUpOf(half_axis_z_up);
+                const centre_drawn: Vec = yUpOf(world_position);
+                const segment_start: Vec = centre_drawn - half_axis_drawn;
+                const segment_end: Vec = centre_drawn + half_axis_drawn;
+                const capsule_slices: i32 = 12;
+                const capsule_rings: i32 = 6;
+                z.drawCapsule(gl, segment_start, segment_end, capsule.radius, capsule_slices, capsule_rings, tint);
             },
             else => {},
         }
@@ -733,17 +748,18 @@ fn reloadShownRun(s: *State, io: Io) void {
 /// field - or the defaults when no run is shown, and a name no run has.
 fn openNewRunForm(s: *State) void {
     const form: *NewRunForm = &s.new_run;
-    // The form is PPO's for now: a PPO run starts it from its own settings, another learner's from the defaults.
-    form.run = if (s.shown) |*shown| (shown.parameters.toPpoRun() orelse .{}) else .{};
-    const name: []const u8 = freeRunName(s.runs, form.run.motion, &form.name_buffer);
+    // From the run shown, whichever learner it trained - its learner, settings and controls - or from the defaults.
+    form.run = if (s.shown) |*shown| shown.parameters else .{};
+    const name: []const u8 = freeRunName(s.runs, form.run.learner, form.run.task.motion, &form.name_buffer);
     form.name_length = name.len;
+    form.is_name_typed = false;
     form.is_open = true;
     const source: []const u8 = if (s.shown) |*shown| shown.name() else "the defaults";
     log.info("new training: parameters from {s}, named {s}", .{ source, name });
 }
 
-/// Why the form's run cannot start, or null when it can: a name unfit for a folder or already a run's, or a
-/// parameter the trainer would refuse (`PpoRun.problem`).
+/// Why the form's run cannot start, or null when it can: a name unfit for a folder or already a run's, a learner the
+/// trainer does not train yet, or a parameter it would refuse (`GenoRun.problem`).
 fn newRunProblem(form: *const NewRunForm, runs: []const native_os.FolderEntry) ?[]const u8 {
     const name: []const u8 = form.name();
     if (!isRunNameFit(name)) {
@@ -752,6 +768,9 @@ fn newRunProblem(form: *const NewRunForm, runs: []const native_os.FolderEntry) ?
     const is_taken: bool = runIndexNamed(runs, name) != null;
     if (is_taken) {
         return "name: a run of that name exists";
+    }
+    if (!form.run.learner.isTrainable()) {
+        return "learner: not in the trainer yet";
     }
     return form.run.problem();
 }
@@ -836,11 +855,10 @@ fn startRun(s: *State, io: Io) void {
     };
     log.info("{s}: made {s}", .{ name, folder });
 
-    // The parameters, written as the trainer will read them: the form's PPO settings as a `GenoRun`, which names its
-    // learner.
+    // The parameters, written as the trainer will read them: the form's run, which names its learner.
     var text: Io.Writer.Allocating = .init(s.gpa);
     defer text.deinit();
-    const new_run: lab.GenoRun = .fromPpoRun(s.new_run.run);
+    const new_run: lab.GenoRun = s.new_run.run;
     new_run.write(&text.writer) catch {
         tell(s, .err, "{s}: out of memory writing run.zon", .{name});
         return;
@@ -952,8 +970,9 @@ fn watchStartedTrainers(s: *State) void {
     }
 }
 
-/// The new training's form, while it is open: the run's name, every parameter of `PpoRun` (`ui.editStruct`), what
-/// stops it from starting, and start, defaults and cancel.
+/// The new training's form, while it is open: the run's name, the learner (a choice of three, each with a line on
+/// what it is), that learner's settings, the task and the controls (`ui.editStruct`), what stops it from starting, and
+/// start, defaults and cancel.
 fn drawNewRunWindow(s: *State, u: ui.Ui, io: Io) void {
     const form: *NewRunForm = &s.new_run;
     if (!form.is_open) {
@@ -962,8 +981,46 @@ fn drawNewRunWindow(s: *State, u: ui.Ui, io: Io) void {
     const window_options: ui.WindowOpts = .{ .initial_pos = .{ 392, 4 }, .initial_size = .{ 420, 520 } };
     const window: ui.WindowHandle = u.window("new training", window_options) orelse return;
     defer window.close();
-    _ = u.inputText("name", &form.name_buffer, &form.name_length, .{});
-    _ = u.editStruct(&form.run);
+    const is_name_edited: bool = u.inputText("name", &form.name_buffer, &form.name_length, .{});
+    if (is_name_edited) {
+        form.is_name_typed = true;
+    }
+    // The learner first - each with its own settings, so choosing one starts it from its defaults - then that
+    // learner's settings, the task and the run's controls.
+    const learner_choices = [_]lab.GenoLearner{ .{ .ppo = .{} }, .{ .supertrack = .{} }, .{ .efficient_tdmpc = .{} } };
+    var chosen_index: i32 = 0;
+    for (learner_choices, 0..) |choice, choice_index| {
+        const is_chosen: bool = std.meta.activeTag(form.run.learner) == std.meta.activeTag(choice);
+        if (is_chosen) {
+            chosen_index = @intCast(choice_index);
+        }
+    }
+    const index_before: i32 = chosen_index;
+    for (learner_choices, 0..) |choice, choice_index| {
+        _ = u.radioButton(@tagName(choice), &chosen_index, @intCast(choice_index));
+        u.sameLine(.{});
+    }
+    u.newLine();
+    const is_another_learner_chosen: bool = chosen_index != index_before;
+    if (is_another_learner_chosen) {
+        const chosen_slot: usize = @intCast(chosen_index);
+        form.run.learner = learner_choices[chosen_slot];
+    }
+    u.textWrapped("{s}", .{form.run.learner.summary()});
+    switch (form.run.learner) {
+        .ppo => |*settings| _ = u.editStruct(settings),
+        .supertrack => |*settings| _ = u.editStruct(settings),
+        .efficient_tdmpc => |*settings| _ = u.editStruct(settings),
+    }
+    const is_task_changed: bool = u.editStruct(&form.run.task);
+    _ = u.editStruct(&form.run.controls);
+    // A generated name follows the learner and the motion - `ppo-dance-1` becomes `supertrack-dance-1` - and a typed
+    // one is kept.
+    const is_generated_name_stale: bool = !form.is_name_typed and (is_another_learner_chosen or is_task_changed);
+    if (is_generated_name_stale) {
+        const name: []const u8 = freeRunName(s.runs, form.run.learner, form.run.task.motion, &form.name_buffer);
+        form.name_length = name.len;
+    }
     const problem: ?[]const u8 = newRunProblem(form, s.runs);
     if (problem) |why| {
         u.textColored(s.look.problem, "{s}", .{why});
@@ -978,6 +1035,10 @@ fn drawNewRunWindow(s: *State, u: ui.Ui, io: Io) void {
     u.sameLine(.{});
     if (u.button("defaults", .{})) {
         form.run = .{};
+        if (!form.is_name_typed) {
+            const name: []const u8 = freeRunName(s.runs, form.run.learner, form.run.task.motion, &form.name_buffer);
+            form.name_length = name.len;
+        }
     }
     u.sameLine(.{});
     if (u.button("cancel", .{})) {
@@ -993,7 +1054,6 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.meshes = .{
         .sphere = try z.genMeshSphere(gpa, 1.0, 10, 8),
         .cube = try z.genMeshCube(gpa, 1.0, 1.0, 1.0),
-        .cylinder = try z.genMeshCylinder(gpa, 1.0, 1.0, 16, 2),
     };
     s.transform = .{zm.identity()};
 
@@ -1062,7 +1122,6 @@ fn deinit(gpa: Allocator, s: *State) void {
     s.imported.deinit();
     s.robot.deinit();
     s.document.deinit();
-    z.unloadMesh(gpa, s.meshes.cylinder);
     z.unloadMesh(gpa, s.meshes.cube);
     z.unloadMesh(gpa, s.meshes.sphere);
     s.ui_host.deinit();
@@ -1083,10 +1142,25 @@ fn drawRunLine(
     };
     const is_silent: bool = watch.isSilent(now_seconds);
     const state_name: []const u8 = if (is_silent) "silent" else @tagName(status.state);
+    // The learner, and what its log counts: PPO's batches, SuperTrack's rounds (`GenoLearner.unitName`).
+    const learner_name: []const u8 = if (watch.parameters) |parameters| @tagName(parameters.learner) else "?";
+    const unit_name: []const u8 = if (watch.parameters) |parameters| parameters.learner.unitName() else "line";
+    const progress_count: u64 = status.batches;
     if (status.recent_seconds_to_failure) |seconds| {
-        u.textColored(color, "  {s}, batch {d}, loses it every {d:.1} s", .{ state_name, status.batches, seconds });
+        u.textColored(color, "  {s}, {s}, {s} {d}, loses it every {d:.1} s", .{
+            learner_name,
+            state_name,
+            unit_name,
+            progress_count,
+            seconds,
+        });
     } else {
-        u.textColored(color, "  {s}, batch {d}, no losses lately", .{ state_name, status.batches });
+        u.textColored(color, "  {s}, {s}, {s} {d}, no losses lately", .{
+            learner_name,
+            state_name,
+            unit_name,
+            progress_count,
+        });
     }
     // The newest judgement, with its standard error, beside the servo judged on the same starts.
     const judged: JudgedRun = watch.judged orelse return;
@@ -1160,7 +1234,6 @@ fn decadesAboveLowest(seconds: f32, plot: CurvePlot) f32 {
 /// A point of the curves: which run's, and which batch - and whether it is the run's last.
 const CurvePick = struct {
     run_index: usize,
-    batch: u64,
     /// The point's minute of training: the policy checkpoint nearest it is the one shown.
     training_minutes: f32,
     is_last: bool,
@@ -1190,7 +1263,6 @@ fn nearestCurvePoint(
                 nearest_squared_distance = squared_distance;
                 nearest = .{
                     .run_index = run_index,
-                    .batch = points[point_index].batch,
                     .training_minutes = points[point_index].training_minutes,
                     .is_last = point_index + 1 == points.len,
                 };

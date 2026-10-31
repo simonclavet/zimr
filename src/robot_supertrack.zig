@@ -859,13 +859,14 @@ pub fn SuperTrackKitOn(comptime M: type) type {
             step: u32,
             rate: f64,
         ) void {
-            const s: f32 = float(step);
             var q: M.Params = p.base();
+            // Adam's bias corrections as zimrnum's Adam forms them, for the betas this dispatch uses.
+            const corrections: zn.AdamCorrections(f32) = zn.adamCorrectionMultipliers(f32, q.beta1, q.beta2, step);
             q.w_off = start;
             q.count = count;
             q.rate = @floatCast(rate);
-            q.correction1 = 1.0 / (1.0 - @exp(s * @log(@as(f32, 0.9))));
-            q.correction2 = 1.0 / (1.0 - @exp(s * @log(@as(f32, 0.999))));
+            q.correction1 = corrections.first;
+            q.correction2 = corrections.second;
             p.run("adam", q, count);
         }
 

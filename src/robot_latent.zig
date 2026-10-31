@@ -102,6 +102,11 @@ const Moments = struct {
     /// Mean and spread, spreads floored so a feature that never moves does not divide by nothing. The two slices
     /// are `owned`'s.
     fn normalizer(self: Moments, owned: Allocator) !Normalizer {
+        return self.normalizerFloored(owned, 1.0e-3);
+    }
+
+    /// Mean and spread, each spread at least `spread_floor`. The two slices are `owned`'s.
+    fn normalizerFloored(self: Moments, owned: Allocator, spread_floor: f64) !Normalizer {
         if (self.count == 0) {
             return error.NoData;
         }
@@ -113,7 +118,7 @@ const Moments = struct {
         for (mean, spread, self.sum, self.squares) |*mu, *sigma, s, q| {
             const average: f64 = s / n;
             mu.* = @floatCast(average);
-            sigma.* = @floatCast(@max(@sqrt(@max(q / n - average * average, 0.0)), 1.0e-3));
+            sigma.* = @floatCast(@max(@sqrt(@max(q / n - average * average, 0.0)), spread_floor));
         }
         return .{ .mean = mean, .spread = spread };
     }
@@ -149,6 +154,51 @@ pub fn measureClipNormalizer(
         }
     }
     return moments.normalizer(owned);
+}
+
+/// THE CHANGE OF THE FEATURES IN ONE STEP, measured from the reference as the normaliser is (`measureClipNormalizer`):
+/// every pair of consecutive frames of every clip, each posed as the fleet poses a reference, the change of their
+/// features in `normalizer`'s units - (raw at t - raw at t-1) / spread - its mean and its spread for every feature,
+/// each spread at least `spread_floor`. What the world model predicts each step is such a change; these say how large
+/// each feature's change typically is, so a prediction can be made, and judged, in those units (`IncrementScale`).
+/// Frame 0 has no velocity (`resetToFrame` starts at 1), so the first pair is frames 1 and 2. The caller owns the two
+/// slices.
+pub fn measureClipIncrements(
+    owned: Allocator,
+    m: *rbt.Model,
+    clips: []const *const dance.Clip,
+    normalizer: Normalizer,
+    spread_floor: f64,
+) !Normalizer {
+    var data: rbt.Data = try .init(owned, m);
+    defer data.deinit();
+    var state: track.State = try .init(owned, m.nbody);
+    defer state.deinit(owned);
+    const f: usize = track.localSize(m.nbody);
+    const raw: []f32 = try owned.alloc(f32, f);
+    defer owned.free(raw);
+    const previous_raw: []f32 = try owned.alloc(f32, f);
+    defer owned.free(previous_raw);
+    const change: []f32 = try owned.alloc(f32, f);
+    defer owned.free(change);
+    var moments: Moments = try .init(owned, f);
+    defer moments.deinit(owned);
+    const root: usize = track.rootBody(m);
+    for (clips) |clip| {
+        for (1..clip.frame_count) |frame| {
+            track.resetToFrame(m, &data, clip, frame);
+            track.stateOf(m, &data, &state);
+            track.local(state, root, raw);
+            if (frame >= 2) {
+                for (change, raw, previous_raw, normalizer.spread) |*delta, now, before, spread| {
+                    delta.* = (now - before) / spread;
+                }
+                moments.add(change);
+            }
+            @memcpy(previous_raw, raw);
+        }
+    }
+    return moments.normalizerFloored(owned, spread_floor);
 }
 
 /// Mean and spread of every feature over everything the replay holds, spreads floored so a feature
@@ -2672,7 +2722,7 @@ test "robot_latent: what the replay says was applied before a record is what col
     setup.init(gpa, threaded.io(), 3) catch return error.SkipZigTest;
     defer setup.deinit();
     const fleet: *track.Fleet = setup.fleet;
-    fleet.options.shove_every = 7;
+    fleet.options.pushes = .{ .every = 7 };
     fleet.options.max_steps = 50;
     const learner: *Learner = try .init(gpa, fleet, .{
         .hidden = 16,

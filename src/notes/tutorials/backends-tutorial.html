@@ -265,11 +265,11 @@ with its details, where the document first needs it; this table is for looking o
 <tr><td>Buffer</td><td>A block of GPU memory: vertices, indices, uniforms, anything else</td>
     <td><a href="#buffers">8.1</a></td></tr>
 <tr><td>Texture, image</td><td>A grid of texels: a picture, a render target, a depth buffer</td>
-    <td><a href="#textures">8.4</a></td></tr>
+    <td><a href="#textures">8.6</a></td></tr>
 <tr><td>View</td><td>How a shader or a pass sees a texture: which mip levels and layers, read as what</td>
-    <td><a href="#textures">8.4</a></td></tr>
+    <td><a href="#textures">8.6</a></td></tr>
 <tr><td>Sampler</td><td>How a shader reads a texture: the filtering, and what happens past its edges</td>
-    <td><a href="#samplers">8.6</a></td></tr>
+    <td><a href="#samplers">8.9</a></td></tr>
 <tr><td>Shader module</td><td>Compiled shader code: WGSL for WebGPU, SPIR-V for Vulkan</td>
     <td><a href="#shaders">5</a></td></tr>
 <tr><td>Bind group, descriptor set</td><td>The resources a draw's shaders read, gathered under one handle</td>
@@ -2239,6 +2239,7 @@ fn chooseGpu(self: *Host) BringUpError!Gpu {
             .queue_family = family,
             .max_memory_allocations = properties.limits.max_memory_allocation_count,
             .max_bound_descriptor_sets = properties.limits.max_bound_descriptor_sets,
+            .max_storage_buffer_range = properties.limits.max_storage_buffer_range,
         };
         if (choice) |wanted| {
             const index_wanted: ?usize = parseInt(usize, wanted, 10) catch null;
@@ -3728,6 +3729,18 @@ fn createBindGroup(
         switch (entry.resource) {
             .buffer =&gt; {
                 const buffer: *BufferSlot = self.buffers.get(entry.handle, "buffer");
+                // A storage binding no wider than the device can bind: past it, the device reads and writes beyond
+                // the binding with no error - a silent wrong answer, traded here for a loud stop.
+                const is_storage: bool = descriptorType(kind) == .storage_buffer;
+                const bound_bytes: u64 = if (entry.size == 0) buffer.size - entry.offset else entry.size;
+                if (is_storage and bound_bytes &gt; self.gpu.max_storage_buffer_range) {
+                    panic("vulkan host: bind group `{s}`: a storage binding of {d} bytes; {s} binds at most {d}", .{
+                        label,
+                        bound_bytes,
+                        vk.fixedName(&amp;self.gpu.name),
+                        self.gpu.max_storage_buffer_range,
+                    });
+                }
                 buffer_infos[index] = .{
                     .buffer = buffer.buffer,
                     .offset = entry.offset,
@@ -4577,12 +4590,15 @@ waits until the display has taken the previous one, so the loop runs at the disp
 <code>requestAnimationFrame</code> does. A minimized window has no visible pixels, and the loop sleeps instead of
 drawing.</p>
 
-<pre data-src="src/native_loop.zig" data-in="pub fn openWindow(" data-decl="pub fn run("><code class="zig">/// Runs the window's frames until it is closed, each at the time it starts on the system's clock - or, when the
-/// `ZIMR_SCRIPT` setting names a script, runs the script in the window (`runScriptInWindow`) and returns how it went.
+<pre data-src="src/native_loop.zig" data-in="pub fn openWindow(" data-decl="pub fn run("><code class="zig">/// Runs the window's frames until it is closed, each at the time it starts on the system's clock - at most
+/// `max_frames_per_second` a second, when the app asks for fewer than the display gives (`waitForBeat`) - or, when
+/// the `ZIMR_SCRIPT` setting names a script, runs the script in the window (`runScriptInWindow`) and returns how it
+/// went: a script draws exactly the frames it asks for.
 pub fn run(
     update: UpdateFunction,
     receive_event: EventFunction,
     capture: script.CaptureFunction,
+    max_frames_per_second: ?f32,
 ) ?script.Outcome {
     if (comptime !has_window_loop) {
         // No window was opened (`openWindow`): no frames to run.
@@ -4593,12 +4609,19 @@ pub fn run(
     if (native_os.environmentVariable("ZIMR_SCRIPT", &amp;setting_buffer)) |script_path| {
         return runScriptInWindow(update, receive_event, capture, script_path);
     }
+    var pacer: FramePacer = .{};
     while (true) {
-        const pass: WindowPass = switch (serviceWindow(receive_event)) {
-            // The frame's wait, here, input handed over as it arrives (`waitForFrame`).
-            .draw =&gt; waitForFrame(receive_event),
-            else =&gt; |other| other,
-        };
+        var pass: WindowPass = serviceWindow(receive_event);
+        // The frame's beat, for an app that asks for fewer frames than the display gives (`waitForBeat`).
+        if (pass == .draw) {
+            if (max_frames_per_second) |frames_per_second| {
+                pass = waitForBeat(receive_event, &amp;pacer, frames_per_second);
+            }
+        }
+        // The frame's wait, here, input handed over as it arrives (`waitForFrame`).
+        if (pass == .draw) {
+            pass = waitForFrame(receive_event);
+        }
         switch (pass) {
             .draw =&gt; update(native_os.monotonicMilliseconds()),
             .hidden =&gt; win32.Sleep(16),

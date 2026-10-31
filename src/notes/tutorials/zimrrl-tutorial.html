@@ -29,11 +29,11 @@
     <ol><li><a href="#dists">Distributions as types</a></li>
         <li><a href="#rl-differentiable">Sampling versus training</a></li>
         <li><a href="#squashed">The squash correction</a></li>
-        <li><a href="#rl-transformer">Attention over a scene</a></li></ol></li>
+        <li><a href="#rl-transformer">Attention over a scene</a></li><li><a href="#flowpolicy">Flow policies</a></li><li><a href="#persistentnoise">Noise that drifts</a></li><li><a href="#synergies">Synergies</a></li></ol></li>
   <li><a href="#onpolicy">On-policy training: PPO and AWR</a>
     <ol><li><a href="#rl-ppo">PPO: what the clip is for</a></li>
         <li><a href="#ppo">The PPO objective and its two health numbers</a></li>
-        <li><a href="#rl-awr">AWR: imitate your own good actions</a></li></ol></li>
+        <li><a href="#rl-awr">AWR: imitate your own good actions</a></li><li><a href="#fpo">FPO: PPO for a flow</a></li></ol></li>
   <li><a href="#offpolicy">Off-policy training: DQN, SAC and TD3</a>
     <ol><li><a href="#rl-offpolicy">The off-policy loop</a></li>
         <li><a href="#dqn">The DQN target</a></li>
@@ -4220,6 +4220,146 @@ normalisation, so the gradient reaches the first layer undiminished and deep sta
 warmup. Its six projections travel in a named <code>EncoderWeights</code>, so <code>wq</code> and <code>wk</code>
 cannot be exchanged by position.</p>
 
+<h3 id="flowpolicy">5.5 Flow policies<a class="anchor" href="#flowpolicy">#</a></h3>
+
+<p>A Gaussian policy has one mode. Where two different actions are both good - after a push, a step to the left or a
+step to the right - its mean lies between them, and between a step left and a step right is no step at all. A
+<strong>flow policy</strong> (<code>FlowPolicy</code>) can hold both. It makes an action from noise by following a
+learned velocity field, the way image generators turn noise into images: the same network maps some noises to the
+one way and some to the other.</p>
+
+<p>Flow time t runs from 0 to 1, from a noise x<sub>0</sub> to an action a, along the straight path between them:</p>
+
+<pre class="sketch"><code>   x_t = (1 - t) x_0 + t a            its velocity:  a - x_0, the same all along it
+
+   t = 0            t = 1/4          t = 1/2          t = 3/4          t = 1
+   x_0  ----v---->  x_1  ----v---->  x_2  ----v---->  x_3  ----v---->  the action
+        Euler steps of 1/K = 1/4:   x_(k+1) = x_k + (1/K) v(c, x_k, k/K)</code></pre>
+
+<p>A network v(c, x, t) - given what the policy observes c, a point x and the time - is trained to give that velocity
+wherever such paths pass. To act, the policy follows it from a fresh noise by K Euler steps. Once the noise is drawn
+the action is a deterministic function of it, so the same noise always gives the same action - which is what lets a
+character keep one noise, and so one way back, for as long as it needs it - and the action has a gradient with respect
+to the network's weights, through the K steps.</p>
+
+<p><strong>Learning a set of actions.</strong> The <em>flow matching loss</em> trains the velocity directly, without
+following the flow: for an action a and a draw of time and noise, the point x<sub>t</sub> on its path and the velocity
+the path has there,</p>
+
+<pre class="sketch"><code>   L_fm = | v(c, x_t, t) - (a - x_0) |^2</code></pre>
+
+<p>averaged over many draws. Its minimum is the field whose flow carries the noise distribution onto the actions'
+distribution - several modes included, if the actions have several. That is how a flow learns from demonstrations,
+or from a planner's answers, without averaging them away.</p>
+
+<p><strong>How many steps.</strong> Learning several modes is half of it; sampling them is the other half. A flow that
+carries one noise distribution onto two separate actions must split the noise somewhere - noises on one side of a
+boundary go to one action, the rest to the other - so its paths bend away from the boundary as they go. Euler steps
+are straight: with few of them, a sample starting near the boundary is carried across the bend and lands between the
+two actions. With more, the steps follow the bend. Two actions 1.2 apart, learned from the same situation:</p>
+
+<pre class="sketch"><code>   Euler steps   near one action or the other   in between
+   4             76%                             10%
+   8             94%                             1.5%</code></pre>
+
+<p>A flow with a single mode needs few steps - on its straight paths Euler is close to exact - while a flow whose job
+is to keep different answers apart needs enough steps to follow the bends between them.</p>
+
+<p><strong>Learning from a gradient.</strong> A critic, or a world model's backward pass, says how a cost changes
+with the action: g = d cost / d a. FlowDPG turns it into a better target, without differentiating through the
+sampler. From x<sub>t</sub>, one velocity evaluation estimates where the flow is heading - the clean action
+a^ = x<sub>t</sub> + (1 - t) v^ - a step against g improves it, and the velocity is regressed toward the straight
+path from x<sub>0</sub> to the improved action:</p>
+
+<pre class="sketch"><code>   a*  = a^ - alpha (|v^| / |g|) g                  a step down the cost, scaled to the flow's own motion
+   u*  = a* - x_0 = t (a - x_0) + (1 - t) v^ - alpha (|v^| / |g|) g
+   L   = | v(c, x_t, t) - u* |^2  +  anchor x L_fm</code></pre>
+
+<p>Scaling the step by |v^| / |g| makes alpha a fraction of the flow's own motion rather than a learning rate in the
+cost's units. At alpha = 0, with a field already carrying x<sub>0</sub> to a, u* is the flow matching target exactly:
+the improvement is a correction added to the target.</p>
+
+<p><strong>A flow at rest.</strong> A flow whose velocity starts at zero has no motion of its own: v^ = 0, and, its
+action being its noise, a - x<sub>0</sub> = 0 as well - so the step and the anchor are both zero and the flow could
+never begin to learn. The step is therefore scaled by the larger of |v^| and a floor, the typical length of the flow's
+noise (s times the square root of the action's width): a flow at rest takes noise-sized steps down the cost, and one
+that moves more than its noise takes FlowDPG's own.</p>
+
+<p><strong>Worked by hand.</strong> The sampler first, with K = 4 on a field that is 0.5 everywhere: from
+x<sub>0</sub> = -0.75 each step adds 0.25 x 0.5 = 0.125, so the points are -0.75, -0.625, -0.5, -0.375 and the action
+-0.25 - on a constant field the flow moves every noise by the same amount, and it is a field that varies with x that
+bends different noises toward different actions. Then FlowDPG's target, for one action of two numbers:</p>
+
+<pre class="sketch"><code>   a = (0.6, -0.2)    x_0 = (0.1, 0.3)    t = 0.4    v^ = (0.3, -0.4), |v^| = 0.5    g = (0, 2), |g| = 2    alpha = 0.2
+
+   the path's velocity        a - x_0                    = ( 0.5,  -0.5 )
+   the estimate's share       0.4 (a - x_0) + 0.6 v^     = ( 0.38, -0.44)
+   the step                   0.2 x 0.5 / 2 = 0.05 per unit of g:   0.05 g = ( 0,  0.1 )
+   u*                                                    = ( 0.38, -0.54)</code></pre>
+
+<p>The target's second number falls, against the gradient's; its first, which the gradient does not touch, keeps the
+estimate's.</p>
+
+<p>The network reads the time as sines and cosines - [sin(pi f t), cos(pi f t)] for f = 1, 2, 4 - smooth in t, and at
+the lowest frequency half a cycle over [0, 1], so no two times in it look alike. Its input row is
+[condition | x | time features]. The noise has a scale s: with the velocity network starting at zero, the flow's first
+actions are its noise itself, so a policy can start as "no correction, plus exploration noise of s".</p>
+
+<h3 id="persistentnoise">5.6 Noise that drifts<a class="anchor" href="#persistentnoise">#</a></h3>
+
+<p>Fresh noise each step shakes an agent around a point; noise that <em>drifts</em> sends it exploring in one direction
+for a while. An Ornstein-Uhlenbeck process does that: each step the noise keeps a share rho of itself and takes the
+rest fresh,</p>
+
+<pre class="sketch"><code>   e_(t+1) = rho e_t + sqrt(1 - rho^2) xi_t        xi_t a fresh standard normal
+   rho     = exp(-dt / tau)                         tau, the noise's correlation time</code></pre>
+
+<p>and its spread never changes: if e<sub>t</sub> has variance 1, e<sub>t+1</sub> has variance rho^2 + (1 - rho^2) = 1.
+It is as wide as fresh noise, only correlated in time - e<sub>t</sub> and e<sub>t+k</sub> have correlation rho^k, so
+the noise remembers about tau seconds of itself. At 60 Hz with tau = 0.5 s, rho = exp(-1/30) = 0.967: each step takes
+about a quarter of a standard normal fresh (sqrt(1 - 0.967^2) = 0.256), and after half a second the noise keeps
+e<sup>-1</sup> = 0.37 of its correlation with where it was.</p>
+
+<p>For a flow policy (<a href="#flowpolicy">5.5</a>) this is what lets a character commit. The flow maps each noise
+to an action - different noises, perhaps, to different ways back after a push. Fresh noise each step would hop between
+them, committing to none; noise that drifts keeps a character on the way back it began, while still trying others over
+seconds. <code>ouCorrelation</code> gives rho, and <code>ouStep</code> takes one step from fresh draws the caller
+supplies.</p>
+
+<h3 id="synergies">5.7 Synergies<a class="anchor" href="#synergies">#</a></h3>
+
+<p>A body's joints do not move independently. In a stride the hips, knees and ankles move together; a recovery is a
+few such coordinated movements - a step, a lean, a crouch - rather than every joint on its own. A <em>synergy</em> is
+one such direction: a unit vector over all the actions. A handful of them, combined, make most of the actions a body
+takes,</p>
+
+<pre class="sketch"><code>   action = c_1 s_1 + c_2 s_2 + ... + c_k s_k          s_j the synergies, c_j the coefficients</code></pre>
+
+<p>so a policy can choose k coefficients instead of every action - 8 instead of 35 - and the actions follow.
+<code>ActionSynergies</code> finds them from a set of actions. Stack the actions as the rows of a matrix A; its singular
+value decomposition A = U S V<sup>T</sup> gives, in V's columns, orthonormal directions ordered by how much of the
+rows' energy lies along each - the j-th carries s<sub>j</sub><sup>2</sup> of the total - and the first k of them are
+the k directions that together reconstruct the rows best. Each one's share of the energy says what it is worth; what
+the first k leave over is what the synergies cannot express.</p>
+
+<p>The synergies are fitted about zero - the energy is the rows' sum of squares, not their variance about a mean -
+because the actions they describe are corrections, and a correction of zero must stay "no correction", whatever the
+set's average. An action's coefficients are its components along the synergies, c = B a with the synergies as B's
+rows; coefficients make the action B<sup>T</sup> c.</p>
+
+<p><strong>Worked by hand.</strong> Four actions of two numbers:</p>
+
+<pre class="sketch"><code>   actions          (2, 0)   (-2, 0)   (0, 1)   (0, -1)
+   energy           along the first axis 4 + 4 = 8,   along the second 1 + 1 = 2,   10 in all
+
+   synergy 1        (1, 0)      share 8 / 10 = 0.8
+   synergy 2        (0, 1)      share 2 / 10 = 0.2
+
+   keeping one      (2, 0) and (-2, 0) reproduced exactly;   (0, 1) and (0, -1) become (0, 0)</code></pre>
+
+<p>One synergy keeps four fifths of the energy. Whether that is enough depends on what the missing fifth was: here,
+everything the last two actions did.</p>
+
 <h2 id="onpolicy">6. On-policy training: PPO and AWR<a class="anchor" href="#onpolicy">#</a></h2>
 
 <p>On-policy methods learn from the rollout the current policy has just collected. PPO limits how far one update
@@ -4695,6 +4835,36 @@ absent.</p>
 <p><code>maskedMean</code> restricts the loss to steps whose action was sampled, since a deterministic action says
 nothing about what the policy would have explored.</p>
 
+<h3 id="fpo">6.4 FPO: PPO for a flow<a class="anchor" href="#fpo">#</a></h3>
+
+<p>PPO needs each action's likelihood under the new policy relative to the policy that took it. A Gaussian has a
+formula for it; a flow policy (<a href="#flowpolicy">5.5</a>) does not - its action is wherever its velocity carries a
+noise, and how much of the noise ends near a given action has no closed form. FPO (Flow Policy Optimization) puts the
+flow's own flow matching loss on the action in the likelihood's place. Averaged over a few draws of a time and a
+noise,</p>
+
+<pre class="sketch"><code>   L(a) = mean over draws of | v(c, x_t, t) - (a - x_0) |^2          x_t = (1 - t) x_0 + t a</code></pre>
+
+<p>is low where the flow readily carries noise to the action and high where it does not - it behaves like the action's
+negative log-likelihood. So the ratio PPO needs becomes</p>
+
+<pre class="sketch"><code>   ratio = exp(L_old(a) - L_new(a))          the same draws for both: exactly 1 at the old weights</code></pre>
+
+<p>and everything else is PPO's clipped surrogate, unchanged: <code>fpoLoss</code> is <code>PpoClipLoss</code> given
+-L<sub>new</sub> and -L<sub>old</sub> as the log-likelihoods. An action that did better than expected has its loss
+lowered - the flow carries more noise to it - until the ratio passes 1 + clip; one that did worse has its loss raised.
+The squared error is summed over the action's dimensions, as a log-likelihood sums over independent ones, so the
+ratio's scale does not depend on how many there are.</p>
+
+<p><strong>Worked.</strong> Clip 0.2, an advantage of 2:</p>
+
+<pre class="sketch"><code>   L_old    L_new    ratio              objective
+   0.50     0.40     e^0.1 = 1.105      1.105 x 2 = 2.21        inside the clip
+   0.50     0.20     e^0.3 = 1.35       1.2 x 2   = 2.4         clipped: lowering L_new further earns nothing</code></pre>
+
+<p>The draws must be the ones the old losses were computed with: with fresh draws the ratio would wander from 1 by the
+draws' own noise, and PPO's clip would be spent on that rather than on the policy's change.</p>
+
 <h2 id="offpolicy">7. Off-policy training: DQN, SAC and TD3<a class="anchor" href="#offpolicy">#</a></h2>
 
 <p>Off-policy methods keep their data and learn from it many times. That is more sample-efficient, and it brings
@@ -4793,6 +4963,16 @@ pub fn offPolicyUpdate(
 <code>polyakUpdate</code> moves the target network that fraction of the way toward the online weights; the complement
 would make it track instantly, as if there were no target network. The follow happens after the gradient step,
 because the batch's targets were computed from the target network as it was.</p>
+
+<p><strong>Stopping and carrying on.</strong> A long off-policy run is stopped and resumed, and what must be kept
+for the resumed run to be the same run is more than the networks' weights: the optimiser's moments and its step
+count (Adam's bias correction reads the count, so restarting it misjudges every moment for thousands of updates),
+any target networks, the input normaliser, the counters the curves are drawn against, and the random stream that
+decides every sample from here on. The replay buffer is the one large part that can be left out: a resumed learner
+refills it by acting for a few rounds before its first update, which costs a moment against hours of training and
+keeps the saved file the size of the networks. The SuperTrack learner's state file does exactly this, with a
+worked example of the Adam step (<a href="robot-mocap-tutorial.html#residentstate">the robot-mocap tutorial,
+&sect;12.11</a>).</p>
 
 <h3 id="dqn">7.2 The DQN target<a class="anchor" href="#dqn">#</a></h3>
 
@@ -6105,7 +6285,11 @@ pub fn Mlp(comptime T: type) type {
 
         /// This architecture over `given`'s tensors (a `params().clone()`): the TARGET network, to be attached
         /// `.frozen` and moved by `given.follow`. The layers' storage comes from `allocator`; the tensors are shared.
-        pub fn withParams(self: Self, given: Params(T), allocator: Allocator) Error!Self {
+        pub fn withParams(
+            self: Self,
+            given: Params(T),
+            allocator: Allocator,
+        ) Error!Self {
             if (given.tensors.len != self.tensorCount()) {
                 return Error.ShapeMismatch;
             }
@@ -6533,18 +6717,9 @@ const returns: zn.CategoricalScalar(f32) = .{ .bin_count = 101, .low = -5, .high
 try returns.twinTargetRows(first_twin_probabilities, second_twin_probabilities, 1, target_probabilities);
 </code></pre>
 <div class="zn-source">
-<details class="src-fold"><summary><code>symlog</code></summary><pre><code class="zig">/// SYMLOG, the "symmetric logarithm" (DreamerV3, Hafner et al. 2023): sign(x) * log(1 + |x|).
-///
-/// It squashes large magnitudes and leaves small ones almost alone: its slope at zero is 1, so near zero it is the
-/// identity; 10 becomes 2.4, 1000 becomes 6.9, 22025 becomes 10. It is odd, defined for every number, and exactly
-/// inverted by `symexp`. Why a learner wants it: a network asked to predict returns of 0.5 in one task and 5000 in
-/// another cannot use one scale for both - in symlog space they are 0.41 and 8.5, ordinary numbers for one set of
-/// settings (one bin range, one learning rate) across every task. `zm.log1p` keeps it exact for tiny values.
-pub fn symlog(comptime T: type, x: T) T {
-    comptime requireFloat(T);
-    const squashed_magnitude: T = scalarLog1p(@abs(x));
-    return if (x &lt; 0) -squashed_magnitude else squashed_magnitude;
-}
+<details class="src-fold"><summary><code>symlog</code></summary><pre><code class="zig">/// SYMLOG and SYMEXP, the "symmetric logarithm" and its inverse (DreamerV3): zimrmath's (`zm.symlog`, `zm.symexp`),
+/// where the GPU kit's two-hot kernels call them too.
+pub const symlog = zm.symlog;
 </code></pre></details>
 <details class="src-fold"><summary><code>CategoricalScalar</code></summary><pre><code class="zig">/// A SINGLE NUMBER PREDICTED AS A DISTRIBUTION OVER BINS - "regression as classification" (DreamerV3; TD-MPC2; BMPC's
 /// reward and value heads).
@@ -6606,11 +6781,10 @@ pub fn CategoricalScalar(comptime T: type) type {
             };
         }
 
-        /// Where bin `index` sits on the axis: evenly spaced from `low` (bin 0) to `high` (the last bin).
+        /// Where bin `index` sits on the axis: evenly spaced from `low` (bin 0) to `high` (the last bin) - by
+        /// zimrmath's definition (`zm.binPosition`), the GPU kit's too.
         pub fn binPosition(self: Self, index: usize) T {
-            const last_index: T = @as(T, @floatFromInt(self.bin_count - 1));
-            const spacing: T = (self.high - self.low) / last_index;
-            return self.low + @as(T, @floatFromInt(index)) * spacing;
+            return zm.binPosition(T, self.low, self.high, self.bin_count, index);
         }
 
         /// THE TWO-HOT TARGET for `value`, into `out` (`bin_count` entries): the value placed on the axis, clamped to
@@ -6622,12 +6796,10 @@ pub fn CategoricalScalar(comptime T: type) type {
             if (out.len != self.bin_count) {
                 return Error.ShapeMismatch;
             }
-            // 1. The value on the axis, clamped to what the bins cover.
-            const axis_position: T = scalarClamp(self.toAxis(value), self.low, self.high);
-            // 2. Where it sits among the bins, counted in bins: a fractional index.
-            const last_index: T = @as(T, @floatFromInt(self.bin_count - 1));
-            const spacing: T = (self.high - self.low) / last_index;
-            const grid_position: T = scalarClamp((axis_position - self.low) / spacing, 0, last_index);
+            // 1. The value on the axis; 2. where it sits among the bins, clamped to what they cover, counted in
+            // bins: a fractional index (`zm.gridPosition`).
+            const axis_position: T = self.toAxis(value);
+            const grid_position: T = zm.gridPosition(T, axis_position, self.low, self.high, self.bin_count);
             // 3. All of the mass, shared between its two neighbouring bins.
             @memset(out, 0);
             addPointMassToGrid(T, out, grid_position, 1);
@@ -7453,6 +7625,49 @@ pub fn WorldModelLoss(comptime T: type) type {
 </code></pre></details>
 </div><!--/zn-source-->
 
+<p><strong>How the gradient runs back through the rollout.</strong> The dynamics is applied once per step, so the
+backward runs the steps in reverse - back-propagation through time - and a prediction's gradient has to be gathered
+from every road that leads away from it before the step that made it can pass it on. A prediction z_(t+1) is read
+three times: by its own consistency error, by the next step's dynamics (unless it is the last), and by the reward and
+value heads, which are trained on the rolled latents. So:</p>
+
+<pre><code>d z_(t+1)  =  its consistency error's gradient
+           +  what the next step's dynamics took back to its input
+           +  what the reward head and every value head at step t + 1 took back
+
+then back through the dynamics at step t, to z_t and the action - and so on to z_0,
+whose gradient the encoder learns from (the targets z* take none: they are detached)</code></pre>
+
+<p>The dynamics' weight gradient is the sum over every step that applied it: one network, one gradient, however long
+the window.</p>
+
+<p><strong>Windows that run past an episode's end.</strong> A replay window is H consecutive steps, and one sampled near
+the end of an episode runs past it: after the step that ended the episode, the window's later steps belong to no
+episode the earlier ones lead to. The window still rolls forward - the rollout is the same arithmetic for every row -
+but from then on it counts for nothing. Its consistency rows drop out of the step's mean, which becomes the mean over
+the windows still counting; its reward and value target rows are all zeros, which in a cross-entropy cost exactly
+nothing, in value and in gradient (the mean of those two terms stays over the whole batch). With four windows and a
+window of three steps:</p>
+
+<pre><code>finished by step       window 0   window 1   window 2   window 3     still counting   consistency's factor
+  step 0                  .          .          .          .               4            4 / 4 = 1
+  step 1                  .          X          .          .               3            4 / 3
+  step 2                  .          X          .          X               2            4 / 2 = 2
+
+the step's consistency  =  (mean over the whole batch of the counted rows' squared errors)  x  its factor
+                        =  the mean over the windows still counting</code></pre>
+
+<p>The flags come with the replay batch (<code>SequenceReplay.sample</code>), and one call marks every loss of the
+window, the policy's included (<code>LatentRollout.setFinished</code>).</p>
+
+<p><strong>Dropout in the value heads.</strong> While they train, BMPC's value heads drop out 1% of their first layer's
+units, between its linear part and its layer norm - a light regulariser: no head can come to lean on one feature of
+the latent. It is inverted dropout (zimrnum's <code>Graph.dropout</code>): a kept unit is scaled by 1 / 0.99 so the
+expected value is unchanged, and the masks are drawn once per update. Every value head at every step of every
+dynamics head gets its own mask, from its own split of the update's generator - dynamics head, then step, then value
+head - and a network splits it once more for its layer. The same heads read as targets, and every network used to act,
+do not drop out.</p>
+
 <h3 id="wm-update">9.6 How the pieces fit: one update<a class="anchor" href="#wm-update">#</a></h3>
 
 <p>Everything above is built once, for a given batch size and window length. Each training update then only writes
@@ -8128,9 +8343,9 @@ places at the &beta; where their penalised scores meet: (mean<sub>A</sub> &minus
 
 <h3 id="wm-mppi">9.8 Searching for the best plan: MPPI<a class="anchor" href="#wm-mppi">#</a></h3>
 
-<p>The scorer rates a plan but gives no gradient for improving it, so the planner searches by sampling. MPPI keeps a
-Gaussian over plans &mdash; a <em>mean</em> plan and a <em>spread</em>, one standard deviation for each step and action
-dimension &mdash; and repeats a short loop a few times:</p>
+<p>The scorer rates a plan, and the planner searches by sampling: it proposes plans, has them scored, and moves
+toward the best, using the scores alone. MPPI keeps a Gaussian over plans - a mean plan and a spread, one standard
+deviation for each step and action dimension - and repeats a short loop a few times:</p>
 
 <ol>
 <li><strong>Sample</strong> hundreds of candidate plans from the Gaussian, each action clamped to [&minus;1, 1]. A few
@@ -8142,6 +8357,36 @@ e<sup>temperature&nbsp;&times;&nbsp;(score&nbsp;&minus;&nbsp;best)</sup>, and mo
 is their weighted mean, the new spread their weighted deviation, never below a small floor so the search keeps
 exploring.</li>
 </ol>
+
+<p><strong>Why scores alone.</strong> The scorer is made of differentiable networks, so a gradient of the score with
+respect to the plan exists, and training computes such gradients all the time. The planner still does not climb it.
+Each head was trained to have the right VALUES at the states and actions it saw; nothing trained its SLOPE with respect
+to the action, which is whatever the fit happened to leave. Climbing that slope tends to find the actions where the
+heads are wrong - the model's adversarial examples. Ranking candidates by their scores uses only what training made
+accurate, and a population of candidates can hold several distant plans at once, where a gradient follows one.</p>
+
+<p><strong>The refit, worked.</strong> With a temperature of 0.5 and three elites scoring 2.0, 1.6 and 0.4, the weights
+before normalising are 1, e<sup>-0.2</sup> and e<sup>-0.8</sup>; for one step and action dimension where the elites
+chose 0.5, 0.3 and -0.2:</p>
+
+<pre><code>raw weights        1         0.819     0.449        (sum 2.268)
+weights            0.441     0.361     0.198
+new mean           0.441 x 0.5 + 0.361 x 0.3 + 0.198 x (-0.2)          =  0.289
+new spread         sqrt(weighted mean of (action - 0.289)^2)          =  0.259   (above the floor, so kept)</code></pre>
+
+<p>The temperature sets how sharply the best dominates: at 0.5 a plan one point worse still weighs e<sup>-0.5</sup>, about
+0.6 of the best's; at 5 it would weigh less than 0.01. Two rules keep the ranking well defined. A score that is not a
+number counts as 0, and an infinite one as the largest finite number of its sign, so a broken candidate can neither
+poison the weights nor win by overflowing. Among equal scores, the candidate that comes later in the state's block is
+taken first, which is what a stable ascending sort read from the end gives.</p>
+
+<p><strong>A temperature relative to the elites.</strong> The weights read a score difference in the scores' own units:
+with values in the tens, as above, a difference of one point is small, but with costs of hundredths every elite
+weighs almost alike and the refit barely favours the best. MPPI can instead read the differences relative to the
+elites' own spread - weights e<sup>temperature&nbsp;&times;&nbsp;(score&nbsp;&minus;&nbsp;best)&nbsp;/&nbsp;(best&nbsp;&minus;&nbsp;worst
+elite)</sup> - so that the worst elite always weighs e<sup>-temperature</sup> of the best, whatever the units. For the
+three elites above, at temperature 2, the spread is 1.6 and the raw weights are 1, e<sup>-0.5</sup> and
+e<sup>-2</sup>; the same elites scoring 200, 160 and 40 get exactly the same weights.</p>
 
 <p>Early on the spread is wide and the search explores; as good plans turn up it narrows around them. Only the plan's
 first action is carried out. At the next decision the mean starts from the last plan shifted by one step, since
@@ -8597,6 +8842,9 @@ pub fn Mppi(comptime T: type) type {
 <code>refit</code>, then <code>choose</code>; the steps are public, so any scorer can drive them. The noise comes from
 zimrnum's counter-based <code>Rng</code>, so a plan is exactly reproducible from its seed.</p>
 
+<p>The same search runs on the GPU learning kit, with the same arithmetic and the same ranking rules: the
+robot-mocap tutorial's <a href="robot-mocap-tutorial.html#plankit">12.13</a> shows how it is laid out.</p>
+
 <h3 id="wm-replay">9.9 Remembering stretches of play: SequenceReplay<a class="anchor" href="#wm-replay">#</a></h3>
 
 <p>A world model learns from <em>stretches</em> of experience: it is rolled forward H steps from one observation, with
@@ -8907,6 +9155,17 @@ pub fn SequenceReplay(comptime T: type) type {
                 eligible_environments_still_to_skip -= 1;
             }
             unreachable; // `sample` draws eligible_rank below the number of eligible environments
+        }
+
+        /// Whether some environment holds at least `window_length` steps - whether `sample` can draw a window of
+        /// that length. A learner resumed with an empty replay waits for this before its first update.
+        pub fn holdsWindow(self: *const Self, window_length: usize) bool {
+            for (self.environment_rings) |environment_ring| {
+                if (environment_ring.len &gt;= window_length) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         /// Fill `windows_out` with windows of `window_length` consecutive steps, STEP-MAJOR (output row =
@@ -9415,6 +9674,19 @@ pub fn RunningScale(comptime T: type) type {
 </code></pre></details>
 </div><!--/zn-source-->
 
+<p>A worked example: ten divergences from a batch's first step, sorted. A percentile sits between two of them, at
+position q x (n - 1), and is read by straight-line interpolation between its neighbours - torch's and numpy's
+default:</p>
+
+<pre><code>sorted:            0.1  0.4  0.8  1.9  2.2  3.2  4.1  5.6  6.3  7.5
+5th percentile     position 0.05 x 9 = 0.45   ->  0.1 + 0.45 x (0.4 - 0.1)  =  0.235
+95th percentile    position 0.95 x 9 = 8.55   ->  6.3 + 0.55 x (7.5 - 6.3)  =  6.96
+width              6.96 - 0.235 = 6.725, at least 1: 6.725
+scale              1 + 0.01 x (6.725 - 1) = 1.057          (from its start at 1)</code></pre>
+
+<p>A batch whose width came out under 1 would move the scale toward 1, not toward the smaller width: that is the
+floor.</p>
+
 <h3 id="bmpc-policy">9.13 The policy: a Gaussian with a squashed centre<a class="anchor" href="#bmpc-policy">#</a></h3>
 
 <p>The planner is good but slow; the policy is a fast guess at what the planner would do, and in BMPC it is a Gaussian
@@ -9802,6 +10074,20 @@ pub fn PolicyDistillationLoss(comptime T: type) type {
 }
 </code></pre></details>
 </div><!--/zn-source-->
+
+<p><strong>The gradient, by hand.</strong> The divergence between two Gaussians has a closed form, and so has its
+gradient, which shows what each part of the pull does. For one action dimension, with the policy's mean m_p and log
+spread log s_p, the planner's m_q and log s_q:</p>
+
+<pre><code>d KL / d m_p       =  (m_p - m_q) / s_q^2          toward the planner's mean, hardest where it was surest
+d KL / d log s_p   =  s_p^2 / s_q^2  -  1          the spread pulled toward the planner's: narrower when the
+                                                   policy is wider, wider when it is narrower, still at equality
+d entropy / d log s_p  =  1                        the bonus pushes every spread a little wider, always</code></pre>
+
+<p>The pull toward the planner's mean is divided by the planner's variance: where a planning run was confident - a
+small s_q - the policy is pulled firmly to its answer; where it was vague, gently. Both are divided by the running scale
+and averaged over the dimensions, then carried back through the head's two squashings - the mean's tanh and the
+bounded spread's - to the network's outputs.</p>
 
 <h3 id="policy-plans">9.15 The policy's own plans in the search<a class="anchor" href="#policy-plans">#</a></h3>
 
@@ -11006,6 +11292,10 @@ steps. <code>Bmpc(T).discountFor(L)</code> computes it, and a task stores the re
 <figcaption>The discount against the episode's length, with four lengths worked through.</figcaption>
 </figure>
 
+<p>The same update runs on the GPU learning kit, with the same arithmetic - the world model's rollout, its loss, its
+clip and Adam, the running scale and the policy's distillation, each laid out as kernels over the kit's buffers. The
+robot-mocap tutorial's <a href="robot-mocap-tutorial.html#tdmpckit">12.12</a> shows how.</p>
+
 <h3 id="bmpc-reanalyze">9.20 Reanalyze: planning again at stored states<a class="anchor" href="#bmpc-reanalyze">#</a></h3>
 
 <p>Each row of the replay stores the answer the planner gave when that step was played (<a href="#wm-replay">9.9</a>),
@@ -11176,14 +11466,37 @@ action acted on &mdash; the planner's target jittered by exploration noise, or a
 the reward, the true next observation, whether the episode ended there, and the planner's target, or the empty one
 while seeding.</p>
 
-<p><strong>Episodes have a fixed length L</strong>, since BMPC has no notion of termination. The L-th step is stored
-as truncated, with the true next observation; the environment is then reset, and the next decision is an episode's
-first, so the planner starts from scratch rather than from its last plan:</p>
+<p><strong>Episodes last at most L steps.</strong> Each step of an environment returns its reward and how it left the
+episode (<code>StepOutcome</code>): it goes on, or the environment cut it although the state is not final
+(<code>truncated</code> &mdash; a clip that ran out). The loop also truncates every episode at its L-th step. The
+step that ends an episode is stored with how it ended and the true next observation; the environment is then reset,
+and the next decision is an episode's first, so the planner starts from scratch rather than from its last plan:</p>
 
 <pre><code>frame          0      1      2    |  3      4      5    |  6
 episode step   1      2      3    |  1      2      3    |  1          (L = 3)
 truncated      -      -      yes  |  -      -      yes  |  -
 first step     yes    -      -    |  yes    -      -    |  yes</code></pre>
+
+<p>An environment that cuts its own episodes &mdash; one cutting at the second step, beside one that runs to L:</p>
+
+<pre><code>frame              0     1     2     3     4     5
+cutting:  step     1     2|    1     2|    1     2|        truncated at every second step
+steady:   step     1     2     3|    1     2     3|      truncated at every third</code></pre>
+
+<p><strong>No step may call its state final.</strong> A third ending exists in the contract &mdash;
+<code>terminated</code>, a state after which nothing more can be earned &mdash; and the trainer refuses it with
+<code>error.TerminationNotModelled</code>. The reason is in the value target (<a href="#value-targets">9.16</a>): it
+is built from the model's own next state, never from the stored one, so no flag stored with a row can reach it. A
+final state stored as one would be valued as if the episode went on. TD-MPC2 draws the same line: outside its
+episodic mode, which adds a termination head, it stops at the first terminated step.</p>
+
+<p>A task in which the agent can fail &mdash; a character that falls &mdash; shows the failure another way: the
+environment lives on through it for a while, rewarded as the task rewards it, and then cuts the episode. The data then
+holds what the failure leads to, and the value learns from the data what it is worth. The cartpole's balance task does
+this already (a fallen pole earns little for the rest of the episode); the dance does it with an aftermath after each
+loss of the reference (<a href="robot-mocap-tutorial.html#replay">the robot-mocap tutorial, 11.7</a>). EfficientTDMPC
+finds its pessimism (<a href="#kl-robust">9.10</a>) worth turning on exactly for tasks in which the agent can fail
+early, and off for the others.</p>
 
 <p>The discount comes from L, by the rule of <a href="#bmpc-learn">9.19</a>. Acting, environment resets and updates
 draw from three separate random streams, so the same seeds replay the same run, and adding updates never changes what
@@ -11200,13 +11513,41 @@ if (frame_plan.planned) {
 // ... every environment steps; its row is filled, with the planner's target or the empty one ...
 try self.replay.push(self.rows, self.active);
 // ... each environment advances, or begins a new episode at its L-th step ...
-for (0..frame_plan.updates) |_| {
+const can_learn: bool = self.replay.holdsWindow(self.learner.config.horizon);
+const updates_now: usize = if (can_learn) frame_plan.updates else 0;
+for (0..updates_now) |_| {
     self.last_report = try self.learner.update(&amp;self.replay, update_rng, self.update_index, frame_plan.pretraining);
     self.update_index += 1;
 }</code></pre>
 
 <p><code>last_report</code> keeps the latest update's losses &mdash; consistency, reward and value, the gradient norm,
 and the policy's when it learned &mdash; so a run can be watched as it trains.</p>
+
+<p><strong>Stopping and carrying on.</strong> A trainer's state is everything it is apart from its environments and its
+replay, and it fits in one file (<code>exportState</code>, <code>importState</code>):</p>
+
+<pre><code>StateHeader         the magic, the number type, the shape, the counters: frames, updates, each optimiser's steps,
+                    the policy loss's running scale
+the configuration   the trainer's own, as text
+episodes            per environment, how many episodes it has begun
+parameters          the encoder, each dynamics head, the reward, the policy, each value head, each TARGET value head
+optimiser state     Adam's two moments of every parameter: the encoder's optimiser, the rest of the world model's,
+                    the policy's</code></pre>
+
+<p>The random streams need nothing more. Each is a counter-based function of the seed and a label, as above: a
+frame's stream is the frame number split from the seed, an episode's reset stream the environment and its episode
+count, an update's the update number. With the seed and the counters restored, every later
+stream is the one the run would have drawn.</p>
+
+<p>The file is checked before a single number is used. Its configuration is read back and compared with the trainer's
+setting by setting; the first that differs is named by its path &mdash; <code>config.acting.horizon</code> &mdash;
+since a file of other settings would load numbers shaped for another agent. Every parameter must be finite, every
+optimiser value too, an Adam second moment (a running mean of squares) never below zero, and the running scale finite
+and above zero. A file that fails is refused whole, the trainer untouched.</p>
+
+<p>The replay is not in the file. A resumed trainer is past its seeding, so it plans from its first frame; its
+replay starts empty, and it makes no update until one environment holds a whole training window. Its first windows
+are then all from its newest policy, which costs less than keeping a million stored steps in the file.</p>
 
 <h3 id="bmpc-configurations">9.23 Two configurations: BMPC and EfficientTDMPC<a class="anchor" href="#bmpc-configurations">#</a></h3>
 
@@ -11379,6 +11720,7 @@ other lacks. Names appearing twice belong to different types; the signature colu
 <tr><td><code>init</code></td><td><code>init(gpa: Allocator, environment_count: usize, capacity_per_environment: usize, row_width: usize, done_column: usize) Error!Self</code></td><td><span class="host">method</span></td><td>Construct: Rng.init(seed), Ctx.init(gpa, seed), and each layer's, network's and planner's init.</td></tr>
 <tr><td><code>deinit</code></td><td><code>deinit(self: *Self, gpa: Allocator) void</code></td><td><span class="host">method</span></td><td>Give back what init allocated: a masked array's values and mask, a network's or planner's tensors, a replay's rings.</td></tr>
 <tr><td><code>push</code></td><td><code>push(self: *Self, step_rows: []const T, environment_is_active: []const bool) Error!void</code></td><td><span class="host">method</span></td><td>ReplayBuffer: one transition, the oldest overwritten. SequenceReplay: one step of every environment; an inactive one writes nothing.</td></tr>
+<tr><td><code>holdsWindow</code></td><td><code>holdsWindow(self: *const Self, window_length: usize) bool</code></td><td><span class="host">method</span></td><td>SequenceReplay: whether some environment's ring can supply a whole window - a resumed trainer waits for it before its first update.</td></tr>
 <tr><td><code>sample</code></td><td><code>sample(self: *const Self, rng: Rng, draw_index: u32, window_length: usize, origins_out: []WindowOrigin, windows_out: []T, finished_out: []T) Error!void</code></td><td><span class="host">method</span></td><td>Uniform with replacement, addressable by (rng, index); SequenceReplay.sample draws step-major windows of one environment with their finished masks and origins; Mppi.sample draws candidate plans.</td></tr>
 <tr><td><code>writeBack</code></td><td><code>writeBack(self: *Self, origins: []const WindowOrigin, first_step: usize, step_count: usize, first_column: usize, values_in: []const T) Error!void</code></td><td><span class="host">method</span></td><td>Copies step-major values into chosen columns of chosen steps of sampled windows, in place - reanalyze's fresh targets.</td></tr>
 <tr><td><code>Transition</code></td><td><code>Transition = struct</code></td><td><span class="host">host</span></td><td>One step. terminal means no future to bootstrap.</td></tr>
@@ -11390,8 +11732,8 @@ other lacks. Names appearing twice belong to different types; the signature colu
 <tr><td><code>observe</code></td><td><code>observe(self: *ObsNormalizer, obs: []const f64) Error!void</code></td><td><span class="host">method</span></td><td>Fold one observation into the running statistics. Collection only - the split from `apply` is what makes evaluation correct by construction.</td></tr>
 <tr><td><code>variance</code></td><td><code>variance(self: ObsNormalizer, feature: usize) f64</code></td><td><span class="host">method</span></td><td>Two passes. ddof selects the divisor.</td></tr>
 <tr><td><code>apply</code></td><td><code>apply(self: ObsNormalizer, obs: []const f64, out: []f64) Error!void</code></td><td><span class="host">method</span></td><td>Pure: a normaliser never touches its statistics; an Mlp runs over handles from bind.</td></tr>
-<tr><td><code>observeF32</code></td><td><code>observeF32(self: *ObsNormalizer, obs: []const f32) Error!void</code></td><td><span class="host">method</span></td><td>`observe` for an observation kept in f32, as a learner whose networks take f32 keeps it: each value widened to f64, the statistics those `observe` makes of the widened values.</td></tr>
-<tr><td><code>applyInPlaceF32</code></td><td><code>applyInPlaceF32(self: ObsNormalizer, obs: []f32) Error!void</code></td><td><span class="host">method</span></td><td>`apply` in place for an f32 observation: widened, normalised in f64 as `apply` does, narrowed once. Pure; with nothing observed, the observation is left as it is.</td></tr>
+<tr><td><code>observeF32</code></td><td><code>observeF32(self: *ObsNormalizer, obs: []const f32) Error!void</code></td><td><span class="host">method</span></td><td>`observe` for an observation of f32, the device's own: folded in at the normaliser's f64.</td></tr>
+<tr><td><code>applyInPlaceF32</code></td><td><code>applyInPlaceF32(self: ObsNormalizer, obs: []f32) Error!void</code></td><td><span class="host">method</span></td><td>`apply` on an f32 observation, in place: what a policy player normalises with.</td></tr>
 <tr><td><code>MinibatchOrder</code></td><td><code>MinibatchOrder = struct</code></td><td><span class="host">host</span></td><td>The shuffled minibatch walk every on-policy update needs.</td></tr>
 <tr><td><code>init</code></td><td><code>init(gpa: Allocator, count: usize, size: usize) Error!MinibatchOrder</code></td><td><span class="host">method</span></td><td>Construct: Rng.init(seed), Ctx.init(gpa, seed), and each layer's, network's and planner's init.</td></tr>
 <tr><td><code>deinit</code></td><td><code>deinit(self: *MinibatchOrder, gpa: Allocator) void</code></td><td><span class="host">method</span></td><td>Give back what init allocated: a masked array's values and mask, a network's or planner's tensors, a replay's rings.</td></tr>

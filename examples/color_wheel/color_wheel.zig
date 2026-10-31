@@ -19,7 +19,6 @@ const float = zm.float;
 const rad_per_deg = zm.rad_per_deg;
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
-const distance = zm.distance;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const triangle_count = 120;
@@ -117,7 +116,7 @@ fn update(f: *z.Frame, s: *State) void {
             m[1] >= lay.sy - 18 and m[1] <= lay.sy + 18);
         if (on_slider) {
             s.mode = mode_slider;
-        } else if (distance(m, lay.center) <= lay.radius + 12) {
+        } else if (zm.distance(m, lay.center) <= lay.radius + 12) {
             s.mode = mode_wheel;
         } else {
             s.mode = mode_none;

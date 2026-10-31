@@ -10,7 +10,6 @@ const zm = @import("zm");
 const common = @import("example_common");
 
 const sinRad = zm.sinRad;
-const distance = zm.distance;
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -51,7 +50,7 @@ fn nearestPoint(pts: []const Vec2, m: Vec2) i32 {
     var best: i32 = -1;
     var best_d: f32 = grab_radius;
     for (pts, 0..) |p, i| {
-        const d: f32 = distance(p, m);
+        const d: f32 = zm.distance(p, m);
         if (d <= best_d) {
             best_d = d;
             best = @intCast(i);
@@ -101,7 +100,7 @@ fn update(f: *z.Frame, s: *State) void {
         s.selected = nearestPoint(s.points[0..], mouse);
     }
     if (down) {
-        if (distance(mouse, s.press) > 8.0) {
+        if (zm.distance(mouse, s.press) > 8.0) {
             s.dragged = true;
         }
         if (s.selected >= 0) {

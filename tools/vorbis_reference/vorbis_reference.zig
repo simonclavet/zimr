@@ -5,7 +5,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const ArrayListUnmanaged = std.ArrayListUnmanaged;
+const ArrayList = std.ArrayList;
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const testing_allocator = std.testing.allocator;
@@ -57,7 +57,7 @@ fn decodeWithStb(allocator: Allocator, bytes: []const u8) !StbFrames {
         return error.StbCouldNotOpen;
     defer stb_vorbis_close(stb);
     const channels: usize = @intCast(stb_vorbis_get_info(stb).channels);
-    var frames: ArrayListUnmanaged(f32) = .empty;
+    var frames: ArrayList(f32) = .empty;
     errdefer frames.deinit(allocator);
     var buffer: [4096 * 8]f32 = undefined;
     const buffer_floats: usize = buffer.len / channels * channels;
@@ -78,7 +78,7 @@ fn decodeWithEngine(allocator: Allocator, bytes: []const u8) ![]f32 {
     var decoder: codecs.audio.vorbis.Decoder = try .init(allocator, bytes);
     defer decoder.deinit();
     const channels: usize = decoder.channelCount();
-    var frames: ArrayListUnmanaged(f32) = .empty;
+    var frames: ArrayList(f32) = .empty;
     errdefer frames.deinit(allocator);
     var buffer: [4096 * 8]f32 = undefined;
     const buffer_floats: usize = buffer.len / channels * channels;

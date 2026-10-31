@@ -514,6 +514,12 @@ const notes = [_]Note{
         .name = "clipGradNorm",
         .text = "ONE norm over all parameters - per-tensor clipping changes the DIRECTION.",
     },
+    .{ .name = "powInt", .text = "A whole-number power by squaring: how Adam's bias corrections are formed." },
+    .{ .name = "AdamCorrections", .text = "Adam's two bias corrections at one step, as multipliers." },
+    .{
+        .name = "adamCorrectionMultipliers",
+        .text = "1 / (1 - beta^step) for both moments, by `powInt` - what every GPU kit's Adam multiplies by.",
+    },
     .{
         .name = "saveParameters",
         .text = "A trained network to bytes. Named p0, p1 - so the ORDER must match.",
@@ -558,6 +564,11 @@ const notes = [_]Note{
     .{ .name = "setInputs", .text = "Write the next minibatch's old log-probabilities and advantages." },
     .{ .name = "entropyRows", .text = "A zero probability contributes zero." },
     .{ .name = "ReplayBuffer", .text = "A ring: the oldest transition is overwritten." },
+    .{
+        .name = "holdsWindow",
+        .text = "SequenceReplay: whether some environment's ring can supply a whole window - a resumed trainer " ++
+            "waits for it before its first update.",
+    },
     .{
         .name = "push",
         .text = "ReplayBuffer: one transition, the oldest overwritten. SequenceReplay: one step of every " ++
@@ -756,6 +767,14 @@ const notes = [_]Note{
         .name = "observe",
         .text = "Fold one observation into the running statistics. Collection only - the split " ++
             "from `apply` is what makes evaluation correct by construction.",
+    },
+    .{
+        .name = "observeF32",
+        .text = "`observe` for an observation of f32, the device's own: folded in at the normaliser's f64.",
+    },
+    .{
+        .name = "applyInPlaceF32",
+        .text = "`apply` on an f32 observation, in place: what a policy player normalises with.",
     },
     .{
         .name = "deterministic",

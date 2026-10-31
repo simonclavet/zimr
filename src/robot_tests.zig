@@ -20,6 +20,7 @@ pub const robot_physics = @import("robot_physics.zig");
 pub const robot_control = @import("robot_control.zig");
 pub const robot_mpc = @import("robot_mpc.zig");
 pub const robot_bmpc = @import("robot_bmpc.zig");
+pub const robot_bmpc_dance = @import("robot_bmpc_dance.zig");
 pub const robot_mjcf = @import("robot_mjcf.zig");
 pub const robot_maximal = @import("robot_maximal.zig");
 pub const robot_dance = @import("robot_dance.zig");
@@ -27,6 +28,7 @@ pub const robot_gym = @import("robot_gym.zig");
 /// The GPU kit's proofs: kept out of the zimr module (they import `gpu/zn_mlp.zig` by path).
 pub const gpu_learn_tests = @import("gpu_learn_tests.zig");
 pub const kit_mlp = @import("kit_mlp.zig");
+pub const kit_mlp_tests = @import("kit_mlp_tests.zig");
 pub const robot_track = @import("robot_track.zig");
 pub const robot_world = @import("robot_world.zig");
 pub const robot_supertrack = @import("robot_supertrack.zig");

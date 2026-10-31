@@ -694,7 +694,30 @@ disposable".
 a cold cache needs more than one turn. Re-run it detached; do not start debugging.
 
 ## First thing each session
-Read `src/web/readme.html`. It is the project description — what zimr is, the
+
+★★★ **SET UP THE SANDBOX FIRST - three steps, in this order, before any build (Oct 26).** A fresh sandbox has no
+compiler, no Vulkan driver and no validation layer; the zip carries none of them.
+
+1. **The toolchain.** If `tools/zig-*-*-*/` is missing, Simon uploads the Zig tarball: `tar -xJf <upload> -C tools/`
+   (see "Cold setup" below if it is newer than the tree's last green build).
+2. **The environment, in every new shell:** `. ./.zenv.sh` from the repo root. It puts `zig` and
+   `tools/zig-out/bin` (`zbuild`, `measure`) on PATH - the toolchain found by glob, never by version - and CHECKS
+   for lavapipe and the validation layer, printing the install command when either is missing. Build `zbuild` once
+   per sandbox: `zig build zbuild`.
+3. **Vulkan: lavapipe AND the validation layer** - two packages, both needed, about a minute (the Ubuntu archive is
+   on the allowed network list):
+
+       apt-get update && apt-get install -y mesa-vulkan-drivers vulkan-validationlayers
+
+   `mesa-vulkan-drivers` is lavapipe, Mesa's CPU Vulkan driver (`llvmpipe`; its ICD is
+   `/usr/share/vulkan/icd.d/lvp_icd.json`). `vulkan-validationlayers` is the Khronos validation layer
+   (`/usr/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json`). zimr turns the layer on and REQUIRES it:
+   `zbuild vk-host-test` exits with code 2 ("the validation layer is not on") without it - lavapipe alone is not
+   enough. Every GPU check in the sandbox runs on this pair: the `<app>-headless` runs, the lab's and trainer's
+   headless checks, and `vk-host-test`, whose `kit` check runs the GPU learning kit's kernels on the device against
+   their CPU twin.
+
+Then read `src/web/readme.html`. It is the project description — what zimr is, the
 API, the build commands, the shader/compute pipeline, the file layout. **Keep it
 current**: any change to a path, type, namespace, build step, or behavior it
 describes gets reflected in `readme.html` the same turn (grep it for the old name
@@ -1749,6 +1772,9 @@ why they were excluded originally. That call was RIGHT; the bug was that `step` 
 under a findable name, not that it wasn't reserved. Keywords are for DISTINCTIVE math words
 (`dot`, `cross`, `atan2`, `lerp`, `clamp01`), where reserving them costs nothing.
 `saturate` was REMOVED from the keyword list (a @compileError decl cannot be aliased/used).
+`distance` was REMOVED from the keyword list (Oct 27, Simon): a distance in metres is a natural local's name, and
+reserving the word forced names like `mean_square` where `distance` was meant. The function is written
+`zm.distance(a, b)`, qualified, as every non-keyword zm decl may be; its sized variants (`distance2/3/4`) stay keywords.
 
 ### zimrmath discoverability — a standard op under a non-standard name is INVISIBLE
 
@@ -3433,11 +3459,12 @@ column holds the translation, which was the assumption that produced the wrong a
   (before that fix, `isStartScreenSkipped`'s `getenv` broke the whole root on Linux while Windows passed). The UI test
   context has no font metrics: text measures 0 wide and `font_size` tall - test layout vertically or with explicit
   sizes.
-- **Headless runs need a Vulkan driver, and a fresh sandbox has none** (Oct 18): no ICD under
-  `/usr/share/vulkan/icd.d`. `apt-get update && apt-get install -y mesa-vulkan-drivers` (about a minute; the archive
-  is on the allowed list) adds lavapipe; then `zig build <name>-headless -Dscript=<file> -Dmode=release` runs on
-  `llvmpipe` with the validation layer, and `.capture_to` paths are written relative to the repo root - move the PNGs
-  out of the tree before zipping.
+- **Headless runs need a Vulkan driver AND the validation layer, and a fresh sandbox has neither** (Oct 18; the layer
+  added Oct 26, when a sandbox had lavapipe but not the layer and `vk-host-test` stopped with exit code 2). Install
+  both - "First thing each session", step 3: `apt-get update && apt-get install -y mesa-vulkan-drivers
+  vulkan-validationlayers`; `. ./.zenv.sh` reports which is missing. Then `zig build <name>-headless -Dscript=<file>
+  -Dmode=release` runs on `llvmpipe` with the validation layer, and `.capture_to` paths are written relative to the
+  repo root - move the PNGs out of the tree before zipping.
 - **`> file 2>&1` CAN LOSE STDOUT.** std's `File.Writer` writes a regular file POSITIONALLY, so with both streams
   on one file a later stderr write (a leak report at exit) lands at offset 0 over what stdout wrote. Two runs then
   "agree" on the leak lines alone (Sep 28: decl_deps looked like it printed nothing). `zig build`'s own output does

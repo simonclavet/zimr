@@ -1272,8 +1272,10 @@ pub extern "user32" fn MsgWaitForMultipleObjectsEx(
     dwWakeMask: DWORD,
     dwFlags: DWORD,
 ) callconv(.winapi) DWORD;
-/// Every kind of message, input and others (`MsgWaitForMultipleObjectsEx`).
-pub const QS_ALLINPUT: DWORD = 0x04FF;
+/// Every kind of message, input and others (`MsgWaitForMultipleObjectsEx`), as `winuser.h` defines it from Windows 8
+/// on: `QS_INPUT` there includes touch (`QS_TOUCH`, 0x0800) and pointer (`QS_POINTER`, 0x1000) input, so a wait on
+/// this mask wakes for a finger as it does for a mouse. The older value, 0x04FF, left both out.
+pub const QS_ALLINPUT: DWORD = 0x1CFF;
 /// Returns for a message already in the queue too, not only one arriving during the wait.
 pub const MWMO_INPUTAVAILABLE: DWORD = 0x0004;
 pub const INFINITE: DWORD = 0xFFFF_FFFF;

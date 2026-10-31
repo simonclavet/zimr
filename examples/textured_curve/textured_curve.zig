@@ -20,7 +20,6 @@ const Color = zm.Color;
 const float = zm.float;
 const clamp = zm.clamp;
 const length = zm.length;
-const distance = zm.distance;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // Procedural road texture. U spans the road width; V tiles down its length.
@@ -240,7 +239,7 @@ fn slider(
 }
 
 fn hit(m: Vec2, p: Vec2, r: f32) bool {
-    return distance(m, p) <= r;
+    return zm.distance(m, p) <= r;
 }
 
 // small local Rectangle helpers (types.Rectangle via z)

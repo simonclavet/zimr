@@ -2287,14 +2287,15 @@ fn addVulkanHostTest(
 }
 
 /// The headless trainer (`tools/geno_trainer.zig`) built for `target`: the engine on the native host, `zn_mlp`'s
-/// kernels as their SPIR-V and their CPU module, the baked dance, and the command-line reader. ReleaseFast: it runs
-/// for hours. Built for the build machine it trains on that machine's Vulkan driver; built for Windows, on a Windows
-/// machine's GPU.
+/// kernels as their SPIR-V and their CPU module, the baked clips, and the command-line reader. ReleaseSafe: it runs
+/// for hours, and must fail loudly rather than train on a memory error (the reason, at `optimize`). Built for the build
+/// machine it trains on that machine's Vulkan driver; built for Windows, on a Windows machine's GPU.
 fn addGenoTrainer(
     b: *std.Build,
     target: ResolvedTarget,
     inputs: VulkanHostTestInputs,
     cli_mod: *Module,
+    trainer_portable: bool,
 ) *Compile {
     const native_options: *Options = b.addOptions();
     native_options.addOption(bool, "assert_log", inputs.assert_log);
@@ -2303,7 +2304,10 @@ fn addGenoTrainer(
     native_options.addOption([]const u8, "host", "native");
     const numerics: NumericsModules = addNumericsModules(b, null, null, inputs.zimrmath_mod);
     const links_libc: bool = target.result.os.tag != .windows;
-    const optimize: std.builtin.OptimizeMode = .ReleaseFast;
+    // ReleaseSafe, not ReleaseFast: a run lasts hours, and a memory error - an index past an array's end - must stop
+    // it with a message where it happens, rather than let it carry on with corrupted memory, perhaps to its end
+    // without a sign. The safety checks cost the CPU's physics some speed and the GPU's work nothing.
+    const optimize: std.builtin.OptimizeMode = .ReleaseSafe;
     const engine_mod: *Module = b.createModule(.{
         .root_source_file = b.path("src/zimr.zig"),
         .target = target,
@@ -2326,7 +2330,27 @@ fn addGenoTrainer(
     trainer_mod.addImport("cli", cli_mod);
     const dance_clip: LazyPath = b.path("examples/geno_ppo/dance.zclip");
     trainer_mod.addAnonymousImport("geno_dance_zclip", .{ .root_source_file = dance_clip });
-    const kernel_source: LazyPath = b.path("src/gpu/zn_mlp.zig");
+    // The second clip of a two-clip run (`robot_lab.PpoMotion.dance_and_getup`): the whole fall and get-up take, on
+    // Geno.
+    const getup_clip: LazyPath = b.path("examples/geno_ppo/getup.zclip");
+    trainer_mod.addAnonymousImport("geno_getup_zclip", .{ .root_source_file = getup_clip });
+    // The rest of the minute (`robot_lab.GenoMotion.one_minute`): walking and running, on Geno.
+    const walk_clip: LazyPath = b.path("examples/geno_ppo/walk.zclip");
+    trainer_mod.addAnonymousImport("geno_walk_zclip", .{ .root_source_file = walk_clip });
+    const run_clip: LazyPath = b.path("examples/geno_ppo/run.zclip");
+    trainer_mod.addAnonymousImport("geno_run_zclip", .{ .root_source_file = run_clip });
+    // The kernels at a NIGHT'S SIZES: `zn_mlp.zig` copied beside the trainer's sizes file under the name it imports
+    // (`src/gpu/zn_mlp_sizes.zig` holds the pages'), so this build's declared buffers, SPIR-V and CPU module all
+    // agree - and every other build of the kernels keeps the pages' sizes, unchanged.
+    // The trainer's buffers: a desktop GPU's (256 MB of activations - past the 128 MB some devices bind) or the
+    // portable ones every device binds, for runs smaller than a night's on any device (`trainer_portable`).
+    const trainer_sizes: []const u8 = if (trainer_portable)
+        "src/gpu/zn_mlp_sizes_trainer_portable.zig"
+    else
+        "src/gpu/zn_mlp_sizes_trainer.zig";
+    const sized_kernels: *Step.WriteFile = b.addWriteFiles();
+    _ = sized_kernels.addCopyFile(b.path(trainer_sizes), "zn_mlp_sizes.zig");
+    const kernel_source: LazyPath = sized_kernels.addCopyFile(b.path("src/gpu/zn_mlp.zig"), "zn_mlp.zig");
     const kernel_output: ShaderPipeline.ComputeOutput = inputs.shader_pipeline.addComputeOutput(
         kernel_source,
         "dense_fwd",
@@ -3094,6 +3118,71 @@ const zn_mlp_entries = [_][]const u8{
     "st_world_fwd",
     "st_world_bwd",
     "st_reduce",
+    "norm_fwd",
+    "mish_fwd",
+    "simnorm_fwd",
+    "mish_bwd",
+    "simnorm_bwd",
+    "norm_params_bwd",
+    "norm_bwd",
+    "twohot_fwd",
+    "twohot_bwd",
+    "twohot_decode",
+    "place_columns",
+    "take_columns",
+    "grad_square_partials",
+    "clip_factor",
+    "adam_clipped",
+    "policy_distill_bwd",
+    "policy_divergence",
+    "running_scale_update",
+    "policy_draw",
+    "value_target_combine",
+    "mask_values",
+    "mask_gradients",
+    "broadcast_rows",
+    "plan_score_combine",
+    "copy_row_blocks",
+    "mppi_sample",
+    "mppi_elites",
+    "mppi_refit",
+    "mppi_begin",
+    "mppi_choose",
+    "mppi_explore",
+    "lat_barrier_bwd",
+    "lat_tracking_cost",
+    "twohot_value_bwd",
+    "ensemble_tail_weights",
+    "flow_time_features",
+    "flow_euler_step",
+    "flow_path_points",
+    "flow_dpg_bwd",
+    "hashed_noise",
+    "copy_columns",
+    "hashed_uniforms",
+    "copy_columns_from_gradients",
+    "plan_gather",
+    "plan_mailbox",
+    "synergy_decode_add",
+    "synergy_project_gradient",
+    "flow_draw_losses",
+    "fpo_advantages",
+    "fpo_velocity_gradient",
+    "fpo_normalize_advantages",
+    "stat_root_mean_square",
+    "stat_mean_square_difference",
+    "stat_mean_and_deviation",
+    "fpo_ratio_stats",
+    "stat_copy",
+    "critic_value_stats",
+    "stat_barrier",
+    "share_factor",
+    "add_scaled_gradients",
+    "gradients_from_sum",
+    "plan_gain_stats",
+    "lat_skip_gather",
+    "lat_skip_targets",
+    "lat_scale_columns",
 };
 
 /// geno_lab: the training lab. Embeds the dance clip the training page trains on (`examples/geno_ppo/dance.zclip`),
@@ -5412,6 +5501,8 @@ pub fn build(b: *std.Build) void {
             .optimize = .Debug,
             .link_libc = true,
         });
+        // `native_os` reaches `host.zig`, which reads the build's choice of host from `build_options`.
+        native_os_mod.addImport("build_options", build_opts.createModule());
         const native_os_tests: *Step.Compile = b.addTest(.{ .root_module = native_os_mod });
         const host_test_step: *Step = b.step(
             "vk-host-test",
@@ -5435,10 +5526,17 @@ pub fn build(b: *std.Build) void {
         );
         windows_host_test_step.dependOn(&windows_host_test_install.step);
 
-        // ---- geno-trainer: DReCon trained by PPO on Geno, headless, in a run folder (`tools/geno_trainer.zig`):
+        // ---- geno-trainer: Geno trained by PPO or SuperTrack, headless, in a run folder (`tools/geno_trainer.zig`):
         // installed beside the headless programs for the build machine, and beside the Windows programs for Windows.
         //     zig build geno-trainer        then        zig-out/headless/bin/geno_trainer --run=runs/night1
-        const trainer_exe: *Compile = addGenoTrainer(b, b.graph.host, host_test_inputs, cli_mod);
+        // `-Dtrainer-portable=true`: buffers every device binds (`zn_mlp_sizes_trainer_portable.zig`), for smaller
+        // runs on any device - declared once, for both builds.
+        const trainer_portable: bool = b.option(
+            bool,
+            "trainer-portable",
+            "build the headless trainer with buffers every device binds (128 MB); smaller runs only",
+        ) orelse false;
+        const trainer_exe: *Compile = addGenoTrainer(b, b.graph.host, host_test_inputs, cli_mod, trainer_portable);
         const trainer_install: *InstallArtifact = b.addInstallArtifact(trainer_exe, .{
             .dest_dir = .{ .override = .{ .custom = "headless/bin" } },
         });
@@ -5447,7 +5545,8 @@ pub fn build(b: *std.Build) void {
             "Build zig-out/headless/bin/geno_trainer, the headless trainer of a run folder",
         );
         trainer_step.dependOn(&trainer_install.step);
-        const windows_trainer_exe: *Compile = addGenoTrainer(b, windows_target, host_test_inputs, cli_mod);
+        const windows_trainer_exe: *Compile =
+            addGenoTrainer(b, windows_target, host_test_inputs, cli_mod, trainer_portable);
         const windows_trainer_install: *InstallArtifact = installWindowsProgram(
             b,
             windows_trainer_exe,
@@ -6618,45 +6717,9 @@ pub fn build(b: *std.Build) void {
                 .{
                     .basename = "zn_mlp",
                     .source_path = "src/gpu/zn_mlp.zig",
-                    .entries = &.{
-                        "dense_fwd",
-                        "act_bwd",
-                        "dense_bwd_x",
-                        "dense_bwd_w",
-                        "mse_bwd",
-                        "mse_value",
-                        "adam",
-                        "ppo_mean_grad",
-                        "ppo_logstd_grad",
-                        // The page's pipeline table is built from the module's whole kernel
-                        // list, so every kernel is registered, SAC's included.
-                        "squash_fwd",
-                        "squash_logp",
-                        "sac_target",
-                        "min_route",
-                        "squash_bwd",
-                        "squash_logstd_grad",
-                        "alpha_grad",
-                        "polyak",
-                        "cp_wm_input",
-                        "cp_wm_input_bwd",
-                        "cp_force",
-                        "cp_force_bwd",
-                        "cp_step",
-                        "cp_step_bwd",
-                        "cp_track_bwd",
-                        "add_block",
-                        "lat_advance",
-                        "lat_take",
-                        "lat_gather",
-                        "lat_act",
-                        "lat_act_bwd",
-                        "st_policy_fwd",
-                        "st_policy_bwd",
-                        "st_world_fwd",
-                        "st_world_bwd",
-                        "st_reduce",
-                    },
+                    // The page builds its pipeline table from the module's whole kernel list, so every
+                    // kernel is registered (`zn_mlp_entries`).
+                    .entries = &zn_mlp_entries,
                 },
             },
         },
@@ -6689,45 +6752,9 @@ pub fn build(b: *std.Build) void {
                 .{
                     .basename = "zn_mlp",
                     .source_path = "src/gpu/zn_mlp.zig",
-                    .entries = &.{
-                        "dense_fwd",
-                        "act_bwd",
-                        "dense_bwd_x",
-                        "dense_bwd_w",
-                        "mse_bwd",
-                        "mse_value",
-                        "adam",
-                        "ppo_mean_grad",
-                        "ppo_logstd_grad",
-                        // The page's pipeline table is built from the module's whole kernel
-                        // list, so every kernel is registered, SAC's included.
-                        "squash_fwd",
-                        "squash_logp",
-                        "sac_target",
-                        "min_route",
-                        "squash_bwd",
-                        "squash_logstd_grad",
-                        "alpha_grad",
-                        "polyak",
-                        "cp_wm_input",
-                        "cp_wm_input_bwd",
-                        "cp_force",
-                        "cp_force_bwd",
-                        "cp_step",
-                        "cp_step_bwd",
-                        "cp_track_bwd",
-                        "add_block",
-                        "lat_advance",
-                        "lat_take",
-                        "lat_gather",
-                        "lat_act",
-                        "lat_act_bwd",
-                        "st_policy_fwd",
-                        "st_policy_bwd",
-                        "st_world_fwd",
-                        "st_world_bwd",
-                        "st_reduce",
-                    },
+                    // The page builds its pipeline table from the module's whole kernel list, so every
+                    // kernel is registered (`zn_mlp_entries`).
+                    .entries = &zn_mlp_entries,
                     .wants_zimrnum = true,
                 },
             },
@@ -6742,45 +6769,9 @@ pub fn build(b: *std.Build) void {
                 .{
                     .basename = "zn_mlp",
                     .source_path = "src/gpu/zn_mlp.zig",
-                    .entries = &.{
-                        "dense_fwd",
-                        "act_bwd",
-                        "dense_bwd_x",
-                        "dense_bwd_w",
-                        "mse_bwd",
-                        "mse_value",
-                        "adam",
-                        "ppo_mean_grad",
-                        "ppo_logstd_grad",
-                        // The page's pipeline table is built from the module's whole kernel
-                        // list, so every kernel is registered, SAC's included.
-                        "squash_fwd",
-                        "squash_logp",
-                        "sac_target",
-                        "min_route",
-                        "squash_bwd",
-                        "squash_logstd_grad",
-                        "alpha_grad",
-                        "polyak",
-                        "cp_wm_input",
-                        "cp_wm_input_bwd",
-                        "cp_force",
-                        "cp_force_bwd",
-                        "cp_step",
-                        "cp_step_bwd",
-                        "cp_track_bwd",
-                        "add_block",
-                        "lat_advance",
-                        "lat_take",
-                        "lat_gather",
-                        "lat_act",
-                        "lat_act_bwd",
-                        "st_policy_fwd",
-                        "st_policy_bwd",
-                        "st_world_fwd",
-                        "st_world_bwd",
-                        "st_reduce",
-                    },
+                    // The page builds its pipeline table from the module's whole kernel list, so every
+                    // kernel is registered (`zn_mlp_entries`).
+                    .entries = &zn_mlp_entries,
                     .wants_zimrnum = true,
                 },
             },
@@ -6794,45 +6785,9 @@ pub fn build(b: *std.Build) void {
                 .{
                     .basename = "zn_mlp",
                     .source_path = "src/gpu/zn_mlp.zig",
-                    .entries = &.{
-                        "dense_fwd",
-                        "act_bwd",
-                        "dense_bwd_x",
-                        "dense_bwd_w",
-                        "mse_bwd",
-                        "mse_value",
-                        "adam",
-                        "ppo_mean_grad",
-                        "ppo_logstd_grad",
-                        // The page's pipeline table is built from the module's whole kernel
-                        // list, so every kernel is registered, SAC's included.
-                        "squash_fwd",
-                        "squash_logp",
-                        "sac_target",
-                        "min_route",
-                        "squash_bwd",
-                        "squash_logstd_grad",
-                        "alpha_grad",
-                        "polyak",
-                        "cp_wm_input",
-                        "cp_wm_input_bwd",
-                        "cp_force",
-                        "cp_force_bwd",
-                        "cp_step",
-                        "cp_step_bwd",
-                        "cp_track_bwd",
-                        "add_block",
-                        "lat_advance",
-                        "lat_take",
-                        "lat_gather",
-                        "lat_act",
-                        "lat_act_bwd",
-                        "st_policy_fwd",
-                        "st_policy_bwd",
-                        "st_world_fwd",
-                        "st_world_bwd",
-                        "st_reduce",
-                    },
+                    // The page builds its pipeline table from the module's whole kernel list, so every
+                    // kernel is registered (`zn_mlp_entries`).
+                    .entries = &zn_mlp_entries,
                 },
             },
         },
@@ -7839,6 +7794,17 @@ pub fn build(b: *std.Build) void {
     doc_folds_fix.addArg("--fix");
     doc_folds_fix.addArgs(&doc_folds_pages);
     doc_folds_step.dependOn(&doc_folds_fix.step);
+    // The tool's own checks (its section numbering).
+    const doc_folds_tests: *Compile = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/doc_folds.zig"),
+            .target = b.graph.host,
+            .optimize = .debug,
+        }),
+    });
+    doc_folds_tests.root_module.addImport("cli", cli_mod);
+    const doc_folds_test_step: *Step = b.step("doc-folds-test", "the documentation tool's own checks");
+    doc_folds_test_step.dependOn(&b.addRunArtifact(doc_folds_tests).step);
 
     // c2js CANARY: the marker gate catches C that c2js KNOWS it cannot model;
     // this catches C it models WRONGLY. The battery is transpiled the normal way
@@ -8012,18 +7978,44 @@ pub fn build(b: *std.Build) void {
     // later for-loop reuses the same value.
     const native_target: ResolvedTarget = b.standardTargetOptions(.{});
 
-    // bmpc-cartpole: BMPC learns to balance a cartpole - the end-to-end gate of the BMPC agent. It trains a small agent
-    // for a few minutes, so it runs on demand rather than in test-fast. Built ReleaseSafe, with safety checks kept: zm,
-    // zn and zrl set no optimisation of their own, so they compile as this root does.
+    // bmpc-cartpole: BMPC learns to balance a cartpole - the end-to-end gate of the BMPC agent, on the CPU and on the
+    // GPU learning kit's CPU twin. It trains a small agent for a few minutes, so it runs on demand, not in test-fast.
+    // Built ReleaseFast: the kit's twin runs its kernels' inner loops millions of times a run, and Zig's bounds checks
+    // there doubled the kit gate's time (about 360 s ReleaseSafe, 170 s ReleaseFast). The gate measures LEARNING; the
+    // correctness of every piece is the known answers' job, run ReleaseSafe in test-fast with every check live. In this
+    // mode a failed zimr assert is `unreachable` - pass -Dassert-log to have it logged instead. zm, zn and zrl set no
+    // optimisation of their own, so they compile as this root does.
     {
         const bmpc_cartpole_mod: *Module = b.createModule(.{
             .root_source_file = b.path("src/robot_bmpc_cartpole.zig"),
             .target = native_target,
-            .optimize = .ReleaseSafe,
+            .optimize = .ReleaseFast,
         });
         bmpc_cartpole_mod.addImport("zm", zimrmath_mod);
         bmpc_cartpole_mod.addImport("zn", zimrnum_mod);
         bmpc_cartpole_mod.addImport("zrl", zimrrl_mod);
+        // The kit's gate runs here too (`-Dtest-filter="kit cartpole gate"` alone), on the GPU learning kit's CPU twin:
+        // the kit's pipe reaches the engine's GPU layers, so the root takes the fast roots' imports.
+        const bmpc_cartpole_options_mod: *Module = build_opts.createModule();
+        bmpc_cartpole_mod.addImport("build_options", bmpc_cartpole_options_mod);
+        bmpc_cartpole_mod.addImport("shader_interface", shader_interface_mod);
+        bmpc_cartpole_mod.addImport("kompute", kompute_mod);
+        const bmpc_cartpole_codecs_mod: *Module = b.createModule(.{
+            .root_source_file = b.path("src/codecs.zig"),
+            .target = native_target,
+            .optimize = .ReleaseFast,
+        });
+        bmpc_cartpole_codecs_mod.addImport("zm", zimrmath_mod);
+        bmpc_cartpole_codecs_mod.addImport("build_options", bmpc_cartpole_options_mod);
+        bmpc_cartpole_mod.addImport("codecs", bmpc_cartpole_codecs_mod);
+        const bmpc_cartpole_robot_mod: *Module = b.createModule(.{
+            .root_source_file = b.path("src/robot.zig"),
+            .target = native_target,
+            .optimize = .ReleaseFast,
+        });
+        bmpc_cartpole_robot_mod.addImport("zm", zimrmath_mod);
+        bmpc_cartpole_robot_mod.addImport("build_options", bmpc_cartpole_options_mod);
+        bmpc_cartpole_mod.addImport("robot", bmpc_cartpole_robot_mod);
         const bmpc_cartpole_test: *Compile = b.addTest(.{ .root_module = bmpc_cartpole_mod });
         if (test_filter) |f| {
             bmpc_cartpole_test.filters = b.allocator.dupe([]const u8, &.{f}) catch @panic("OOM");

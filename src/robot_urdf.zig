@@ -30,7 +30,7 @@ const urdf = @import("urdf.zig");
 
 const zm = @import("zm");
 const allocPrint = std.fmt.allocPrint;
-const ArrayListUnmanaged = std.ArrayListUnmanaged;
+const ArrayList = std.ArrayList;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const testing_allocator = std.testing.allocator;
 const float = zm.float;
@@ -78,7 +78,7 @@ pub fn buildModel(
     const a: Allocator = scratch.allocator();
 
     var bodies: []rbt.BodySpec = try a.alloc(rbt.BodySpec, robot.bodies.len);
-    var tendons: ArrayListUnmanaged(rbt.TendonSpec) = .empty;
+    var tendons: ArrayList(rbt.TendonSpec) = .empty;
 
     for (robot.bodies, 0..) |body, i| {
         // A URDF `fixed` joint arrives as no joint at all, so an empty slice is the whole
@@ -118,7 +118,7 @@ pub fn buildModel(
 
         // Mesh geoms are skipped - the same omission the emitter makes, and the caller can
         // count them with `urdf.meshCount` to report it.
-        var geoms: ArrayListUnmanaged(rbt.GeomSpec) = .empty;
+        var geoms: ArrayList(rbt.GeomSpec) = .empty;
         for (body.geoms) |geom| {
             const shape: rbt.GeomShape = switch (geom.shape) {
                 .box => |half| .{ .box = .{ .half_extent = half } },

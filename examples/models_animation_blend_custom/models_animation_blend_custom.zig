@@ -14,7 +14,7 @@
 //! accumulating the hierarchy (as here) is the same idea and a touch cleaner.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const ArrayListUnmanaged = std.ArrayListUnmanaged;
+const ArrayList = std.ArrayList;
 const sliceAsBytes = std.mem.sliceAsBytes;
 const eql = std.mem.eql;
 const indexOf = std.mem.indexOf;
@@ -129,7 +129,7 @@ fn readClip(
     doc: z.codecs.gltf.Data,
     anim: z.codecs.gltf.Animation,
 ) !Clip {
-    var tracks: ArrayListUnmanaged(Track) = .empty;
+    var tracks: ArrayList(Track) = .empty;
     errdefer tracks.deinit(gpa);
     var duration: f32 = 0;
     for (anim.channels) |chn| {

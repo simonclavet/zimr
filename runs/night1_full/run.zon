@@ -1,0 +1,94 @@
+// THE FIRST NIGHT, THE WHOLE SYSTEM: night1_improve's recipe (returns, the time-to-return cost, the world model's bound)
+// with every component that discovers ways back on - the flow actor with its three teachers sharing each update, and
+// the planner searching for the characters in danger. Read beside night1_improve, its Gaussian twin: the difference is
+// what the flow and the search add.
+.{
+    .task = .{ .motion = .one_minute },
+    .learner = .{ .supertrack = .{
+        // 8 characters on each of the 4 clips (they are assigned by character); the physics on every core.
+        .characters = 32,
+        .physics_threads = 0,
+        // 256 steps of replay per character (4.3 s): with the flow's teachers and the planner's search beside
+        // SuperTrack's windows, the whole system fills 79% of the trainer's 128 MB of activations and 90% of their
+        // gradients (the start line says it).
+        .replay_steps = 256,
+        // 32 windows per update. The world model learns on 8 steps, the policy imagines 32 with the critic past them -
+        // SuperMimic's horizons (a horizon of 8 learns poorly with a critic, 32 fastest).
+        .rows = 32,
+        .window = 8,
+        .policy_window = 32,
+        // The networks at a third of the reference implementations' widths: SuperMimic's world model and policy 680
+        // wide (theirs 2048), the critic's heads 170 (EfficientTDMPC's 512). The trainer's buffers are sized for them
+        // (`zn_mlp_sizes_trainer.zig`).
+        .hidden = 680,
+        .policy_hidden = 680,
+        .critic = .{ .hidden = 170 },
+        // Four world model updates and two policy updates a round: SuperMimic trains about 16 world model steps and 13
+        // imagined policy steps for every step of data, this learner 0.5 and 2 at one of each - 2 and 4 here. Raise
+        // them while a round's training stays below its acting (the handover's first ten minutes).
+        .world_updates = 4,
+        .policy_updates = 2,
+        // The policy's optimiser as SuperMimic's: Adam's second moment over about 20 updates, the gradient's length
+        // bounded - 20 is a few times the 7 to 14 the short runs log early (`policy_gradient_norm`); the log says
+        // whether it binds.
+        .policy_beta2 = 0.95,
+        .policy_gradient_clip = 20,
+        // The world model's gradient bounded at 50: about 15 to 40 while it predicts tracking, 170 to 590 through a
+        // fall's contacts - a bound that leaves the calm updates alone and keeps a fall from inflating Adam's moments.
+        .world_gradient_clip = 50,
+        // The rates' cosine over the 8 hours planned, down to 3% (SuperMimic's floor); held there if the run goes on.
+        .rate_decay_hours = 8,
+        .rate_floor_share = 0.03,
+        // The critic, and its value past the horizon at full weight once trusted (ramped over 1,000 updates). Its cost
+        // capped at 25 a step far from the reference - a fall's costs run to thousands, past what its bins hold - so it
+        // values a fallen state by its time to return; near the reference the cost is SuperTrack's (below 8, under
+        // 4% off).
+        .return_cost_cap = 25,
+        .train_critic = true,
+        .value_tail = 1.0,
+        .value_tail_ramp_updates = 1000,
+        // Restarts weighted toward the stretches failing now: half uniform, 40% hard, 10% by history, bins of 1 s.
+        .curriculum = .{ .bin_seconds = 1, .uniform_share = 0.5, .hard_share = 0.4 },
+        // Pushes: none in the first hour, rising to one every two seconds per character at up to 3.5 m/s by the
+        // seventh, held after; a quarter of starts in trouble as the schedule allows.
+        .pushes = .{
+            .rate_per_second = 0.5,
+            .speed_min = 0.5,
+            .speed_max = 3.5,
+            .start_hours = 1,
+            .full_hours = 7,
+            .start_share = 0.25,
+        },
+        // RETURNS: five seconds (300 steps) to come back after a loss, 8 steps holding the reference again to have
+        // returned, a quarter of the policy's windows drawn inside returns.
+        .aftermath_steps = 300,
+        .return_steps = 8,
+        .return_window_share = 0.25,
+        // THE FLOW ACTOR, as wide as the policy, its three teachers sharing each update (their natural sizes differ
+        // tenfold): FlowDPG 1, the planner's distillation 0.5 - the ways back the search found - and FPO 0.25, grown
+        // with the critic's trust.
+        .actor = .flow,
+        .flow = .{ .hidden_width = 680, .share_teachers = true, .dpg_share = 1.0, .fpo_weight = 0.25 },
+        // THE PLANNER: four characters at a time, the most endangered; 24 candidates each (4 of them the flow's own),
+        // two rounds of six elites, over 16 steps - a whole round, its decision made at the round's end and acted on
+        // through the next.
+        .planning = .{
+            .enabled = true,
+            .flags = .{ .budget = 4 },
+            .candidates = 24,
+            .horizon = 16,
+            .rounds = 2,
+            .elites = 6,
+            .flow_plans = 4,
+            .distill_weight = 0.5,
+        },
+    } },
+    .controls = .{
+        // Until stopped: the schedules are laid out for 8 hours, and a longer run goes on at full strength.
+        .stop_after_hours = 0,
+        // Judged and probed every half hour (1 to 5 m/s pushes, returns followed 5 s), checkpointed as often.
+        .judge_minutes = 30,
+        .checkpoint_minutes = 30,
+        .save_minutes = 5,
+    },
+}

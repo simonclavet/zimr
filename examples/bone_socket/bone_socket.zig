@@ -19,7 +19,7 @@
 //! `compose(local, parentWorld)`, and a skin matrix is `compose(inverseBind, jointWorld)`.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const ArrayListUnmanaged = std.ArrayListUnmanaged;
+const ArrayList = std.ArrayList;
 const sliceAsBytes = std.mem.sliceAsBytes;
 const z = @import("zimr");
 const zm = @import("zm");
@@ -223,7 +223,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         }
     }
     const anim: z.codecs.gltf.Animation = doc.animations[anim_index];
-    var tracks: ArrayListUnmanaged(Track) = .empty;
+    var tracks: ArrayList(Track) = .empty;
     errdefer tracks.deinit(gpa);
     var duration: f32 = 0;
     for (anim.channels) |chn| {

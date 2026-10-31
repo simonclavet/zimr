@@ -18,7 +18,6 @@ const eql = std.mem.eql;
 const expectError = std.testing.expectError;
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
-const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const AutoHashMapUnmanaged = std.AutoHashMapUnmanaged;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const testing_allocator = std.testing.allocator;
@@ -7914,7 +7913,7 @@ pub const audio = struct {
             serial_number: ?u32 = null,
             next_sequence_number: ?u32 = null,
             /// A packet spanning pages: its pieces so far, and whether one is being gathered.
-            gathered: ArrayListUnmanaged(u8) = .empty,
+            gathered: ArrayList(u8) = .empty,
             is_gathering: bool = false,
             /// Whether the page being read begins with the rest of a packet this reader did not see begin - after a
             /// move, or a lost page: those segments are passed over.
@@ -9590,7 +9589,7 @@ pub const audio = struct {
                 first_offset: usize,
                 serial_number: ?u32,
             ) Allocator.Error![]const PageMark {
-                var marks: ArrayListUnmanaged(PageMark) = .empty;
+                var marks: ArrayList(PageMark) = .empty;
                 var offset: usize = first_offset;
                 while (offset < bytes.len) {
                     const page: ogg.Page = ogg.readPage(bytes[offset..]) catch {
@@ -12755,9 +12754,9 @@ pub const stl = struct {
     }
 
     fn parseAscii(gpa: Allocator, bytes: []const u8) Error!Mesh {
-        var positions: ArrayListUnmanaged(f32) = .empty;
+        var positions: ArrayList(f32) = .empty;
         errdefer positions.deinit(gpa);
-        var normals: ArrayListUnmanaged(f32) = .empty;
+        var normals: ArrayList(f32) = .empty;
         errdefer normals.deinit(gpa);
 
         // Token-driven rather than line-driven: real ASCII STL varies in whitespace and
@@ -12977,8 +12976,8 @@ pub const xml = struct {
         arena: Allocator,
         diagnostic: ?*Diagnostic,
 
-        elements: ArrayListUnmanaged(Element) = .empty,
-        attributes: ArrayListUnmanaged(Attribute) = .empty,
+        elements: ArrayList(Element) = .empty,
+        attributes: ArrayList(Attribute) = .empty,
         root: ?u32 = null,
 
         /// Scratch for one element's children while its subtree is being read.
@@ -12989,7 +12988,7 @@ pub const xml = struct {
         /// its finished children on a stack and copies them into `elements` in one block when
         /// the element closes. The copy is what buys the flat, cache-friendly layout; without it
         /// the tree would need per-node pointers.
-        pending: ArrayListUnmanaged(Element) = .empty,
+        pending: ArrayList(Element) = .empty,
 
         fn fail(self: *Parser, err: Error, context: []const u8) Error {
             if (self.diagnostic) |d| {
@@ -13225,7 +13224,7 @@ pub const xml = struct {
             if (indexOfScalar(u8, raw, '&') == null) {
                 return raw;
             }
-            var out: ArrayListUnmanaged(u8) = .empty;
+            var out: ArrayList(u8) = .empty;
             try out.ensureTotalCapacity(self.arena, raw.len);
             var i: usize = 0;
             while (i < raw.len) {
@@ -13862,7 +13861,7 @@ test "xml: deep nesting does not blow anything up" {
     // is rather than discover it in the field.
     const gpa: Allocator = testing_allocator;
     const depth: usize = 200;
-    var source: ArrayListUnmanaged(u8) = .empty;
+    var source: ArrayList(u8) = .empty;
     defer source.deinit(gpa);
     for (0..depth) |_| {
         try source.appendSlice(gpa, "<n>");
@@ -14290,13 +14289,13 @@ pub const fbx = struct {
         /// Scratch window for the inflater, allocated ONCE for the whole parse.
         window: []u8,
 
-        nodes: ArrayListUnmanaged(Node) = .empty,
-        values: ArrayListUnmanaged(Value) = .empty,
+        nodes: ArrayList(Node) = .empty,
+        values: ArrayList(Value) = .empty,
         /// Scratch for one level's finished children, so they can be copied into `nodes` as one
         /// contiguous block. Identical reasoning to `codecs.xml`'s `pending`: a child's own subtree
         /// is parsed before the next sibling is known, so appending directly would interleave
         /// grandchildren between siblings and destroy the span layout.
-        pending: ArrayListUnmanaged(Node) = .empty,
+        pending: ArrayList(Node) = .empty,
 
         fn take(self: *Parser, n: usize) Error![]const u8 {
             // Subtraction, not addition: `pos + n` can wrap when `n` comes from a corrupt
@@ -14675,7 +14674,7 @@ pub const fbx = struct {
         errdefer doc.deinit();
         const arena: Allocator = doc.arena.allocator();
 
-        var objects: ArrayListUnmanaged(Object) = .empty;
+        var objects: ArrayList(Object) = .empty;
         var by_id: AutoHashMapUnmanaged(i64, u32) = .empty;
 
         if (doc.child(doc.rootNode(), "Objects")) |objects_node| {
@@ -14699,7 +14698,7 @@ pub const fbx = struct {
             }
         }
 
-        var conns: ArrayListUnmanaged(Connection) = .empty;
+        var conns: ArrayList(Connection) = .empty;
         if (doc.child(doc.rootNode(), "Connections")) |conns_node| {
             for (conns_node.children(&doc)) |c| {
                 const vs: []const Value = c.values(&doc);
@@ -15645,11 +15644,11 @@ pub const fbx = struct {
         errdefer arena.deinit();
         const a: Allocator = arena.allocator();
 
-        var positions: ArrayListUnmanaged(f32) = .empty;
-        var out_normals: ArrayListUnmanaged(f32) = .empty;
-        var out_uvs: ArrayListUnmanaged(f32) = .empty;
-        var indices: ArrayListUnmanaged(u32) = .empty;
-        var sources: ArrayListUnmanaged(u32) = .empty;
+        var positions: ArrayList(f32) = .empty;
+        var out_normals: ArrayList(f32) = .empty;
+        var out_uvs: ArrayList(f32) = .empty;
+        var indices: ArrayList(u32) = .empty;
+        var sources: ArrayList(u32) = .empty;
         defer positions.deinit(gpa);
         defer out_normals.deinit(gpa);
         defer out_uvs.deinit(gpa);
@@ -15660,7 +15659,7 @@ pub const fbx = struct {
         defer weld.deinit(gpa);
 
         // Corners of the polygon being accumulated, as emitted vertex indices.
-        var polygon: ArrayListUnmanaged(u32) = .empty;
+        var polygon: ArrayList(u32) = .empty;
         defer polygon.deinit(gpa);
 
         for (corners, 0..) |raw, corner| {
@@ -15810,9 +15809,9 @@ pub const fbx = struct {
         errdefer arena.deinit();
         const a: Allocator = arena.allocator();
 
-        var influences: ArrayListUnmanaged(Influence) = .empty;
+        var influences: ArrayList(Influence) = .empty;
         defer influences.deinit(gpa);
-        var bind_links: ArrayListUnmanaged(BindLink) = .empty;
+        var bind_links: ArrayList(BindLink) = .empty;
         defer bind_links.deinit(gpa);
 
         // Walk Skin -> Cluster -> Model for this geometry. Both edge directions are checked
@@ -16411,11 +16410,11 @@ pub const fbx = struct {
     /// Builds a binary FBX byte stream. Records are written depth-first; `beginNode`/`endNode`
     /// bracket a child list, matching the file's own nesting.
     pub const Writer = struct {
-        buf: ArrayListUnmanaged(u8) = .empty,
+        buf: ArrayList(u8) = .empty,
         gpa: Allocator,
         version: u32,
         /// Offsets of the end-offset fields still to be back-patched, innermost last.
-        open: ArrayListUnmanaged(usize) = .empty,
+        open: ArrayList(usize) = .empty,
 
         pub fn init(gpa: Allocator, version: u32) Writer {
             return .{ .gpa = gpa, .version = version };
@@ -16723,11 +16722,11 @@ pub const bvh = struct {
         arena: Allocator,
         diagnostic: ?*Diagnostic,
 
-        joints: ArrayListUnmanaged(Joint) = .empty,
+        joints: ArrayList(Joint) = .empty,
         /// The joint an OFFSET or CHANNELS applies to - the most recently opened one.
         current: i32 = -1,
         /// Parents of the open braces, so `}` can restore the right one.
-        open: ArrayListUnmanaged(i32) = .empty,
+        open: ArrayList(i32) = .empty,
         channel_count: usize = 0,
         frame_count: usize = 0,
         frame_time: f32 = 0,
@@ -16925,9 +16924,9 @@ pub const bvh = struct {
     /// stores values like `1.81973137e-05`; `{d:.6}` flattens those to `0.000000`, and the
     /// round-trip test would then fail for a formatting reason unrelated to parsing.
     pub fn encode(gpa: Allocator, data: Data) Error![]u8 {
-        var out: ArrayListUnmanaged(u8) = .empty;
+        var out: ArrayList(u8) = .empty;
         errdefer out.deinit(gpa);
-        const w: *ArrayListUnmanaged(u8) = &out;
+        const w: *ArrayList(u8) = &out;
 
         try w.appendSlice(gpa, "HIERARCHY\n");
 
@@ -16999,7 +16998,7 @@ pub const bvh = struct {
         return n;
     }
 
-    fn indent(w: *ArrayListUnmanaged(u8), gpa: Allocator, depth: usize) Error!void {
+    fn indent(w: *ArrayList(u8), gpa: Allocator, depth: usize) Error!void {
         try w.appendNTimes(gpa, '\t', depth);
     }
 
@@ -17620,7 +17619,7 @@ pub const bvh = struct {
         arena: Allocator,
         gpa: Allocator,
         opts: FromFbxOptions,
-        joints: ArrayListUnmanaged(Joint) = .empty,
+        joints: ArrayList(Joint) = .empty,
         /// One bit per FBX object, so a cycle in `Connections` cannot be walked twice.
         visited: std.DynamicBitSetUnmanaged,
         /// How this scene identifies bones. Resolved once by `detectJointRule`.
@@ -17630,7 +17629,7 @@ pub const bvh = struct {
         parent_is_joint: bool = false,
         /// Parallel to `joints`: the FBX object index each came from. End Sites reuse their
         /// parent's, and never read it.
-        sources: ArrayListUnmanaged(u32) = .empty,
+        sources: ArrayList(u32) = .empty,
 
         /// FBX's own spellings for a skeleton joint. `LimbNode` is what every exporter here
         /// writes; `Limb` is the older form and `Root` appears in some rigs.

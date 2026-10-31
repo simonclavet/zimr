@@ -426,7 +426,8 @@ pub const descriptions = [_]Entry{
     },
     .{
         .path = ".zenv.sh",
-        .text = "Sourceable PATH exports for the vendored toolchains.",
+        .text = "Sourceable PATH exports for the vendored toolchains, and a check for lavapipe and the Vulkan " ++
+            "validation layer that names the command installing them.",
     },
     .{
         .path = "LICENSE",

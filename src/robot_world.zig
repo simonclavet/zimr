@@ -621,7 +621,9 @@ pub fn Planner(comptime M: type) type {
                 rbt.forward(m, &self.data);
                 for (0..horizon) |h| {
                     const action: []const f32 = self.sequences[(s * horizon + h) * action_size ..][0..action_size];
-                    try fleet.driveOnce(&self.data, &self.world, &self.bridge, clip, @intCast(frame + h), action);
+                    const drive: *track.DriveScratch = &fleet.drive_scratches[0];
+                    const aim_frame: u32 = @intCast(frame + h);
+                    try fleet.driveOnce(&self.data, &self.world, &self.bridge, clip, aim_frame, action, drive);
                     track.stateOf(m, &self.data, &self.states[0]);
                     self.costs[s] += self.stepCost(self.states[0], self.reference[h + 1], fleet.root) +
                         self.options.action_weight * actionSize2(action);

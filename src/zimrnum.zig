@@ -67,6 +67,7 @@
 const std = @import("std");
 const zm = @import("zm");
 const Log2Int = zm.Log2Int;
+const floatEps = zm.floatEps;
 const maxInt = zm.maxInt;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
@@ -95,6 +96,7 @@ const readInt = std.mem.readInt;
 const writeInt = std.mem.writeInt;
 const ArrayList = std.ArrayList;
 const endsWith = std.mem.endsWith;
+const Random = std.Random;
 // Bound at file scope because the linter wants both: `no-qualified-zm` forbids `zm.sinRad(x)` in
 // a body, and `reserved-math-names` forbids a declaration named `sin` that is NOT `zm.sinRad`.
 // Binding the reserved name to zm's own function is the form that satisfies both.
@@ -111,8 +113,6 @@ const scalarCosTurns = zm.cosTurns;
 const scalarTrunc = zm.trunc;
 const scalarRound = zm.round;
 const scalarClamp = zm.clamp;
-const scalarLog1p = zm.log1p;
-const scalarExpm1 = zm.expm1;
 const tau = zm.tau;
 const scalarLog2 = zm.log2;
 const scalarLog10 = zm.log10;
@@ -167,11 +167,10 @@ pub fn isFloat(comptime T: type) bool {
 /// So: `requireFloat` where the ARITHMETIC needs it - exponentials, roots, means, ratios,
 /// anything that pivots or draws. `requireNumeric` where the operation is addressing,
 /// comparison or exact arithmetic and the element type is the caller's business.
-pub fn requireFloat(comptime T: type) void {
-    if (comptime !isFloat(T)) {
-        @compileError("zimrnum: expected f16, f32 or f64, got " ++ @typeName(T));
-    }
-}
+///
+/// The check itself is zimrmath's (`zm.requireFloatScalar`), shared with the row reductions there, which the GPU
+/// kernels run too: one definition of what a float element type is.
+pub const requireFloat = zm.requireFloatScalar;
 
 /// This operation needs whole numbers, and a float caller is a compile error.
 ///
@@ -1556,51 +1555,15 @@ pub const Walk2 = struct {
 // L06  REDUCTIONS AND MATMUL
 // =============================================================================
 
-/// A running sum that carries the rounding error of every addition in a second accumulator.
-///
 /// ONE IMPLEMENTATION OF NEUMAIER SUMMATION, USED BY EVERY ACCUMULATION IN THIS FILE
 ///
-/// The eight lines below had been copied into ten places - `sumAll`, `matmul`'s inner product,
-/// `layerNormRows` twice, `variance`, `covariance`, `dotAll`, `mseLoss`, `rootMeanSquare` - and the five
-/// losses written later had none of them, because copying eight lines is exactly the kind of
-/// thing that gets skipped. A type with an `add` is what makes compensation the default rather
-/// than a discipline.
-///
-/// Neumaier rather than Kahan: the branch handles an addend larger than the running total,
-/// which plain Kahan gets wrong. The cost is three extra floating-point operations per element.
-pub fn CompensatedSum(comptime T: type) type {
-    comptime requireNumeric(T);
-    return struct {
-        total: T = 0,
-        compensation: T = 0,
-
-        /// THE COMPENSATION IS A NO-OP FOR INTEGERS, AND THAT IS WHY IT LIVES HERE
-        ///
-        /// Integer addition is EXACT - there is no rounding, so there is nothing to compensate
-        /// and the correction term would be zero at every step. Branching here rather than at
-        /// every call site means each of the dozen reductions built on this type widens to
-        /// integers for free, instead of a dozen copies of the same comptime `if`.
-        ///
-        /// The same lesson as `Walk`: **a type with a method makes the right thing the default**.
-        pub fn add(self: *@This(), x: T) void {
-            if (comptime !isFloat(T)) {
-                self.total += x;
-                return;
-            }
-            const t: T = self.total + x;
-            if (@abs(self.total) >= @abs(x)) {
-                self.compensation += (self.total - t) + x;
-            } else {
-                self.compensation += (x - t) + self.total;
-            }
-            self.total = t;
-        }
-
-        pub fn value(self: @This()) T {
-            return self.total + self.compensation;
-        }
-    };
-}
+/// Eight lines had been copied into ten places - `sumAll`, `matmul`'s inner product, `layerNormRows` twice,
+/// `variance`, `covariance`, `dotAll`, `mseLoss`, `rootMeanSquare` - and the losses written later had none of them,
+/// because copying eight lines is exactly the kind of thing that gets skipped. A type with an `add` is what makes
+/// compensation the default rather than a discipline. It is zimrmath's (`zm.CompensatedSum`), in the shader-safe tier,
+/// because the GPU learning kit's row reductions sum through it too (`zm.layerNormRowStatistics`): one summation for
+/// the host and the device.
+pub const CompensatedSum = zm.CompensatedSum;
 
 /// The sum of every element, in compensated arithmetic.
 ///
@@ -3264,7 +3227,9 @@ pub fn polyakUpdate(
     }
     while (walk.next()) |at| {
         const held: T = try target.at(at);
-        try target.setAt(at, held + follow * ((try online.at(at)) - held));
+        const online_value: T = try online.at(at);
+        // zimrmath's one step (`zm.polyakFollow`), shared with the GPU kit's `polyak` kernel.
+        try target.setAt(at, zm.polyakFollow(T, held, online_value, follow));
     }
 }
 
@@ -3279,39 +3244,17 @@ pub fn polyakUpdate(
 /// point exactly on a bin gives all of its mass to that bin. (Written with `floor` and `ceil` as the two neighbours, an
 /// exact landing has floor = ceil, both shares come out zero, and the mass vanishes - the textbook version's bug.)
 pub fn addPointMassToGrid(comptime T: type, bins: []T, grid_position: T, mass: T) void {
-    const last_index: usize = bins.len - 1;
-    // The bin at or just below the point, and the next one up - the top bin is its own "next": its share is zero.
-    const lower_index: usize = @floor(grid_position);
-    const upper_index: usize = @min(lower_index + 1, last_index);
-    // How far past the lower bin the point sits: 0 exactly on it, approaching 1 near the upper one.
-    const lower_position: T = @floor(grid_position);
-    const fraction_toward_upper: T = grid_position - lower_position;
-    const share_to_lower: T = mass * (1 - fraction_toward_upper);
-    const share_to_upper: T = mass * fraction_toward_upper;
-    bins[lower_index] += share_to_lower;
-    bins[upper_index] += share_to_upper;
+    // The two bins and their shares by zimrmath's one definition (`zm.gridShares`), which the GPU kit's two-hot
+    // kernels use too.
+    const shares: zm.GridShares(T) = zm.gridShares(T, grid_position, bins.len, mass);
+    bins[shares.lower_index] += shares.lower_share;
+    bins[shares.upper_index] += shares.upper_share;
 }
 
-/// SYMLOG, the "symmetric logarithm" (DreamerV3, Hafner et al. 2023): sign(x) * log(1 + |x|).
-///
-/// It squashes large magnitudes and leaves small ones almost alone: its slope at zero is 1, so near zero it is the
-/// identity; 10 becomes 2.4, 1000 becomes 6.9, 22025 becomes 10. It is odd, defined for every number, and exactly
-/// inverted by `symexp`. Why a learner wants it: a network asked to predict returns of 0.5 in one task and 5000 in
-/// another cannot use one scale for both - in symlog space they are 0.41 and 8.5, ordinary numbers for one set of
-/// settings (one bin range, one learning rate) across every task. `zm.log1p` keeps it exact for tiny values.
-pub fn symlog(comptime T: type, x: T) T {
-    comptime requireFloat(T);
-    const squashed_magnitude: T = scalarLog1p(@abs(x));
-    return if (x < 0) -squashed_magnitude else squashed_magnitude;
-}
-
-/// SYMEXP, the inverse of `symlog`: sign(y) * (exp(|y|) - 1), so symexp(symlog(x)) = x. `zm.expm1` keeps it exact
-/// near 0.
-pub fn symexp(comptime T: type, y: T) T {
-    comptime requireFloat(T);
-    const expanded_magnitude: T = scalarExpm1(@abs(y));
-    return if (y < 0) -expanded_magnitude else expanded_magnitude;
-}
+/// SYMLOG and SYMEXP, the "symmetric logarithm" and its inverse (DreamerV3): zimrmath's (`zm.symlog`, `zm.symexp`),
+/// where the GPU kit's two-hot kernels call them too.
+pub const symlog = zm.symlog;
+pub const symexp = zm.symexp;
 
 /// A SINGLE NUMBER PREDICTED AS A DISTRIBUTION OVER BINS - "regression as classification" (DreamerV3; TD-MPC2; BMPC's
 /// reward and value heads).
@@ -3373,11 +3316,10 @@ pub fn CategoricalScalar(comptime T: type) type {
             };
         }
 
-        /// Where bin `index` sits on the axis: evenly spaced from `low` (bin 0) to `high` (the last bin).
+        /// Where bin `index` sits on the axis: evenly spaced from `low` (bin 0) to `high` (the last bin) - by
+        /// zimrmath's definition (`zm.binPosition`), the GPU kit's too.
         pub fn binPosition(self: Self, index: usize) T {
-            const last_index: T = @as(T, @floatFromInt(self.bin_count - 1));
-            const spacing: T = (self.high - self.low) / last_index;
-            return self.low + @as(T, @floatFromInt(index)) * spacing;
+            return zm.binPosition(T, self.low, self.high, self.bin_count, index);
         }
 
         /// THE TWO-HOT TARGET for `value`, into `out` (`bin_count` entries): the value placed on the axis, clamped to
@@ -3389,12 +3331,10 @@ pub fn CategoricalScalar(comptime T: type) type {
             if (out.len != self.bin_count) {
                 return Error.ShapeMismatch;
             }
-            // 1. The value on the axis, clamped to what the bins cover.
-            const axis_position: T = scalarClamp(self.toAxis(value), self.low, self.high);
-            // 2. Where it sits among the bins, counted in bins: a fractional index.
-            const last_index: T = @as(T, @floatFromInt(self.bin_count - 1));
-            const spacing: T = (self.high - self.low) / last_index;
-            const grid_position: T = scalarClamp((axis_position - self.low) / spacing, 0, last_index);
+            // 1. The value on the axis; 2. where it sits among the bins, clamped to what they cover, counted in
+            // bins: a fractional index (`zm.gridPosition`).
+            const axis_position: T = self.toAxis(value);
+            const grid_position: T = zm.gridPosition(T, axis_position, self.low, self.high, self.bin_count);
             // 3. All of the mass, shared between its two neighbouring bins.
             @memset(out, 0);
             addPointMassToGrid(T, out, grid_position, 1);
@@ -5403,6 +5343,32 @@ pub fn argminAxis(
     return argExtremumAxis(T, Index, out, a, axis, false);
 }
 
+/// One row of a rank-2 tensor as a row accessor (`zm.requireRowAccess`): the shape zimrmath's row reductions read.
+fn TensorRow(comptime T: type) type {
+    return struct {
+        tensor: Tensor(T),
+        row: usize,
+
+        pub fn at(tensor_row: @This(), index: usize) T {
+            return tensor_row.tensor.at2(tensor_row.row, index);
+        }
+    };
+}
+
+/// A row of a rank-2 tensor, read NORMALISED by its layer-norm statistics (`zm.layerNormValue`): the forward's n,
+/// recomputed from the input instead of stored - what `layerNormRowsBackward` reads its couplings over.
+fn NormalisedTensorRow(comptime T: type) type {
+    return struct {
+        input: TensorRow(T),
+        statistics: zm.LayerNormStatistics(T),
+
+        pub fn at(normalised_row: @This(), index: usize) T {
+            const input_value: T = normalised_row.input.at(index);
+            return zm.layerNormValue(T, input_value, normalised_row.statistics);
+        }
+    };
+}
+
 /// The gradient of `layerNormRows` with respect to its input.
 ///
 /// EVERY ELEMENT OF A ROW APPEARS IN EVERY OTHER ELEMENT'S GRADIENT
@@ -5420,6 +5386,11 @@ pub fn argminAxis(
 ///
 /// `dx` is written, not accumulated. `a` is the ORIGINAL input, not the normalised output: the
 /// formula needs `xhat`, and recomputing it from `a` costs one pass and saves storing it.
+///
+/// The arithmetic is zimrmath's, shared with the GPU kit's `norm_bwd`: the row's statistics as the
+/// forward computes them (`zm.layerNormRowStatistics`), so `xhat` here is the forward's normalised
+/// value to the bit (`zm.layerNormValue`); the two couplings (`zm.layerNormGradientCouplings`); and
+/// each input's gradient (`zm.layerNormInputGradient`).
 pub fn layerNormRowsBackward(
     comptime T: type,
     dx: Tensor(T),
@@ -5431,7 +5402,10 @@ pub fn layerNormRowsBackward(
     if (a.rank != 2 or dx.rank != 2 or dy.rank != 2) {
         return Error.UnsupportedShape;
     }
-    if (dx.size() != a.size() or dy.size() != a.size()) {
+    // The rows are read by position (`at2`), so the three must have the same SHAPE, not only the same size.
+    const same_shapes: bool = dx.shape[0] == a.shape[0] and dx.shape[1] == a.shape[1] and
+        dy.shape[0] == a.shape[0] and dy.shape[1] == a.shape[1];
+    if (!same_shapes) {
         return Error.ShapeMismatch;
     }
     const rows: usize = a.shape[0];
@@ -5439,36 +5413,37 @@ pub fn layerNormRowsBackward(
     if (cols == 0) {
         return Error.DomainError;
     }
-    const width: T = @floatFromInt(cols);
     for (0..rows) |row| {
-        var sum: CompensatedSum(T) = .{};
-        for (0..cols) |col| {
-            sum.add(try a.at(&.{ row, col }));
-        }
-        const mean: T = sum.value() / width;
-        var spread: CompensatedSum(T) = .{};
-        for (0..cols) |col| {
-            const centred: T = (try a.at(&.{ row, col })) - mean;
-            spread.add(centred * centred);
-        }
-        const sigma: T = @sqrt(spread.value() / width + epsilon);
-
+        const input_row: TensorRow(T) = .{ .tensor = a, .row = row };
+        const statistics: zm.LayerNormStatistics(T) = zm.layerNormRowStatistics(
+            T,
+            TensorRow(T),
+            input_row,
+            cols,
+            epsilon,
+        );
+        const gradient_row: TensorRow(T) = .{ .tensor = dy, .row = row };
+        const normalised_row: NormalisedTensorRow(T) = .{ .input = input_row, .statistics = statistics };
         // The two couplings, each a mean over the row.
-        var sum_dy: CompensatedSum(T) = .{};
-        var sum_dy_xhat: CompensatedSum(T) = .{};
+        const couplings: zm.LayerNormGradientCouplings(T) = zm.layerNormGradientCouplings(
+            T,
+            TensorRow(T),
+            NormalisedTensorRow(T),
+            gradient_row,
+            normalised_row,
+            cols,
+        );
         for (0..cols) |col| {
-            const g: T = try dy.at(&.{ row, col });
-            const xhat: T = ((try a.at(&.{ row, col })) - mean) / sigma;
-            sum_dy.add(g);
-            sum_dy_xhat.add(g * xhat);
-        }
-        const mean_dy: T = sum_dy.value() / width;
-        const mean_dy_xhat: T = sum_dy_xhat.value() / width;
-
-        for (0..cols) |col| {
-            const g: T = try dy.at(&.{ row, col });
-            const xhat: T = ((try a.at(&.{ row, col })) - mean) / sigma;
-            try dx.setAt(&.{ row, col }, (g - mean_dy - xhat * mean_dy_xhat) / sigma);
+            const arriving_gradient: T = dy.at2(row, col);
+            const normalised: T = normalised_row.at(col);
+            const input_gradient: T = zm.layerNormInputGradient(
+                T,
+                arriving_gradient,
+                normalised,
+                couplings,
+                statistics.inverse_spread,
+            );
+            dx.setAt2(row, col, input_gradient);
         }
     }
 }
@@ -7165,28 +7140,14 @@ pub fn softmaxRows(comptime T: type, out: Tensor(T), a: Tensor(T)) Error!void {
 
     var row: usize = 0;
     while (row < rows) : (row += 1) {
-        var largest: T = a.at2(row, 0);
-        var col: usize = 1;
+        // The row's largest value and its compensated sum of shifted exponentials, by the one definition every
+        // softmax shares - SimNorm's groups and the GPU kit's kernels among them (`zm.softmaxGroupStatistics`).
+        const input_row: TensorRow(T) = .{ .tensor = a, .row = row };
+        const statistics: zm.SoftmaxGroupStatistics(T) = zm.softmaxGroupStatistics(T, TensorRow(T), input_row, 0, cols);
+        var col: usize = 0;
         while (col < cols) : (col += 1) {
-            const x: T = a.at2(row, col);
-            if (x > largest) {
-                largest = x;
-            }
-        }
-        // Compensated, like every other accumulation here: a wide row is exactly the sum that
-        // loses its low bits, and the result is a denominator every element is divided by.
-        var total: CompensatedSum(T) = .{};
-        col = 0;
-        while (col < cols) : (col += 1) {
-            const e: T = @exp(a.at2(row, col) - largest);
-            out.setAt2(row, col, e);
-            total.add(e);
-        }
-        const denominator: T = total.value();
-        col = 0;
-        while (col < cols) : (col += 1) {
-            const e: T = out.at2(row, col);
-            out.setAt2(row, col, e / denominator);
+            const probability: T = zm.softmaxGroupValue(T, a.at2(row, col), statistics);
+            out.setAt2(row, col, probability);
         }
     }
 }
@@ -7277,25 +7238,24 @@ pub fn simNormRows(
     const row_count: usize = input.shape[0];
     const group_count: usize = input.shape[1] / group;
     for (0..row_count) |row| {
+        const tensor_row: TensorRow(T) = .{ .tensor = input, .row = row };
         for (0..group_count) |group_index| {
             const group_start: usize = group_index * group;
             const group_end: usize = group_start + group;
-            // 1. The group's largest input - subtracting it keeps the largest exponential at e^0 = 1.
-            var largest_input: T = input.at2(row, group_start);
-            for (group_start + 1..group_end) |feature| {
-                largest_input = @max(largest_input, input.at2(row, feature));
-            }
-            // 2. Every shifted exponential, and their sum.
-            var sum_of_exponentials: T = 0;
+            // The group's largest input - subtracting it keeps the largest exponential at e^0 = 1 - and the sum of
+            // the shifted exponentials, by the one definition the GPU kit's kernel shares
+            // (`zm.softmaxGroupStatistics`). Every input of the group is read here, before any output is written:
+            // `out` may be `input`.
+            const statistics: zm.SoftmaxGroupStatistics(T) = zm.softmaxGroupStatistics(
+                T,
+                TensorRow(T),
+                tensor_row,
+                group_start,
+                group,
+            );
+            // Each exponential over the sum: the group's probabilities.
             for (group_start..group_end) |feature| {
-                const shifted_input: T = input.at2(row, feature) - largest_input;
-                const exponential: T = @exp(shifted_input);
-                out.setAt2(row, feature, exponential);
-                sum_of_exponentials += exponential;
-            }
-            // 3. Each exponential over the sum: the group's probabilities.
-            for (group_start..group_end) |feature| {
-                const probability: T = out.at2(row, feature) / sum_of_exponentials;
+                const probability: T = zm.softmaxGroupValue(T, input.at2(row, feature), statistics);
                 out.setAt2(row, feature, probability);
             }
         }
@@ -7327,26 +7287,44 @@ pub fn simNormRowsGrad(
     const row_count: usize = output.shape[0];
     const group_count: usize = output.shape[1] / group;
     for (0..row_count) |row| {
+        const gradient_row: TensorRow(T) = .{ .tensor = output_gradient, .row = row };
+        const output_row: TensorRow(T) = .{ .tensor = output, .row = row };
         for (0..group_count) |group_index| {
             const group_start: usize = group_index * group;
             const group_end: usize = group_start + group;
-            // The group's probability-weighted average of the arriving gradient: sum over j of g_j p_j.
-            var weighted_average_gradient: T = 0;
-            for (group_start..group_end) |feature| {
-                weighted_average_gradient += output_gradient.at2(row, feature) * output.at2(row, feature);
-            }
+            // The group's probability-weighted average of the arriving gradient, sum over j of g_j p_j - by the
+            // definition the GPU kit's `simnorm_bwd` shares (`zm.softmaxGroupGradientDot`). Every value of the group
+            // is read before any is written: `out` may be `output_gradient`.
+            const weighted_average_gradient: T = zm.softmaxGroupGradientDot(
+                T,
+                TensorRow(T),
+                TensorRow(T),
+                gradient_row,
+                output_row,
+                group_start,
+                group,
+            );
             // Each input's gradient: its probability, times how far its arriving gradient is from that average.
             for (group_start..group_end) |feature| {
                 const probability: T = output.at2(row, feature);
                 const arriving_gradient: T = output_gradient.at2(row, feature);
-                const input_gradient: T = probability * (arriving_gradient - weighted_average_gradient);
+                const input_gradient: T = zm.softmaxGroupInputGradient(
+                    T,
+                    arriving_gradient,
+                    probability,
+                    weighted_average_gradient,
+                );
                 out.setAt2(row, feature, input_gradient);
             }
         }
     }
 }
 
-fn fillDropoutMask(
+/// An inverted-dropout mask (`Graph.dropout`): each element kept with probability `keep` - its value 1 / keep, so the
+/// expected value is unchanged - or dropped, its value 0, by a uniform draw from `rng` at the element's index. The
+/// draw depends on the generator and the index alone, so a mask is the same wherever it is made: the GPU kit's host
+/// fills a value head's mask with it, and the kit then drops exactly what the CPU agent drops.
+pub fn fillDropoutMask(
     comptime T: type,
     mask: Tensor(T),
     rng: Rng,
@@ -7586,33 +7564,22 @@ pub fn layerNormRows(
     if (cols == 0) {
         return Error.DomainError;
     }
-    const width: T = @floatFromInt(cols);
-
     var row: usize = 0;
     while (row < rows) : (row += 1) {
-        // Both accumulations are compensated, for the reason recorded with `sumAll`: a wide row
-        // is exactly the sum that loses its low bits, and here it feeds a DIVISOR.
-        var total: CompensatedSum(T) = .{};
+        // The row's statistics by the one definition every layer norm shares - the GPU kit's kernel among them
+        // (`zm.layerNormRowStatistics`: both sums compensated, epsilon inside the root).
+        const tensor_row: TensorRow(T) = .{ .tensor = a, .row = row };
+        const statistics: zm.LayerNormStatistics(T) = zm.layerNormRowStatistics(
+            T,
+            TensorRow(T),
+            tensor_row,
+            cols,
+            epsilon,
+        );
         var col: usize = 0;
         while (col < cols) : (col += 1) {
             const x: T = a.at2(row, col);
-            total.add(x);
-        }
-        const mean: T = total.value() / width;
-
-        var sq: CompensatedSum(T) = .{};
-        col = 0;
-        while (col < cols) : (col += 1) {
-            const d: T = a.at2(row, col) - mean;
-            const term: T = d * d;
-            sq.add(term);
-        }
-        const inv: T = 1.0 / @sqrt(sq.value() / width + epsilon);
-
-        col = 0;
-        while (col < cols) : (col += 1) {
-            const x: T = a.at2(row, col);
-            out.setAt2(row, col, (x - mean) * inv);
+            out.setAt2(row, col, zm.layerNormValue(T, x, statistics));
         }
     }
 }
@@ -7923,16 +7890,11 @@ pub fn crossEntropyRowsGrad(
 /// subtracted before exponentiating (so the biggest exponential is e^0 = 1 and nothing overflows) and added back
 /// after the logarithm.
 fn rowLogSumExp(comptime T: type, logits: Tensor(T), row: usize) T {
+    // The row's softmax statistics by the one definition every softmax shares (`zm.softmaxGroupStatistics`).
     const cols: usize = logits.shape[1];
-    var largest_logit: T = logits.at2(row, 0);
-    for (1..cols) |col| {
-        largest_logit = @max(largest_logit, logits.at2(row, col));
-    }
-    var sum_of_shifted_exponentials: T = 0;
-    for (0..cols) |col| {
-        sum_of_shifted_exponentials += @exp(logits.at2(row, col) - largest_logit);
-    }
-    return largest_logit + @log(sum_of_shifted_exponentials);
+    const logit_row: TensorRow(T) = .{ .tensor = logits, .row = row };
+    const statistics: zm.SoftmaxGroupStatistics(T) = zm.softmaxGroupStatistics(T, TensorRow(T), logit_row, 0, cols);
+    return zm.softmaxLogDenominator(T, statistics);
 }
 
 /// SOFT-LABEL CROSS-ENTROPY: how far a predicted distribution is from a TARGET DISTRIBUTION, per row, averaged over
@@ -8349,6 +8311,18 @@ pub fn accuracy(
     return @as(T, @floatFromInt(correct)) / @as(T, @floatFromInt(targets.len));
 }
 
+/// A slice read as a row accessor (`zm.requireRowAccess`), for zimrmath's functions over rows - the host's way of
+/// handing a plain slice to the same row statistics the GPU kernels compute over their buffers.
+pub fn SliceRow(comptime T: type) type {
+    return struct {
+        values: []const T,
+
+        pub fn at(row: @This(), index: usize) T {
+            return row.values[index];
+        }
+    };
+}
+
 /// `quantile` on values already sorted ascending. Separate so several quantiles of one sample
 /// cost one sort rather than one sort each.
 pub fn quantileSorted(comptime T: type, sorted: []const T, q: T) Error!T {
@@ -8359,18 +8333,10 @@ pub fn quantileSorted(comptime T: type, sorted: []const T, q: T) Error!T {
     if (q < 0 or q > 1) {
         return Error.DomainError;
     }
-    if (sorted.len == 1) {
-        return sorted[0];
-    }
-    const position: T = q * @as(T, @floatFromInt(sorted.len - 1));
-    // @floor rather than a bare cast: the rule wants the rounding named, and for a position that
-    // is non-negative by construction the two agree, so saying which one is free.
-    const below: usize = @floor(position);
-    if (below + 1 >= sorted.len) {
-        return sorted[sorted.len - 1];
-    }
-    const weight: T = position - @as(T, @floatFromInt(below));
-    return sorted[below] + weight * (sorted[below + 1] - sorted[below]);
+    // The interpolation is zimrmath's one definition (`zm.quantileOfSorted`), which the GPU kit's running scale calls
+    // on a buffer.
+    const sorted_row: SliceRow(T) = .{ .values = sorted };
+    return zm.quantileOfSorted(T, SliceRow(T), sorted_row, sorted.len, q);
 }
 
 /// The value below which a fraction `q` of the data lies, by linear interpolation between the
@@ -8455,9 +8421,9 @@ pub fn RunningScale(comptime T: type) type {
             const fifth_percentile: T = try quantileSorted(T, scratch, 0.05);
             const ninety_fifth_percentile: T = try quantileSorted(T, scratch, 0.95);
             const spread: T = ninety_fifth_percentile - fifth_percentile;
-            // The floor on THIS batch's spread, before it is averaged in.
-            const floored_spread: T = @max(1, spread);
-            self.value += self.tau * (floored_spread - self.value);
+            // The floor on THIS batch's spread, before it is averaged in: zimrmath's one step (`zm.runningScaleStep`),
+            // which the GPU kit's running scale takes too.
+            self.value = zm.runningScaleStep(T, self.value, self.tau, spread);
         }
     };
 }
@@ -9571,9 +9537,13 @@ pub fn svd(
                 }
                 const dot_pq: T = gamma.value();
                 // Relative: the columns are orthogonal enough when their inner product is
-                // negligible against their own lengths, at any scale.
+                // negligible against their own lengths, at any scale - negligible at THIS type's
+                // precision: a few of its epsilons. (A fixed 1e-15 is below what an f32 rotation
+                // can reach - its epsilon is about 1.2e-7 - so an f32 SVD would sweep to the limit
+                // and give up, every time.)
                 const lengths: T = @sqrt(alpha.value() * beta.value());
-                if (lengths == 0 or @abs(dot_pq) <= lengths * @as(T, @floatCast(1.0e-15))) {
+                const orthogonal_enough: T = 4 * floatEps(T);
+                if (lengths == 0 or @abs(dot_pq) <= lengths * orthogonal_enough) {
                     continue;
                 }
                 rotations += 1;
@@ -11110,8 +11080,9 @@ pub const Adam = struct {
     epsilon: f64 = 1.0e-8,
 };
 
-/// `base^exponent` for a whole-number exponent, by squaring.
-fn powInt(comptime T: type, base: T, exponent: usize) T {
+/// `base^exponent` for a whole-number exponent, by squaring - how Adam's bias corrections are formed here
+/// (`adamStep`), and for the GPU kit's Adam (`adamCorrectionMultipliers`), so the two correct by the same numbers.
+pub fn powInt(comptime T: type, base: T, exponent: usize) T {
     var result: T = 1;
     var acc: T = base;
     var remaining: usize = exponent;
@@ -11122,6 +11093,33 @@ fn powInt(comptime T: type, base: T, exponent: usize) T {
         acc *= acc;
     }
     return result;
+}
+
+/// Adam's two bias corrections at one step, as the multipliers a GPU kernel applies (`adamCorrectionMultipliers`).
+pub fn AdamCorrections(comptime T: type) type {
+    return struct {
+        /// 1 / (1 - beta1^step): the first moment's correction.
+        first: T,
+        /// 1 / (1 - beta2^step): the second moment's.
+        second: T,
+    };
+}
+
+/// Adam's bias corrections at `step` (counted from 1) for a GPU kit's Adam, which MULTIPLIES by them: the reciprocals
+/// of 1 - beta1^step and 1 - beta2^step, each power formed by squaring (`powInt`) exactly as `adamStep` forms the
+/// divisors it divides by - so the kit's correction is the host's to within the one rounding of the reciprocal. Every
+/// kit learner's host takes its corrections from here.
+pub fn adamCorrectionMultipliers(
+    comptime T: type,
+    beta1: T,
+    beta2: T,
+    step: usize,
+) AdamCorrections(T) {
+    comptime requireFloat(T);
+    const first_divisor: T = 1 - powInt(T, beta1, step);
+    const second_divisor: T = 1 - powInt(T, beta2, step);
+    const corrections: AdamCorrections(T) = .{ .first = 1 / first_divisor, .second = 1 / second_divisor };
+    return corrections;
 }
 
 /// One Adam step. `m` and `v` are the first and second moment buffers, read and updated in place.
@@ -11430,6 +11428,11 @@ test "zn schedule: linear decay is straight, ends where it says, and never goes 
 /// `total` it is `lowest`, and the descent is steepest in the middle - which is the shape the schedule is
 /// chosen for. At or past `total` it returns `lowest` rather than continuing the cosine into its
 /// rising half, which would take the rate back up.
+///
+/// Worked, from 1 to 0.03 over 1,000 steps - a rate as a share of its base: step 250 gives 0.858
+/// (0.03 + 0.97 x (1 + cos 45 degrees) / 2), step 500 0.515, halfway, step 750 0.172, and step 1,000
+/// and after 0.03. A learner training from a replay through a learned model ends at such a floor
+/// rather than at zero (SuperMimic's rates decay so over 250,000 updates): it keeps refining.
 pub fn cosineLearningRate(
     comptime T: type,
     step: usize,
@@ -31820,4 +31823,32 @@ test "zn.Ctx.scope: a context opens an arena over its own allocator" {
     const sample: []f64 = try s_arena.allocator().alloc(f64, 512);
     ctx.rng.fillNormal(f64, sample);
     try expect(isFinite(sample[0]) and isFinite(sample[511]));
+}
+
+test "zimrnum: an f32 svd converges at f32's own precision and reconstructs its matrix" {
+    // An f32 matrix of 20 rows and 3 columns: the SVD must converge - its orthogonality test at f32's precision, not a
+    // fixed 1e-15 that no f32 rotation can reach - and U S V^T must give the matrix back to f32 rounding.
+    const gpa: Allocator = testing_allocator;
+    var generator: Random.DefaultPrng = .init(23);
+    const random: Random = generator.random();
+    var values: [20 * 3]f32 = undefined;
+    for (&values) |*value| {
+        value.* = random.floatNorm(f32);
+    }
+    const a: Tensor(f32) = try .fromSlice(&values, &.{ 20, 3 });
+    const u: Tensor(f32) = try .alloc(gpa, &.{ 20, 3 });
+    defer gpa.free(u.data);
+    var singular_values: [3]f32 = undefined;
+    const v: Tensor(f32) = try .alloc(gpa, &.{ 3, 3 });
+    defer gpa.free(v.data);
+    try svd(f32, u, &singular_values, v, a);
+    for (0..20) |row| {
+        for (0..3) |column| {
+            var rebuilt: f32 = 0;
+            for (0..3) |k| {
+                rebuilt += u.data[row * 3 + k] * singular_values[k] * v.data[column * 3 + k];
+            }
+            try expectApproxEqAbs(values[row * 3 + column], rebuilt, 1e-5);
+        }
+    }
 }

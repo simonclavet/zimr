@@ -71,6 +71,9 @@ pub const Options = struct {
     action_limit: f32 = 1.0,
     /// The task, WHOLE (`robot_track.Task`: servo, floor, reward, failure rule).
     task: track.Task = .{},
+    /// Physics steps a character lives on after losing the reference before its episode is cut
+    /// (`robot_track.Fleet.Options.aftermath_steps`): zero ends the episode at the loss.
+    aftermath_steps: u32 = 0,
     /// DReCon's watched and actuated bodies, in this robot's names.
     bodies: policy.Bodies = .{},
     /// The fleet's random stream: where each episode starts on the clip. Same seed, same episodes.
@@ -89,6 +92,9 @@ pub const Outcome = struct {
     /// Held steps on which the reference was LOST - counting EVERY held step, including any on the fresh episode that
     /// replaced an ended one: time-to-failure statistics count exposure the same way, so the two stay a fair ratio.
     failures: u32 = 0,
+    /// Of the CREDITED steps, those spent in an AFTERMATH (`robot_track.Fleet.Options.aftermath_steps`): after the
+    /// failure, so not time at risk - a learner leaves them out of the exposure a time to failure is counted over.
+    aftermath_steps: u32 = 0,
     /// Episodes that ended during the decision (almost always 0 or 1) and the sum of their lengths in physics steps.
     ended: u32 = 0,
     ended_length: u64 = 0,
@@ -140,6 +146,7 @@ pub const TrackEnv = struct {
                 .action_scale = options.action_scale,
                 .task = options.task,
                 .body_names = body_names,
+                .aftermath_steps = options.aftermath_steps,
             }),
             .subset = subset,
             .controller = try policy.Controller.init(arena, m, subset, envs, .{
@@ -243,6 +250,9 @@ pub const TrackEnv = struct {
                     outcome.reward += self.fleet.rewards[env] / float(held_steps);
                     outcome.reward_sum += self.fleet.rewards[env];
                     outcome.credited += 1;
+                    if (self.fleet.in_aftermath[env]) {
+                        outcome.aftermath_steps += 1;
+                    }
                 }
                 if (!self.fleet.dones[env]) {
                     continue;
@@ -252,7 +262,8 @@ pub const TrackEnv = struct {
                 if (!self.ended_yet[env]) {
                     outcome.end = switch (self.fleet.ends[env]) {
                         .lost => .stop,
-                        .cap => .cut,
+                        // The fall is in the data, its steps rewarded; what follows is the value of where it ended.
+                        .cap, .aftermath => .cut,
                         .clip_end => if (self.options.clip_end == .bootstrap) .cut else .stop,
                     };
                     if (outcome.end == .cut) {

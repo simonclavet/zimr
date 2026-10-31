@@ -4526,3 +4526,714 @@ testing details, war stories or development anecdotes (Simon's standing preferen
   goal, design, code, known answers, checks and turns (25-35 in all); the open decisions. The done-log stays beneath.
   Found while planning: the CPU agent's environment contract has fixed-length episodes only - B1 must let a step end
   its episode (a fall is terminal), or EfficientTDMPC's pessimism has nothing to apply to.
+- **Oct 25 - A1: SuperTrack's learner saves and resumes.** Its state file holds the shape, every option, every
+  counter (the update counts are Adam's step counts: restarted at 1 with the moments kept, the first steps would be
+  0.4 times their size) and the random stream, then both networks, Adam's moments and the normaliser; the replay is
+  refilled. A file of another shape or options is refused by the setting's path. On the CPU twin a learner trained
+  four rounds, saved, loaded into a fresh learner and saved again gives the same bytes, and the same action bit for
+  bit; a flipped exponent bit acts otherwise. Tutorials: robot-mocap 12.11, zimrrl 7.1.
+- **Oct 25 - A2a: a policy names its observation and carries its interval.** The policy file's version 3 adds an
+  observation header - DReCon's observation, or SuperTrack's features with the clip's frozen means and spreads - and
+  the decision interval; the show and the judge decide when the policy says. A version-2 file reads as DReCon's every
+  2 steps and acts bit for bit as before; PPO's bit-for-bit tests pass unchanged. Found by `check`: `QS_ALLINPUT` was
+  the pre-Windows-8 value (no touch or pointer input), now the headers' 0x1CFF.
+- **Oct 25 - A2b: a SuperTrack policy plays from its file.** The learner's packed policy is three consecutive
+  policy layers, so its file is a copy of the mirror and the clip's statistics. The features have one definition,
+  shared by the learner and the lab's decider. Played from its file the policy gives the kit's own output bit for bit;
+  on the learner's fleet over 600 steps it agrees with the mirror to 2e-8 (largest action 0.034); zero weights are
+  judged exactly as the servo. Every player now turns a non-finite action into zero.
+- **Oct 25 - review of A1-A2b.** Two bugs fixed: a state file's numbers were never checked (a NaN weight or a zero
+  spread loaded silently) - `stateProblem` now names the section; and a version-2 policy of a PPO run whose recipe
+  decided every 3 steps would have been shown every 2 - the lab now reads old files at the run's own interval
+  (`PolicyFile.decodeKnowingVersion2Interval`). Noted, not changed: the GPU resume's stale mirror (A3), and Windows
+  7 rejecting the touch bits of `QS_ALLINPUT`.
+- **Oct 25 - A3a: SuperTrack in the trainer.** A SuperTrack run trains headless in its folder, round by round,
+  saving its whole learner, its policy, its own log and the shared status; started again, it carries on (the replay
+  refilled by the first round's collection) or refuses a state of another shape by name. On lavapipe: 893 rounds over
+  three starts, 2.4 minutes, counters continuous. Found and guarded: a readback copy started before a resume's upload
+  would have put the fresh learner's weights back in the mirror (`Compute.discardReadback`). Also fixed: a displaced
+  doc comment in the trainer (`resumeFromFolder`'s, above `judgeNewestPolicy`).
+- **Oct 25 - A3b: SuperTrack runs judged, checkpointed, self-checked.** Judged by every learner's judge, so the
+  servo's line is PPO's; policies kept by the minute; each start's first policy file read back and played by the lab's
+  decider against the learner's mirror (to rounding) or the run fails. Found running a resume: after the readback was
+  discarded, the first round dispatched nothing, so `waitForReadback` returned at once with no readback and the save
+  would fail - it now waits for a readback that exists. On lavapipe the judge reads 0.82-1.03 s against the servo's.
+- **Oct 25 - A3c: curves by column name.** The lab's learning curve reads any learner's log by its header: the
+  three columns every log shares wherever they are, the window by what a line is (8 batches, 128 rounds). A header it
+  does not know gives no points and counts its lines as skipped. A3 is complete.
+- **Oct 25 - A4a: the lab knows the learners.** A run's line says which learner trained it and counts in its unit;
+  the new-run form chooses the learner first, then edits that learner's settings, the task and the controls. Headless,
+  a SuperTrack run from the trainer is listed with its judgement (0.82 +- 0.07 s against the servo's 1.49 s), its curve
+  and its policy shown. Seen in the capture: rates under 0.0005 read 0.000 in the form - for PPO too.
+- **Oct 25 - A4b: phase A complete.** Headless, the lab's form started a SuperTrack run whose trainer trained and
+  stopped on its stop file; a PPO run and two SuperTrack runs listed side by side, judged on the same starts - the
+  servo's line byte-identical in both learners' judge.csv. New runs are named by learner and motion. The UI's float
+  fields show 0.0003 as 0.0003 (they showed 0.000: every rate in every form).
+- **Oct 25 - Geno drawn as capsules.** The lab, geno_train, geno_ppo and getup_frames drew each capsule as its bare
+  cylinder part (an open tube, no hemispheres); Geno's spine is mostly caps (`Spine3`: radius 0.13, cylinder part
+  0.09), so it showed as wide flat disks. All four now draw `z.drawCapsule` between the segment's ends, as
+  geno_dance (the retarget demo) does. Seen while checking: geno_train's headless capture shows no character at all,
+  before the change as after - not yet looked into.
+- **Oct 25 - B1a: episodes that end.** The CPU agent's environments say how each step left the episode - going on,
+  ended in a final state, or cut - and the trainer stores and resets accordingly, the loop's length still a cut. Found:
+  BMPC's model-based value target cannot see a terminal state at all, so on the dance a fall would be valued as if the
+  dance went on; a decision for Simon (a termination head, as TD-MPC2's episodic mode, recommended).
+- **Oct 25 - phase B made precise.** Simon chose the aftermath. Studied TD-MPC2's April 2025 code: it either models
+  termination (a head, cut targets, a hard cut in planning) or refuses a terminated step outright - ours will refuse
+  too. Its discount, seeding, warm start and large-action iterations are ours already. Phase B rewritten as B1b (the
+  fleet's aftermath), B1c (the dance as the agent's environment), B2a (state file), B2b (policy file v4), B2c (the
+  trainer's path), B3 (the lab and its planner switch): 8-10 turns, plumbing and known answers - the dance is learnt
+  in phase C, on the GPU. `bpmpc-main` turned out to be a differentiable QP-MPC library, noted for later.
+- **Oct 25 - B1b: the aftermath.** A fleet can let a character that lost the reference live on for a number of
+  steps, simulated and rewarded through its fall, before its episode ends as `aftermath` - the failure counted once,
+  at the loss, and the aftermath's steps marked as not at risk. At zero nothing changes: every robot-family test
+  passes as before. Two fleets on one seed agree bit for bit up to the loss; then one restarts and the other lives on
+  its 30 steps and is cut. Found by the test: the flag must describe the step just taken - the restart had cleared it
+  on the aftermath's last step, which would have counted that step as at risk.
+- **Oct 25 - B1c, first half: the dance behind the agent's contract.** One character of Geno's dance is an
+  environment of the CPU EfficientTDMPC trainer: DReCon's observation and controller, Geno's task, an aftermath after
+  every loss. Two characters at random lost the reference 2 and 3 times in 6 seconds; each loss reached the replay as
+  a cut after 30 steps of aftermath (300 and 270 of 360 steps at risk). With no aftermath the trainer refuses the
+  first loss as a final state; two trainers on one seed store the same rows. A brainstorm on termination as the crux
+  of merging SuperTrack and EfficientTDMPC opened in the plan (R5.10).
+- **Oct 25 - review and bug hunt.** Three bugs, fixed: (1) the UI's number fields seeded an edit with the
+  three-decimal display, so focusing a field and clicking away committed the rounded text - 0.0125 became 0.013 -
+  now the edit starts from the exact value (a test, and a control with the old seeding that fails it); (2) a
+  character's steps at risk counted the steps a hold spends on the fresh start that `reset` then replaces - now only
+  the decision's own steps count, and an aftermath step only among them; (3) the lab's new-run form regenerated its
+  name over one typed by hand, and left a generated one stale after `defaults` or a new motion - now a generated name
+  follows the learner and the motion and a typed one stays (seen headless: supertrack-dance-1 becomes ppo-dance-2).
+  Reviewed and found right: the fleet's aftermath in every path (broken, capped or at the clip's end during one, in
+  the grace), the judge's count, the refusal, the resets. The brainstorm now heads the plan's end, three ideas more.
+- **Oct 25 - B1c done: the run's settings, a learning test, the CPU's cost.** EfficientTDMPC's run settings now
+  name its fleet and resolve the agent's configuration against the preset, refusing an aftermath shorter than the
+  acting planner's reach. On Geno a small agent trains: the world model's loss from 0.98 to 0.40 in 301 updates, every
+  loss finite. Measured: with the preset's planner, even at small widths, a decision costs about 3 s on this CPU -
+  a hundred times slower than real time - and the paper's widths ran out of memory. The dance is learnt on the GPU.
+- **Oct 26 - B2a: the agent's state file.** A turn was cut off before it compiled anything; its edits were on disk
+  and whole. Compiled and tested next: a trained trainer's export imported into one built from other seeds exports
+  the same bytes (but each environment's episode count, one more - the import begins fresh episodes) and plans the
+  same decision to the bit; a file of other settings is refused as `config.acting.horizon`; a non-finite parameter and
+  a negative Adam second moment refused by name; CONTROL: one weight changed in the file moves the decision; resumed,
+  the trainer plans at once and waits for a whole window before its first update.
+- **Oct 26 - B2b, first half: EfficientTDMPC's layers in the player.** The lab's policy player runs TD-MPC2's normed
+  layers - layer norm, gain and bias, then Mish or SimNorm - through zimrnum's own functions, so on the same
+  pre-activations it equals the agent's graph to the bit (a control with another epsilon or SimNorm group differs).
+  Learnt on the way: a test-filtered build skips analysing the tests it filters out, so two callers in other test
+  files that no longer compiled were found only by `check`.
+- **Oct 26 - policy file version 4.** Each layer's header now carries a normed layer's SimNorm group and epsilon,
+  so EfficientTDMPC's layers can be written and read; versions 2 and 3 still read through their shorter headers. A
+  hand-made normed policy reads back and acts the same to the bit; a zero epsilon, a group that does not divide its
+  layer, a group on a Mish layer, and a normed activation in a version-3 file are each refused by name.
+- **Oct 26 - no compatibility.** Simon: no data to preserve yet, so no reading of older formats. The policy file
+  reads only its own version - the version-2 and version-3 readers and the lab's run-interval plumbing removed, a
+  file of another version refused by name - and a run file in PPO's old layout is refused rather than converted.
+- **Oct 26 - B2b done: EfficientTDMPC's policy as a file.** The agent's encoder and its policy's mean - the head's
+  centres through tanh, its spreads dropped - written as a policy file; played back it gives the agent's own mean
+  actions to 2.2e-7 (single-precision rounding), the means spread up to 0.99 so the agreement means something; one
+  weight changed in the file moves the action. The order from here follows the CPU's measured cost: phase C (the GPU
+  agent) next, then the trainer path and the lab, built once for the GPU learner.
+- **Oct 26 - phase C begins: the kit surveyed.** `zn_mlp` has dense layers (tanh, relu, linear), Adam, Polyak,
+  SAC's squash and SuperTrack's fused kernels; its activation derivatives come from the output, which Mish cannot give
+  back, and nothing in it sees a whole row. C1 is now four steps: the normed layer forward (with its norm's arithmetic
+  shared with zimrnum, so the GPU agent's policy and its file can agree to the bit), its backward, the two-hot loss,
+  and all of it on lavapipe.
+- **Oct 26 - C1a, first half: one arithmetic for every layer norm.** The mean, the compensated variance and the
+  inverse spread of a row, and a SimNorm group's largest value and sum of exponentials, now live once in zimrmath -
+  the shader-safe tier the kit already imports - over a row accessor; zimrnum's layer norm and SimNorm call them, to
+  the same bits as before. Neumaier's compensated sum moved with them. Next: the kit's kernels on top.
+- **Oct 26 - review.** Read the agent's state file in full (written by the turn that was cut off, only tested
+  since): its layout, Adam's interleaved moments, the refill gate against how windows are drawn - all right. Fixed:
+  the row reductions now state and check their preconditions (a float element of one lane, a width and a group of at
+  least one); a character's start draw cannot divide by zero on a clip too short to start in; the policy file's
+  conversion checks the head's width is twice the action's. One definition more: zimrnum's `requireFloat` is now
+  zimrmath's `requireFloatScalar`, which the kernels' row reductions use.
+- **Oct 26 - C1a done: the normed layer forward on the kit.** Three kernels - the norm (a thread per row), Mish,
+  SimNorm (a thread per group) - built on zimrmath's row statistics: on the CPU twin they write the graph's own bits
+  from the same pre-activations, and the whole layer agrees to 2.4e-7. Found on the way: a readback holds only
+  `element_count` values (the first run panicked reading past them), and four pages each kept their own copy of the
+  kit's kernel list - adding a kernel broke them until they shared one.
+- **Oct 26 - C1b done: the normed layer backward on the kit.** The backward's row arithmetic now lives once in
+  zimrmath too, which fixed an old inconsistency: zimrnum's layer-norm backward recomputed its statistics its own way
+  and divided by the spread where the forward multiplies by its inverse, so its normalised values could differ from
+  the forward's in the last bit. Four kernels; every gradient within 9e-8 of the graph's. Found while checking: the
+  first central-difference check chose a weight whose gradient was 3e-5 - inside the tolerance, so it would have
+  passed for a wrong gradient; it now moves the weight with the largest gradient and compares relatively.
+- **Oct 26 - one softmax.** Preparing the two-hot loss for the kit showed three softmaxes in zimrnum that differed
+  in their last bits: one summed with compensation and found its largest with `>`, two summed plainly with `@max`.
+  All three now take zimrmath's one statistics (compensated), as SimNorm's groups do; the two-hot's placing of a value
+  among the bins moved to zimrmath with them, so a kernel and `CategoricalScalar` place it alike.
+- **Oct 26 - C1c done: the two-hot loss on the kit.** Loss, gradient and decode as three row kernels, the target's
+  two bins found where needed; on the CPU twin they equal zimrnum's to the bit for targets inside bins, on one and
+  clamped past both ends. A check in the first draft of the test asserted that a clamped TARGET decodes inside the
+  range - but decoding reads the logits, not the target, so it tested nothing; removed.
+- **Oct 26 - C1 complete: the new kernels on a real device.** A turn was cut off after writing the lavapipe check;
+  its edits were on disk and whole. Run in the next (once the Vulkan validation layer was installed in this sandbox):
+  every new kernel on lavapipe agrees with the CPU twin to 2.2e-7, the validation layer silent; a twin given one
+  different gain is refused (1.3e-2). The kit now has everything EfficientTDMPC's networks and losses are made of.
+- **Oct 26 - brainstorm folded into the plan; review.** Ideas scheduled where they cost least: the device-against-
+  twin check over whole updates in C2 (T20), a `planning_characters` dial in C3 (T11), the agent's uncertainty
+  signals first read at C4 and plotted along a watched episode in D2 (T4, T6, T10, T13, T17, T19), and three
+  second-night candidates in E1 (T1, T2, T3). Review found: the device check's `@max` would have passed a NaN as a gap
+  of zero - a non-finite value now fails it; a NaN two-hot target could have become a bin index outside its row on
+  a device (where min and max of a NaN are undefined) - it is placed at 0 and its row's results are NaN, a known
+  answer with a control; SimNorm's group defaulted to 0, which both kernels divide by - it defaults to 8.
+- **Oct 26 - C2a, first half: a whole network on the kit.** A zimrnum `Mlp` laid out on the GPU kit - its
+  parameters once, each batch through it an application with its own activations, so a dynamics head applied at
+  every step of a window keeps every step for the backward. An encoder-shaped and a head-shaped network match
+  zimrnum's graph on the CPU twin: output and every gradient within 1e-5, the input's within 1e-10. Passed on its
+  first run.
+- **Oct 26 - C2a done: the world model's rollout on the kit.** The window encoded once, every dynamics head rolled
+  through wide rows of latent and action, the consistency back-propagated through time into each head and the
+  encoder. Against zimrrl's `LatentRollout` on the same window: the loss to every digit, every gradient to 2.4e-8;
+  without the gradient that flows back from later steps, the check fails. One compile error on the way: the kit's
+  pipe takes its kernel's name at compile time, so choosing between two joins is two calls, not one expression.
+- **Oct 26 - the kit's EfficientTDMPC code made to read like a course.** `robot_bmpc_kit.zig` rewritten: every
+  offset named as one, a counter that RESERVES rather than takes, an enum (`ParameterGradients`) in place of a bool,
+  an intermediate local for each expression, and diagrams of the kit's buffers, a layer's forward and backward side
+  by side, and the rollout through time; the newest kernels' one-letter names spelled out. Behaviour unchanged: the
+  kit's tests, `check`, and lavapipe (2.2e-7) as before.
+- **Oct 26 - C2b done: the world model's whole loss on the kit.** The reward and value heads read the rollout's
+  wide rows - the reward head the whole [z | a], the value heads the latent columns through the same stride - and
+  their gradients join the backward through time as readers of the latents they read. Against zimrrl's
+  `WorldModelLoss`: the total to every digit, all 9503 gradients of five networks to 4.8e-7; with the readers'
+  gradients dropped, the check fails. Passed on its first run.
+- **Oct 26 - C2c, first half: the world model's update on the kit.** One clip of the global gradient norm in two
+  passes, Adam with the encoder at 0.3 x the rate, the target value heads' follow. Found on the way: the kit's Polyak
+  kernel used the two-term form that zimrnum had measured as the less accurate and replaced; both now call one
+  `polyakFollow`. Two updates agree with the CPU agent's to 1.8e-7, the clip engaged; BMPC's limit of 20 would have
+  left this small test's norm unclipped, so the test sets 0.5.
+- **Oct 26 - one network on the kit, not two.** Asked to look for duplication: `kit_mlp.zig` already had an MLP on
+  the kit, laid out by hand, beside the world model's new `KitNetwork`. The general one moved into `kit_mlp.zig`,
+  gained dense layers with a fused tanh or relu, and `KitMlp` became a thin trainer on it - its four tests, the
+  world-model tests and `robot_world`'s all unchanged. Two older hand layouts remain, PPO's and SAC's on the GPU,
+  recorded as next.
+- **Oct 26 - review, a second look for duplication, and the plan reviewed.** Found and fixed: the world model's
+  layout was never checked against the kit's buffer sizes (now `KitLayout.requireFitsKit`, every buffer at its true
+  capacity); Adam's bias correction formed five ways across the kit's learners (now one function, as zimrnum's Adam
+  forms it); zimrnum's own GPU row kernels with plain sums of their own (now zimrmath's row statistics, like the
+  host). The plan gained C2d: value targets, finished windows and value dropout on the kit, the three things the
+  CPU learner's update does that the known answers so far had set aside.
+- **Oct 26 - the policy's distillation on the kit.** BMPC teaches its policy to say in one pass what the planner
+  worked out: a KL toward the planner's Gaussian at every stored step, over a running scale, less a faint entropy
+  bonus. On the kit the gradient has a closed form, written by one thread per row at the network's raw outputs;
+  against zimrrl's loss it agrees to 3.1599422 and within 8.3e-7 on every gradient.
+- **Oct 26 - the running scale on the kit.** BMPC divides its policy's divergence by a running scale - a moving
+  average of the 5th-to-95th percentile spread of the first step's divergences, never counted below 1 - moved with
+  each batch before the gradient reads it. On the kit: the divergences first, then one thread that sorts them and
+  moves the scale, kept on the device. The percentile's interpolation and the scale's step now live once in zimrmath,
+  for zimrnum and the kit; the kit's scale equals zimrnum's to the bit over three batches.
+- **Oct 26 - C2c done: the policy's whole update on the kit.** The policy reads every dynamics head's rolled
+  latents where the rollout left them, moves its running scale and steps, nothing coming back to the host; two updates
+  agree with the CPU agent's to a ulp. Found on the way, in the test rather than the kit: the fixture built the kit's
+  learner with BMPC's clip limit while the CPU side used the test's lower one - a parameter off by 9% of a step
+  looked at first like Adam's sensitivity near its epsilon, until printing the clip factor showed 20 / norm.
+- **Oct 26 - the two tutorials sorted.** The EfficientTDMPC passages had piled up inside robot-mocap's 12.2 (the
+  kernels) and re-explained what zimrrl's chapter 9 already teaches. Now: 12.2 keeps the kernels, the network-on-the-kit
+  passage sits with `KitMlp` in 12.4, and a new 12.12 tells only how the kit lays the update out, linking to zimrrl's
+  9.4, 9.5, 9.12-9.14 and 9.19 for what it is; zimrrl gained the concepts the kit passages had and it lacked - the
+  backward through the rollout (9.5), a worked running scale (9.12), the distillation's gradient by hand (9.14) - and a
+  link back. Code: clearer names in the policy learner (`update_count`, `step_index`, `entropiesAt`).
+- **Oct 26 - the value targets on the kit.** What a stored step is worth, by one step of the model through every
+  dynamics head: the policy's draw at the true latent - which the rollout had already encoded - the reward it earns,
+  and the target value heads where each head leads. Against zimrrl's `LatentValueTargets` every stored step's target
+  agrees within 4.2e-7. The tolerance had to be absolute: untrained heads decode near zero, as a sum of terms the
+  size of the bins.
+- **Oct 26 - by value or by pointer.** Asked whether the kit's host code copies when it passes its learners around:
+  it does, by design - they are descriptors of 16 to 248 bytes (offsets, widths, slices into an arena), made once and
+  never changed, every copy describing the same regions; what changes is on the device or behind the pointers already
+  used (`*Pipe`, `*KitLayout`). Written into `kit_mlp`'s head, with a test keeping every descriptor under 512 bytes.
+  The sandbox's disk filled to 98% on the way (the build refuses below 1 GB free): a scratch snapshot unzipped in /tmp
+  and the build outputs went; the 8 GB build cache stays.
+- **Oct 26 - finished windows on the kit; the build cache cleared.** A window that runs past its episode's end
+  rolls on but counts for nothing: on the kit a counting column and per-step mean factors in the activation buffer,
+  read by the consistency's gradient, the two-hot kernels and the distillation. Against `setFinished` the masked total
+  and every gradient agree; with the flags left off the kit, the unmasked total is refused. The 8 GB build cache was
+  cleared first (9 GB free after); the cold rebuild took about four minutes.
+- **Oct 26 - value-head dropout on the kit.** The world model's value heads drop out while they train, with masks
+  the host draws from the same generator as the CPU agent - zimrnum's own mask function, now public. The first run's
+  gradients were 2% off: `Mlp.apply` splits its generator once more per layer, which the kit's masks had not; with
+  that split every gradient agrees. A mask of all ones is the update without dropout, so every other test is
+  unchanged.
+- **Oct 26 - flow matching policies studied; phase G proposed.** FPO (on-policy: PPO with each action's flow
+  matching loss standing in for its log-likelihood) and FlowDPG (off-policy: a critic's action gradient distilled into
+  the velocity field without back-propagating through the sampler), and FPO's code (the PHC humanoid's flow policy
+  and loop). FPO's humanoid tracking wins most where the reference under-determines the action - the regime a big
+  push creates. Plan: a recovery probe in the lab first (D3), then flow policies as building blocks (G1, G2), FPO on
+  the dance as the decisive experiment (G3), and only on a gain the flow actor for EfficientTDMPC and SuperTrack.
+  The deployment risk named: fresh noise each decision lets a recovery flip between ways back, so the noise must
+  persist.
+- **Oct 26 - C2 complete: one whole world-model update on the kit equals the CPU agent's.** The CPU learner samples
+  a real replay batch - half its rows past an episode's end - computes its value targets, drops out, clips and steps;
+  the kit does the same from the same batch and generators, and all 14751 parameters agree within 3.7e-9. Found on
+  the way: the learner redraws its dropout masks per graph node, not per layer as a fresh loss does - the value heads'
+  gradients came out 16% off until the kit's masks named whose generator they use.
+- **Oct 26 - C3a: the planner's scores on the kit.** Every candidate plan of every state rolled under every
+  dynamics head and scored by the model's rewards and values, the heads' disagreement priced in; against zimrrl's
+  scorer, every score agrees within 2e-6 for both objectives. Since a score needs no gradient, each network has one
+  application reused at every step: the plan's memory does not grow with its length.
+- **Oct 26 - why SuperTrack follows gradients and EfficientTDMPC only scores; phase H proposed.** SuperTrack's loss
+  is exact and its model physical, so its gradient means something - at training time, amortised into the policy, and
+  blind past its 32-frame window. EfficientTDMPC's score is built of heads trained on values, whose slopes are
+  untrained, so it searches by sampling at decision time - by choice: the gradients exist and the kit computes them.
+  The merge proposed: SuperTrack with EfficientTDMPC's value at its window's end (H1), a planner scored by SuperTrack's
+  model and exact reward (H2), and gradient refinement of the planner's elites (H3).
+- **Oct 26 - C3b: the policy's own plans in the search, on the kit.** A few of every state's candidates are what
+  the policy would do, drawn and rolled through the model and placed first in the state's block; against zimrrl's
+  `LatentPolicyPlans` every action agrees within 1e-6.
+- **Oct 26 - C3c: one MPPI round on the kit, and a bug in the CPU planner.** The search's sample, elites and refit
+  run as three kernels; the elites are picked without sorting, each the largest (score, candidate) pair below the
+  last, which reproduces the CPU's stable sort exactly, ties included. Testing an infinite score turned up a real bug
+  shared by both sides: the CPU's rankable score sent +inf to infinity, not to the largest finite number as
+  documented, so one overflowed score made every weight NaN. Fixed at the one definition, now in zimrmath.
+- **Oct 26 - review of the planner's code, and the tutorials.** One named column placement and one two-hot decode
+  now serve every kit learner (five hand-built placements and two copies of the decode before); the scorer reads as
+  its diagram - encode, roll each head, read the values, combine; `broadcast_rows` reads a copy count of its own,
+  where it had borrowed the candidates' count even when copying policy plans. The robot-mocap kit chapter now gives
+  the planner its own section with a map of a search, and the update's section a map of one update; zimrrl's MPPI
+  section says why the planner uses scores alone, works a refit through, and states its two ranking rules.
+- **Oct 26 - C3 complete: a whole planning decision on the kit equals the CPU actor's.** The policy's plans, the
+  warm start, the rounds of sample, score and refit, the drawn elite and its jitter, with nothing going back to the
+  host between them; over a cold decision and a warm one, every target, spread and action agrees within 1e-6 and every
+  chosen elite exactly. The kit now has EfficientTDMPC's whole update (C2) and its whole decision (C3).
+- **Oct 26 - C4a: the kit's learner, one update from the replay as the CPU agent's.** The batch sampled by the same
+  call, laid out and uploaded region by region - the device keeps state the host does not mirror - then the world
+  model's update and the policy's; over three updates every parameter agrees with the CPU learner's within 3.6e-7.
+  Found on the way: a fold of the tutorial had become ambiguous when a second `update` appeared in the file, and the
+  fold tool's error had been hidden by how its output was filtered. Also: the recovery probe renamed D4 (D3 was the
+  lab's compare view already).
+- **Oct 26 - C4b: reanalyze on the kit.** Every real update (in the test; every tenth in the gate) the batch's first
+  windows are planned again by a second kit planner, and the new targets go into the batch and back into the replay;
+  against the CPU learner every parameter and every stored row agree. The decision's noise drawing now lives in
+  `KitPlanner` itself, shared by acting and reanalyzing - the decision test was rewritten on it and still agrees.
+- **Oct 26 - C4 complete: the kit trains EfficientTDMPC end to end, at the CPU agent's level.** `KitTrainer` runs
+  the CPU trainer's frames with every network on the kit; the cartpole gate, built ReleaseFast, takes about three
+  minutes on the kit's CPU twin. On the way it seemed to fail - 0.425 against a bar of 0.9 - until the CPU agent was
+  measured beside it: 0.518, 0.295, 0.408 over three seeds, the same in ReleaseSafe; and the journal of Oct 4 had
+  recorded 0.333, learning rather than mastery, with the 0.9 bar never passed. C4 asked for the CPU's level, and the
+  kit's 0.425 is inside the CPU's range. Two fixes made the gate fit the kit: forward-only applications (no gradients
+  where nothing learns) and reanalyze in chunks. The signals' first record: the first layer's inverse spread falls
+  tenfold as the pole falls - the sharpest of them.
+- **Oct 26 - the next ten turns decided.** Recovery needs data, then credit past the window, then discovery, in
+  that order: pushes and the recovery probe (N1), SuperTrack without resets (N2), the failure barrier (N3), a critic of
+  future cost (N4) and its value tail through SuperTrack's model (N5), pessimism and the first night (N6), a tracking
+  planner on SuperTrack's own model (N7), the sparse teacher (N8), the second night (N9), review (N10). R5.3's
+  recommended design, with phase H folded in and the kit's EfficientTDMPC pieces reused inside SuperTrack's learner.
+  Deferred: C5, the lab's views, the flow actor. Testing: one or two checks a turn, where an error would be silent.
+- **Oct 26 - N1: pushes, and the recovery probe.** One push for the fleet - the whole body's velocity changed in a
+  random horizontal direction - on a schedule or at random moments; a probe beside the judge that pushes every start
+  once per band of speed and watches three seconds: survived, and tracking back, with the time. The night trainer now
+  writes `recovery.csv` at every judgement, the servo's first. On the servo alone the probe says nothing - it loses the
+  walk within a second - so its first real numbers will be a trained SuperTrack policy's.
+- **Oct 26 - N2: SuperTrack can live on after a loss.** A share of the fleet keeps an aftermath; the replay flags
+  every row after a loss; the world model draws its windows from anywhere, falls included, and the policy only from
+  windows that start before a loss. With no aftermath the draws are the very same as before.
+- **Oct 26 - N3: a barrier before the failure rule's cliff.** SuperTrack's policy loss can carry a smooth hinge on
+  the head's height error and the tilt, read from the rolled features, so its gradient feels a fall coming. The rule's
+  third measure, the root's drift from the reference, is not in the features and is left out. Its gradient agrees
+  with central differences; at weight 0 the loss is unchanged. A fit test broken by last turn's larger gradient
+  buffer was found and fixed on the way - a reminder to run every suite a change can reach.
+- **Oct 26 - N4a: the critic's targets.** SuperTrack's critic is EfficientTDMPC's two-hot value heads on the
+  policy's own input; its TD targets come from the real steps of every gathered window - each transition's cost (the
+  distance from the goal plus the barrier) and the target heads where it led - and agree with a hand computation. Moving
+  `kit_mlp`'s tests to a file of their own fixed a module collision the headless trainer would have hit.
+- **Oct 27 - a review of the recovery work's code, names and comments.** Pushes, living on after a loss, the window
+  sampler, the recovery probe, the barrier and cost kernels, the critic and the barrier's columns: descriptive names,
+  and comments that carry the reasoning - the Poisson process of random pushes, why a push changes only the root's
+  velocity, rejection sampling's uniformity, the probe's protocol, the chain rule through the normaliser and the
+  cosine's derivative, the features' layout behind the barrier's columns, and why the critic uses temporal
+  differences, target heads, an ensemble and two-hot bins. `distance` is no longer a reserved word. One run of every
+  slow robot_track test failed once without a message and passed on the rerun; the failing test was not identified.
+- **Oct 27 - a review of the EfficientTDMPC kit's newer code.** The planner's decision inputs in four named steps,
+  each saying why every value is drawn at its CPU index and written at its kit position; a dead writer removed; the
+  signals' two measures moved to zimrmath (`binsSpreadUnderSoftmax`, `meanGroupEntropy`) with known-answer checks; one
+  `readCurrentActs` for every result the host needs at once (acting, reanalyze) in place of two copies of the same
+  check; the learner's batch layout, the reanalyze chunk and the trainer's frame renamed and explained. The decision
+  test still equals the CPU actor, and the cartpole gate lands on the same 0.425: nothing behaves differently.
+- **Oct 27 - N4b: SuperTrack's critic learns.** Each world-model round also updates the critic on the windows it
+  gathered: EfficientTDMPC's value-head update - the two-hot loss against the TD targets, a clipped Adam step, the
+  target heads following slowly. One update moves every head toward its target; in the learner's loop it trains
+  round for round. Its weights are not yet in the state file.
+- **Oct 27 - N5: the value tail.** SuperTrack's policy loss can now see past its window: the critic's estimate of
+  the cost after the window's last state, its gradient carried back through the critic's heads and then, like the
+  tracking terms, through the world model to the policy. It ramps up from nothing; a critic as it starts adds exactly
+  nothing; its gradient agrees with central differences. The critic is now kept in the learner's state file.
+- **Oct 27 - the next twenty turns: one complete system for the first night.** One model (SuperTrack's), one
+  critic (built), one cost (tracking + barrier), one actor - a flow policy with persistent noise - and three teachers
+  writing corrections into its target: SuperTrack's pathwise gradient through FlowDPG, EfficientTDMPC's planner on
+  flagged states (MPPI over SuperTrack's model, the flow's samples as its candidates, distilled by flow matching),
+  and FPO on real returns. EfficientTDMPC's planner machinery is taken; its latent world model is kept as the
+  fallback scorer. Turns: pessimism, the flow (CPU reference, kit, rollout, teacher, acting, trainer), the planner
+  (scorer, search, flags, teacher), FPO, the three in one update, the complete run and its protocol, two reviews,
+  the tutorials, the night's reading.
+- **Oct 27 - S1: a pessimistic value tail.** The tail can read the critic's heads' mean plus beta of their spread,
+  pushing the policy away from what the critic is unsure of; its gradient agrees with central differences, and at
+  beta 0 it is the plain mean's, unchanged. The row mask learned real weights on the way. The critic's numbers in the
+  log wait for S2, where every device number of the complete run gets one readback path.
+- **Oct 27 - F1: the flow policy, as a CPU reference.** A velocity network on [condition | point | time], the
+  straight path from noise to action, K Euler steps to act, the flow matching loss to learn a set of actions, and
+  FlowDPG's target to learn from a cost's gradient - whose consistency term turned out to be the flow matching term
+  weighted by (1 - t)^2 on the straight path. Checked by hand.
+- **Oct 27 - F2: the flow on the kit.** The velocity a `KitNetwork`, a sampler of K blocks and applications, a
+  trainer of one, four small kernels around them. Its actions equal the CPU reference's exactly; its two gradients
+  equal autodiff's; on lavapipe it equals its CPU twin.
+- **Oct 27 - a review of the critic's update, the value tail, pessimism and the flow, as a course.** Worked examples
+  with numbers where the comments gave only formulas: the pessimistic weights for two disagreeing heads, the decoded
+  value's slope over two bins, the critic's clip, Adam's bias correction and the Polyak follow, the tail's ramp, the
+  flow's Euler steps and FlowDPG's target by hand - in the code and in both tutorials. Two call sites made readable:
+  the flow's zero start a named option instead of a bare `true`, and the sampler's destination a named struct
+  instead of three numbers.
+- **Oct 27 - F3: the flow acts in SuperTrack's rollout.** At every step it takes the Gaussian policy's turn: the
+  step's [goal | state] as its condition, the exploration's own noise as its starting point, its last Euler step
+  writing into the row the world model reads. A flow of zero velocity rolls exactly the zero policy's rollout, to the
+  bit; a moving one equals the CPU reference's sampler.
+- **Oct 27 - F4: the flow learns from SuperTrack's gradient.** Each rolled action's gradient becomes FlowDPG's
+  cost gradient for that step's training row. The check found a real flaw: FlowDPG scales its step by the flow's own
+  motion, so a flow that starts at rest - as ours does, to begin exactly as SuperTrack's policy - could never start
+  learning. Its step now has a floor, the noise's typical length. A zero-velocity flow keeps exactly the zero
+  Gaussian policy's gradient, and one step moves its weights.
+- **Oct 27 - F5: the flow can act on the host.** Any kit network runs on the CPU as its kernels do, and the flow's
+  sampler on top of it gives the kit's actions to the bit; persistent noise - an Ornstein-Uhlenbeck process of unit
+  spread - lets a character keep the way back it began. The learner's acting with them joins the actor setting in F6.
+- **Oct 27 - F6a: SuperTrack's learner with a flow actor.** An actor setting; the flow built beside the critic,
+  starting exactly as the zero Gaussian policy; acting from its mirror with each character's drifting noise; judged
+  at zero noise; kept whole in the state file, its noise included. A flow run resumes bit for bit. The check found the
+  readback window stopping short of the flow's weights.
+- **Oct 27 - a review of the flow's code for bugs.** One real bug: the night trainer judged, probed and saved a
+  flow run through the Gaussian policy's file - the untrained policy the flow replaced - so its judge.csv and
+  recovery.csv would have been meaningless; it now judges through the learner's own actor, and writes no Gaussian
+  policy file for such a run (a flow at rest, judged so, is the servo exactly). Made robust: the noise's length named
+  in the state file's shape, its numbers checked; a negative correlation time, zero Euler steps and a hidden layer
+  of no width refused by name. Made plainer: one helper chooses each character's action for either actor; the
+  noise's correlation computed once a call; one clipped Adam step (`kit_mlp.ClippedAdam`) where the critic and the
+  flow each wrote their own.
+- **Oct 27 - P1: the tracking planner's scorer.** A plan is scored by SuperTrack's own objective - rolled through
+  its world model, each step charged as the policy's loss charges it, the critic's pessimistic tail after the last -
+  in a second world-model kit placed after the others, reading the same weights. Its scores equal the CPU model's
+  to the bit at the real sizes.
+- **Oct 27 - P2a: the tracking planner searches.** EfficientTDMPC's MPPI, unchanged, now takes the shape of what it
+  searches rather than a scorer, so it serves SuperTrack's scorer too. The known-answer check found a layout bug - the
+  scorer read candidates candidate by candidate while MPPI writes them step by step - and, fixed, the search finds a
+  hidden zero-cost plan to a thousandth of doing nothing's cost.
+- **Oct 27 - a deep review: the bug classes made impossible.** Each bug so far named a class. A layout described
+  in two places' prose: the candidates' action layout is now code (`SearchShape.stepActionsAt` / `candidateActionAt`),
+  the only way the host reaches it. A copy from the wrong buffer: a run of columns now carries its buffer
+  (`kit_mlp.RowColumns`), and `copyColumns` picks the kernel from it. A hand-kept sum of parameter blocks: the
+  learner's parameters end where its layout ends (`params_end`), which the readback and the state file both use, the
+  header's named parts asserted to cover it. And a barrier without a normaliser now fails by name instead of reading
+  the buffer's start (`norm_at` optional). The uniform's copy fields lost their misleading `flow_` prefix.
+- **Oct 27 - P2b: the flow's own plans seed the search.** Several of the flow's ways back, each rolled closed-loop
+  through the world model, are the first candidates of every state. The check found a kit without a Gaussian policy
+  writing a flow's actions past its own end - every kit now counts every actor's packed actions. A flow's plan known
+  to be best is kept: placed exactly, scored best, the first elite.
+- **Oct 27 - P3a: which characters plan.** A hazard from the failure barrier's own formula - now one definition
+  shared by the kernels and the host - and flags with hysteresis, a budget and a re-planning schedule, following a
+  worked table step for step. MPPI's temperature can now be relative to its elites' spread, so SuperTrack's
+  hundredths sharpen the search as TD-MPC2's tens do.
+- **Oct 27 - P3b-i: hazards and flags in the learner; the compute knob designed.** The hazard became a fraction of
+  the barrier's margins (its hinged value stays near zero until a fall is under way). The learner computes it for every
+  character as it acts and runs the flags between steps; a character pushed at 4 m/s is flagged after 0.9 s - late, so
+  the hazard's slope comes next. Simon asked for one knob over tracking versus recovery compute: designed as a share
+  in multiply-adds, kept by a controller over the planner's budget and the perturbation exposure (K1).
+- **Oct 27 - P3b-ii-a: one decision clock, a warm start by the plan's age, and the planner's gather.** A per-character
+  schedule could not warm-start correctly - a plan must move forward by the steps since it was made - so all planning
+  characters now decide together; MPPI's warm start shifts by any number of steps. A planner's rows are gathered on
+  the device from each character's start and the reference table, as training windows are.
+- **Oct 27 - a review of the planner's flags and kernels.** The flags' clock gave the plans' age only through a
+  number read at the wrong moment - one step short; `step` now returns it with each decision, and the clock rests when
+  nobody plans. One normalisation for both gathers; margins of zero refused; the planner's kernels compared on the
+  device.
+- **Oct 27 - P3b-ii-b1: the learner decides, and its plans come back in a mailbox.** On every decision the planning
+  characters' states and table rows go to their slots, the search runs warm from their last plans, and each slot's
+  chosen candidate's whole plan lands in a mailbox after the parameters - read back every frame, never saved. The
+  suite caught a readback that shrank to nothing without extras, and the layout refused a default planner too large
+  for the kit's buffers.
+- **Oct 27 - P3b-ii-b2: characters act from their plans.** The host refreshes its copy of the mailbox every step;
+  a planning character acts from its own plan at index = steps since its decision, so a plan arriving late is joined
+  where it has got to. A rising hazard is projected ahead, flagging falls sooner. The tutorial's planning material
+  became one section with a decision's timeline and a worked late plan.
+- **Oct 27 - a review of planning's timing.** Three bugs about time that only a GPU would show: a judged step could
+  act from a plan; the projection invented rises from a zero start or another episode's hazard; and two decisions in
+  one frame would overwrite each other's inputs. Plans are acted on only while exploring, a hazard's history lives
+  within its episode, and decisions are one per frame, a due one waiting with its age counted.
+- **Oct 27 - P4a: teacher 2's rule.** A flow learns plans by flow matching: one plan is reproduced from any noise,
+  two opposite plans for one situation are both kept rather than averaged - once the flow takes enough Euler steps to
+  follow its bending paths (eight: 94% near a plan; four left a tenth between). The flow actor now takes eight. Each
+  of the flow's gradients takes a weight and adds or writes, so teachers combine.
+- **Oct 27 - P4b: teacher 2 in the learner; five Euler steps.** Every step a character takes from its plan becomes an
+  example; each round a small batch of them is uploaded, and every policy update adds the flow matching loss on it to
+  FlowDPG's gradient. At weight 0 it changes nothing, to the bit. Simon set the flow's steps to five: every ingredient
+  present at a small budget for the first night, numbers adjusted night by night.
+- **Oct 28 - the next twenty turns, replanned.** The flow becomes a recovery residual on top of SuperTrack's MLP, in
+  eight synergies of the body's motion: the precise tracker stays, the flow's multimodal job shrinks to the few
+  dimensions it needs, the planner searches corrections closed-loop around the policy's own reactions, and every
+  teacher speaks the same small language. Then FPO, the three teachers together, the stats mailbox, the knob, the
+  complete run, its smoke test, the policy file, reviews, tutorials, the night's protocol and its reading, the gate.
+- **Oct 28 - A1: synergies.** A few directions in action space that carry most of what a body does, found by an
+  SVD of the actions and fitted about zero, since a correction of zero must stay none. Checked by hand on four actions
+  and on actions planted from three directions. Next, FPO's reference in zimrrl, then the flow's reshape.
+- **Oct 28 - Q0: FPO's reference.** A flow's flow matching loss on an action, averaged over a few draws, stands in for
+  its negative log-likelihood, and FPO is then PPO's own clipped surrogate on exp(L_old - L_new) - no second
+  surrogate. Exactly 1 at the old weights; one step favours what did well and disfavours what did badly.
+- **Oct 28 - A2: the flow corrects the policy, in the rollout.** SuperTrack's policy acts as always and the flow
+  adds its decoded synergies; the backward gives the policy its own gradients and the flow its projected share. A
+  flow at rest adds nothing, to the bit. On the way, zimrnum's SVD had a fixed tolerance no f32 could reach - fixed.
+- **Oct 28 - A2: the flow corrects the policy.** SuperTrack's MLP acts as always and the flow adds its choice in a few
+  synergies; the backward gives the MLP its usual gradient and the flow its projection. At rest with no noise the
+  rollout is SuperTrack's own, to the bit. Found on the way: zimrnum's SVD could never converge in f32 (a fixed 1e-15
+  tolerance) - now the type's own precision.
+- **Oct 28 - A3a: the host corrects the policy as the kit does.** The host's raw action is the policy's, plus the
+  flow's decoded correction, plus SuperTrack's exploration - one flat path for both actors. A planning character's
+  noise drifts more slowly. The host matches the kit to 1.5e-8 on trained weights.
+- **Oct 28 - compression set aside; A4a.** Simon's doubt was right: a PCA of the dance's pose changes is the wrong
+  basis for recovery corrections. The flow stays a full-width correction on the policy for the first night, its noise
+  half of sigma. The kit can now take corrections given in advance - the planner's candidates, closed loop around
+  the policy - and a flow's own choices, given back, reproduce its rollout to the bit.
+- **Oct 29 - A4b: the planner searches corrections around the policy, closed loop.** A candidate of zeros is the
+  policy itself; a late plan adds its correction to the policy's reaction to the state actually reached. An earlier
+  attempt at the turn had written it; reviewed against the snapshot, it held - but for one gap: the host's staging
+  gave the policy no goal in its own columns. Fixed.
+- **Oct 29 - Q1a: teacher 3's examples.** Every step the flow chooses for a character in danger becomes an example
+  once the next step shows where it led. Danger is the hazard, not the fleet's aftermath - which turned out to mean the
+  steps after a fall, time no longer at risk.
+- **Oct 29 - review: one word, many places.** When plans became corrections, several names, comments and tutorial
+  passages still said actions - exactly where the meaning had changed. All now say correction. Teacher 3's
+  conditions moved into one function, so learners without it compute nothing for it.
+- **Oct 29 - the tutorial's system at a glance.** Chapter 11 opens with the whole system: two figures - how one
+  action is chosen (the policy, plus the flow's or a plan's correction, plus exploration) and the learning loop -
+  a comparison with DReCon, SuperTrack, TD-MPC2 and diffusion/flow policies, and the six choices that set it apart.
+  Both figures rendered and checked by eye; the second needed a clean crossing and a label moved off its arrow.
+- **Oct 29 - the tutorial reorganised, its numbers generated.** `tools/doc_folds.zig` now numbers a page's sections
+  from their order and keeps every number-only section link in step - it found and fixed three stale links in
+  robot-mocap and three in the backends tutorial. Chapter 11 reads as a course now: the system, the idea (three stubs
+  merged), the cartpole, the humanoid, the extensions, how to tell it learns, the example; 'Toward the humanoid'
+  (out of date) removed.
+- **Oct 29 - the tutorial, second pass.** The documentation tool also writes the page's contents (opt-in markers)
+  and finds links that wrap after `<a`. Chapter 12 is the machine now - what the kit is, what runs where on a phone,
+  the kernels, submitting work, an ordinary network - and a new chapter 13, Learners on the GPU, takes the learners
+  in build order. The flow's concept moved into chapter 11, beside planning; the kit keeps its mechanics. Two
+  plain-text section numbers became links, and the wrapped-link fix caught one more stale reference.
+- **Oct 29 - the tutorial, third pass: figures.** The planning loop (host and device lanes), who plans step by step
+  (lanes of hazards and slots), a plan rolled closed loop (the policy plus each step's correction through the model,
+  costs and the critic's tail), and one rollout step with the flow - each rendered and checked by eye, each needing a
+  label or a curve moved before it read clearly.
+- **Oct 29 - the tutorial, fourth pass.** The life of a decision is a sequence figure now, host and device. Chapter
+  10 reordered - the task, what a policy sees, the shared tricks, PPO with its trainer (the algorithm linked to
+  zimrrl, the two tracking-specific choices kept), the simpler gym, SAC (the tracker has no SAC path, so no title
+  claims one), a tracker trained in a page (was 'Training on the device in your hand'), the examples.
+- **Oct 29 - the tutorial, consistency pass.** Chapter 1's map now matches the book: the pipeline names the critic,
+  planner and flow and points at the learners on the GPU; 'What exists' says what runs, not 'the humanoid is next';
+  'How to read' links its chapter numbers so they stay right. Conventions gain a Learning group; recipes gain a
+  flow-and-planner recipe and a resume recipe - first written wrongly (the replay is not saved), corrected against
+  exportState's own comment. The generated reference covers the learner modules.
+- **Oct 29 - Q1b-i: FPO's old losses on the kit.** `KitFlow.drawLosses` gives each example its flow matching loss
+  averaged over its draws, as zimrrl's graph does - equal to about one part in ten million.
+- **Oct 29 - the critic's goal.** Before computing FPO's advantage, a check of what the critic reads: a state beside
+  the goal of its own frame, not the policy's next goal - its comment said otherwise. Teacher 3's examples now carry
+  that own goal, so C(this) will read the frame the critic was trained on.
+- **Oct 29 - Q1b-ii: teacher 3's advantage.** Each real step scored against the critic's expectation,
+  A = -c - gamma C(next) + C(this), on the device - the critic asked at the frames it was trained on, the cost the
+  one its targets charge. Checked part by part against the host.
+- **Oct 29 - review: one definition each.** Teacher 3's example layout and SuperTrack's per-step cost were each
+  written out in several places; each is now one definition every user goes through (`Fpo.Columns`,
+  `runTrackingCost`). Nothing they compute changed.
+- **Oct 29 - Q1b-iii: teacher 3's round start in the learner.** First in each round's recording: the advantages
+  and the old losses, each example broadcast to its draws, the draws seeded by the acting steps. The old losses are
+  checked to be those of the round's starting weights, to the bit.
+- **Oct 29 - Q1c-i: FPO's update on the kit.** PPO's clipped surrogate differentiated through a flow's
+  likelihood stand-in, equal to autodiff of zimrrl's FPO loss - including an example past the clip, which teaches
+  nothing, as PPO intends.
+- **Oct 29 - Q1c-ii: teacher 3 teaches.** Each round, the flow learns from real returns as well as from the
+  model's gradient and the planner's answers: the advantages normalised over the batch, FPO's clipped update added
+  after teacher 2's. At weight 0 it changes nothing, to the bit. The tutorial describes it now.
+- **Oct 29 - review for understanding.** The flow actor's head comment had gone stale and is now its map (the
+  correction, one rollout step, the three teachers and where each lives); names that said less than they hold are
+  renamed; the acting loop reads as its recipe, one named step per call. Nothing it computes changed.
+- **Oct 29 - Q2: trust in the critic.** The three teachers work together through one idea: everything that leans on
+  the critic - the tail, its pessimism, the planner's tail, teachers 2 and 3 - grows with one trust from nothing to
+  whole, from the first build and across a resume. FlowDPG, leaning on the world model, is not ramped.
+- **Oct 29 - the first night, planned.** Studying the night's path: a run names one motion and the trainer embeds
+  the dance alone (the real get-up take, 18 s, is baked only as a 5 s window); clips are drawn at random, so the
+  harder one gets less time; judge and probe see one clip; the log has six columns. But the trainer runs on lavapipe
+  here, so the night's exact run can be smoked through the real GPU path first. Ten steps: both clips in one run,
+  judged per clip, pushes that grow, every number of the device and the host in the log, safeguards, the run files,
+  the smoke, the policy file, review, tutorial, handover.
+- **Oct 29 - N1a: the dance and the get-up in one run.** The get-up the pages use belonged to another robot, so the
+  whole 18 s take was copied onto Geno and baked; a run can ask for both clips, each character keeping one so the
+  harder clip gets its half of the time. Through the real GPU path on lavapipe, it trains.
+- **Oct 29 - blind spots.** The crash the smoke found was old code nothing had ever run: a policy's probe acting
+  past its fleet. Fixed, with a test. The lessons: the night's exact configuration has never run in the trainer, an
+  unchecked build hid the bug (the trainer is ReleaseSafe now), real GPU limits are tighter than lavapipe's (checked
+  at start, N4), judging pauses training (timed, N3b), and nothing has yet shown the whole system learns (a first-hour
+  rule against the baseline, N10). The Windows trainer cross-compiles.
+- **Oct 29 - N1b-i: judged per clip, end to end.** Both clips judged and probed on their own, through the real GPU
+  path. The probe's lines showed a last blind spot: on the get-up, pushes that land while the reference lies down
+  count as 'survived' - the probe must push only where the reference stands.
+- **Oct 30 - N1b-ii: each clip on its own, everywhere.** The status and the console give each clip's recent time to
+  failure; the probe pushes only where the reference stands, so the get-up's servo no longer 'survives' pushes while
+  lying down. Which leaves the get-up only two probe pushes per band - too few; N5 decides.
+- **Oct 30 - N2: pushes that grow.** The pushes' range opens over the first steps, gentle to hard. Looking at how
+  a resumed night would keep the ramp's place found that the learner's step count was never saved: a resume restarted
+  every hashed noise stream. Saved now, the ramp with it.
+- **Oct 30 - review for the book's standard.** Comments that told stories now state reasons; plan words left the
+  code; the motion type is named for what it is; the tutorial explains the probe's standing rule and per-clip judging.
+- **Oct 30 - N3a-i: the device's numbers.** Every learner now keeps a block of statistics the readback brings home
+  with the weights; the flow's three teachers write theirs - how hard each pushes, how far the flow has moved.
+- **Oct 30 - N3a-ii, first half.** The log learns the world model's loss and the policy's tracking term; and the
+  kernels now share their arithmetic - the page's loss and the log's, FPO's update and its statistics, one definition
+  each.
+- **Oct 30 - SuperMimic, studied.** SuperTrack scaled with SHAC's critic: H 32 with a critic past it, a soft
+  survival weight, a reset curriculum, ten future goals - zero failures on 129,514 motions on two GPUs, with no planner
+  and no flow. Our policy imagines only 8 steps (the world model's window) and its gradient is not clipped. Thirty turns
+  planned: visibility, the fundamentals (horizon, clipping, curriculum, future goals, a survival objective), the
+  night, then the second night built on what the first shows.
+- **Oct 30 - the goal: one minute of mocap, big pushes, new ways back.** Reproduce SuperMimic's recipe on a minute
+  of motion, then go past it: characters knocked down mid-dance that get up by ways they find and REJOIN the mocap -
+  motion matching for recovery goals. First step of the horizon: the world model's window inside a longer kit, its
+  update unchanged to the bit.
+- **Oct 30 - the policy imagines further than the world model is fit.** A learner option sets the policy's horizon
+  beside the world model's window: 32 and 8, as SuperMimic found best with a critic past the horizon.
+- **Oct 30 - the policy's optimiser, clipped.** Its gradient bounded in length and then number by number before
+  Adam, as SuperMimic's; with nothing to bound it is the plain Adam to the bit, and its length is logged so the bounds
+  can be set in our own units.
+- **Oct 30 - the rates' schedule.** Every network's rate can follow a cosine to a floor, as SuperMimic's do - by
+  zimrnum's own schedule, which was already there.
+- **Oct 30 - the reset curriculum.** New episodes start where the practice is needed: each second of each clip
+  keeps a running failure rate, and restarts lean toward the failing seconds, as SuperMimic's do. Future goals were
+  moved after the rejoin work: many touch points, less difference for this goal.
+- **Oct 30 - the minute.** Sixty seconds on Geno: the dance, the get-up, walking, running - one motion naming its
+  clips. Starting it on the trainer hit the device's limit: the kernels' buffers are sized for the pages; the trainer
+  needs its own sizes, which is next.
+- **Oct 30 - actors.** Experience on every core, the same on the web and native: workers that own their
+  characters and a whole round, one message each way per round, buffers moved rather than copied. Moving a round's
+  data costs well under a percent of a core; what would cost is talking every step.
+- **Oct 30 - the trainer's own sizes.** The kernels take their buffer sizes from a file beside them; the trainer
+  builds them beside a night's sizes. The minute trains on lavapipe, all four clips named on the console.
+- **Oct 30 - the host's policy, on its own.** Choosing an action now needs only the mirrored weights and their
+  shapes, gathered in one value an actor can carry to another thread or a worker - every check unchanged to the bit.
+- **Oct 30 - records built apart from their upload.** An actor can now build its characters' records wherever it
+  runs; the learner places them. And reading the acting loop showed planning decisions are better made at a round's
+  end - from the freshest states, their plans arriving no later.
+- **Oct 30 - decisions at the round's end.** A planning decision falling due mid-round now waits for the round's
+  last step and plans from the freshest states; its plans arrive no later. A round no longer needs the device in its
+  middle - what a worker's round requires.
+- **Oct 30 - the first night in ten turns.** Visibility completed, parallel physics on native (identical results
+  whatever the threads; the workers wait for night two), rejoining the mocap in three turns, safeguards, two run files
+  - reproduce and improve - each smoked, the policy file, review and handover.
+- **Oct 30 - deep review.** A refused window draw was silent (counted now); the curriculum chased noise (now on an
+  absolute scale, losses per second); plans shorter than a round are refused; and two corrections to rejoining before
+  it is built: no segment break at a re-sync, and a re-sync opens its stretch to the policy's windows.
+- **Oct 30 - the device's numbers, complete.** The critic's heads (their mean, their disagreement, their error)
+  and the policy's barrier and tail join the log's numbers - every part of the learner now reports what it is doing.
+- **Oct 30 - the log is the learner, line by line.** Thirty-eight columns from one definition - every count of the
+  round, its time, every device number. The first real run with them showed the tail's value missing in every round;
+  it is decoded for the log now.
+- **Oct 30 - the physics on every core.** A fleet step in three phases: record, physics in tasks on threads, then
+  every random draw in order - the same numbers to the bit with one thread or four. The speed waits for a machine
+  with more than one core.
+- **Oct 30 - review: a race a single core hid.** The threaded physics shared one arena underneath every
+  character's world - safe on this one-core container, corrupting on a desktop during falls. Each character has its
+  own arena now, checked by the shared one not growing. And every statistic writes at one place, no exceptions by name.
+- **Oct 30 - returning, not rejoining.** Simon: return to the reference directly, inventing what is necessary;
+  motion matching another time. The aftermath becomes a return - a character back on track goes on - and the policy
+  learns from returns; then a return probe, and goals further ahead.
+- **Oct 30 - pushes on a schedule of hours.** None in the first hour; rate and strength rising together to full at
+  the seventh; held after, so longer runs go on at full strength. In training hours, so it holds on any machine.
+- **Oct 30 - the return.** A character that loses the reference can now come back to it - to where the motion has
+  got to - and its episode goes on; one that cannot ends when its aftermath runs out.
+- **Oct 30 - the policy learns the way back.** A quarter of its windows now come from inside returns; and some
+  episodes start in trouble, pushed at the schedule's top speed. The tracking loss turned out not to saturate in a fall
+  - its gradients are large there - which is why the share is bounded.
+- **Oct 30 - the return probe.** Every judgement now pushes at 1 to 5 m/s and follows each loss for five seconds:
+  returned and how soon, not returned, or unresolved. The servo alone, on the dance, came back once in 65 pushes.
+- **Oct 30 - goals further ahead deferred; review.** The time to failure had counted the steps after a loss as
+  survived - the improve run would have looked better than it was. Only time at risk counts now; and a run that
+  learns from returns must bound its policy's gradient.
+- **Oct 30 - safeguards.** A run now stops itself when a weight or a device number stops being finite, names it,
+  and never saves it; each checkpoint keeps the learner's whole state too, the newest four.
+- **Oct 30 - the night's run files.** Reproduce and improve, identical but for returns; the rates' schedule in
+  hours. The reproduce file trains on lavapipe as written, resumes, and stops on its stop file.
+- **Oct 30 - the second smoke.** The improve file judges and probes the minute end to end - the servo, the policy,
+  every clip, every band, returns followed - and its policy file plays as the learner acts.
+- **Oct 30 - the alarm and the room.** A run now names a clip whose policy learned and then fell apart, and says
+  at its start how full its buffers are - the night's fills 96% of its activations.
+
+- **Oct 30 - the way back, by search and by flow.** A new ten-turn plan to show FlowDPG and EfficientTDMPC finding
+  ways back to the mocap: a cost that means time far from the reference, planning every return, teaching the flow
+  from them, fallen starts, the diversity of the ways back measured and watched - and night 1 handed over first.
+- **Oct 30 - the whole system, measured.** Night 1 is to run everything. Every component on, the night's sizes: it
+  needed bigger buffers (now 128 MB of activations), and it ran - but the plans were never acted on, FlowDPG gave no
+  gradient, the costs of a fall broke the critic's scale, and acting took 13 s a round. Five turns to fix and balance
+  them before the night.
+- **Oct 30 - plans acted on; FlowDPG heard but drowned.** The plans had stopped the moment training began - they
+  came back a round late; acting now waits for them. FlowDPG was not silent: its gradient is ten thousand times smaller
+  than the other teachers', summed before the optimiser sees them - the balance is the next real work.
+- **Oct 30 - the time to return.** Far from the reference every step now costs the same for the critic, the planner
+  and FPO, so a fallen state is valued by how long until it is back: the critic's error fell from thousands to about
+  ten, FPO's advantages from tens of thousands to a few.
+- **Oct 30 - acting in three phases.** Every random number drawn first, in order; each character's action computed
+  from its own; the bookkeeping after - the same numbers to the bit, and the expensive middle now free to go to threads.
+- **Oct 30 - review and comments.** The recent logic checked against what it replaced; the comments now give
+  reasons rather than history - what was measured, why the numbers are drawn first, why FlowDPG reads so small.
+- **Oct 30 - acting on every core.** The policy and the flow now run in the fleet's tasks, each with its own
+  scratch - the same actions to the bit with one thread or four, and the trainer's numbers digit for digit.
+- **Oct 30 - the teachers' shares.** Measured on the flow's weights, FlowDPG was never drowned - its gradient was
+  the largest, taking most of each update by accident of its row count. Each teacher now gets the share it is given:
+  FlowDPG 1, the planner's ways back a half, FPO as the critic earns trust.
+- **Oct 30 - the whole system, balanced and smoked.** The world model's updates are bounded against a fall's
+  spikes; the whole system has its own run file, and it runs as written with every component moving.
+- **Oct 30 - a time hierarchy, judged.** The planner's limit is not speed but what it searches: 1,104 dimensions
+  with twenty samples. Knots over the horizon first, a multi-step critic beside them, and a jump world model only if a
+  measurement says planning further helps returns.
+- **Oct 30 - the handover page.** Three runs and what each answers, the commands, the first ten minutes, the
+  first-hour rule decided in advance, the morning's question. A run the watchdog stops now exits as a failure.
+- **Oct 30 - the search measured.** The planner's chosen plans always beat the flow's own proposals, by a growing
+  margin - more than I expected. Whether that is finding or exploiting the model is the next thing knots and the probe
+  will tell.
+- **Oct 30 - knots in the search.** The planner now draws a plan at a few knots and runs straight lines between
+  them. Against the per-step search its gain over the flow starts higher and grows slower - which is either fewer
+  loopholes or less freedom; what plans promise against what they deliver will tell.
+- **Oct 30 - the skip model, designed.** Plans with every step near and every fourth step far, the far half
+  rolled by a model trained directly to jump 4 steps: the world model's own kind of network with a wider input, a
+  longer horizon at about half the cost.
+- **Oct 30 - knots at two scales.** A plan's knots are now its first few steps, each its own, then one every
+  few steps: Simon's 1, 2, 3, 4, 8, 12, 16, 20 is fine steps 4 and span 4. Next, the model that jumps the span.
+- **Oct 30 - the skip model, built.** The world model's kind of network, asked to predict four steps at once from
+  the recorded windows, with the two numbers that will say whether it beats four steps rolled one by one.
+- **Oct 30 - planning more often.** Replanning every few steps, or every step in trouble, would keep plans
+  honest, make the warm start an optimiser and give the flow cleaner examples. The cost is the round trip to a busy
+  GPU, so the probe measures the gain first.
+- **Oct 30 - EfficientTDMPC read in full.** Its planner scores every prefix of a plan, averages over an ensemble
+  of world models and is pessimistic where plans teach; ours did none of it, with a search 25 times smaller. The plan
+  now spends half the compute discovering returns, and gives SuperMimic jumps too.
+- **Oct 31 - plan v5.** The plan was too big to steer by; it is archived as v4, and v5 starts from an inventory
+  checked against the code: EfficientTDMPC's objective, ensembles, pessimism and reanalyze already exist in the BMPC
+  kit, unused by the tracking planner. Ten turns bring them in, with the skip model, the plans' honesty and a probe that
+  plans.
+- **Oct 31 - plans judged by every prefix.** The tracking planner now scores through EfficientTDMPC's own
+  combination, and can average over every prefix of a plan, the critic read at each depth. A test's warning that had
+  made every passing run of the learner's suite look failed is gone.
+- **Oct 31 - the skip model learns in the learner.** It trains beside the world model and is saved with the state.
+  Adding it turned up hidden padding in the saved settings, so a state file could hold unwritten bytes; a
+  compile-time guard now keeps every saved byte written.
+- **Oct 31 - Uni-SuperMimic read.** It trains its world model about thirty times harder per step of data than
+  we do, and normalises what the world model predicts by how much each part changes in a step. The skip model will
+  become a head of the world model, sharing what it already computes.
+- **Oct 31 - the skip model is a head.** It reads the world model's own encoding of a step and adds the next three
+  steps; nothing flows back, and a learner with it trains its world model and policy to the same numbers as one
+  without.
+- **Oct 31 - SuperMimic through jumps.** Simon's idea: the policy learns through 4 fine steps and then jumps,
+  reaching far in a short chain. It works with the jump's actions taken from its start state - its ordinary action and
+  the one aimed at the jump's end, a straight line between - and a check that gradients through jumps point where
+  gradients through steps do.
+- **Oct 31 - wider networks, harder training.** The networks are now a third of SuperMimic's and EfficientTDMPC's
+  widths, the trainer's buffers sized for them, and each round trains the world model four times and the policy twice.
+  A run too big for its buffers now says which one.
+- **Oct 31 - the change in units of the typical change.** The world model can now predict each feature's change
+  in units of how much it typically changes in a step, judged the same way; a kit with it and a plain kit with it
+  folded into the last layer agree exactly. Building it showed the night's 256 MB buffers were past what lavapipe can
+  bind - every sandbox run since the widths changed read past its binding. The GPU host now refuses that loudly, and
+  a portable build keeps smaller runs possible anywhere.
+- **Oct 31 - review.** One recorded check from T4 was not valid and is corrected; a needless horizon limit is gone.
+  Still open before a night: the full gate, a first run of the night files on a GPU that can bind them, and a
+  measurement of whether the change statistics help.

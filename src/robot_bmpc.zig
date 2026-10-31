@@ -56,8 +56,14 @@ const expectEqualSlices = std.testing.expectEqualSlices;
 const expectApproxEqAbs = std.testing.expectApproxEqAbs;
 const expectError = std.testing.expectError;
 const eql = std.mem.eql;
+const ArrayList = std.ArrayList;
+const Io = std.Io;
+const asBytes = std.mem.asBytes;
+const sliceAsBytes = std.mem.sliceAsBytes;
 const clamp = zm.clamp;
+const assertf = zm.assertf;
 const float64 = zm.float64;
+const nan = zm.nan;
 const Rng = zn.Rng;
 const Var = zn.Var;
 const Tensor = zn.Tensor;
@@ -1776,25 +1782,128 @@ pub fn Bmpc(comptime T: type) type {
             }
         };
 
+        /// THE STATE FILE - what a trainer is, apart from its environments and its replay, so that a run can stop and
+        /// carry on exactly where it stopped (`Trainer.exportState`, `Trainer.stateProblem`, `Trainer.importState`):
+        ///
+        ///     StateHeader              the magic, the number type, the shape, the counters (below)
+        ///     the configuration        the trainer's own (`Learner.config`), as ZON text - read back and compared
+        ///                              field by field, so that a file of other settings is refused by the setting
+        ///     episodes                 one u32 per environment: how many episodes each has begun - its next reset's
+        ///                              stream (`Trainer.beginEpisode`)
+        ///     parameters               every network's numbers, in this order: the encoder, each dynamics head,
+        ///                              the reward, the policy, each value head, each TARGET value head
+        ///     optimiser state          Adam's two moments of every parameter it trains, for the encoder's
+        ///                              optimiser, then the rest of the world model's, then the policy's
+        ///
+        /// The random streams are counter-based (`Rng.split` by frame, environment, episode and update), so the seed
+        /// and the counters ARE their state. The replay is not kept: a resumed trainer refills it by acting with its
+        /// planner, and makes no update until the replay can supply a window (`Trainer.runFrame`).
+        pub const state_file_magic: [8]u8 = "ZBMPCST1".*;
+
+        /// The state file's fixed head (see `state_file_magic` for the whole layout).
+        pub const StateHeader = extern struct {
+            magic: [8]u8,
+            /// The bytes of one number (`@sizeOf(T)`): a file of f64 numbers is refused by an f32 trainer.
+            number_bytes: u32,
+            observation_width: u32,
+            action_width: u32,
+            environment_count: u32,
+            /// The configuration's ZON text, in bytes.
+            config_text_bytes: u32,
+            /// The trainer's random seed (`Rng.seed`).
+            random_seed: u32,
+            /// The numbers of every network, and of every optimiser's state.
+            parameter_count: u64,
+            optimizer_value_count: u64,
+            /// The counters: frames stepped, updates made (`Trainer.update_index`), updates counted outside
+            /// pretraining (`Learner.updates`, which times reanalyze), and each optimiser's steps (Adam's bias
+            /// correction).
+            frame: u64,
+            update_index: u64,
+            counted_updates: u64,
+            encoder_optimizer_steps: u64,
+            model_optimizer_steps: u64,
+            policy_optimizer_steps: u64,
+            /// The policy loss's running scale (`RunningScale.value`).
+            kl_scale: f64,
+        };
+
+        /// The path of the first field whose value differs between `saved` and `current` - `config.acting.horizon` -
+        /// or null when every field agrees. A struct field is compared field by field, any other by value.
+        fn firstDifferingField(
+            comptime Value: type,
+            saved: Value,
+            current: Value,
+            comptime path: []const u8,
+        ) ?[]const u8 {
+            switch (@typeInfo(Value)) {
+                .@"struct" => |info| {
+                    inline for (info.field_names) |field_name| {
+                        const FieldValue: type = @FieldType(Value, field_name);
+                        const field_path: []const u8 = path ++ "." ++ field_name;
+                        const saved_field: FieldValue = @field(saved, field_name);
+                        const current_field: FieldValue = @field(current, field_name);
+                        const difference: ?[]const u8 = firstDifferingField(
+                            FieldValue,
+                            saved_field,
+                            current_field,
+                            field_path,
+                        );
+                        if (difference) |differing_path| {
+                            return differing_path;
+                        }
+                    }
+                    return null;
+                },
+                else => return if (saved == current) null else path ++ ": the file's setting is not this trainer's",
+            }
+        }
+
+        /// How an environment's step left its episode (`StepOutcome`).
+        pub const EpisodeEnding = enum {
+            /// The episode goes on: the next decision is made from the observation this step wrote.
+            continues,
+            /// The episode ended in a FINAL state - nothing more can be earned from it. This agent models no
+            /// termination: its value targets and its planner bootstrap from the model's next state whatever the data
+            /// says, so a final state would be valued as if the episode went on. Its trainer therefore REFUSES a
+            /// terminated step (`error.TerminationNotModelled`), as TD-MPC2 refuses one outside its episodic mode. An
+            /// environment shows a fall instead by living on through it - its aftermath, rewarded as the task rewards
+            /// it - and then cutting the episode (`truncated`): the data itself then says what falling is worth.
+            terminated,
+            /// The episode was cut short although its state is not final - the clip ran out, the environment's own
+            /// time limit. Stored as truncated, and the environment is reset.
+            truncated,
+        };
+
+        /// What one step of an environment returns: the reward, and how the step left the episode.
+        pub const StepOutcome = struct {
+            reward: T,
+            ending: EpisodeEnding = .continues,
+        };
+
         /// WHAT THE TRAINING LOOP NEEDS FROM AN ENVIRONMENT, checked when a trainer is built:
         ///
         ///     pub fn reset(self: *Environment, rng: Rng, observation: []T) void
         ///         start an episode and write its first observation
-        ///     pub fn step(self: *Environment, action: []const T, observation: []T) T
-        ///         act once, write the observation that follows, and return the reward
+        ///     pub fn step(self: *Environment, action: []const T, observation: []T) StepOutcome
+        ///         act once, write the observation that follows - the TRUE successor, even when the step ends the
+        ///         episode - and say what it earned and whether the episode goes on
         ///
-        /// An environment never ends an episode itself: BMPC has no notion of termination, so the loop cuts every
-        /// episode at a fixed length (a truncation, never a terminal state).
+        /// An episode then ends in one of two ways, whichever comes first: the environment cuts it (`truncated` -
+        /// a clip's end, or the end of a fall's aftermath), or the loop's own length L is reached (truncated). A
+        /// `terminated` step is refused (`EpisodeEnding.terminated` says why). The cartpole's balance task only ever
+        /// reaches L; on the dance a fall cuts the episode early, which is where EfficientTDMPC's pessimism pays
+        /// (`Config.efficientTdmpc`).
         pub fn requireEnvironment(comptime Environment: type) void {
             const reset_type: type = fn (*Environment, Rng, []T) void;
-            const step_type: type = fn (*Environment, []const T, []T) T;
+            const step_type: type = fn (*Environment, []const T, []T) StepOutcome;
             if (!@hasDecl(Environment, "reset") or @TypeOf(Environment.reset) != reset_type) {
                 @compileError("bmpc: an environment needs `pub fn reset(self: *" ++ @typeName(Environment) ++
                     ", rng: Rng, observation: []T) void`");
             }
             if (!@hasDecl(Environment, "step") or @TypeOf(Environment.step) != step_type) {
                 @compileError("bmpc: an environment needs `pub fn step(self: *" ++ @typeName(Environment) ++
-                    ", action: []const T, observation: []T) T`");
+                    ", action: []const T, observation: []T) StepOutcome`");
             }
         }
 
@@ -1814,14 +1923,22 @@ pub fn Bmpc(comptime T: type) type {
         /// observation, whether the episode ended there, and the planner's target - or, while seeding, the empty
         /// target N(0, 1), since no planner answered for that step.
         ///
-        /// EPISODES HAVE A FIXED LENGTH L. The L-th step of an episode is stored as truncated, with the TRUE next
-        /// observation; the environment is then reset, and the next decision is marked as an episode's first step,
-        /// so the planner starts from scratch rather than from the last plan:
+        /// EPISODES LAST AT MOST L STEPS. The step that ends an episode - the environment's truncated step, or the
+        /// L-th - is stored with the TRUE next observation and how it ended; the environment is then reset, and the
+        /// next decision is marked as an episode's first step, so the planner starts from scratch rather than from
+        /// the last plan:
         ///
         ///     frame          0      1      2    |  3      4      5    |  6
         ///     episode step   1      2      3    |  1      2      3    |  1          (L = 3)
         ///     truncated      -      -      yes  |  -      -      yes  |  -
         ///     first step     yes    -      -    |  yes    -      -    |  yes
+        ///
+        /// and with an environment that cuts an episode itself (the end of an aftermath at the second step of the
+        /// second episode):
+        ///
+        ///     frame          0      1      2    |  3      4    |  5      6      7    |  8
+        ///     episode step   1      2      3    |  1      2    |  1      2      3    |  1
+        ///     truncated      -      -      yes  |  -      yes  |  -      -      yes  |  -
         ///
         /// The discount comes from L, by BMPC's rule (`discountFor`): `init` sets it, whatever the config says.
         ///
@@ -1843,6 +1960,8 @@ pub fn Bmpc(comptime T: type) type {
                 environments: []Environment,
                 schedule: Schedule,
                 episode_length: usize,
+                /// The networks the actor and the learner share: their numbers are what the state file keeps.
+                networks: Networks,
                 row: Row,
                 actor: Actor,
                 learner: Learner,
@@ -1856,6 +1975,9 @@ pub fn Bmpc(comptime T: type) type {
                 first_steps: []bool,
                 /// The steps taken in each environment's current episode.
                 episode_steps: []usize,
+                /// Whether each environment's episode ended at this frame's step - terminal, truncated by the
+                /// environment, or at the loop's length: the environment is reset after the frame's rows are stored.
+                episode_ended: []bool,
                 /// The episodes begun in each environment; each reset draws from its own stream.
                 episodes: []u32,
                 /// The frame's actions and, when the planner acted, its targets.
@@ -1911,6 +2033,7 @@ pub fn Bmpc(comptime T: type) type {
                         .environments = environments,
                         .schedule = schedule,
                         .episode_length = episode_length,
+                        .networks = networks,
                         .row = row,
                         .actor = actor,
                         .learner = learner,
@@ -1920,6 +2043,7 @@ pub fn Bmpc(comptime T: type) type {
                         .next_observations = try allocator.alloc(T, count * observation_width),
                         .first_steps = try allocator.alloc(bool, count),
                         .episode_steps = try allocator.alloc(usize, count),
+                        .episode_ended = try allocator.alloc(bool, count),
                         .episodes = try allocator.alloc(u32, count),
                         .decision = .{
                             .actions = try allocator.alloc(T, decided),
@@ -1934,6 +2058,7 @@ pub fn Bmpc(comptime T: type) type {
                     };
                     @memset(trainer.active, true);
                     @memset(trainer.episodes, 0);
+                    @memset(trainer.episode_ended, false);
                     for (trainer.environments, 0..) |*environment, index| {
                         trainer.beginEpisode(environment, index);
                     }
@@ -1975,8 +2100,17 @@ pub fn Bmpc(comptime T: type) type {
                         const observation: []const T = self.observations[begin..][0..observation_width];
                         const next_observation: []T = self.next_observations[begin..][0..observation_width];
                         const action: []const T = self.decision.actions[index * action_width ..][0..action_width];
-                        const reward: T = environment.step(action, next_observation);
+                        const outcome: StepOutcome = environment.step(action, next_observation);
+                        if (outcome.ending == .terminated) {
+                            return error.TerminationNotModelled;
+                        }
                         self.episode_steps[index] += 1;
+                        // How the episode ended here, if it did: the environment's word first, then the loop's
+                        // length - a fall at the L-th step is a fall, not a time limit.
+                        const reached_length: bool = self.episode_steps[index] == self.episode_length;
+                        const is_terminal: bool = outcome.ending == .terminated;
+                        const is_truncated: bool = !is_terminal and (outcome.ending == .truncated or reached_length);
+                        self.episode_ended[index] = is_terminal or is_truncated;
                         const target: ?Target = if (frame_plan.planned) .{
                             .means = self.decision.target_means[index * action_width ..][0..action_width],
                             .spreads = self.decision.target_spreads[index * action_width ..][0..action_width],
@@ -1984,10 +2118,10 @@ pub fn Bmpc(comptime T: type) type {
                         try self.row.fill(self.rows[index * row_width ..][0..row_width], .{
                             .observation = observation,
                             .action = action,
-                            .reward = reward,
+                            .reward = outcome.reward,
                             .next_observation = next_observation,
-                            .terminated = false,
-                            .truncated = self.episode_steps[index] == self.episode_length,
+                            .terminated = is_terminal,
+                            .truncated = is_truncated,
                             .target = target,
                         });
                     }
@@ -1995,7 +2129,7 @@ pub fn Bmpc(comptime T: type) type {
                     // Advance every environment: the successor becomes what the next decision sees, or, at the end
                     // of an episode, a fresh episode begins.
                     for (self.environments, 0..) |*environment, index| {
-                        if (self.episode_steps[index] == self.episode_length) {
+                        if (self.episode_ended[index]) {
                             self.beginEpisode(environment, index);
                         } else {
                             const begin: usize = index * observation_width;
@@ -2006,7 +2140,11 @@ pub fn Bmpc(comptime T: type) type {
                             self.first_steps[index] = false;
                         }
                     }
-                    for (0..frame_plan.updates) |_| {
+                    // A replay that cannot yet supply a window - a resumed trainer's, refilling - waits: its updates
+                    // start once one environment holds a whole window (`StateHeader`).
+                    const can_learn: bool = self.replay.holdsWindow(self.learner.config.horizon);
+                    const updates_now: usize = if (can_learn) frame_plan.updates else 0;
+                    for (0..updates_now) |_| {
                         const update_rng: Rng = self.rng.split(update_stream).split(self.update_index);
                         self.last_report = try self.learner.update(
                             &self.replay,
@@ -2018,6 +2156,301 @@ pub fn Bmpc(comptime T: type) type {
                     }
                     self.frame += 1;
                     return frame_plan;
+                }
+
+                /// Every network's tensors, in the state file's order (`state_file_magic`): the slice in `arena`, the
+                /// tensors the networks' own, so writing into one writes into the network that every graph reads.
+                fn networkTensors(self: *const Self, arena: Allocator) ![]Tensor(T) {
+                    const networks: Networks = self.networks;
+                    var tensors: ArrayList(Tensor(T)) = .empty;
+                    try appendNetworkTensors(arena, &tensors, networks.encoder);
+                    for (networks.dynamics) |dynamics_head| {
+                        try appendNetworkTensors(arena, &tensors, dynamics_head);
+                    }
+                    try appendNetworkTensors(arena, &tensors, networks.reward);
+                    try appendNetworkTensors(arena, &tensors, networks.policy);
+                    for (networks.values) |value_head| {
+                        try appendNetworkTensors(arena, &tensors, value_head);
+                    }
+                    for (networks.target_values) |target_value_head| {
+                        try appendNetworkTensors(arena, &tensors, target_value_head);
+                    }
+                    return tensors.items;
+                }
+
+                fn appendNetworkTensors(
+                    arena: Allocator,
+                    tensors: *ArrayList(Tensor(T)),
+                    network: Mlp(T),
+                ) !void {
+                    const network_params: Params(T) = try network.params(arena);
+                    try tensors.appendSlice(arena, network_params.tensors);
+                }
+
+                /// The three optimisers, in the state file's order: the encoder's, the rest of the world model's, the
+                /// policy's.
+                fn optimizers(self: *Self) [3]*Optimizer(T) {
+                    return .{
+                        &self.learner.world_model.encoder_optimizer,
+                        &self.learner.world_model.model_optimizer,
+                        &self.learner.policy.optimizer,
+                    };
+                }
+
+                fn numberCount(tensors: []const Tensor(T)) usize {
+                    var count: usize = 0;
+                    for (tensors) |tensor| {
+                        count += tensor.data.len;
+                    }
+                    return count;
+                }
+
+                fn optimizerValueCount(self: *Self) usize {
+                    var count: usize = 0;
+                    for (self.optimizers()) |optimizer| {
+                        count += numberCount(optimizer.state);
+                    }
+                    return count;
+                }
+
+                /// The header this trainer would write now: its shape and every counter.
+                fn stateHeader(
+                    self: *Self,
+                    parameter_count: usize,
+                    config_text_bytes: usize,
+                ) StateHeader {
+                    const trainer_optimizers: [3]*Optimizer(T) = self.optimizers();
+                    return .{
+                        .magic = state_file_magic,
+                        .number_bytes = @sizeOf(T),
+                        .observation_width = @intCast(self.row.observation_width),
+                        .action_width = @intCast(self.row.action_width),
+                        .environment_count = @intCast(self.environments.len),
+                        .config_text_bytes = @intCast(config_text_bytes),
+                        .random_seed = self.rng.seed,
+                        .parameter_count = parameter_count,
+                        .optimizer_value_count = self.optimizerValueCount(),
+                        .frame = self.frame,
+                        .update_index = self.update_index,
+                        .counted_updates = self.learner.updates,
+                        .encoder_optimizer_steps = trainer_optimizers[0].steps,
+                        .model_optimizer_steps = trainer_optimizers[1].steps,
+                        .policy_optimizer_steps = trainer_optimizers[2].steps,
+                        .kl_scale = self.learner.policy.kl_scale.value,
+                    };
+                }
+
+                /// The trainer's whole state as a file's worth of bytes (`state_file_magic` gives the layout). Memory:
+                /// the bytes are allocated with `gpa` and become the caller's to free; working memory is freed before
+                /// it returns.
+                pub fn exportState(self: *Self, gpa: Allocator) ![]u8 {
+                    var arena_state: ArenaAllocator = .init(gpa);
+                    defer arena_state.deinit();
+                    const arena: Allocator = arena_state.allocator();
+                    const network_tensors: []Tensor(T) = try self.networkTensors(arena);
+                    var config_text: Io.Writer.Allocating = .init(arena);
+                    try std.zon.stringify.serialize(self.learner.config, .{}, &config_text.writer);
+                    const config_bytes: []const u8 = config_text.written();
+                    const parameter_count: usize = numberCount(network_tensors);
+                    const header: StateHeader = self.stateHeader(parameter_count, config_bytes.len);
+                    const episode_bytes: usize = self.episodes.len * @sizeOf(u32);
+                    const number_count: usize = parameter_count + self.optimizerValueCount();
+                    const total_bytes: usize = @sizeOf(StateHeader) + config_bytes.len + episode_bytes +
+                        number_count * @sizeOf(T);
+                    const bytes: []u8 = try gpa.alloc(u8, total_bytes);
+                    var cursor: usize = 0;
+                    @memcpy(bytes[cursor..][0..@sizeOf(StateHeader)], asBytes(&header));
+                    cursor += @sizeOf(StateHeader);
+                    @memcpy(bytes[cursor..][0..config_bytes.len], config_bytes);
+                    cursor += config_bytes.len;
+                    @memcpy(bytes[cursor..][0..episode_bytes], sliceAsBytes(self.episodes));
+                    cursor += episode_bytes;
+                    for (network_tensors) |tensor| {
+                        const tensor_bytes: []const u8 = sliceAsBytes(tensor.data);
+                        @memcpy(bytes[cursor..][0..tensor_bytes.len], tensor_bytes);
+                        cursor += tensor_bytes.len;
+                    }
+                    for (self.optimizers()) |optimizer| {
+                        for (optimizer.state) |tensor| {
+                            const tensor_bytes: []const u8 = sliceAsBytes(tensor.data);
+                            @memcpy(bytes[cursor..][0..tensor_bytes.len], tensor_bytes);
+                            cursor += tensor_bytes.len;
+                        }
+                    }
+                    assertf(cursor == total_bytes, @src(), "state file: wrote {d} of {d} bytes", .{
+                        cursor,
+                        total_bytes,
+                    });
+                    return bytes;
+                }
+
+                /// Why `bytes` cannot be this trainer's state, naming the part - or null when it can. Every number is
+                /// checked before any is used: the parameters finite, Adam's moments finite and its second moments not
+                /// negative, the policy loss's scale finite and above zero; and the file's configuration, read back,
+                /// must equal this trainer's in every field - the first that differs is named by its path. The only
+                /// error is running out of memory (`gpa` is working memory, freed before it returns).
+                pub fn stateProblem(
+                    self: *Self,
+                    gpa: Allocator,
+                    bytes: []const u8,
+                ) !?[]const u8 {
+                    if (bytes.len < @sizeOf(StateHeader)) {
+                        return "header: shorter than a state file's";
+                    }
+                    var header: StateHeader = undefined;
+                    @memcpy(asBytes(&header), bytes[0..@sizeOf(StateHeader)]);
+                    if (!eql(u8, &header.magic, &state_file_magic)) {
+                        return "header.magic: not an EfficientTDMPC state file";
+                    }
+                    if (header.number_bytes != @sizeOf(T)) {
+                        return "header.number_bytes: numbers of another precision";
+                    }
+                    const shape_agrees: bool = header.observation_width == self.row.observation_width and
+                        header.action_width == self.row.action_width;
+                    if (!shape_agrees) {
+                        return "header: another observation or action width";
+                    }
+                    if (header.environment_count != self.environments.len) {
+                        return "header.environment_count: another number of environments";
+                    }
+                    var arena_state: ArenaAllocator = .init(gpa);
+                    defer arena_state.deinit();
+                    const arena: Allocator = arena_state.allocator();
+                    const network_tensors: []Tensor(T) = try self.networkTensors(arena);
+                    const parameter_count: usize = numberCount(network_tensors);
+                    const counts_agree: bool = header.parameter_count == parameter_count and
+                        header.optimizer_value_count == self.optimizerValueCount();
+                    if (!counts_agree) {
+                        return "header: another number of parameters or optimiser values";
+                    }
+                    const episode_bytes: usize = self.episodes.len * @sizeOf(u32);
+                    const number_count: usize = parameter_count + self.optimizerValueCount();
+                    const expected_bytes: usize = @sizeOf(StateHeader) + header.config_text_bytes + episode_bytes +
+                        number_count * @sizeOf(T);
+                    if (bytes.len != expected_bytes) {
+                        return "header: the file's length is not its parts'";
+                    }
+                    // The configuration, read back and compared setting by setting.
+                    const config_start: usize = @sizeOf(StateHeader);
+                    const config_text: []const u8 = bytes[config_start..][0..header.config_text_bytes];
+                    const config_source: [:0]const u8 = try arena.dupeSentinel(u8, config_text, 0);
+                    var diagnostics: std.zon.parse.Diagnostics = undefined;
+                    const saved_config: Config = std.zon.parse.fromSlice(Config, .{
+                        .gpa = gpa,
+                        .arena = arena,
+                        .source = config_source,
+                        .diagnostics = &diagnostics,
+                    }) catch |err| switch (err) {
+                        error.OutOfMemory => return error.OutOfMemory,
+                        else => return "config: not this agent's settings",
+                    };
+                    if (firstDifferingField(Config, saved_config, self.learner.config, "config")) |differing_path| {
+                        return differing_path;
+                    }
+                    // The numbers, read from the file without copying them in.
+                    var cursor: usize = config_start + header.config_text_bytes + episode_bytes;
+                    const parameter_bytes: usize = parameter_count * @sizeOf(T);
+                    const parameters_problem: ?[]const u8 = numbersProblem(
+                        bytes[cursor..][0..parameter_bytes],
+                        "numbers.parameters: not finite",
+                    );
+                    if (parameters_problem) |problem| {
+                        return problem;
+                    }
+                    cursor += parameter_bytes;
+                    for (self.optimizers()) |optimizer| {
+                        const per_parameter: usize = optimizer.state.len / @max(optimizer.params.len, 1);
+                        for (optimizer.state, 0..) |tensor, state_index| {
+                            const tensor_bytes: usize = tensor.data.len * @sizeOf(T);
+                            const values: []const u8 = bytes[cursor..][0..tensor_bytes];
+                            if (numbersProblem(values, "numbers.optimizer_state: not finite")) |problem| {
+                                return problem;
+                            }
+                            // Adam keeps two buffers a parameter, the first moment then the second: a second moment
+                            // is a running mean of squares, never below zero.
+                            const is_adam_second_moment: bool = optimizer.kind == .adam and
+                                per_parameter == 2 and state_index % 2 == 1;
+                            if (is_adam_second_moment and hasNegativeNumber(values)) {
+                                return "numbers.optimizer_state: a second moment below zero";
+                            }
+                            cursor += tensor_bytes;
+                        }
+                    }
+                    const is_kl_scale_usable: bool = zm.isFinite(header.kl_scale) and header.kl_scale > 0;
+                    if (!is_kl_scale_usable) {
+                        return "header.kl_scale: not finite, or not above zero";
+                    }
+                    return null;
+                }
+
+                /// `problem` when one of the numbers in `values` (bytes of T, in the file's order) is not finite.
+                fn numbersProblem(values: []const u8, problem: []const u8) ?[]const u8 {
+                    var number_index: usize = 0;
+                    while (number_index * @sizeOf(T) < values.len) : (number_index += 1) {
+                        var number: T = undefined;
+                        @memcpy(asBytes(&number), values[number_index * @sizeOf(T) ..][0..@sizeOf(T)]);
+                        if (!zm.isFinite(number)) {
+                            return problem;
+                        }
+                    }
+                    return null;
+                }
+
+                fn hasNegativeNumber(values: []const u8) bool {
+                    var number_index: usize = 0;
+                    while (number_index * @sizeOf(T) < values.len) : (number_index += 1) {
+                        var number: T = undefined;
+                        @memcpy(asBytes(&number), values[number_index * @sizeOf(T) ..][0..@sizeOf(T)]);
+                        if (number < 0) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+
+                /// Carry on from `bytes` (`exportState`'s): every number into the networks and the optimisers, every
+                /// counter, the random seed and each environment's episode count - then every environment begins a
+                /// fresh episode from its restored stream, since the episodes the trainer was built with began from
+                /// the run's first. Refused (`error.StateRefused`) when `stateProblem` names one; nothing is changed
+                /// then. `gpa` is working memory, freed before it returns.
+                pub fn importState(self: *Self, gpa: Allocator, bytes: []const u8) !void {
+                    if (try self.stateProblem(gpa, bytes)) |_| {
+                        return error.StateRefused;
+                    }
+                    var header: StateHeader = undefined;
+                    @memcpy(asBytes(&header), bytes[0..@sizeOf(StateHeader)]);
+                    var arena_state: ArenaAllocator = .init(gpa);
+                    defer arena_state.deinit();
+                    const arena: Allocator = arena_state.allocator();
+                    var cursor: usize = @sizeOf(StateHeader) + header.config_text_bytes;
+                    const episode_bytes: usize = self.episodes.len * @sizeOf(u32);
+                    @memcpy(sliceAsBytes(self.episodes), bytes[cursor..][0..episode_bytes]);
+                    cursor += episode_bytes;
+                    const network_tensors: []Tensor(T) = try self.networkTensors(arena);
+                    for (network_tensors) |tensor| {
+                        const tensor_bytes: []u8 = sliceAsBytes(tensor.data);
+                        @memcpy(tensor_bytes, bytes[cursor..][0..tensor_bytes.len]);
+                        cursor += tensor_bytes.len;
+                    }
+                    const trainer_optimizers: [3]*Optimizer(T) = self.optimizers();
+                    for (trainer_optimizers) |optimizer| {
+                        for (optimizer.state) |tensor| {
+                            const tensor_bytes: []u8 = sliceAsBytes(tensor.data);
+                            @memcpy(tensor_bytes, bytes[cursor..][0..tensor_bytes.len]);
+                            cursor += tensor_bytes.len;
+                        }
+                    }
+                    trainer_optimizers[0].steps = @intCast(header.encoder_optimizer_steps);
+                    trainer_optimizers[1].steps = @intCast(header.model_optimizer_steps);
+                    trainer_optimizers[2].steps = @intCast(header.policy_optimizer_steps);
+                    self.learner.policy.kl_scale.value = @floatCast(header.kl_scale);
+                    self.learner.updates = @intCast(header.counted_updates);
+                    self.update_index = @intCast(header.update_index);
+                    self.frame = @intCast(header.frame);
+                    self.rng = .{ .seed = header.random_seed };
+                    for (self.environments, 0..) |*environment, index| {
+                        self.beginEpisode(environment, index);
+                    }
                 }
             };
         }
@@ -3365,6 +3798,12 @@ test "bmpc: once warm, a decision asks its allocator for nothing" {
 const RampEnvironment = struct {
     position: f64 = 0,
     resets: usize = 0,
+    /// The position at which the environment cuts its own episode - a stand-in for the end of a fall's aftermath - or
+    /// null: the episode then lasts until the loop's length.
+    cuts_at_position: ?f64 = null,
+    /// The position at which the environment says its state is final - a termination, which the trainer refuses - or
+    /// null.
+    terminates_at_position: ?f64 = null,
 
     pub fn reset(self: *RampEnvironment, rng: Rng, observation: []f64) void {
         _ = rng;
@@ -3374,11 +3813,26 @@ const RampEnvironment = struct {
         @memset(observation[1..], 0.5);
     }
 
-    pub fn step(self: *RampEnvironment, action: []const f64, observation: []f64) f64 {
+    pub fn step(
+        self: *RampEnvironment,
+        action: []const f64,
+        observation: []f64,
+    ) TestBmpc.StepOutcome {
         self.position += 1;
         observation[0] = self.position;
         @memset(observation[1..], 0.5);
-        return action[0];
+        const cuts_here: bool = if (self.cuts_at_position) |cut_position| self.position == cut_position else false;
+        const terminates_here: bool = if (self.terminates_at_position) |final_position|
+            self.position == final_position
+        else
+            false;
+        const ending: TestBmpc.EpisodeEnding = if (terminates_here)
+            .terminated
+        else if (cuts_here)
+            .truncated
+        else
+            .continues;
+        return .{ .reward = action[0], .ending = ending };
     }
 };
 
@@ -3512,6 +3966,62 @@ test "bmpc trainer: an episode ends at its L-th step - truncated, the true final
     }
 }
 
+test "bmpc trainer: an environment that cuts its own episode - truncated, then a reset; the length still truncates" {
+    // A stand-in for a fall's aftermath ending: the first environment cuts its episode at its second step; the
+    // second never does, so its episodes run to the loop's length L = 3. The frames:
+    //
+    //     frame              0     1     2     3     4     5
+    //     cutting:  step     1     2|    1     2|    1     2|        truncated at every second step
+    //     steady:   step     1     2     3|    1     2     3|      truncated at every third
+    var arena_state: ArenaAllocator = .init(testing_allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    var environments = [_]RampEnvironment{ .{ .cuts_at_position = 2 }, .{} };
+    const seeding_only: TestBmpc.Schedule = .{ .seed_frames = 100, .burst_updates = 0, .updates_per_frame = 0 };
+    var trainer: RampTrainer = try rampTrainer(arena, &environments, seeding_only, 3);
+    for (0..6) |_| {
+        _ = try trainer.runFrame();
+    }
+    const cutting: zrl.ReplayBuffer(f64) = trainer.replay.environment_rings[0];
+    const steady: zrl.ReplayBuffer(f64) = trainer.replay.environment_rings[1];
+    const done_column: usize = trainer.row.doneColumn();
+    const terminated_column: usize = trainer.row.terminatedColumn();
+    const next_observation_start: usize = trainer.row.nextObservationStart();
+    for (0..6) |frame| {
+        const cutting_row: []const f64 = cutting.row(frame);
+        const steady_row: []const f64 = steady.row(frame);
+        const cut_at_this_frame: bool = frame % 2 == 1;
+        const steady_ends_at_this_frame: bool = frame % 3 == 2;
+        // The cut: done, never terminated, with the true final observation - position 2 - as its successor.
+        try expectEqual(@as(f64, if (cut_at_this_frame) 1 else 0), cutting_row[done_column]);
+        try expectEqual(@as(f64, 0), cutting_row[terminated_column]);
+        if (cut_at_this_frame) {
+            try expectEqual(@as(f64, 2), cutting_row[next_observation_start]);
+        }
+        // The length: done, never terminated.
+        try expectEqual(@as(f64, if (steady_ends_at_this_frame) 1 else 0), steady_row[done_column]);
+        try expectEqual(@as(f64, 0), steady_row[terminated_column]);
+    }
+    // Every cut reset its environment (three, after `init`'s first episode); the steady one reset twice.
+    try expectEqual(@as(usize, 4), environments[0].resets);
+    try expectEqual(@as(usize, 3), environments[1].resets);
+    try expect(trainer.first_steps[0] and trainer.first_steps[1]);
+}
+
+test "bmpc trainer: a terminated step is refused - this agent models no termination" {
+    // The agent's value targets and planner bootstrap from the model's next state whatever the data says, so a final
+    // state stored as one would be valued as if the episode went on. The trainer refuses it at once, with the error
+    // naming the cause; the frames before it ran as usual.
+    var arena_state: ArenaAllocator = .init(testing_allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    var environments = [_]RampEnvironment{ .{ .terminates_at_position = 2 }, .{} };
+    const seeding_only: TestBmpc.Schedule = .{ .seed_frames = 100, .burst_updates = 0, .updates_per_frame = 0 };
+    var trainer: RampTrainer = try rampTrainer(arena, &environments, seeding_only, 3);
+    _ = try trainer.runFrame();
+    try expectError(error.TerminationNotModelled, trainer.runFrame());
+}
+
 test "bmpc trainer: the same seeds run the same frames, bit for bit, through the burst and the planner" {
     var arena_state: ArenaAllocator = .init(testing_allocator);
     defer arena_state.deinit();
@@ -3544,4 +4054,174 @@ test "bmpc trainer: the discount comes from the episode's length" {
     const trainer: RampTrainer = try rampTrainer(arena, &environments, schedule, 500);
     // L = 500: n = 100, gamma = 0.99 - whatever the config said (0.95).
     try expectEqual(TestBmpc.discountFor(500), trainer.learner.config.discount);
+}
+
+// ---- The state file ----
+
+/// A trainer of two ramps that has learnt a little: 6 frames of seeding, a burst of 3 updates, then 2 updates a frame
+/// for 14 more frames - so its networks, both optimisers' moments, the policy loss's scale and every counter have
+/// moved from where they began.
+fn trainedRampTrainer(arena: Allocator, environments: []RampEnvironment) !RampTrainer {
+    const schedule: TestBmpc.Schedule = .{ .seed_frames = 6, .burst_updates = 3, .updates_per_frame = 2 };
+    var trainer: RampTrainer = try rampTrainer(arena, environments, schedule, 5);
+    for (0..20) |_| {
+        _ = try trainer.runFrame();
+    }
+    return trainer;
+}
+
+/// A trainer of two ramps on `config`, built from seeds of the caller's and never run: what a resumed run starts as.
+fn freshRampTrainer(
+    arena: Allocator,
+    environments: []RampEnvironment,
+    config: TestBmpc.Config,
+    network_seed: u32,
+) !RampTrainer {
+    const schedule: TestBmpc.Schedule = .{ .seed_frames = 6, .burst_updates = 3, .updates_per_frame = 2 };
+    const networks: TestBmpc.Networks = try .init(arena, Rng.init(network_seed), 4, 2, config);
+    const loop_seed: u32 = network_seed + 1;
+    return RampTrainer.init(arena, environments, networks, 4, 2, config, schedule, 5, 64, Rng.init(loop_seed));
+}
+
+/// The bytes of a state file before its episode counts, and after them: what an import changes on purpose (each
+/// environment begins a fresh episode from its restored stream) lies between.
+fn stateWithoutEpisodes(bytes: []const u8, environment_count: usize) [2][]const u8 {
+    var header: TestBmpc.StateHeader = undefined;
+    @memcpy(asBytes(&header), bytes[0..@sizeOf(TestBmpc.StateHeader)]);
+    const episodes_start: usize = @sizeOf(TestBmpc.StateHeader) + header.config_text_bytes;
+    const episodes_end: usize = episodes_start + environment_count * @sizeOf(u32);
+    return .{ bytes[0..episodes_start], bytes[episodes_end..] };
+}
+
+test "bmpc state file: export, import into a fresh trainer, export again - the same bytes; the same decision" {
+    // The second trainer is built from other random seeds, so every number it ends with came from the file. Its
+    // export equals the first's but for the episode counts, each one more: importing begins a fresh episode in every
+    // environment, from its restored stream.
+    var arena_state: ArenaAllocator = .init(testing_allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    var first_ramps = [_]RampEnvironment{ .{}, .{} };
+    var first: RampTrainer = try trainedRampTrainer(arena, &first_ramps);
+    const saved: []u8 = try first.exportState(testing_allocator);
+    defer testing_allocator.free(saved);
+
+    var second_ramps = [_]RampEnvironment{ .{}, .{} };
+    const config: TestBmpc.Config = learnerTestConfig(20);
+    var second: RampTrainer = try freshRampTrainer(arena, &second_ramps, config, 4321);
+    try expectEqual(@as(?[]const u8, null), try second.stateProblem(testing_allocator, saved));
+    try second.importState(testing_allocator, saved);
+    const saved_again: []u8 = try second.exportState(testing_allocator);
+    defer testing_allocator.free(saved_again);
+    try expectEqual(saved.len, saved_again.len);
+    const first_parts: [2][]const u8 = stateWithoutEpisodes(saved, 2);
+    const second_parts: [2][]const u8 = stateWithoutEpisodes(saved_again, 2);
+    try expectEqualSlices(u8, first_parts[0], second_parts[0]);
+    try expectEqualSlices(u8, first_parts[1], second_parts[1]);
+    for (first.episodes, second.episodes) |first_count, second_count| {
+        try expectEqual(first_count + 1, second_count);
+    }
+    try expectEqual(first.frame, second.frame);
+    try expectEqual(first.update_index, second.update_index);
+
+    // The same planner decision from the same observations, first steps and stream, to the bit.
+    const observations = [_]f64{ 1, 0.5, 0.5, 0.5, 2, 0.5, 0.5, 0.5 };
+    const first_steps = [_]bool{ true, true };
+    try first.actor.act(&observations, &first_steps, .evaluate, Rng.init(77), first.decision);
+    try second.actor.act(&observations, &first_steps, .evaluate, Rng.init(77), second.decision);
+    try expectEqualSlices(f64, first.decision.actions, second.decision.actions);
+    try expectEqualSlices(f64, first.decision.target_means, second.decision.target_means);
+}
+
+test "bmpc state file: a file of other settings is refused by the setting's path; damaged numbers by their part" {
+    var arena_state: ArenaAllocator = .init(testing_allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    var ramps = [_]RampEnvironment{ .{}, .{} };
+    var trainer: RampTrainer = try trainedRampTrainer(arena, &ramps);
+    const saved: []u8 = try trainer.exportState(testing_allocator);
+    defer testing_allocator.free(saved);
+
+    // A trainer that plans one decision further ahead.
+    var other_ramps = [_]RampEnvironment{ .{}, .{} };
+    var other_config: TestBmpc.Config = learnerTestConfig(20);
+    other_config.acting.horizon += 1;
+    var other: RampTrainer = try freshRampTrainer(arena, &other_ramps, other_config, 90);
+    const refused_setting: []const u8 = (try other.stateProblem(testing_allocator, saved)).?;
+    try expect(eql(u8, "config.acting.horizon: the file's setting is not this trainer's", refused_setting));
+    try expectError(error.StateRefused, other.importState(testing_allocator, saved));
+
+    // The same trainer, the file damaged: its first parameter not a number, then an Adam second moment below zero.
+    var header: TestBmpc.StateHeader = undefined;
+    @memcpy(asBytes(&header), saved[0..@sizeOf(TestBmpc.StateHeader)]);
+    const parameters_start: usize = @sizeOf(TestBmpc.StateHeader) + header.config_text_bytes + 2 * @sizeOf(u32);
+    const damaged: []u8 = try testing_allocator.dupe(u8, saved);
+    defer testing_allocator.free(damaged);
+    const not_a_number: f64 = nan(f64);
+    @memcpy(damaged[parameters_start..][0..@sizeOf(f64)], asBytes(&not_a_number));
+    const parameters_refused: []const u8 = (try trainer.stateProblem(testing_allocator, damaged)).?;
+    try expect(eql(u8, "numbers.parameters: not finite", parameters_refused));
+
+    @memcpy(damaged, saved);
+    // The encoder optimiser's first parameter's second moment: right after its first moment.
+    const optimizer_start: usize = parameters_start + header.parameter_count * @sizeOf(f64);
+    const first_moment_values: usize = trainer.learner.world_model.encoder_optimizer.state[0].data.len;
+    const second_moment_start: usize = optimizer_start + first_moment_values * @sizeOf(f64);
+    const below_zero: f64 = -1;
+    @memcpy(damaged[second_moment_start..][0..@sizeOf(f64)], asBytes(&below_zero));
+    const moment_refused: []const u8 = (try trainer.stateProblem(testing_allocator, damaged)).?;
+    try expect(eql(u8, "numbers.optimizer_state: a second moment below zero", moment_refused));
+}
+
+test "bmpc state file: CONTROL - one number changed in the file makes the imported trainer decide otherwise" {
+    // The decision test above holds only if the file's numbers are what decides: the encoder's first weight doubled
+    // (an exponent bit flipped, still finite) must move the planner's answer.
+    var arena_state: ArenaAllocator = .init(testing_allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    var first_ramps = [_]RampEnvironment{ .{}, .{} };
+    var first: RampTrainer = try trainedRampTrainer(arena, &first_ramps);
+    const saved: []u8 = try first.exportState(testing_allocator);
+    defer testing_allocator.free(saved);
+    var header: TestBmpc.StateHeader = undefined;
+    @memcpy(asBytes(&header), saved[0..@sizeOf(TestBmpc.StateHeader)]);
+    const parameters_start: usize = @sizeOf(TestBmpc.StateHeader) + header.config_text_bytes + 2 * @sizeOf(u32);
+    var weight: f64 = undefined;
+    @memcpy(asBytes(&weight), saved[parameters_start..][0..@sizeOf(f64)]);
+    const doubled_weight: f64 = 2 * weight + 1;
+    @memcpy(saved[parameters_start..][0..@sizeOf(f64)], asBytes(&doubled_weight));
+
+    var second_ramps = [_]RampEnvironment{ .{}, .{} };
+    const config: TestBmpc.Config = learnerTestConfig(20);
+    var second: RampTrainer = try freshRampTrainer(arena, &second_ramps, config, 4321);
+    try second.importState(testing_allocator, saved);
+    const observations = [_]f64{ 1, 0.5, 0.5, 0.5, 2, 0.5, 0.5, 0.5 };
+    const first_steps = [_]bool{ true, true };
+    try first.actor.act(&observations, &first_steps, .evaluate, Rng.init(77), first.decision);
+    try second.actor.act(&observations, &first_steps, .evaluate, Rng.init(77), second.decision);
+    try expect(!eql(f64, first.decision.actions, second.decision.actions));
+}
+
+test "bmpc state file: a resumed trainer refills its replay before its first update, then learns at its rate" {
+    // Resumed past its seeding, the trainer plans at once; its replay is empty, so it makes no update until one
+    // environment holds a whole window (the horizon, 3 steps) - then the schedule's 2 a frame.
+    var arena_state: ArenaAllocator = .init(testing_allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    var first_ramps = [_]RampEnvironment{ .{}, .{} };
+    var first: RampTrainer = try trainedRampTrainer(arena, &first_ramps);
+    const saved: []u8 = try first.exportState(testing_allocator);
+    defer testing_allocator.free(saved);
+    var second_ramps = [_]RampEnvironment{ .{}, .{} };
+    const config: TestBmpc.Config = learnerTestConfig(20);
+    var resumed: RampTrainer = try freshRampTrainer(arena, &second_ramps, config, 4321);
+    try resumed.importState(testing_allocator, saved);
+    const updates_before: u32 = resumed.update_index;
+    const horizon: usize = config.horizon;
+    for (0..horizon - 1) |_| {
+        const ran: TestBmpc.Schedule.Frame = try resumed.runFrame();
+        try expect(ran.planned);
+        try expectEqual(updates_before, resumed.update_index);
+    }
+    _ = try resumed.runFrame();
+    try expectEqual(updates_before + 2, resumed.update_index);
 }

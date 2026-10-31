@@ -32,6 +32,14 @@
 //! the first sentence of its doc comment. So when somebody adds a public function, the tutorial's
 //! reference grows by itself - and if nobody regenerated it, the gate says so.
 //!
+//! And the section numbers. A page that numbers its headings - `<h2 id="supertrack">11. SuperTrack`,
+//! `<h3 id="idea">11.2 The idea` - gets every number from the heading's place in the page, and every
+//! link to a numbered heading whose text is only its number - `<a href="#idea">11.2</a>`, or the same
+//! with a section sign before it - shows that heading's number (`numberSections`). Sections can then
+//! be moved, added and removed freely: the numbers and every reference to them follow. And the page's
+//! contents, when it asks for it - between `<!--doc-folds:toc-->` and `<!--doc-folds:toc-end-->` - is
+//! the list of its numbered chapters, each with its numbered sections (`tableOfContents`).
+//!
 //! Two modes:
 //!
 //!     zig build doc-folds   --fix    rewrite every block from the source, printing each page's diff
@@ -56,11 +64,15 @@ const startsWith = std.mem.startsWith;
 const endsWith = std.mem.endsWith;
 const trim = std.mem.trim;
 const trimStart = std.mem.trimStart;
+const trimEnd = std.mem.trimEnd;
 const allocPrint = std.fmt.allocPrint;
 const splitScalar = std.mem.splitScalar;
 
 const Io = std.Io;
 const ArrayList = std.ArrayList;
+const expectEqual = std.testing.expectEqual;
+const expectEqualStrings = std.testing.expectEqualStrings;
+const testing_allocator = std.testing.allocator;
 const File = Io.File;
 const Dir = Io.Dir;
 
@@ -366,6 +378,270 @@ fn reference(
     return out.items;
 }
 
+/// The reference region of `text`, if the page has one, regenerated (this file's head).
+fn referenceRegion(
+    gpa: Allocator,
+    io: Io,
+    page: []const u8,
+    cache: *ArrayList(Source),
+    text: []u8,
+    rep: *Report,
+) ![]u8 {
+    const begin_marker: []const u8 = "<!--doc-folds:ref ";
+    const end_marker: []const u8 = "<!--doc-folds:ref-end-->";
+    const b: usize = indexOf(u8, text, begin_marker) orelse return text;
+    const files_end: usize = indexOfPos(u8, text, b, "-->") orelse return text;
+    const files: []const u8 = text[b + begin_marker.len .. files_end];
+    const region_start: usize = files_end + "-->".len;
+    const region_end: usize = indexOfPos(u8, text, region_start, end_marker) orelse return text;
+    const generated: []u8 = try reference(gpa, io, cache, files);
+    rep.references += 1;
+    if (eql(u8, text[region_start..region_end], generated)) {
+        return text;
+    }
+    rep.stale += 1;
+    try say(io, gpa, "{s}: the reference is out of date\n", .{page});
+    var rebuilt: ArrayList(u8) = .empty;
+    try rebuilt.appendSlice(gpa, text[0..region_start]);
+    try rebuilt.appendSlice(gpa, generated);
+    try rebuilt.appendSlice(gpa, text[region_end..]);
+    rep.regenerated += 1;
+    return rebuilt.items;
+}
+
+/// How many decimal digits `text` has in a row from `start`.
+fn digitCount(text: []const u8, start: usize) usize {
+    var end: usize = start;
+    while (end < text.len and text[end] >= '0' and text[end] <= '9') : (end += 1) {}
+    return end - start;
+}
+
+/// Whether `text` is a section number and nothing else: `11` or `11.4`.
+fn isSectionNumber(text: []const u8) bool {
+    const whole: usize = digitCount(text, 0);
+    if (whole == 0) {
+        return false;
+    }
+    if (whole == text.len) {
+        return true;
+    }
+    if (text[whole] != '.') {
+        return false;
+    }
+    const part: usize = digitCount(text, whole + 1);
+    return part > 0 and whole + 1 + part == text.len;
+}
+
+/// How long the number at the start of a heading's text is - `11. ` for a chapter, `11.4 ` for a section, the space
+/// included - or null when it carries none.
+fn headingNumberLength(title: []const u8, is_chapter: bool) ?usize {
+    const whole: usize = digitCount(title, 0);
+    if (whole == 0) {
+        return null;
+    }
+    if (is_chapter) {
+        const has_point_and_space: bool = startsWith(u8, title[whole..], ". ");
+        return if (has_point_and_space) whole + 2 else null;
+    }
+    if (!startsWith(u8, title[whole..], ".")) {
+        return null;
+    }
+    const part: usize = digitCount(title, whole + 1);
+    const end: usize = whole + 1 + part;
+    const has_space: bool = part > 0 and startsWith(u8, title[end..], " ");
+    return if (has_space) end + 1 else null;
+}
+
+/// Whether `before` - a page up to an `href="#` - ends with a link's opening, `<a` and whitespace (a space, or a line
+/// break where the link wraps).
+fn isLinkStart(before: []const u8) bool {
+    const opening: []const u8 = trimEnd(u8, before, " \t\r\n");
+    const has_space: bool = opening.len < before.len;
+    return has_space and endsWith(u8, opening, "<a");
+}
+
+/// Where the next chapter or section heading starts, from `pos` on, and which it is - or null when there are no more.
+fn nextHeading(text: []const u8, pos: usize) ?struct { at: usize, is_chapter: bool } {
+    const chapter_at: ?usize = indexOfPos(u8, text, pos, "<h2 id=\"");
+    const section_at: ?usize = indexOfPos(u8, text, pos, "<h3 id=\"");
+    if (chapter_at == null and section_at == null) {
+        return null;
+    }
+    const is_chapter: bool = section_at == null or (chapter_at != null and chapter_at.? < section_at.?);
+    const at: usize = if (is_chapter) chapter_at.? else section_at.?;
+    return .{ .at = at, .is_chapter = is_chapter };
+}
+
+/// A page with its section numbers generated, and how many numbers changed.
+const Numbered = struct {
+    text: []u8,
+    count: usize,
+};
+
+/// THE SECTION NUMBERS (this file's head). Two passes over the page:
+///
+///     headings   every `<h2 id="...">` whose text starts with a number - `11. ` - is the next CHAPTER, and every
+///                `<h3 id="...">` whose text starts with one - `11.4 ` - the next SECTION of its chapter; each gets
+///                the number its place gives it. A heading without a number is left as it is, and counts for nothing.
+///     links      every `<a href="#id">` straight to a numbered heading whose whole text is a number - `11.4`,
+///                with or without a section sign before it - shows that heading's number. A link with any other
+///                text is left as it is.
+///
+/// Memory: `gpa`, the caller's (an arena in this tool).
+fn numberSections(gpa: Allocator, text: []const u8) !Numbered {
+    var numbers: std.StringHashMapUnmanaged([]const u8) = .empty;
+    var changed: usize = 0;
+    // The headings, in the page's order.
+    var headed: ArrayList(u8) = .empty;
+    var pos: usize = 0;
+    var chapter: usize = 0;
+    var section: usize = 0;
+    while (nextHeading(text, pos)) |heading| {
+        const id_start: usize = heading.at + "<h2 id=\"".len;
+        const id_end: usize = indexOfPos(u8, text, id_start, "\"") orelse break;
+        const tag_end: usize = indexOfPos(u8, text, id_end, ">") orelse break;
+        const title_start: usize = tag_end + 1;
+        try headed.appendSlice(gpa, text[pos..title_start]);
+        pos = title_start;
+        const prefix_length: usize = headingNumberLength(text[title_start..], heading.is_chapter) orelse continue;
+        if (!heading.is_chapter and chapter == 0) {
+            continue;
+        }
+        if (heading.is_chapter) {
+            chapter += 1;
+            section = 0;
+        } else {
+            section += 1;
+        }
+        const number: []const u8 = if (heading.is_chapter)
+            try allocPrint(gpa, "{d}", .{chapter})
+        else
+            try allocPrint(gpa, "{d}.{d}", .{ chapter, section });
+        try numbers.put(gpa, text[id_start..id_end], number);
+        const prefix: []const u8 = if (heading.is_chapter)
+            try allocPrint(gpa, "{s}. ", .{number})
+        else
+            try allocPrint(gpa, "{s} ", .{number});
+        const old_prefix: []const u8 = text[title_start .. title_start + prefix_length];
+        changed += @intFromBool(!eql(u8, old_prefix, prefix));
+        try headed.appendSlice(gpa, prefix);
+        pos = title_start + prefix_length;
+    }
+    try headed.appendSlice(gpa, text[pos..]);
+    // The links to them: `<a`, any whitespace - a link may wrap there - then `href="#`.
+    const page: []const u8 = headed.items;
+    var linked: ArrayList(u8) = .empty;
+    const target_open: []const u8 = "href=\"#";
+    const section_sign: []const u8 = "\u{a7}";
+    pos = 0;
+    while (indexOfPos(u8, page, pos, target_open)) |target_at| {
+        const id_start: usize = target_at + target_open.len;
+        const opens_a_link: bool = isLinkStart(page[0..target_at]);
+        if (!opens_a_link) {
+            try linked.appendSlice(gpa, page[pos..id_start]);
+            pos = id_start;
+            continue;
+        }
+        const id_end: usize = indexOfPos(u8, page, id_start, "\"") orelse break;
+        const label_start: usize = id_end + "\">".len;
+        const opens_directly: bool = startsWith(u8, page[id_end..], "\">");
+        const label_end: usize = indexOfPos(u8, page, id_end, "</a>") orelse break;
+        const number: ?[]const u8 = numbers.get(page[id_start..id_end]);
+        const label: []const u8 = if (opens_directly) page[label_start..label_end] else "";
+        const has_sign: bool = startsWith(u8, label, section_sign);
+        const label_number: []const u8 = if (has_sign) label[section_sign.len..] else label;
+        if (!opens_directly or number == null or !isSectionNumber(label_number)) {
+            try linked.appendSlice(gpa, page[pos..id_end]);
+            pos = id_end;
+            continue;
+        }
+        try linked.appendSlice(gpa, page[pos..label_start]);
+        if (has_sign) {
+            try linked.appendSlice(gpa, section_sign);
+        }
+        try linked.appendSlice(gpa, number.?);
+        changed += @intFromBool(!eql(u8, label_number, number.?));
+        pos = label_end;
+    }
+    try linked.appendSlice(gpa, page[pos..]);
+    const result: Numbered = .{ .text = linked.items, .count = changed };
+    return result;
+}
+
+/// THE CONTENTS (this file's head): the region between `<!--doc-folds:toc-->` and `<!--doc-folds:toc-end-->`, when
+/// the page has one, rewritten as the list of its numbered chapters, each with its numbered sections nested in it -
+/// every entry a link to its heading, titled by the heading's text without its number:
+///
+///     <ol>
+///     <li><a href="#what">What this is</a>
+///       <ol>
+///       <li><a href="#problem">The problem</a></li>
+///       </ol></li>
+///     <li><a href="#ref">Reference</a></li>
+///     </ol>
+///
+/// The count is 1 when the region changed, 0 otherwise. Memory: `gpa`, the caller's (an arena in this tool).
+fn tableOfContents(gpa: Allocator, text: []u8) !Numbered {
+    const begin_marker: []const u8 = "<!--doc-folds:toc-->";
+    const end_marker: []const u8 = "<!--doc-folds:toc-end-->";
+    const unchanged: Numbered = .{ .text = text, .count = 0 };
+    const begin: usize = indexOf(u8, text, begin_marker) orelse return unchanged;
+    const region_start: usize = begin + begin_marker.len;
+    const region_end: usize = indexOfPos(u8, text, region_start, end_marker) orelse return unchanged;
+    var list: ArrayList(u8) = .empty;
+    try list.appendSlice(gpa, "\n<ol>\n");
+    var chapter_open: bool = false;
+    var sections_open: bool = false;
+    var pos: usize = 0;
+    while (nextHeading(text, pos)) |heading| {
+        const id_start: usize = heading.at + "<h2 id=\"".len;
+        const id_end: usize = indexOfPos(u8, text, id_start, "\"") orelse break;
+        const tag_end: usize = indexOfPos(u8, text, id_end, ">") orelse break;
+        const title_start: usize = tag_end + 1;
+        pos = title_start;
+        const prefix_length: usize = headingNumberLength(text[title_start..], heading.is_chapter) orelse continue;
+        const title_end: usize = indexOfPos(u8, text, title_start, "<") orelse break;
+        const id: []const u8 = text[id_start..id_end];
+        const title: []const u8 = trim(u8, text[title_start + prefix_length .. title_end], " ");
+        if (heading.is_chapter) {
+            if (sections_open) {
+                try list.appendSlice(gpa, "  </ol>");
+                sections_open = false;
+            }
+            if (chapter_open) {
+                try list.appendSlice(gpa, "</li>\n");
+            }
+            try list.appendSlice(gpa, try allocPrint(gpa, "<li><a href=\"#{s}\">{s}</a>", .{ id, title }));
+            chapter_open = true;
+            continue;
+        }
+        if (!chapter_open) {
+            continue;
+        }
+        if (!sections_open) {
+            try list.appendSlice(gpa, "\n  <ol>\n");
+            sections_open = true;
+        }
+        try list.appendSlice(gpa, try allocPrint(gpa, "  <li><a href=\"#{s}\">{s}</a></li>\n", .{ id, title }));
+    }
+    if (sections_open) {
+        try list.appendSlice(gpa, "  </ol>");
+    }
+    if (chapter_open) {
+        try list.appendSlice(gpa, "</li>\n");
+    }
+    try list.appendSlice(gpa, "</ol>\n");
+    if (eql(u8, text[region_start..region_end], list.items)) {
+        return unchanged;
+    }
+    var rebuilt: ArrayList(u8) = .empty;
+    try rebuilt.appendSlice(gpa, text[0..region_start]);
+    try rebuilt.appendSlice(gpa, list.items);
+    try rebuilt.appendSlice(gpa, text[region_end..]);
+    const result: Numbered = .{ .text = rebuilt.items, .count = 1 };
+    return result;
+}
+
 /// Regenerate (or check) one page. Returns the page's new text; `rep` says what happened.
 fn processPage(
     gpa: Allocator,
@@ -420,29 +696,91 @@ fn processPage(
     }
     try out.appendSlice(gpa, text[pos..]);
 
-    // The reference region, if the page has one.
-    const begin_marker: []const u8 = "<!--doc-folds:ref ";
-    const end_marker: []const u8 = "<!--doc-folds:ref-end-->";
-    const joined: []u8 = out.items;
-    if (indexOf(u8, joined, begin_marker)) |b| {
-        const files_end: usize = indexOfPos(u8, joined, b, "-->") orelse return joined;
-        const files: []const u8 = joined[b + begin_marker.len .. files_end];
-        const region_start: usize = files_end + "-->".len;
-        const region_end: usize = indexOfPos(u8, joined, region_start, end_marker) orelse return joined;
-        const generated: []u8 = try reference(gpa, io, &cache, files);
-        rep.references += 1;
-        if (!eql(u8, joined[region_start..region_end], generated)) {
-            rep.stale += 1;
-            try say(io, gpa, "{s}: the reference is out of date\n", .{page});
-            var rebuilt: ArrayList(u8) = .empty;
-            try rebuilt.appendSlice(gpa, joined[0..region_start]);
-            try rebuilt.appendSlice(gpa, generated);
-            try rebuilt.appendSlice(gpa, joined[region_end..]);
-            rep.regenerated += 1;
-            return rebuilt.items;
-        }
+    const with_reference: []u8 = try referenceRegion(gpa, io, page, &cache, out.items, rep);
+    const numbered: Numbered = try numberSections(gpa, with_reference);
+    const numbers_changed: usize = numbered.count;
+    if (numbers_changed > 0) {
+        rep.stale += numbers_changed;
+        rep.regenerated += numbers_changed;
+        try say(io, gpa, "{s}: {d} section number(s) out of date\n", .{ page, numbers_changed });
     }
-    return joined;
+    const contents: Numbered = try tableOfContents(gpa, numbered.text);
+    if (contents.count > 0) {
+        rep.stale += 1;
+        rep.regenerated += 1;
+        try say(io, gpa, "{s}: the contents is out of date\n", .{page});
+    }
+    return contents.text;
+}
+
+test "doc_folds: section numbers follow the headings' order, and links follow their headings" {
+    // A page whose sections were moved: chapter 2's sections out of order, a link showing a stale number, a link
+    // with words in it, and an unnumbered heading. The numbers come from the order; the number-only links follow
+    // their headings; the rest is left alone.
+    var arena: ArenaAllocator = .init(testing_allocator);
+    defer arena.deinit();
+    const gpa: Allocator = arena.allocator();
+    const page: []const u8 =
+        \\<h2 id="intro">Contents</h2>
+        \\<h2 id="one">1. One</h2>
+        \\<h3 id="a">1.1 A</h3>
+        \\<h2 id="two">2. Two</h2>
+        \\<h3 id="c">2.3 C</h3>
+        \\<h3 id="b">2.1 B</h3>
+        \\<p>See <a href="#c">§2.3</a>, <a href="#b">2.1</a>, <a href="#b">B itself</a>, <a href="#two">§2</a>.</p>
+        \\<p>And a link that wraps: <a
+        \\href="#c">§2.3</a>.</p>
+    ;
+    const expected: []const u8 =
+        \\<h2 id="intro">Contents</h2>
+        \\<h2 id="one">1. One</h2>
+        \\<h3 id="a">1.1 A</h3>
+        \\<h2 id="two">2. Two</h2>
+        \\<h3 id="c">2.1 C</h3>
+        \\<h3 id="b">2.2 B</h3>
+        \\<p>See <a href="#c">§2.1</a>, <a href="#b">2.2</a>, <a href="#b">B itself</a>, <a href="#two">§2</a>.</p>
+        \\<p>And a link that wraps: <a
+        \\href="#c">§2.1</a>.</p>
+    ;
+    const numbered: Numbered = try numberSections(gpa, page);
+    try expectEqualStrings(expected, numbered.text);
+    try expectEqual(@as(usize, 5), numbered.count);
+}
+
+test "doc_folds: the contents lists the numbered chapters, each with its numbered sections" {
+    // A page asking for its contents, with an unnumbered heading and a chapter without sections: the list holds the
+    // numbered headings only, the sections nested in their chapter, every title without its number or its anchor.
+    var arena: ArenaAllocator = .init(testing_allocator);
+    defer arena.deinit();
+    const gpa: Allocator = arena.allocator();
+    const page: []u8 = try gpa.dupe(u8,
+        \\<nav><!--doc-folds:toc-->stale<!--doc-folds:toc-end--></nav>
+        \\<h2 id="intro">Contents</h2>
+        \\<h2 id="one">1. One<a class="anchor" href="#one">#</a></h2>
+        \\<h3 id="a">1.1 A first section<a class="anchor" href="#a">#</a></h3>
+        \\<h3 id="b">1.2 B</h3>
+        \\<h2 id="two">2. Two</h2>
+    );
+    const expected: []const u8 =
+        \\<nav><!--doc-folds:toc-->
+        \\<ol>
+        \\<li><a href="#one">One</a>
+        \\  <ol>
+        \\  <li><a href="#a">A first section</a></li>
+        \\  <li><a href="#b">B</a></li>
+        \\  </ol></li>
+        \\<li><a href="#two">Two</a></li>
+        \\</ol>
+        \\<!--doc-folds:toc-end--></nav>
+        \\<h2 id="intro">Contents</h2>
+        \\<h2 id="one">1. One<a class="anchor" href="#one">#</a></h2>
+        \\<h3 id="a">1.1 A first section<a class="anchor" href="#a">#</a></h3>
+        \\<h3 id="b">1.2 B</h3>
+        \\<h2 id="two">2. Two</h2>
+    ;
+    const contents: Numbered = try tableOfContents(gpa, page);
+    try expectEqualStrings(expected, contents.text);
+    try expectEqual(@as(usize, 1), contents.count);
 }
 
 /// The command line (std's cli, `src/command_line.zig`). `--check` is `--fix`'s CLEAR - the PR's name for an option

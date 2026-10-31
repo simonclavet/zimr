@@ -13,7 +13,6 @@ const common = @import("example_common");
 const sinRad = zm.sinRad;
 const cosRad = zm.cosRad;
 const tau = zm.tau;
-const distance = zm.distance;
 const float = zm.float;
 const radFromDeg = zm.radFromDeg;
 const Vec2 = zm.Vec2;
@@ -174,7 +173,7 @@ fn update(f: *z.Frame, s: *State) void {
         s.press = m;
         s.dragged = false;
     }
-    if (z.isMouseButtonDown(f.input, .left) and distance(m, s.press) > 8.0) {
+    if (z.isMouseButtonDown(f.input, .left) and zm.distance(m, s.press) > 8.0) {
         s.dragged = true;
         s.dst_center = m;
     }

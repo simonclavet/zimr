@@ -12,7 +12,7 @@
 
 const std = @import("std");
 const Io = std.Io;
-const ArrayListUnmanaged = std.ArrayListUnmanaged;
+const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
 const indexOfScalar = std.mem.indexOfScalar;
 const startsWith = std.mem.startsWith;
@@ -34,7 +34,7 @@ const MeshLoader = struct {
     base: []const u8,
     /// Every buffer handed out, freed together at the end - the borrower has no idea how
     /// long `urdf.resolveMeshes` keeps them.
-    loaded: ArrayListUnmanaged([]const u8) = .empty,
+    loaded: ArrayList([]const u8) = .empty,
 
     fn deinit(self: *MeshLoader) void {
         for (self.loaded.items) |bytes| {

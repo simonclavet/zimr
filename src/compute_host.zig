@@ -433,6 +433,10 @@ pub fn Compute(comptime M: type) type {
             mirrored: u64 = 0,
             /// The dispatch count at the moment the in-flight copy was encoded.
             copy_at: u64 = 0,
+            /// Whether the copy in flight was encoded before an upload that replaced what it copies
+            /// (`discardReadback`): when it lands it is released unread, and the next copy - encoded
+            /// after the upload - is the first the mirror takes.
+            discard_copy_in_flight: bool = false,
             /// Bytes the in-flight copy packs into `staging` (each field's first
             /// `element_count` elements, back to back), and that `element_count`.
             read_bytes: u32 = 0,
@@ -1497,6 +1501,25 @@ pub fn Compute(comptime M: type) type {
             }
         }
 
+        /// Forgets what the readback holds, and the copy in flight if there is one: from here, `readLatest` returns
+        /// null until a copy encoded AFTER this call has landed. For a caller that has just replaced buffers by
+        /// upload - a learner resumed from a saved state: a copy encoded before the upload would bring back exactly
+        /// what the upload replaced, and anything reading the readback (a mirror of the weights) would go back to it.
+        ///
+        /// On the CPU backend the buffers are the module's own and every read is current: nothing to forget. On the
+        /// worker backend an upload writes the readback's own mirror, so the readback holds the upload already; a job
+        /// still in flight would overwrite it on landing, and is not guarded here - no learner runs on that backend.
+        pub fn discardReadback(self: *Self) void {
+            switch (self.backend) {
+                .cpu, .worker => {},
+                .gpu => {
+                    const gp: *Gpu = &self.gpu.?;
+                    gp.have_read = false;
+                    gp.discard_copy_in_flight = gp.read != .invalid;
+                },
+            }
+        }
+
         pub fn readLatest(self: *Self, comptime field: Field) ?[]const ElemOf(field) {
             // Variable-count fields (pos/vel/...) are sized to capacity and slice to
             // the live `element_count`; fixed fields (grid_counts, cell_start) must
@@ -1536,7 +1559,14 @@ pub fn Compute(comptime M: type) type {
                 },
                 .gpu => {
                     const gp: *Gpu = &self.gpu.?;
-                    if (gp.read != .invalid and wgpu.bufferReadPoll(gp.read)) {
+                    const copy_has_landed: bool = gp.read != .invalid and wgpu.bufferReadPoll(gp.read);
+                    if (copy_has_landed and gp.discard_copy_in_flight) {
+                        // A copy of what an upload has since replaced (`discardReadback`): released
+                        // unread. The block below encodes a fresh one, after the upload.
+                        wgpu.bufferReadRelease(gp.read);
+                        gp.read = .invalid;
+                        gp.discard_copy_in_flight = false;
+                    } else if (copy_has_landed) {
                         const mirror_bytes: []u8 = asBytes(gp.mirror);
                         wgpu.bufferReadInto(gp.read, mirror_bytes[0..gp.read_bytes]);
                         unpackPrefixes(mirror_bytes, gp.read_count);

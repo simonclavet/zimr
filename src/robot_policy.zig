@@ -168,6 +168,32 @@ pub fn defaultSubset(
     return subsetFor(gpa, m, body_names, &watched_bodies, &actuated_bodies);
 }
 
+/// Every joint but the free root, in model order, and no watched body: the subset of a policy that acts on the whole
+/// body and observes something other than DReCon's watched bodies - SuperTrack's, whose action is one number per
+/// actuated degree of freedom (`robot_track.actionSize`). In model order, the subset's degrees of freedom are the
+/// model's own after the root's, so `Controller.apply` spreads them onto the model's action one for one.
+pub fn everyActuatedJoint(gpa: Allocator, m: *const rbt.Model) !Subset {
+    var joint_list: ArrayList(usize) = .empty;
+    errdefer joint_list.deinit(gpa);
+    var dofs: usize = 0;
+    for (0..m.njnt) |joint| {
+        const is_root: bool = m.jnt_type[joint] == .free;
+        if (!is_root) {
+            try joint_list.append(gpa, joint);
+            dofs += dofsOf(m, joint);
+        }
+    }
+    const no_watched_bodies: []usize = try gpa.alloc(usize, 0);
+    errdefer gpa.free(no_watched_bodies);
+    const joints: []usize = try joint_list.toOwnedSlice(gpa);
+    const action_size: usize = track.actionSize(m);
+    assertf(dofs == action_size, @src(), "everyActuatedJoint: {d} degrees of freedom, an action of {d}", .{
+        dofs,
+        action_size,
+    });
+    return .{ .bodies = no_watched_bodies, .joints = joints, .dofs = dofs };
+}
+
 /// A frame that turns with the character but does not tilt with it, sitting at its centre of mass.
 pub const Frame = struct {
     /// Rotates world vectors into the frame.

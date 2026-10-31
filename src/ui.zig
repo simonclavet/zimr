@@ -10652,7 +10652,9 @@ pub const SliderOpts = struct {
 /// `opts.fmt` field directly without making opts itself a comptime
 /// argument - too invasive for. The defaults below match
 /// what most users want:
-///   - floats: 3 decimal places (`"{d:.3}"`)
+///   - floats: 3 decimal places (`"{d:.3}"`) - except a value too small for three decimals to show, which is written
+///     in the fewest digits that read back as it (`"{d}"`): a learning rate of 0.0003 reads 0.0003, not 0.000, so a
+///     setting that is not zero never looks like one
 ///   - integers: no decimals (`"{d}"`)
 /// may revisit with a comptime-format generic or an enum-of-
 /// styles trick to make `opts.fmt` actually wire in.
@@ -10664,10 +10666,41 @@ fn formatScalar(
 ) []const u8 {
     _ = _fmt_runtime; // reserved for (see comment above)
     return switch (@typeInfo(T)) {
-        .float => bufPrint(buf, "{d:.3}", .{v}) catch buf[0..0],
+        .float => formatFloatScalar(buf, T, v),
         .int => bufPrint(buf, "{d}", .{v}) catch buf[0..0],
         else => buf[0..0],
     };
+}
+
+/// The text a numeric field's EDIT starts from: the value in the fewest digits that read back as exactly it. The
+/// display's three decimals would not do: 0.0125 shows as 0.013, and a field focused and left without an edit commits
+/// what its buffer holds - so focusing a setting and clicking away would have changed it.
+fn formatScalarForEditing(buf: []u8, comptime T: type, v: T) []const u8 {
+    return switch (@typeInfo(T)) {
+        .float, .int => bufPrint(buf, "{d}", .{v}) catch buf[0..0],
+        else => buf[0..0],
+    };
+}
+
+/// A float as `formatScalar` writes it: three decimals, or the shortest decimal that reads back as `v` when three
+/// decimals would round a value that is not zero down to zero (below 0.0005 either side of it).
+fn formatFloatScalar(buf: []u8, comptime T: type, v: T) []const u8 {
+    const smallest_shown_by_three_decimals: T = 0.0005;
+    const rounds_to_zero: bool = v != 0 and @abs(v) < smallest_shown_by_three_decimals;
+    if (rounds_to_zero) {
+        return bufPrint(buf, "{d}", .{v}) catch buf[0..0];
+    }
+    return bufPrint(buf, "{d:.3}", .{v}) catch buf[0..0];
+}
+
+test "formatScalar: three decimals, and a small value that is not zero never reads as zero" {
+    var buffer: [32]u8 = undefined;
+    try expectEqualStrings("0.300", formatScalar(&buffer, f32, 0.3, ""));
+    try expectEqualStrings("1.000", formatScalar(&buffer, f32, 1.0, ""));
+    try expectEqualStrings("0.000", formatScalar(&buffer, f32, 0.0, ""));
+    try expectEqualStrings("0.0003", formatScalar(&buffer, f32, 0.0003, ""));
+    try expectEqualStrings("-0.0001", formatScalar(&buffer, f32, -0.0001, ""));
+    try expectEqualStrings("0.001", formatScalar(&buffer, f32, 0.001, ""));
 }
 
 /// Convert f64 back to any int/float (used to commit the new slider
@@ -15118,16 +15151,17 @@ fn inputScalarInRect(
     }
 
     // Click to focus. On focus-gain, seed the edit buffer with the
-    // current value formatted via opts.fmt - so the user sees what's
-    // there and can edit in place. This block runs BEFORE the
-    // `is_focused` capture so a click + chars_typed on the SAME
-    // frame both register correctly: focus first, then process the
-    // chars using the just-set active_id.
+    // current value, EXACTLY (`formatScalarForEditing`) - so the user
+    // sees what's there and can edit in place, and a field focused
+    // and left without an edit writes back the very value it had.
+    // This block runs BEFORE the `is_focused` capture so a click +
+    // chars_typed on the SAME frame both register correctly: focus
+    // first, then process the chars using the just-set active_id.
     const click_to_focus: bool = hovered and ctx.input.mouse_left_clicked;
     if (click_to_focus) {
         ctx.active_id = id;
         var seed_buf: [64]u8 = undefined;
-        const seeded: []const u8 = formatScalar(&seed_buf, T, value_ptr.*, opts.fmt);
+        const seeded: []const u8 = formatScalarForEditing(&seed_buf, T, value_ptr.*);
         ctx.scalar_edit_buf = @splat(0);
         @memcpy(ctx.scalar_edit_buf[0..seeded.len], seeded);
         ctx.scalar_edit_len = seeded.len;
@@ -21606,6 +21640,31 @@ test "button label: clipped to the button only when it does not fit" {
     }
     try expectEqual(@as(usize, 1), clips_pushed);
     try expectEqual(@as(usize, 1), clips_popped);
+}
+
+test "inputScalarInRect: a field focused and left without an edit keeps its value exactly" {
+    // 0.0125 shows with three decimals as 0.013. Focusing the field seeds its edit with the exact value, so clicking
+    // away - which commits the edit - writes back 0.0125 itself, not the rounded text.
+    var env = TestEnv.init(testing_allocator);
+    defer env.deinit();
+    const id: Id = 0x5678;
+    const box: Rectangle = .{ .x = 80, .y = 80, .width = 120, .height = 24 };
+    var value: f32 = 0.0125;
+    // Frame 1: a click inside the field focuses it and seeds the edit.
+    var snap: InputSnapshot = .{ .mouse_pos = .{ 100, 90 }, .mouse_left_down = true, .mouse_left_clicked = true };
+    var u: Ui = env.beginFrameWith(snap);
+    var w: WindowHandle = u.window("t", .{}) orelse unreachable;
+    _ = inputScalarInRect(u.ctx, u.ctx.current_window.?, id, box, &value, f32, .{});
+    try expectEqualStrings("0.0125", u.ctx.scalar_edit_buf[0..u.ctx.scalar_edit_len]);
+    w.close();
+    // Frame 2: a click outside commits the untouched edit.
+    snap = .{ .mouse_pos = .{ 400, 400 }, .mouse_left_down = true, .mouse_left_clicked = true };
+    u = env.beginFrameWith(snap);
+    w = u.window("t", .{}) orelse unreachable;
+    const changed: bool = inputScalarInRect(u.ctx, u.ctx.current_window.?, id, box, &value, f32, .{});
+    w.close();
+    try expect(!changed);
+    try expectEqual(@as(f32, 0.0125), value);
 }
 
 test "Q3: buttonBehavior fires pressed on click-then-release inside rect" {
