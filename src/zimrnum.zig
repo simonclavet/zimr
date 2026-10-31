@@ -5474,7 +5474,7 @@ pub fn argminAll(comptime T: type, a: Tensor(T)) Error!usize {
     const shape: []const usize = a.shape[0..a.rank];
     for (0..n) |i| {
         const x: T = try a.at(walker[0..a.rank]);
-        if (x < best_value or (comptime isFloat(T)) and zm.isNan(best_value)) {
+        if (x < best_value or ((comptime isFloat(T)) and zm.isNan(best_value))) {
             best_value = x;
             best = i;
         }
@@ -5764,7 +5764,7 @@ fn matmulAlongRows(
     b: Tensor(T),
     shape: MatmulShape,
 ) void {
-    const lanes: usize = suggestVectorLength(T) orelse 32 / @sizeOf(T);
+    const lanes: usize = suggestVectorLength(T) orelse (32 / @sizeOf(T));
     const block_vectors: usize = 4;
     const block: usize = lanes * block_vectors;
     const a_row_step: usize = @intCast(a.strides[0]);
@@ -7735,7 +7735,7 @@ pub fn argmaxAll(comptime T: type, a: Tensor(T)) Error!usize {
     var i: usize = 0;
     while (i < n) : (i += 1) {
         const x: T = a.data[a.offsetOf(walker[0..a.rank])];
-        if (x > best or (comptime isFloat(T)) and zm.isNan(best)) {
+        if (x > best or ((comptime isFloat(T)) and zm.isNan(best))) {
             best = x;
             best_at = i;
         }
@@ -7763,7 +7763,7 @@ pub fn argmaxRows(comptime T: type, out: []usize, a: Tensor(T)) Error!void {
         var col: usize = 1;
         while (col < cols) : (col += 1) {
             const x: T = a.at2(row, col);
-            if (x > best or (comptime isFloat(T)) and zm.isNan(best)) {
+            if (x > best or ((comptime isFloat(T)) and zm.isNan(best))) {
                 best = x;
                 best_at = col;
             }
@@ -8299,7 +8299,7 @@ pub fn accuracy(
         var col: usize = 1;
         while (col < logits.shape[1]) : (col += 1) {
             const x: T = logits.at2(row, col);
-            if (x > best or (comptime isFloat(T)) and zm.isNan(best)) {
+            if (x > best or ((comptime isFloat(T)) and zm.isNan(best))) {
                 best = x;
                 best_at = col;
             }
@@ -20162,7 +20162,7 @@ pub fn dft(
         var re: CompensatedSum(T) = .{};
         var im: CompensatedSum(T) = .{};
         for (input, 0..) |x, sample| {
-            const angle: T = exponent_sign * @as(T, tau) * @as(T, @floatFromInt(bin * sample % n)) /
+            const angle: T = exponent_sign * @as(T, tau) * @as(T, @floatFromInt((bin * sample) % n)) /
                 @as(T, @floatFromInt(n));
             const c: T = scalarCos(angle);
             const s: T = scalarSin(angle);
@@ -24248,7 +24248,7 @@ test "zn integers: the reductions, and what exactness buys" {
     const big: Tensor(i64) = try .alloc(ta, &.{1000});
     defer ta.free(big.data);
     for (big.data, 0..) |*slot, i| {
-        slot.* = @as(i64, 1) << 40 | @as(i64, @intCast(i));
+        slot.* = (@as(i64, 1) << 40) | @as(i64, @intCast(i));
     }
     var by_hand: i64 = 0;
     for (big.data) |value| {

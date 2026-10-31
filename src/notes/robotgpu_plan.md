@@ -1,7 +1,7 @@
 # robotgpu - MuJoCo Warp in zimr, on the GPU of the web and of Windows - the plan (v1 DRAFT, Oct 31 2026)
 
-STATUS: DRAFT FOR REVIEW - decisions taken: D1, D15, D8, D12, D5, D18, D9, D7, D14, D2, D3, D4, D6, D10, D11
-(section 12). Written under claude.md's "MAKE A PLAN" procedure: study,
+STATUS: FINAL (Oct 31) - all 18 decisions answered one at a time and the full list agreed by Simon ("agree. Don't
+implement just yet"). NOT STARTED: implementation, beginning with S0, waits for Simon's explicit go. Written under claude.md's "MAKE A PLAN" procedure: study,
 brainstorm every option, pick, write it down here, then ask the open decisions ONE AT A TIME (section 12) and revise
 after each. **Nothing is implemented and nothing will be until Simon says go.** This file is the one source of truth
 for robotgpu's decisions, status and journal (section 13).
@@ -51,7 +51,8 @@ THE GATES - each one a measurement that can come out red:
      reorder a sum) on lavapipe in the sandbox and on Simon's GPU under Vulkan.
   G3 PARITY WITH MUJOCO. Every feature robot.zig lacks (collision, MuJoCo's contact parameters, the approximate
      constraint diagonal, MJW's Newton line search, elliptic cones, the sensors, the passive forces...) checked against
-     REAL MuJoCo through fixtures `scripts/robot_oracle.py` generates - never against ourselves.
+     REAL MuJoCo through fixtures `scripts/robot_oracle.py` generates - never against ourselves; where MuJoCo Warp
+     deliberately differs from MuJoCo C, against fixtures MJW generates, each such row documented (D16).
   G4 THROUGHPUT. On Simon's desktop GPU, natively, Geno with N worlds: at least 20x the CPU fleet's steps per second
      at equal physics (the journal's "the GPU simulator next, for the 50x that every later experiment needs", Sep 20).
   G5 THE TRACKER TRAINS ON IT. `robot_track_resident` learns with robotgpu as its simulator, and the policy it produces
@@ -151,7 +152,7 @@ joint within 1% in 0.5 s (robot_geno.zig:4401-4482); the servo baseline on dance
 (notes/bench/b1_10min_seed1.csv); save/restore replays identically (robot_geno.zig:5480).
 
 TWO CONSEQUENCES FOR THE PLAN. (a) Geno's nv of 75 puts a dense Hessian at 75 x 75 x 4 = 22.5 KB, past WebGPU's 16 KB
-of workgroup memory: the solver cannot simply keep H in shared memory (section 6.8). (b) Moving Geno to MuJoCo-faithful
+of workgroup memory - which mattered until D18 made robotgpu native-only: a desktop GPU's 48-64 KB holds it (6.8). (b) Moving Geno to MuJoCo-faithful
 contacts CHANGES THE PHYSICS THE TRACKER WAS TUNED ON - plane instead of box, MuJoCo's max-friction rule instead of the
 geometric mean (2.0 against 1.41), MuJoCo's margins instead of the speculative one, the approximate diagonal, a warm
 start. Section 6.12 and decision D8/D12 deal with it; the judge must run the SAME physics as training (G5).
@@ -811,6 +812,8 @@ asked one at a time; until Simon answers, a pick is a recommendation.
 
   PICK M1 - the zimrnum / src/gpu split, which already works.
 
+  DECIDED Oct 31 (D13): M1 - robotgpu.zig device-free; `robotgpu_host.zig` runs its program on the Vulkan host.
+
 ### 4.N How the tracker uses it (D14)
 
   N1 EVERYTHING ON THE DEVICE: observations, the policy's action, the servo, resets and pushes, recording into the
@@ -826,6 +829,9 @@ asked one at a time; until Simon answers, a pick is a recommendation.
   O2 COMPTIME MODEL SPECIALISATION (unrolled chains, constant offsets) per robot.
 
   PICK O1; O2 stays available for one fixed robot if a measurement asks.
+
+  DECIDED Oct 31 (D17): O1 - generic kernels, model features as uniform flags, comptime variants only where a flag
+  changes a kernel's shape (cone type, collision pair type), as MJW specialises.
 
 ### 4.P One file or a family (D2)
 
@@ -849,6 +855,11 @@ asked one at a time; until Simon answers, a pick is a recommendation.
      stays a PERFORMANCE reference and a reading guide.
 
   PICK Q1.
+
+  DECIDED Oct 31 (D16): Q1 with one refinement - REAL MuJoCo C fixtures are the oracle (plus robot.zig for shared
+  features and the twin for the GPU); where MJW DELIBERATELY differs from MuJoCo C, MJW's behaviour wins (the ask is
+  MuJoCo Warp) and is pinned by a fixture MJW itself generates, each such row documented (margin and gap, 2.6, is
+  the first candidate).
 
 ### 4.R Scope order (D15)
 
@@ -1060,8 +1071,8 @@ host reads and REPORTS - never a silent clamp (claude.md: "a silent clamp is a s
         io:      [sizes.io]f32,        // the host's window: uploads (ctrl, resets) and small readbacks
     };
 
-Eight fields - compute_host's ceiling. A `Layout` (an extern struct of named u32 offsets, flat, no arrays - WGSL
-uniform rules pad nested structs and array elements to 16 bytes) rides inside `Params` with the counts (nworld, nbody,
+Eight fields - compute_host's ceiling. A `Layout` (an extern struct of named u32 offsets, flat, no arrays - std140
+uniform rules, Vulkan's as WGSL's, pad nested structs and array elements to 16 bytes) rides inside `Params` with the counts (nworld, nbody,
 njnt, nv, nq, ngeom, nu, na...), the step options (timestep, gravity, iterations, tolerances, flags) and the feature
 bits. Per-world arrays are WORLD-MAJOR by default: element i of world w at `offset + w * stride + i`, the stride
 derived from the counts (padded to 4 floats), behind one accessor so the element-major alternative is a comptime
@@ -1090,8 +1101,8 @@ io.py and set_const compute:
 ### 6.4 The step program
 
 The step is DATA: `program(layout)` returns the ordered dispatches (kernel id, thread count), and `robotgpu_host.Sim`
-runs them as ONE batch - one params value, one compute pass, no per-dispatch uploads, WebGPU's guarantee that each
-dispatch sees the previous one's writes doing all the synchronising. Several steps can share a submission.
+runs them as ONE batch - one params value, one compute pass, no per-dispatch uploads, the barrier zimr's Vulkan host
+puts before every dispatch doing all the synchronising (each dispatch sees the previous one's writes). Several steps can share a submission.
 
 SUPERSEDED BY D5 (Oct 31): the program is MJW's kernel list from the start - kinematics per (world, branch); inertial,
 geom and site frames per (world, element); subtree com and composite inertia as contiguous-range sums per (world,
@@ -1156,8 +1167,9 @@ trajectory.
     condim, the pair index (which locates friction, solref, solimp), the geom ids.
   - THE SAME FUNCTIONS ON THE CPU feed robot.zig: a host helper runs them per pair and pushes `rbt.Contact`s, so
     robot.zig can run MuJoCo's contacts without zimrphysics - G1's comparison rig and the judge's alternative (4.S).
-  - MuJoCo's margin and gap: MJW sums both geoms' margins and treats gap as an extra detection band; MuJoCo C takes
-    the max and sets includemargin = margin - gap. The G3 fixtures decide which robotgpu reproduces (section 2.6).
+  - MuJoCo's margin and gap: MJW sums both geoms' margins and treats gap as an extra detection band; MuJoCo C may take
+    the max and set includemargin = margin - gap (unverified). If MJW's rule is deliberate, MJW's wins and gets an MJW
+    fixture (D16); if it is an MJW bug, MuJoCo C's.
 
 ### 6.7 Constraints
 
@@ -1259,7 +1271,7 @@ depth and segmentation per camera - the rasteriser MJW's study recommends over p
 ### 6.14 Tests and tooling
 
   - test-fast (`robotgpu_tests.zig`, the CPU twin, a few worlds from the test sizes file): layout and its refusals;
-    pack and decode; every stage BIT-IDENTICAL to robot.zig in its reference shape; MuJoCo fixtures for collision,
+    pack and decode; every stage equal to robot.zig within f32 tolerance (G1, D5); MuJoCo fixtures for collision,
     rows and solver; determinism (the same run twice, bitwise; a world's result independent of nworld and of its
     neighbours); overflow bits set and reported.
   - vk-host-test: every kernel on the device against its twin, one step from identical inputs, with ULP bars -
@@ -1418,7 +1430,8 @@ WATCHING training worlds; MJW's batch renderer for vision-based policies is out 
 
 ## 10. What it should cost - estimates, to be replaced by measurements
 
-Per Geno world-step, the first program: kinematics through the factor ~50k multiply-adds; collision ~2k; rows ~50k
+Per Geno world-step, counted on the per-world shapes (the work is the same in MJW's shapes, only spread wider):
+kinematics through the factor ~50k multiply-adds; collision ~2k; rows ~50k
 (dense J); RNE and passive ~10k; Newton ~130k an iteration x 3-4 warm-started; Euler's damped refactor ~35k. About
 0.6 million multiply-adds, three quarters of them Newton's. At 4,096 worlds that is 2.5 GFLOP a step: on a desktop GPU
 at the 2-5% of peak that latency-bound per-thread code reaches, 2-6 ms a step, or 0.7-2 million world-steps a second.
@@ -1481,6 +1494,11 @@ DECISIONS TAKEN:
     carries it.
   - D11 (Oct 31): K-a, PORT MJW'S NARROWPHASE - primitive first, convex next; the same functions feed robot.zig's
     MuJoCo mode on the CPU; zimrphysics remains a CPU oracle.
+  - D13 (Oct 31): M1, DEVICE-FREE robotgpu.zig + `robotgpu_host.zig` running the program as one batch per step.
+  - D16 (Oct 31): MUJOCO C FIXTURES ARE THE ORACLE (with robot.zig and the twin); where MJW deliberately differs, MJW's
+    behaviour wins, pinned by an MJW-generated fixture, each row documented.
+  - D17 (Oct 31): O1, GENERIC KERNELS + FLAG VARIANTS - one build for every robot; comptime variants only where a flag
+    changes a kernel's shape.
 
 | # | decision | recommendation | where |
 |---|---|---|---|
@@ -1496,11 +1514,11 @@ DECISIONS TAKEN:
 | D10 | warm start | DECIDED: J1, qacc, robot.zig's Newton too | 4.J |
 | D11 | collision | DECIDED: K-a, MJW's primitive narrowphase, then its convex path | 4.K |
 | D12 | contact parameters | DECIDED: L1, MuJoCo's per-geom material and pairs | 4.L |
-| D13 | who drives the device | M1: robotgpu.zig device-free, robotgpu_host.zig runs the program | 4.M |
+| D13 | who drives the device | DECIDED: M1, robotgpu.zig device-free, robotgpu_host.zig runs the program | 4.M |
 | D14 | the tracker | DECIDED: N1 everything on the device; the judge is robot.zig in MuJoCo mode | 4.N, 4.S |
 | D15 | scope and order | DECIDED: R1, tracker first, then full parity; S10 rows decided when reached | 4.R, S10 |
-| D16 | the oracle | Q1: robot.zig, real MuJoCo fixtures, the twin | 4.Q |
-| D17 | specialisation | O1: generic kernels, uniform feature flags | 4.O |
+| D16 | the oracle | DECIDED: MuJoCo C fixtures + robot.zig + the twin; MJW's own fixtures where it deliberately differs | 4.Q |
+| D17 | specialisation | DECIDED: O1, generic kernels, uniform feature flags, comptime variants by shape | 4.O |
 | D18 | target platforms | DECIDED: T1, native only (Windows Vulkan), officially - training never in a browser | 4.T |
 
 ORDER OF ASKING: D1, D15, D8, D12 - the four that change the physics or the scope - then D5, D18 (opened by D5's
@@ -1542,3 +1560,11 @@ answer), D9, D7, D14, D2, D3, D4, D6, D10, D11, D13, D16, D17.
 - Oct 31: D6 decided - C3, accessor with world-major default. Next question: D10, warm start.
 - Oct 31: D10 decided - J1 on both engines; R5 notes `State` carries the warm start. Next question: D11, collision.
 - Oct 31: D11 decided - K-a, port MJW's narrowphase. Next question: D13, who drives the device.
+- Oct 31: D13 decided - M1. Next question: D16, the oracle.
+- Oct 31: D16 decided - MuJoCo C fixtures, MJW's where it deliberately differs; G3 and 6.6 revised. Next question:
+  D17, specialisation (the last).
+- Oct 31: D17 decided - O1, generic kernels with flag variants. ALL EIGHTEEN DECISIONS ANSWERED. Consistency sweep:
+  1.2's Hessian note, 6.2's uniform rule, 6.4's barrier wording, 6.14's parity gate and 10's estimate brought in line
+  with D5 and D18. Next: the full list read back to Simon for explicit agreement before the plan is called final.
+- Oct 31: THE PLAN IS FINAL. Simon agreed with all 18 decisions: "agree. Don't implement just yet." Nothing is
+  implemented; S0 starts only on his go.

@@ -1321,7 +1321,7 @@ const TextBuilder = struct {
         const fraction: u64 = scaled_value % scale;
         var place: u64 = scale / 10;
         while (place > 0) : (place /= 10) {
-            const digit: u8 = @intCast(fraction / place % 10);
+            const digit: u8 = @intCast((fraction / place) % 10);
             builder.appendText(&.{'0' + digit});
         }
     }

@@ -20,7 +20,7 @@
 
 const std = @import("std");
 const ArrayList = std.ArrayList;
-const ArrayListAligned = std.ArrayListAligned;
+const ArrayListAligned = std.array_list.Aligned;
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const expectError = std.testing.expectError;
@@ -3435,7 +3435,7 @@ pub const CmdBuf = struct {
 
         /// `reserved_entities` with the null fallback applied.
         fn reservedEntities(self: @This()) usize {
-            return self.reserved_entities orelse self.getCmds() / entities_ratio;
+            return self.reserved_entities orelse (self.getCmds() / entities_ratio);
         }
     };
 

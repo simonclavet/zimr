@@ -70,7 +70,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 
 // A tiny deterministic hash for asphalt speckle (no per-pixel RNG state).
 fn speckle(x: i32, y: i32) i32 {
-    var h: u32 = @bitCast(x *% 73856093 ^ y *% 19349663);
+    var h: u32 = @bitCast((x *% 73856093) ^ (y *% 19349663));
     h ^= h >> 13;
     h *%= 0x5bd1e995;
     h ^= h >> 15;

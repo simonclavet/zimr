@@ -994,7 +994,7 @@ test "image: blurGaussian of an opaque disc on transparent stays in u8 range" {
             const dx: i32 = @as(i32, @intCast(x)) - 32;
             const dy: i32 = @as(i32, @intCast(y)) - 32;
             if (dx * dx + dy * dy < 8 * 8) {
-                px[y * n + x] = .{ .r = @intCast(x * 7 % 256), .g = @intCast(y * 5 + 3), .b = 201, .a = 255 };
+                px[y * n + x] = .{ .r = @intCast((x * 7) % 256), .g = @intCast(y * 5 + 3), .b = 201, .a = 255 };
             }
         }
     }

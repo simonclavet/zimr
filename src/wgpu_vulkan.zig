@@ -2303,7 +2303,7 @@ fn createTextureView(
     range: ViewRange,
 ) BringUpError!u32 {
     const texture: TextureSlot = self.textures.get(texture_handle, "texture").*;
-    const mip_count: u32 = range.mip_count orelse texture.mip_levels -| range.base_mip;
+    const mip_count: u32 = range.mip_count orelse (texture.mip_levels -| range.base_mip);
     const base_layer: u32 = range.base_layer orelse 0;
     const layer_count: u32 = if (range.base_layer != null) 1 else range.layer_count orelse texture.array_layers;
     const fits: bool = mip_count > 0 and range.base_mip + mip_count <= texture.mip_levels and layer_count > 0 and

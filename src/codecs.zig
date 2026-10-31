@@ -3727,7 +3727,7 @@ pub const truetype = struct {
 
         var l: u32 = 0;
         var r: u32 = readInt(u16, bytes[kern + 10 ..][0..2], .big) - 1;
-        const needle: u32 = @as(u32, @backingInt(a)) << 16 | @as(u32, @backingInt(b));
+        const needle: u32 = (@as(u32, @backingInt(a)) << 16) | @as(u32, @backingInt(b));
         while (l <= r) {
             const m: u32 = (l + r) >> 1;
             const straw: u32 = readInt(u32, bytes[kern + 18 + (m * 6) ..][0..4], .big); // note: unaligned read

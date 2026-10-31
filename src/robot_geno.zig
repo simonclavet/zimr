@@ -8755,7 +8755,7 @@ test "robot_geno: T2 - where would a worst-body limit end the servo's and the te
                     peak = @max(peak, worst);
                 }
                 // The frame the current rule's run ends: where it lost the reference, or the budget's end.
-                const end: usize = lost_at orelse from + run_frames;
+                const end: usize = lost_at orelse (from + run_frames);
                 if (lost_at != null) {
                     lost_runs += 1;
                 }

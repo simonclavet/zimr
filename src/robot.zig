@@ -2145,7 +2145,7 @@ fn buildFromSpec(gpa: Allocator, spec: ModelSpec) !Model {
                 // Armature: an explicit value, or a small fraction of the body's own
                 // inertia so the default scales with the model rather than the units.
                 m.dof_armature[d] = j.armature orelse
-                    default_armature_fraction * representativeInertia(mass_props, j.kind);
+                    (default_armature_fraction * representativeInertia(mass_props, j.kind));
             }
             qpos_n += j.kind.posCount();
             dof_n += ndof;

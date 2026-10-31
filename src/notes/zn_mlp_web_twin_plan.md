@@ -1,6 +1,8 @@
 # zn_mlp in the browser, against its CPU twin - the plan (v1 DRAFT, Oct 31 2026)
 
-STATUS: DRAFT FOR REVIEW - decisions taken: D1, D2, D3, D4 (section 7). Written under claude.md's "MAKE A PLAN" procedure
+STATUS: FINAL (Oct 31) - D1-D7, the smaller choices of 2.H and the stages of section 4 confirmed by Simon ("agree.
+Don't implement just yet"). NOT IMPLEMENTED: stage S1 starts only when Simon says go. Written under claude.md's "MAKE A
+PLAN" procedure
 (claude.md:146): study, brainstorm every option, pick, write it down here, then ask the open decisions ONE AT A TIME and
 revise after each. **Nothing is implemented and nothing will be until Simon says go.** No build or test was run for this
 plan (Simon's rule): every claim about the code below was read and is cited `file:line`; every count about the build
@@ -258,6 +260,7 @@ settle frames costs those frames per row."
 
   PICK S-b, and grow by the pages' needs (SAC and SuperTrack's next), splitting into a second page when the frame count
   nears 240 - "the budget is bought back by splitting the sweep when it next grows" (zimrnum_field.zig:487-489).
+  DECIDED Oct 31 (D5): S-b.
 
 ### 2.F The inputs (D6)
 
@@ -271,6 +274,8 @@ settle frames costs those frames per row."
      decides which bugs it can see" (zn_conformance.zig:158-161).
 
   PICK F2 - all of it in new rows; vk's existing rows keep their data, so the move stays a pure refactor (stage S1).
+  DECIDED Oct 31 (D6): F2. Its cost: ~10 of the ~56 rows (the offset norm block 3, the two-hot branches 2, the second
+  clip 1, the zero teacher's load and absorb 4), ~0.17 s of the page's ~0.9 s.
 
 ### 2.G The red proof (D7)
 
@@ -284,7 +289,11 @@ settle frames costs those frames per row."
      (claude.md:115).
   None: a check never seen red is the tell claude.md:115 names.
 
-  PICK R1 + R3.
+  PICK R1 + R3. DECIDED Oct 31 (D7): R1 + R3 - and R1 opens zimrnum_field from the same pre-fix build too: its
+  `layernorm rows`, `softmax rows` and `logsumexp rows` call the same broken helper (1.1), so they should be XX beside
+  kit_sweep's eleven - a free cross-check that the zn sweep would have caught its own share. (`git log -S` puts
+  `CompensatedSum` in the kernel files only from HEAD's snapshot, 73b20aa, so the zn sweep may simply not have been
+  opened on a device since the bug arrived.)
 
 ### 2.H Smaller choices - picked, listed for confirmation
 
@@ -450,7 +459,8 @@ Claude edits and runs only `zig fmt --check`, `zig ast-check` and the built zimr
      `zig build kit-sweep -Dplatform=web`, then the page on Simon's phone and his desktop's Chrome.
   S5 CALIBRATE AND PROVE. From S4's screenshots set every bar (2.D). Then R1: a worktree at the commit before the
      spv2wgsl fix, with S1-S4's files, the page built and opened on the phone - the eleven rows XX, the other rows OK;
-     vk-host-test green on the same tree. Then the fixed tree: ALL PASS, under 240 frames.
+     zimrnum_field from the same build XX on its three rows that share the helper; vk-host-test green on the same
+     tree. Then the fixed tree: ALL PASS, under 240 frames.
   The plan is done when S5's two screenshots exist and the journal holds their numbers.
 
 
@@ -486,7 +496,9 @@ Claude edits and runs only `zig fmt --check`, `zig ast-check` and the built zimr
 Each is asked with its options, their pros and cons and the recommendation; the plan is revised after each answer, and
 the whole list confirmed before the plan is called final. Nothing is implemented before Simon says go.
 
-DECISIONS TAKEN:
+DECISIONS TAKEN - THE WHOLE LIST CONFIRMED BY SIMON, Oct 31 ("agree. Don't implement just yet"): D1-D7 below, the
+smaller choices of 2.H (`src/gpu/kit_conformance.zig` re-exported by zn_conformance; only the rowed kernels' WGSL
+registered; the name `kit_sweep`; a verdict line in the log) and the stages S1-S5 of section 4.
 
   - D1 (Oct 31): A1, A NEW PAGE beside zimrnum_field - the kit's rows on the GPU and the twin, its own two-second
     budget, the zn sweep untouched. A3 (a self-test in the training pages) stays a follow-up (section 6).
@@ -499,6 +511,20 @@ DECISIONS TAKEN:
   - D4 (Oct 31): E2, PER-REGION ULPs OF THE REGION'S OWN PEAK, CALIBRATED - initial ulps from the zn sweep's analogous
     rows; every row's measured ULPs shown even on a pass; the first runs on lavapipe, Simon's GPU, desktop Chrome and
     the phone set each bar. Everything a step does not declare as written comes back bit-identical.
+  - D5 (Oct 31): S-b, 35 KERNELS IN ~56 ROWS - vk's 25, the 4 of the eleven it lacks, their 3 companions, and the
+    dense network's act_bwd, mse_value and adam; the other 65 waived by name under their learner, the gate (3.5)
+    refusing a kernel that is neither, the page printing "35 of 100 kernels rowed".
+  - D6 (Oct 31): F2, vk's DATA PLUS ROWS BUILT TO EXPOSE EACH KERNEL'S PURPOSE - the 1e4-offset norm block that makes
+    a lost compensation fail, the clip within its limit, the zero-length teacher, the masked identity-axis two-hot,
+    the weighted value slope. Simon: "Go with your recommendation", asking what the work is, what it costs in test
+    time and whether it finds more bugs - answered in the chat: ~0.17 s more on the phone, no new test binary; it
+    finds what vk's well-conditioned data cannot (a lost compensation, a miscompiled branch vk never takes).
+  - D7 (Oct 31): R1 + R3 - the page built from the commit before the spv2wgsl fix and opened on the phone (the eleven
+    rows XX, the rest OK; zimrnum_field from the same build XX on its three rows sharing the helper), then the fixed
+    tree ALL PASS; and the CPU judge test. Simon asked whether zimrnum_field already does this: it does the same KIND
+    of check for zimrnum's tensor kernels (zn_binary, zn_unary, zn_matmul, zrl_binary - 112 rows), but it never loads
+    zn_mlp, so none of the kit's 100 kernels is checked in a browser; adding them there was D1's A2, declined for the
+    budget and the table's shape.
 
 | # | decision | recommendation | where |
 |---|---|---|---|
@@ -506,10 +532,10 @@ DECISIONS TAKEN:
 | D2 | what builds the dispatches | DECIDED: B3, vk's tables shared, held to the host's functions by CPU tests | 2.B |
 | D3 | one kernel at a time or a sequence at a time | DECIDED: C2, isolation, on both hosts | 2.C |
 | D4 | the bars | DECIDED: E2, per-region ULPs of the region's own peak, calibrated on the first runs | 2.D |
-| D5 | which kernels | S-b: 35 entries in ~56 rows, the other 65 waived by name | 2.E |
-| D6 | the inputs | F2: vk's data plus rows built to make each kernel's purpose visible | 2.F |
-| D7 | the red proof | R1 + R3: the pre-fix build on a device, and a CPU judge test | 2.G |
-| -- | smaller choices (file, registered kernels, name, verdict line) | as picked | 2.H |
+| D5 | which kernels | DECIDED: S-b, 35 entries in ~56 rows, the other 65 waived by name | 2.E |
+| D6 | the inputs | DECIDED: F2, vk's data plus rows built to make each kernel's purpose visible | 2.F |
+| D7 | the red proof | DECIDED: R1 + R3, the pre-fix build on a device (zimrnum_field beside it), and a CPU judge test | 2.G |
+| -- | smaller choices (file, registered kernels, name, verdict line) | CONFIRMED: as picked | 2.H |
 
 
 ## 8. Journal
@@ -523,3 +549,9 @@ DECISIONS TAKEN:
 - Oct 31: D2 decided - B3, shared tables held to the host by CPU tests. Next: D3.
 - Oct 31: D3 decided - C2, isolation on both hosts. Next: D4.
 - Oct 31: D4 decided - E2, per-region ULP bars, calibrated. Next: D5.
+- Oct 31: D5 decided - S-b, 35 kernels, 65 waived by name. Next: D6.
+- Oct 31: D6 decided - F2, targeted inputs in new rows. Next: D7.
+- Oct 31: D7 decided - R1 + R3, with zimrnum_field opened from the same pre-fix build as a cross-check. Next: the whole
+  list back to Simon for his explicit agreement.
+- Oct 31: the whole list confirmed - Simon: "agree. Don't implement just yet". The plan is FINAL and NOT implemented;
+  stage S1 (the pure move, proven by vk-host-test's unchanged "largest relative gap") starts on Simon's go.

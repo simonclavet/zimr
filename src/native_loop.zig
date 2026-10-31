@@ -899,13 +899,13 @@ pub const script = struct {
             var directory_buffer: [512]u8 = undefined;
             var path_buffer: [600]u8 = undefined;
             const last_frame_index: u32 = session.outcome.frame_count - 1;
-            const capture_path: []const u8 = path orelse bufPrint(&path_buffer, "{s}/frame_{d}.png", .{
+            const capture_path: []const u8 = path orelse (bufPrint(&path_buffer, "{s}/frame_{d}.png", .{
                 captureDirectory(&directory_buffer),
                 last_frame_index,
             }) catch {
                 session.fail("the capture directory's name is too long", .{});
                 return;
-            };
+            });
             if (!session.capture(session.io, capture_path, width)) {
                 session.fail("capturing to {s} failed", .{capture_path});
                 return;

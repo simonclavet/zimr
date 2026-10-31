@@ -3366,7 +3366,7 @@ const std_vocabulary = [_]StdAlias{
     .{ .namespace = "", .name = "Io", .alias = "Io" },
     .{ .namespace = "", .name = "Random", .alias = "Random" },
     .{ .namespace = "", .name = "ArrayList", .alias = "ArrayList" },
-    .{ .namespace = "", .name = "ArrayListAligned", .alias = "ArrayListAligned" },
+    .{ .namespace = "array_list", .name = "Aligned", .alias = "ArrayListAligned" },
     .{ .namespace = "", .name = "AutoHashMapUnmanaged", .alias = "AutoHashMapUnmanaged" },
     .{ .namespace = "", .name = "StringHashMap", .alias = "StringHashMap" },
     .{ .namespace = "mem", .name = "Allocator", .alias = "Allocator" },

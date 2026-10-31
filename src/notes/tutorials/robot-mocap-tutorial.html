@@ -6546,8 +6546,8 @@ fn resumeFromAutosave(
 frames, as fast as the GPU and the CPU allow - in a <em>run folder</em>, which holds everything about the run, so
 that another program can watch it while it goes and anyone can carry it on later:</p>
 
-<pre class="sketch"><code>   runs/night1/
-       run.zon          the run's parameters: the motion, the recipe, when to save and when to stop
+<pre class="sketch"><code>   ../geno_runs/night1/
+       run.zon         the run's parameters: the motion, the recipe, when to save and when to stop
        weights          the newest weights, rewritten whole every few minutes
        weights_b0012000 a checkpoint: the weights after batch 12,000
        policy           the newest policy, written with the weights: what the lab plays
@@ -6557,7 +6557,7 @@ that another program can watch it while it goes and anyone can carry it on later
        status.zon       its state, batches, minutes, the servo's and the recent time to failure
        stop             created by anyone: the trainer saves everything and exits
 
-   geno_trainer --run=runs/night1</code></pre>
+   geno_trainer --run=../geno_runs/night1</code></pre>
 
 <p>A SuperTrack run lives in a folder of the same shape: the same <code>run.zon</code>, <code>policy</code>,
 <code>status.zon</code> and <code>stop</code>, with a state and a log of its own, because SuperTrack learns in a
@@ -6565,7 +6565,7 @@ different unit. A <em>round</em> is every character simulating <code>collect</co
 mirror, with exploration noise, then one update of the world model and one of the policy on windows the GPU gathers
 from its ring:</p>
 
-<pre class="sketch"><code>   runs/supertrack1/
+<pre class="sketch"><code>   ../geno_runs/supertrack1/
        supertrack_state  the whole learner: both networks, Adam's moments, the counters, the random stream
        policy            the newest policy, written with the state (SuperTrack's features, every step, no filter)
        log.csv           one line per round: round, minutes, steps watched, failures, both update counts
@@ -6712,10 +6712,12 @@ judged no better three times running has fallen apart, and the status names it. 
 above it is not a collapse - an untrained policy starts there - so the alarm stays quiet through a night's first hours
 and speaks only of a policy that had learned. The run goes on; a person decides.</p>
 
-<p><strong>Running a long training.</strong> A run is a folder holding its <code>run.zon</code>, and the trainer is
-started on it - <code>geno_trainer --run=runs/night1_full</code> - and left. Everything it learns and everything it
-measures lands in that folder, each file written whole and renamed into place, so another program can read it while it
-runs: the state and its checkpoints, the policy, <code>log.csv</code> (a line a round), <code>judge.csv</code> and
+<p><strong>Running a long training.</strong> A run is a folder holding its <code>run.zon</code>. The folder lives
+outside the repository, because what a run writes is large and is not source; the recipes the repository keeps are in
+<code>examples/geno_lab/recipes/</code>, each copied into a new folder as its <code>run.zon</code>. The trainer is
+started on the folder - <code>geno_trainer --run=../geno_runs/night1_full</code> - and left. Everything it learns
+and everything it measures lands in that folder, each file written whole and renamed into place, so another program
+can read it while it runs: the state and its checkpoints, the policy, <code>log.csv</code> (a line a round), <code>judge.csv</code> and
 <code>recovery.csv</code> (a line per clip at every judgement, the servo's first), and <code>status.zon</code>. An
 empty file named <code>stop</code> ends it after the round; the same command carries it on from where it was.</p>
 

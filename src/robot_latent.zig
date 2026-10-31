@@ -978,7 +978,7 @@ pub const Learner = struct {
         self.twin = null;
         if (options.twin_world) {
             var twin_options: WorldOptions = options.world;
-            twin_options.seed = options.twin_seed orelse options.world.seed +% 1;
+            twin_options.seed = options.twin_seed orelse (options.world.seed +% 1);
             self.twin = try LatentWorld.init(gpa, fleet, twin_options);
         }
         errdefer if (self.twin) |twin| twin.deinit(gpa);

@@ -5528,7 +5528,8 @@ pub fn build(b: *std.Build) void {
 
         // ---- geno-trainer: Geno trained by PPO or SuperTrack, headless, in a run folder (`tools/geno_trainer.zig`):
         // installed beside the headless programs for the build machine, and beside the Windows programs for Windows.
-        //     zig build geno-trainer        then        zig-out/headless/bin/geno_trainer --run=runs/night1
+        //     zig build geno-trainer        then        zig-out/headless/bin/geno_trainer --run=../geno_runs/night1
+        // A run's folder lives outside the repository; the night's recipes are `examples/geno_lab/recipes/<name>.zon`.
         // `-Dtrainer-portable=true`: buffers every device binds (`zn_mlp_sizes_trainer_portable.zig`), for smaller
         // runs on any device - declared once, for both builds.
         const trainer_portable: bool = b.option(

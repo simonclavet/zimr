@@ -40,7 +40,10 @@
 //! set up, a file cannot be written, or something stopped being finite (the watchdog; the status names it, and the
 //! state saved before it is kept).
 //!
-//!     geno_trainer --run=runs/night1
+//! A run's folder belongs outside the repository: what a run writes is large and is not source. The recipes kept in
+//! the repository are `examples/geno_lab/recipes/<name>.zon`, each copied into a new folder as its `run.zon`:
+//!
+//!     geno_trainer --run=../geno_runs/night1_full
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
