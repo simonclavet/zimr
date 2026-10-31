@@ -9383,6 +9383,25 @@ pub fn build(b: *std.Build) void {
     // because the step exists above and the check is constructed here.
     tripwires_step.dependOn(&fixture_wgsl_check.step);
 
+    // The pointer-argument check: `tests/pointer_param_kernel.zig` hands pointers to non-inline functions, the shape of
+    // every `zm.CompensatedSum.add(&sum, x)` call, and is translated the way every kernel is (`addComputeOutput`,
+    // which passes `--strict`). Its WGSL must pass by reference: the callee takes `ptr<function, T>` and stores
+    // through `(*p)`, the kernel passes `&tally`, and a function handing its pointer on passes `&(*p)`. A by-value
+    // lowering compiles as well and loses every write on the web - zn_mlp's `norm_fwd` did - and if the compiler
+    // ever inlines the calls instead, these strings vanish and the check says so rather than passing over nothing.
+    const pointer_kernel: ShaderPipeline.ComputeOutput = shader_pipeline.addComputeOutput(
+        b.path("tests/pointer_param_kernel.zig"),
+        "tallyThreeTimes",
+        false,
+        false,
+    );
+    const pointer_kernel_check: *Step.CheckFile = b.addCheckFile(pointer_kernel.wgsl, .{
+        .expected_matches = &.{ ": ptr<function, ", "\n  (*", "(&tally, ", "(&(*" },
+    });
+    pointer_kernel_check.setName("pointer arguments pass by reference (tests/pointer_param_kernel.zig)");
+    test_step.dependOn(&pointer_kernel_check.step);
+    tripwires_step.dependOn(&pointer_kernel_check.step);
+
     // (GLSL math-pipeline check removed - the GLSL path is retiring. zm is verified
     // through the WGSL/compute path (turn ~979) and host math tests instead.)
     // Default scan: every src/*.zig file.  To lint a specific subset,

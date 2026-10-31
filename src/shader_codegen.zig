@@ -691,6 +691,11 @@ pub const ShaderPipeline = struct {
             r.addFileInput(b.path(self.spv2wgsl_path));
             break :wblk r;
         };
+        // Strict, as an engine shader is (`ShaderOpts.wgsl_strict`), and with no opt-out: an `// ERROR:` marker
+        // is WGSL spv2wgsl knows to be wrong, so it fails the build here rather than computing wrongly in a browser.
+        // What a marker hides is a silent miscompile on the web alone - a pointer argument lowered by value, say,
+        // drops the callee's writes, while Vulkan, which runs the SPIR-V itself, stays right.
+        w.addArg("--strict");
         if (entry) |e| {
             w.addArg(b.fmt("--entry={s}", .{e}));
         }

@@ -891,9 +891,13 @@ fn typeRank(device_type: vk.PhysicalDeviceType) u32 {
     };
 }
 
-/// Whether `physical_device` offers `VK_KHR_swapchain`, a device extension: a GPU that cannot present is of no use to
-/// a host with a window.
-fn hasSwapchainExtension(self: *Host, physical_device: vk.PhysicalDevice) BringUpError!bool {
+/// Whether `physical_device` offers the device extension `name`: `VK_KHR_swapchain`, without which a GPU is of no use
+/// to a host with a window, or `VK_KHR_maintenance5`, enabled where offered (`createDevice`).
+fn hasDeviceExtension(
+    self: *Host,
+    physical_device: vk.PhysicalDevice,
+    name: [*:0]const u8,
+) BringUpError!bool {
     var count: u32 = 0;
     try vk.check(self.instance_dispatch.enumerateDeviceExtensionProperties(physical_device, null, &count, null));
     const extensions: []vk.ExtensionProperties = try self.gpa.alloc(vk.ExtensionProperties, count);
@@ -904,7 +908,7 @@ fn hasSwapchainExtension(self: *Host, physical_device: vk.PhysicalDevice) BringU
         &count,
         extensions.ptr,
     ));
-    return hasExtensionNamed(extensions[0..count], vk.khr_swapchain_extension_name);
+    return hasExtensionNamed(extensions[0..count], name);
 }
 
 /// The queue family the host would use on `physical_device`, or null when that GPU cannot run the host. A GPU's
@@ -940,7 +944,7 @@ fn suitableQueueFamily(
         return null;
     }
     const needs_presenting: bool = self.window != null;
-    if (needs_presenting and !try hasSwapchainExtension(self, physical_device)) {
+    if (needs_presenting and !try hasDeviceExtension(self, physical_device, vk.khr_swapchain_extension_name)) {
         return null;
     }
     // The queue families, by the two-call enumeration.
@@ -1033,8 +1037,8 @@ fn chooseGpu(self: *Host) BringUpError!Gpu {
 
 /// The device: the program's handle on the chosen GPU, through which every later object is made. Creating it asks for
 /// one queue from the chosen family, enables exactly the features the host stands on - a feature the GPU merely
-/// offers is not on until it is enabled here - and, with a window, the swapchain extension. The device's dispatch
-/// tables are loaded once it exists, and its queue is fetched.
+/// offers is not on until it is enabled here - and, with a window, the swapchain extension; maintenance5 too, where
+/// the GPU offers it. The device's dispatch tables are loaded once it exists, and its queue is fetched.
 fn createDevice(self: *Host) BringUpError!void {
     // One queue, at the highest priority (priorities only rank a device's queues against each other).
     const priority: f32 = 1.0;
@@ -1044,7 +1048,7 @@ fn createDevice(self: *Host) BringUpError!void {
         .p_queue_priorities = @ptrCast(&priority),
     };
     // The features to enable, through the same `p_next` chain that asked for them: Vulkan 1.3's dynamic rendering,
-    // synchronization2 and maintenance4, Vulkan 1.2's timeline semaphores, and two core features below.
+    // synchronization2 and maintenance4, Vulkan 1.2's timeline semaphores, two core features and maintenance5 below.
     //
     // maintenance4 is WebGPU's order of release: an app may release a bind group layout as soon as the pipeline layouts
     // made from it exist, as `compute_host` does for every kernel. Without the feature, a pipeline layout is valid only
@@ -1057,8 +1061,19 @@ fn createDevice(self: *Host) BringUpError!void {
         .maintenance_4 = vk.bool_true,
     };
     var vulkan_12: vk.PhysicalDeviceVulkan12Features = .{ .p_next = &vulkan_13, .timeline_semaphore = vk.bool_true };
-    var supported: vk.PhysicalDeviceFeatures2 = .{};
+    // maintenance5 gives a point whose vertex shader writes no `PointSize` the size of one pixel, WebGPU's only point
+    // size. WGSL has no point size, so no zimr shader writes one, and without the feature a `point_list` pipeline is
+    // invalid (VUID-VkGraphicsPipelineCreateInfo-topology-08773, point_rendering's points). The instance asks for
+    // Vulkan 1.3, where the feature is `VK_KHR_maintenance5`'s: asked for only when the GPU offers the extension, and
+    // enabled - the extension and the feature, the structure the query filled ending the chain - when it offers both.
+    // Without it, points still draw, at a size Vulkan leaves undefined.
+    var maintenance_5: vk.PhysicalDeviceMaintenance5Features = .{};
+    const offers_maintenance_5: bool =
+        try hasDeviceExtension(self, self.gpu.physical_device, vk.khr_maintenance5_extension_name);
+    var supported: vk.PhysicalDeviceFeatures2 = .{ .p_next = if (offers_maintenance_5) &maintenance_5 else null };
     self.instance_dispatch.getPhysicalDeviceFeatures2(self.gpu.physical_device, &supported);
+    const enables_maintenance_5: bool = maintenance_5.maintenance_5 == vk.bool_true;
+    vulkan_13.p_next = if (enables_maintenance_5) &maintenance_5 else null;
     // WebGPU bounds-checks every buffer access; robust buffer access keeps out-of-bounds behaviour alike. Vertex
     // stores are enabled when offered (every desktop GPU does): a vertex-stage storage buffer the legalizer cannot
     // prove read-only (its pointer passed into a function) stays undecorated, which is legal only with this feature.
@@ -1069,8 +1084,17 @@ fn createDevice(self: *Host) BringUpError!void {
             .vertex_pipeline_stores_and_atomics = supported.features.vertex_pipeline_stores_and_atomics,
         },
     };
-    const extensions = [_][*:0]const u8{vk.khr_swapchain_extension_name};
-    const extension_count: u32 = if (self.window != null) 1 else 0;
+    // The device extensions: the swapchain with a window, maintenance5 where its feature is enabled.
+    var extensions: [2][*:0]const u8 = undefined;
+    var extension_count: u32 = 0;
+    if (self.window != null) {
+        extensions[extension_count] = vk.khr_swapchain_extension_name;
+        extension_count += 1;
+    }
+    if (enables_maintenance_5) {
+        extensions[extension_count] = vk.khr_maintenance5_extension_name;
+        extension_count += 1;
+    }
     const device_info: vk.DeviceCreateInfo = .{
         .p_next = &features,
         .queue_create_info_count = 1,

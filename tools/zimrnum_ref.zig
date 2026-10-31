@@ -31,6 +31,7 @@ const parseInt = std.fmt.parseInt;
 const ArrayList = std.ArrayList;
 const eql = std.mem.eql;
 const startsWith = std.mem.startsWith;
+const endsWith = std.mem.endsWith;
 
 /// One library this tool documents.
 const Library = struct {
@@ -69,7 +70,9 @@ const Note = struct { name: []const u8, text: []const u8 };
 
 /// One line per public declaration. A name appearing twice in the source - `init` belongs to both
 /// `Rng` and `Ctx` - takes one note covering both, because the signature column already
-/// distinguishes them.
+/// distinguishes them. Where the owners' claims really differ - `exp` the elementwise function and
+/// `exp` the graph node - the method's note is keyed by its owner, `Graph.exp`, and the bare name
+/// keeps the other (`noteFor`).
 const notes = [_]Note{
     .{ .name = "Error", .text = "One error set for the whole library." },
     .{ .name = "isFloat", .text = "True for f16, f32, f64." },
@@ -244,7 +247,8 @@ const notes = [_]Note{
     .{ .name = "Rng", .text = "Counter-based. A draw is a pure function of (seed, index)." },
     .{
         .name = "init",
-        .text = "Construct: Rng.init(seed), Ctx.init(gpa, seed), and each layer's, network's and planner's init.",
+        .text = "Construct: Rng.init(seed), Ctx.init(gpa, seed), and each layer's, network's, planner's and " ++
+            "policy's init.",
     },
     .{ .name = "split", .text = "A derived generator from a label." },
     .{ .name = "bits", .text = "Raw 32-bit draw, stream 0." },
@@ -300,13 +304,13 @@ const notes = [_]Note{
     .{ .name = "squeeze", .text = "Removes a size-1 axis." },
     .{ .name = "unsqueeze", .text = "Inserts a size-1 axis." },
     .{ .name = "flatten", .text = "Rank-1 view. Contiguous only." },
-    .{ .name = "moveAxis", .text = "The other axes keep their order." },
+    .{ .name = "Tensor.moveAxis", .text = "The other axes keep their order." },
     .{ .name = "transpose", .text = "Exchanges two axes." },
     .{
-        .name = "slice",
+        .name = "Graph.slice",
         .text = "Differentiable. The backward is a SCATTER: unread rows get zero.",
     },
-    .{ .name = "concat", .text = "Differentiable. The backward is the slice, read backwards." },
+    .{ .name = "Graph.concat", .text = "Differentiable. The backward is the slice, read backwards." },
     .{ .name = "broadcastShape", .text = "The NumPy rule. Returns the rank." },
     .{ .name = "map", .text = "Unary elementwise with a comptime function." },
     .{ .name = "zip", .text = "Binary elementwise. Broadcasts both inputs to out." },
@@ -369,19 +373,19 @@ const notes = [_]Note{
     .{ .name = "tanh", .text = "" },
     .{ .name = "gelu", .text = "tanh approximation." },
     .{
-        .name = "exp",
+        .name = "Graph.exp",
         .text = "On the tape. Unlocks compositions, but see softplus for one it cannot.",
     },
-    .{ .name = "log", .text = "On the tape. The backward needs the INPUT, not the output." },
+    .{ .name = "Graph.log", .text = "On the tape. The backward needs the INPUT, not the output." },
     .{
-        .name = "softplus",
+        .name = "Graph.softplus",
         .text = "Its OWN node: log(1+exp(x)) overflows at x=89 in f32. Backward is sigmoid.",
     },
     .{
-        .name = "elu",
+        .name = "Graph.elu",
         .text = "A real node: a branch is not a composition. Backward reads the INPUT.",
     },
-    .{ .name = "mish", .text = "x * tanh(softplus(x)) - a composition once softplus is a node." },
+    .{ .name = "Graph.mish", .text = "x * tanh(softplus(x)) - a composition once softplus is a node." },
     .{ .name = "softplus", .text = "Returns x above 20, on both backends." },
     .{ .name = "mish", .text = "x tanh(softplus(x)) with one exponential: tanh(softplus(x)) = n / (n + 2)." },
     .{ .name = "silu", .text = "x&middot;sigmoid(x), also called swish." },
@@ -479,6 +483,53 @@ const notes = [_]Note{
         .name = "Temperature",
         .text = "log_alpha is the parameter: a clamp on alpha zeroes its own gradient.",
     },
+    .{
+        .name = "ouCorrelation",
+        .text = "rho = exp(-dt / tau) of Ornstein-Uhlenbeck noise: 0 is fresh noise every step, 1 one draw kept.",
+    },
+    .{
+        .name = "ouStep",
+        .text = "e = rho e + sqrt(1 - rho^2) xi, the draws the caller's. Stays N(0, 1) - only correlated in time.",
+    },
+    .{
+        .name = "ActionSynergies",
+        .text = "A few action directions fitted by SVD about ZERO, not the mean: zero coefficients stay no correction.",
+    },
+    .{ .name = "count", .text = "ActionSynergies: how many synergies." },
+    .{ .name = "actionWidth", .text = "ActionSynergies: how many actions each synergy spans." },
+    .{
+        .name = "FlowPolicy",
+        .text = "An action made from noise by K Euler steps along a learned velocity. Several modes, where a " ++
+            "Gaussian has one.",
+    },
+    .{
+        .name = "inputWidth",
+        .text = "FlowPolicy: the velocity network's input width - condition, action, 2 x time_frequencies.",
+    },
+    .{
+        .name = "timeFeatures",
+        .text = "FlowPolicy: t as sin and cos of pi f t, f = 1, 2, 4, ... Half a cycle at the lowest, so t = 0 " ++
+            "and t = 1 differ.",
+    },
+    .{ .name = "velocityInputs", .text = "FlowPolicy: the velocity network's input rows, [condition | x | time]." },
+    .{ .name = "velocityAt", .text = "FlowPolicy: the velocity network on a graph, at velocityInputs' rows." },
+    .{
+        .name = "pathPointsAndVelocities",
+        .text = "FlowPolicy: x_t = (1 - t) x_0 + t a on each straight path, and its velocity there, a - x_0.",
+    },
+    .{
+        .name = "flowMatchingLoss",
+        .text = "FlowPolicy: mean |v(c, x_t, t) - (a - x_0)|^2 - the flow learning to carry noise onto the actions.",
+    },
+    .{
+        .name = "drawLosses",
+        .text = "FlowPolicy: each action's flow matching loss averaged over its draws - FPO's stand-in for -log p.",
+    },
+    .{
+        .name = "flowDpgTargets",
+        .text = "FlowPolicy: FlowDPG's target - the path's velocity, stepped against the cost's gradient by a " ++
+            "share of the flow's own motion.",
+    },
     .{ .name = "log_std_max", .text = "As log_std_min. SAC's usual values." },
     .{ .name = "DqnKind", .text = "double fixes the max-of-noisy-estimates upward bias." },
     .{ .name = "Transition", .text = "One step. terminal means no future to bootstrap." },
@@ -541,11 +592,11 @@ const notes = [_]Note{
     },
     .{ .name = "discountedReturns", .text = "GAE with lambda 1 and zero values." },
     .{
-        .name = "silu",
+        .name = "Graph.silu",
         .text = "x * sigmoid(x) on the tape. The tensor version had no gradient.",
     },
     .{
-        .name = "gelu",
+        .name = "Graph.gelu",
         .text = "The tanh form every transformer runs, not the erf definition.",
     },
     .{
@@ -561,6 +612,10 @@ const notes = [_]Note{
     .{ .name = "normalizeAdvantages", .text = "In place. Epsilon, not DomainError, for a constant batch." },
     .{ .name = "ppoClipObjective", .text = "An objective to MAXIMISE. min(ratio·A, clip(ratio)·A)." },
     .{ .name = "PpoClipLoss", .text = "PPO's clipped surrogate as a graph loss, from generic operations." },
+    .{
+        .name = "fpoLoss",
+        .text = "PPO for a flow policy: ratio exp(L_old - L_new) of drawLosses on the SAME draws, then PpoClipLoss.",
+    },
     .{ .name = "setInputs", .text = "Write the next minibatch's old log-probabilities and advantages." },
     .{ .name = "entropyRows", .text = "A zero probability contributes zero." },
     .{ .name = "ReplayBuffer", .text = "A ring: the oldest transition is overwritten." },
@@ -577,7 +632,8 @@ const notes = [_]Note{
     .{
         .name = "sample",
         .text = "Uniform with replacement, addressable by (rng, index); SequenceReplay.sample draws step-major " ++
-            "windows of one environment with their finished masks and origins; Mppi.sample draws candidate plans.",
+            "windows of one environment with their finished masks and origins; Mppi.sample draws candidate plans; " ++
+            "FlowPolicy.sample follows K Euler steps from a noise to an action.",
     },
     .{
         .name = "slotOf",
@@ -653,7 +709,7 @@ const notes = [_]Note{
     .{ .name = "InitScheme", .text = "xavier or he. Named once, used by every layer." },
     .{ .name = "Conv2d", .text = "Learned kernel and scalar bias. Dense's template." },
     .{ .name = "Embedding", .text = "A table of learned rows, indexed by whole numbers." },
-    .{ .name = "conv2d", .text = "On the graph. Both gradients from one loop nest." },
+    .{ .name = "Graph.conv2d", .text = "On the graph. Both gradients from one loop nest." },
     .{ .name = "embedding", .text = "On the graph. Gradient is a scatter-add." },
     .{ .name = "initXavier", .text = "Uniform &plusmn;&radic;(6/(in+out)). For tanh and sigmoid." },
     .{ .name = "initHe", .text = "Normal, deviation &radic;(2/in). The 2 is relu's discarded half." },
@@ -764,7 +820,7 @@ const notes = [_]Note{
         .text = "Pure: a normaliser never touches its statistics; an Mlp runs over handles from bind.",
     },
     .{
-        .name = "observe",
+        .name = "ObsNormalizer.observe",
         .text = "Fold one observation into the running statistics. Collection only - the split " ++
             "from `apply` is what makes evaluation correct by construction.",
     },
@@ -930,7 +986,7 @@ const notes = [_]Note{
             "whole gradient goes to the winner; ties go left, never half to each.",
     },
     .{
-        .name = "klGaussianDiag",
+        .name = "Graph.klGaussianDiag",
         .text = "Gaussian KL to a FIXED reference, on the tape - a motion prior or a trust " ++
             "region. The reference is a constant so the optimiser cannot train it to agree.",
     },
@@ -1027,7 +1083,7 @@ const notes = [_]Note{
         .text = "The shuffled minibatch walk every on-policy update needs.",
     },
     .{
-        .name = "reshuffle",
+        .name = "MinibatchOrder.reshuffle",
         .text = "Fisher-Yates for one epoch. Resets to identity first, so (rng, epoch) NAMES a " ++
             "permutation instead of depending on what ran before.",
     },
@@ -1104,7 +1160,8 @@ const notes = [_]Note{
     },
     .{
         .name = "fit",
-        .text = "The training loop, written ONCE. A hand-rolled one that skips a layer still shows a falling loss.",
+        .text = "The training loop, written ONCE: a hand-rolled one that skips a layer still shows a falling loss. " ++
+            "ActionSynergies.fit fits the synergies by SVD.",
     },
     .{
         .name = "BiLSTM",
@@ -1179,7 +1236,7 @@ const notes = [_]Note{
     .{ .name = "attach", .text = "Records input @ weight + bias onto a graph." },
     .{ .name = "Optimizer", .text = "Owns per-parameter state. One type, three algorithms." },
     .{ .name = "Kind", .text = "sgd, momentum, or adam — chosen at one call site." },
-    .{ .name = "step", .text = "One update for every bound parameter, from the last backward." },
+    .{ .name = "Optimizer.step", .text = "One update for every bound parameter, from the last backward." },
     .{ .name = "Var", .text = "A handle into a Graph. An index, not a pointer." },
     .{ .name = "Graph", .text = "Reverse-mode autograd. Eager forward, recorded backward." },
     .{ .name = "parameter", .text = "A value the graph differentiates with respect to." },
@@ -1201,7 +1258,6 @@ const notes = [_]Note{
         .text = "Worst gap against a central finite difference. Restores the model.",
     },
     .{ .name = "CompensatedSum", .text = "Neumaier accumulator. Every sum in the library goes through it." },
-    .{ .name = "add", .text = "" },
     .{ .name = "value", .text = "total + compensation." },
     .{ .name = "sumAll", .text = "Compensated (Neumaier)." },
     .{ .name = "sumAllFast", .text = "Pairwise. Faster, wrong under cancellation." },
@@ -1270,6 +1326,7 @@ const notes = [_]Note{
     },
     .{ .name = "crossEntropyRowsGrad", .text = "softmax &minus; onehot, over the row count." },
     .{ .name = "accuracy", .text = "Fraction of rows whose largest logit is at the target." },
+    .{ .name = "SliceRow", .text = "A plain slice as a row accessor, for zimrmath's row statistics on the host." },
     .{ .name = "confusionMatrix", .text = "True DOWN, predicted ACROSS." },
     .{ .name = "ClassScore", .text = "Carries flags saying which zeros are undefined." },
     .{ .name = "classScore", .text = "Precision, recall, F1 for one class." },
@@ -1322,8 +1379,8 @@ const notes = [_]Note{
     },
     .{
         .name = "deinit",
-        .text = "Give back what init allocated: a masked array's values and mask, a network's or planner's tensors, " ++
-            "a replay's rings.",
+        .text = "Give back what init (or ActionSynergies.fit) allocated: a masked array's values and mask, a " ++
+            "network's or planner's tensors, a replay's rings, a synergy set's directions and shares.",
     },
     .{ .name = "len", .text = "Entries, present or not." },
     .{ .name = "fillMissing", .text = "A constant into every gap. The mask is then freed." },
@@ -1463,9 +1520,6 @@ const notes = [_]Note{
     .{ .name = "axis", .text = "Comptime index of a named axis." },
     .{ .name = "extent", .text = "The length of a named axis." },
     .{ .name = "transposed", .text = "Swaps two axes AND their names." },
-    .{ .name = "sumAxis", .text = "" },
-    .{ .name = "meanAxis", .text = "" },
-    .{ .name = "maxAxis", .text = "" },
     .{ .name = "window", .text = "A mini-batch: same type back, so nothing downstream changes." },
     .{ .name = "outer", .text = "out[i][j] = a[i] * b[j]." },
     .{ .name = "diagonal", .text = "Rectangular too: min(rows, cols) entries." },
@@ -1510,15 +1564,24 @@ const notes = [_]Note{
     .{ .name = "toAxis", .text = "A value placed on the bins' axis." },
     .{ .name = "fromAxis", .text = "A position on the bins' axis taken back to a value." },
     .{ .name = "binPosition", .text = "Where a bin sits on the axis." },
-    .{ .name = "encode", .text = "The two-hot target: two neighbouring bins, shared by closeness, summing to 1." },
+    .{
+        .name = "encode",
+        .text = "The two-hot target: two neighbouring bins, shared by closeness, summing to 1. " ++
+            "ActionSynergies: an action's coefficients, c = B a.",
+    },
     .{
         .name = "decode",
-        .text = "A distribution over the bins read back as a number: the mean of the bins, off the axis.",
+        .text = "A distribution over the bins read back as a number: the mean of the bins, off the axis. " ++
+            "ActionSynergies: the action its coefficients make, B^T c.",
     },
     .{ .name = "encodeRows", .text = "encode, one row per value." },
     .{ .name = "decodeRows", .text = "decode, one value per row." },
     .{ .name = "simNormRows", .text = "SimNorm: every group of features softmaxed into a probability vector." },
     .{ .name = "simNormRowsGrad", .text = "SimNorm's backward: per group, p (g - the p-weighted mean of g)." },
+    .{
+        .name = "fillDropoutMask",
+        .text = "Inverted dropout's mask, 1/keep or 0, drawn per index - so the GPU drops exactly what the CPU does.",
+    },
     .{
         .name = "softCrossEntropyRows",
         .text = "Mean over rows of -sum target log softmax(logits): regression as classification.",
@@ -1555,7 +1618,7 @@ const notes = [_]Note{
     .{
         .name = "Options",
         .text = "Settings of LatentRollout, WorldModelLoss, TanhMeanGaussian, PolicyDistillationLoss, " ++
-            "LatentPlanScorer and Mppi.",
+            "LatentPlanScorer, Mppi and FlowPolicy.",
     },
     .{
         .name = "build",
@@ -1614,10 +1677,24 @@ const notes = [_]Note{
     .{ .name = "simNorm", .text = "Graph op: SimNorm with a group size." },
 };
 
-fn noteFor(name: []const u8) ?[]const u8 {
-    for (notes) |entry| {
+/// The index of the note for `name`, declared in `owner` - the type a method belongs to (`topLevelName`), empty for a
+/// top-level declaration. A note keyed `Owner.name` is that owner's alone and wins over the bare `name`, which covers
+/// every other owner: `Graph.exp` says what the graph node does while `exp` keeps the elementwise function's note.
+fn noteFor(owner: []const u8, name: []const u8) ?usize {
+    if (owner.len > 0) {
+        for (notes, 0..) |entry, i| {
+            const is_owners: bool = entry.name.len == owner.len + 1 + name.len and
+                startsWith(u8, entry.name, owner) and
+                entry.name[owner.len] == '.' and
+                endsWith(u8, entry.name, name);
+            if (is_owners) {
+                return i;
+            }
+        }
+    }
+    for (notes, 0..) |entry, i| {
         if (eql(u8, entry.name, name)) {
-            return entry.text;
+            return i;
         }
     }
     return null;
@@ -1637,7 +1714,8 @@ fn noteFor(name: []const u8) ?[]const u8 {
 /// generic names like `init`. It only breaks when a note makes an owner-SPECIFIC claim, which is
 /// a judgement per name rather than something a scanner can settle. So the list is printed, and
 /// each entry is a question for a human: is one note true of every owner, or does the text need
-/// to widen?
+/// to widen? Where the owners' claims really differ, neither: key the method's note by its owner
+/// (`Graph.exp`, see `noteFor`).
 fn reportDuplicateNotes(gpa: Allocator) !void {
     var seen: ArrayList([]const u8) = .empty;
     defer seen.deinit(gpa);
@@ -1679,6 +1757,26 @@ fn reportDuplicateNotes(gpa: Allocator) !void {
         "zimrnum_ref: {d} name(s) carry more than one note; only the FIRST renders: {s}\n",
         .{ reported, line.items },
     );
+}
+
+/// Fail on an owner note (`Graph.exp`) that no row used. It renders only on a method of that owner, so a misspelled
+/// owner, or one renamed since, leaves it dead and the method showing the bare note - the very claim the owner note
+/// was written to correct. Fatal, unlike `reportDuplicateNotes`: which note was meant is not in doubt.
+fn failOnUnusedOwnerNotes(gpa: Allocator, used: *const [notes.len]bool) !void {
+    var unused: ArrayList(u8) = .empty;
+    defer unused.deinit(gpa);
+    for (notes, used) |entry, was_used| {
+        const is_owner_note: bool = indexOfScalar(u8, entry.name, '.') != null;
+        if (is_owner_note and !was_used) {
+            try unused.appendSlice(gpa, entry.name);
+            try unused.append(gpa, ' ');
+        }
+    }
+    if (unused.items.len > 0) {
+        std.process.fatal("zimrnum_ref: these owner notes match no method, so they never render: {s}", .{
+            unused.items,
+        });
+    }
 }
 
 /// Append `text` with the three characters that would otherwise be markup escaped.
@@ -2064,6 +2162,15 @@ fn insertSourceFolds(
     return out.items;
 }
 
+/// The identifier `text` starts with, or null.
+fn leadingIdentifier(text: []const u8) ?[]const u8 {
+    var end: usize = 0;
+    while (end < text.len and (std.ascii.isAlphanumeric(text[end]) or text[end] == '_')) {
+        end += 1;
+    }
+    return if (end == 0) null else text[0..end];
+}
+
 /// The declared name on a `pub fn` / `pub const` line, or null.
 fn declName(line: []const u8) ?[]const u8 {
     const trimmed: []const u8 = trim(u8, line, " ");
@@ -2073,11 +2180,19 @@ fn declName(line: []const u8) ?[]const u8 {
         trimmed["pub const ".len..]
     else
         return null;
-    var end: usize = 0;
-    while (end < rest.len and (std.ascii.isAlphanumeric(rest[end]) or rest[end] == '_')) {
-        end += 1;
+    return leadingIdentifier(rest);
+}
+
+/// The name a top-level declaration line declares, `pub` or not: the owner of the methods indented below it, as
+/// `Graph` is of every method in `pub fn Graph(comptime T: type) type`. Null for an indented line.
+fn topLevelName(line: []const u8) ?[]const u8 {
+    const keywords = [_][]const u8{ "pub fn ", "pub const ", "fn ", "const " };
+    for (keywords) |keyword| {
+        if (startsWith(u8, line, keyword)) {
+            return leadingIdentifier(line[keyword.len..]);
+        }
     }
-    return if (end == 0) null else rest[0..end];
+    return null;
 }
 
 /// Every top-level declaration in `path`, with its exact span.
@@ -2315,6 +2430,7 @@ fn documentLibrary(
     limit: Io.Limit,
     entry: Parsed,
     all: []const Parsed,
+    used: *[notes.len]bool,
 ) !void {
     const library: Library = entry.library;
     const source: []const u8 = entry.source;
@@ -2337,6 +2453,8 @@ fn documentLibrary(
     var count: usize = 0;
     var missing: ArrayList(u8) = .empty;
 
+    // The type the methods below belong to, for their owner notes (`noteFor`).
+    var owner: []const u8 = "";
     var cursor: usize = 0;
     while (cursor < source.len) {
         const line_start: usize = cursor;
@@ -2344,8 +2462,15 @@ fn documentLibrary(
             source.len;
         cursor = line_stop + 1;
         const line: []const u8 = source[line_start..line_stop];
+        if (topLevelName(line)) |top_level| {
+            owner = top_level;
+        }
         const name: []const u8 = declName(line) orelse continue;
-        const text: []const u8 = noteFor(name) orelse blk: {
+        const is_method: bool = line.len > 0 and line[0] == ' ';
+        const text: []const u8 = if (noteFor(if (is_method) owner else "", name)) |note_index| blk: {
+            used[note_index] = true;
+            break :blk notes[note_index].text;
+        } else blk: {
             try missing.appendSlice(gpa, name);
             try missing.append(gpa, ' ');
             break :blk "";
@@ -2358,7 +2483,6 @@ fn documentLibrary(
         // * A METHOD IS NEITHER. `Graph.add` shares a name with the module-level `add` that has a
         // kernel, but the graph runs on the host; showing the kernel there would be a false
         // claim. Methods are marked as such and the lookup is skipped.
-        const is_method: bool = line.len > 0 and line[0] == ' ';
         if (is_method) {
             try rows.appendSlice(gpa, "<span class=\"host\">method</span>");
         } else if (try kernelsFor(gpa, sweep, library.alias, name)) |kernels| {
@@ -2482,8 +2606,11 @@ pub fn main(init: std.process.Init) !void {
             .decls = try extractDeclarations(gpa, sentinel, library.source_path),
         };
     }
+    // Which notes some row used, across every page: an owner note none used is dead.
+    var used: [notes.len]bool = @splat(false);
     for (parsed) |entry| {
-        try documentLibrary(init, gpa, limit, entry, &parsed);
+        try documentLibrary(init, gpa, limit, entry, &parsed, &used);
     }
     try reportDuplicateNotes(gpa);
+    try failOnUnusedOwnerNotes(gpa, &used);
 }

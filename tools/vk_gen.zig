@@ -82,6 +82,7 @@ const structures = [_][]const u8{
     "PhysicalDeviceFeatures2",
     "PhysicalDeviceVulkan12Features",
     "PhysicalDeviceVulkan13Features",
+    "PhysicalDeviceMaintenance5Features",
     "DeviceQueueCreateInfo",
     "DeviceCreateInfo",
     "SurfaceCapabilitiesKHR",

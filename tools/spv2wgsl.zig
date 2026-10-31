@@ -13,7 +13,7 @@
 //! Usage:
 //!   spv2wgsl <input.spv> <output.wgsl>            # translate
 //!   spv2wgsl --check <input.spv>                  # parse + verify, no output
-//!   spv2wgsl --strict <input.spv> <output.wgsl>   # fail on any `// ERROR:` marker
+//!   spv2wgsl --strict <input.spv> <output.wgsl>   # fail on any `// ERROR:` marker or `__unresolved_N__`
 //!   spv2wgsl --entry=NAME <input.spv> <output.wgsl>   # one entry point of a multi-kernel module
 //!   (options in any order; `--help` for the generated usage)
 //!
@@ -22,9 +22,11 @@
 //!   1 - usage error (std's cli convention; it was 2)
 //!   3 - input is not valid SPIR-V (magic mismatch / malformed)
 //!   4 - translation failed (panic surfaced as an error in the underlying lib)
-//!   5 - `--strict` and the output contains a `// ERROR:` marker
-//!       (i.e. a combined-sampler shader or other source-level issue
-//!       the translator can't fix; engine shaders must always pass --strict)
+//!   5 - `--strict` and the output has a line `spv2wgsl.isStrictViolation`
+//!       refuses: an `// ERROR:` marker (a combined sampler, a pointer
+//!       argument WGSL cannot take, an instruction with no lowering) or an
+//!       `__unresolved_N__` name; engine shaders and every compute kernel
+//!       are translated --strict)
 
 const std = @import("std");
 const cli = @import("cli");
@@ -33,7 +35,6 @@ const Io = std.Io;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const sliceAsBytes = std.mem.sliceAsBytes;
 const splitScalar = std.mem.splitScalar;
-const indexOf = std.mem.indexOf;
 const spv2wgsl = @import("spv2wgsl");
 
 /// The command line (std's cli, `src/command_line.zig`). Options come in any order; the hand parser this replaced
@@ -49,10 +50,12 @@ const SpvArgs = struct {
 const spv_cli: cli.Config(SpvArgs) = .{
     .prog = "spv2wgsl",
     .description = "Translates SPIR-V to WGSL, in pure Zig. Exit codes: 3 not valid SPIR-V, 4 translation failed, " ++
-        "5 --strict and the output has an `// ERROR:` marker.",
+        "5 --strict and the output has an `// ERROR:` marker or an `__unresolved_N__` name.",
     .args = .{
         .@"--check" = .{ .description = "parse and verify only: no output file, nothing written" },
-        .@"--strict" = .{ .description = "fail (exit 5) on any `// ERROR:` marker - engine shaders always pass it" },
+        .@"--strict" = .{
+            .description = "fail (exit 5) on an `// ERROR:` marker or an `__unresolved_` name - every build passes it",
+        },
         .@"--entry" = .{ .description = "the one entry point to translate from a multi-kernel module (else the last)" },
         .input = .{ .description = "the SPIR-V module" },
         .output = .{ .description = "the WGSL file to write (not with --check)" },
@@ -130,11 +133,9 @@ fn cmdCheck(
 
 const TranslateOpts = struct {
     entry: ?[]const u8 = null,
-    /// When true, scan the WGSL output for `// ERROR:` markers
-    /// (emitted by handlers like the combined-sampler diagnostic).
-    /// On any match: write nothing, print the matched lines on stderr,
-    /// exit 5.  Used by `addShaderWgsl` to refuse to embed shaders
-    /// with known source-level issues.
+    /// When true, refuse WGSL holding any line `spv2wgsl.isStrictViolation` names - an `// ERROR:` marker or an
+    /// `__unresolved_N__` name: write nothing, print each such line on stderr, exit 5. Every shader and kernel the
+    /// build translates passes it, so nothing the translator knows to be wrong is embedded.
     strict: bool,
 };
 
@@ -185,24 +186,23 @@ fn cmdTranslate(
     };
 
     if (opts.strict) {
-        // Scan for `// ERROR:` markers emitted by handlers that
-        // can't translate something (e.g. combined samplers).  These
-        // are grep-friendly intentionally - the shader transpiles
-        // but is unusable; the source must be fixed.
+        // Every line the translator itself knows to be wrong, printed with its line number in the WGSL: the markers
+        // are grep-friendly on purpose - the module translates, but what it computes is not what the source says.
         var line_no: usize = 1;
-        var error_count: usize = 0;
+        var refused_count: usize = 0;
         var it = splitScalar(u8, wgsl, '\n');
         while (it.next()) |line| : (line_no += 1) {
-            if (indexOf(u8, line, "// ERROR:") != null) {
+            if (spv2wgsl.isStrictViolation(line)) {
                 try printErrorLine(io, "spv2wgsl: {s}:{d}: {s}", .{ input_path, line_no, line });
-                error_count += 1;
+                refused_count += 1;
             }
         }
-        if (error_count > 0) {
+        if (refused_count > 0) {
             try printErrorLine(
                 io,
-                "spv2wgsl: --strict aborted with {d} ERROR marker(s); output not written",
-                .{error_count},
+                "spv2wgsl: --strict refused {d} line(s) (`// ERROR:` marker or `__unresolved_` name); " ++
+                    "output not written",
+                .{refused_count},
             );
             std.process.exit(5);
         }

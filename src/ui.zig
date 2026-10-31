@@ -39611,7 +39611,8 @@ test " inputFloat focus seeds the edit buffer" {
     }
 
     // Frame 2 - click inside box to focus. Buffer should be seeded
-    // with "1.250" and active_id matches the input's id.
+    // with the exact value "1.25" (not the "{d:.3}" display text
+    // "1.250") and active_id matches the input's id.
     {
         const click: InputSnapshot = .{
             .mouse_pos = .{ box.x + box.width / 2, box.y + box.height / 2 },
@@ -39624,7 +39625,7 @@ test " inputFloat focus seeds the edit buffer" {
         const expected_id: Id = hashStr(h.win.id, "speed");
         try expectEqual(expected_id, ctx.active_id);
         const seeded: []const u8 = ctx.scalar_edit_buf[0..ctx.scalar_edit_len];
-        try expectEqualStrings("1.250", seeded);
+        try expectEqualStrings("1.25", seeded);
     }
 }
 

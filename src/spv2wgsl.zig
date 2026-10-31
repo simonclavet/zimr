@@ -255,6 +255,7 @@ const IdKind = enum(u8) {
     function,
     label,
     value, // wgsl_name = temp name or inline expression
+    pointer_parameter, // a function parameter of pointer type; wgsl_name = "(*p)", see `emitOneFunction`
 };
 
 const IdInfo = struct {
@@ -491,6 +492,7 @@ pub const types = struct {
         Return = 253,
         ReturnValue = 254,
         Unreachable = 255,
+        NoLine = 317,
         _, // non-exhaustive: anything else is "we don't handle it"
     };
 
@@ -7475,26 +7477,41 @@ fn emitFunctionCall(
     // bind, and `let x: = f()` (empty type) is a parse error.  Only
     // value-returning calls get a `let` binding.
     const is_void: bool = (t.kind == .type_void);
-    // A pointer-typed argument feeds a by-value-lowered pointer param
-    // (see emitOneFunction slice (b) PART 2).  For an UNCALLED helper that
-    // lowering is sound, but a real call like this means the callee writes
-    // its local copy and the caller never sees the result - a silent
-    // miscompile that naga can't catch (the WGSL is well-formed).  Until
-    // the faithful `ptr<function,T>` + `&arg` lowering lands, make it LOUD:
-    // emit an `// ERROR:` marker so it's detectable (and the closure check
-    // treats any downstream undeclared id as a known symptom, not a bug).
-    for (args) |aid| {
-        const at: *const IdInfo = lookupType(s, lookupId(s, aid).type_id);
-        if (at.kind == .type_pointer) {
+    // A pointer argument is the address of what it names: `&total` for a whole local variable, `&(*p)` for the
+    // caller's own pointer parameter handed on - the callee takes `ptr<function, T>` (`emitOneFunction`). Core WGSL
+    // allows no more than that: a pointer argument into function memory (Zig's pointers; WGSL also has private) with
+    // "the same memory view as its root identifier", a whole variable - `&pair.field_1` needs the
+    // `unrestricted_pointer_parameters` language extension, which not every browser has. Anything else is refused
+    // with a marker, which `--strict` fails on; each goes on a line of its own, before the call, since a comment
+    // inside the call's line would cut it short.
+    var arg_texts: ArrayList([]const u8) = .empty;
+    for (args) |arg_id| {
+        const arg: *const IdInfo = lookupId(s, arg_id);
+        const arg_type: *const IdInfo = lookupType(s, arg.type_id);
+        if (arg_type.kind != .type_pointer) {
+            try arg_texts.append(s.arena, arg.wgsl_name);
+            continue;
+        }
+        const points_into_function_memory: bool = arg_type.extra_a == @backingInt(types.StorageClass.Function);
+        const names_a_whole_variable: bool = arg.kind == .variable or arg.kind == .pointer_parameter;
+        if (!points_into_function_memory) {
             try bprint(
                 out,
                 s.arena,
-                "  // ERROR: call passes pointer arg %{d} to a by-value param — " ++
-                    "out-param result is lost (needs ptr<function,T> + &arg lowering).\n",
-                .{aid},
+                "  // ERROR: call passes pointer %{d} into SPIR-V storage class {d}, not function memory - only " ++
+                    "`ptr<function, T>` arguments are lowered.\n",
+                .{ arg_id, arg_type.extra_a },
             );
-            break;
+        } else if (!names_a_whole_variable) {
+            try bprint(
+                out,
+                s.arena,
+                "  // ERROR: call passes a pointer into part of a variable (%{d}, `{s}`) - a WGSL pointer argument " ++
+                    "must be a whole variable's address.\n",
+                .{ arg_id, arg.wgsl_name },
+            );
         }
+        try arg_texts.append(s.arena, try allocPrint(s.arena, "&{s}", .{arg.wgsl_name}));
     }
     if (is_void) {
         try bprint(out, s.arena, "  {s}(", .{callee});
@@ -7504,13 +7521,64 @@ fn emitFunctionCall(
         try bindLhs(out, s, result, name, t.wgsl_name);
         try bprint(out, s.arena, "{s}(", .{callee});
     }
-    for (args, 0..) |aid, i| {
-        if (i != 0) {
+    for (arg_texts.items, 0..) |arg_text, arg_index| {
+        if (arg_index != 0) {
             try bstr(out, s.arena, ", ");
         }
-        try bstr(out, s.arena, lookupId(s, aid).wgsl_name);
+        try bstr(out, s.arena, arg_text);
     }
     try bstr(out, s.arena, ");\n");
+}
+
+test "pointer arguments: a whole variable's address is passed; part of one, or other memory, is refused" {
+    var arena_state: ArenaAllocator = .init(testing_allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    // A module header whose id bound covers the ids set by hand below; no instruction is read.
+    const header: [5]u32 = .{ 0x07230203, 0x00010000, 0, 16, 0 };
+    var s: State = try .init(arena, &header);
+    const function_memory: u32 = @backingInt(types.StorageClass.Function);
+    const storage_buffer_memory: u32 = @backingInt(types.StorageClass.StorageBuffer);
+    setId(&s, 1, .{ .kind = .type_void });
+    setId(&s, 2, .{ .kind = .type_scalar, .wgsl_name = "f32" });
+    setId(&s, 3, .{ .kind = .type_struct, .wgsl_name = "S3" });
+    // `*Tally` in function memory, and in a storage buffer.
+    setId(&s, 4, .{ .kind = .type_pointer, .wgsl_name = "S3", .extra_a = function_memory, .extra_b = 3 });
+    setId(&s, 5, .{ .kind = .type_pointer, .wgsl_name = "S3", .extra_a = storage_buffer_memory, .extra_b = 3 });
+    setId(&s, 6, .{ .kind = .function, .wgsl_name = "add" });
+    setId(&s, 7, .{ .kind = .variable, .type_id = 4, .wgsl_name = "tally", .extra_a = function_memory, .extra_b = 3 });
+    setId(&s, 8, .{ .kind = .pointer_parameter, .type_id = 4, .wgsl_name = "(*p8)" });
+    // `&pair.right`: an access chain into a local `pair` (id 14).
+    setId(&s, 9, .{ .kind = .value, .type_id = 4, .wgsl_name = "pair.field_1", .extra_a = 14 });
+    setId(&s, 10, .{
+        .kind = .variable,
+        .type_id = 5,
+        .wgsl_name = "kbuf_tallies",
+        .extra_a = storage_buffer_memory,
+        .extra_b = 3,
+    });
+    setId(&s, 11, .{ .kind = .value, .type_id = 2, .wgsl_name = "x" });
+
+    // `OpFunctionCall %void %add <pointer> %x`, for one pointer argument; the call's own result id is unused (void).
+    const call_result_id: u32 = 12;
+    var out: ArrayList(u8) = .empty;
+    try emitFunctionCall(&s, &out, &.{ 1, call_result_id, 6, 7, 11 });
+    try expectEqualStrings("  add(&tally, x);\n", out.items);
+
+    out.clearRetainingCapacity();
+    try emitFunctionCall(&s, &out, &.{ 1, call_result_id, 6, 8, 11 });
+    try expectEqualStrings("  add(&(*p8), x);\n", out.items);
+
+    out.clearRetainingCapacity();
+    try emitFunctionCall(&s, &out, &.{ 1, call_result_id, 6, 9, 11 });
+    const part_marker: []const u8 = "  // ERROR: call passes a pointer into part of a variable (%9, `pair.field_1`)";
+    try expect(startsWith(u8, out.items, part_marker));
+    try expect(endsWith(u8, out.items, "\n  add(&pair.field_1, x);\n"));
+
+    out.clearRetainingCapacity();
+    try emitFunctionCall(&s, &out, &.{ 1, call_result_id, 6, 10, 11 });
+    try expect(startsWith(u8, out.items, "  // ERROR: call passes pointer %10 into SPIR-V storage class 12,"));
+    try expect(endsWith(u8, out.items, "\n  add(&kbuf_tallies, x);\n"));
 }
 
 /// `OpFMod` - floor-based modulo, lowered as `a - b * floor(a / b)`.
@@ -7770,6 +7838,28 @@ fn emitBitcast(
     try bprint(out, s.arena, "bitcast<{s}>({s});\n", .{ target, src });
 }
 
+/// Bind `result` to a zero of `result_type`, for an instruction (`what`) the translator cannot lower, and mark the line
+/// `// ERROR:`. The zero keeps every later use well formed; the marker makes it a build failure instead of a silently
+/// wrong number - `--strict`, which every shader and kernel build passes, refuses it (`isStrictViolation`).
+fn emitZeroPlaceholder(
+    s: *State,
+    out: *ArrayList(u8),
+    result_type: u32,
+    result: u32,
+    what: []const u8,
+) !void {
+    const t: *const IdInfo = lookupType(s, result_type);
+    const name: []const u8 = try tempName(s.arena, result);
+    setId(s, result, .{ .kind = .value, .type_id = result_type, .wgsl_name = name });
+    try bindLhs(out, s, result, name, t.wgsl_name);
+    try bprint(
+        out,
+        s.arena,
+        "{s}();  // ERROR: {s} has no WGSL lowering - this value is a zero placeholder\n",
+        .{ t.wgsl_name, what },
+    );
+}
+
 fn emitExtInst(
     s: *State,
     out: *ArrayList(u8),
@@ -7781,13 +7871,27 @@ fn emitExtInst(
     const ext_op: u32 = ops[3];
     const args: []const u32 = ops[4..];
 
+    const t: *const IdInfo = lookupType(s, tid);
     if (set_id != s.glsl_ext_set) {
+        // Another instruction set. A non-semantic one (debug information) yields nothing and changes nothing, so it
+        // is skipped; an instruction that yields a value would leave its uses naming an id nothing declared.
+        const yields_value: bool = t.kind != .type_void;
+        if (yields_value) {
+            const what: []const u8 = try allocPrint(
+                s.arena,
+                "instruction {d} of a non-GLSL instruction set",
+                .{ext_op},
+            );
+            try emitZeroPlaceholder(s, out, tid, result, what);
+        }
         return;
     }
-    const t: *const IdInfo = lookupType(s, tid);
     const fname: []const u8 = glslExtName(ext_op);
     if (fname.len == 0) {
+        // `Fma` is one (`@mulAdd`): without a placeholder its uses would name `__unresolved_N__`.
         warnUnhandled(s, 0x10000 | ext_op, 0); // synthetic opcode for logging
+        const what: []const u8 = try allocPrint(s.arena, "GLSL.std.450 instruction {d}", .{ext_op});
+        try emitZeroPlaceholder(s, out, tid, result, what);
         return;
     }
     const name: []const u8 = try tempName(s.arena, result);
@@ -7803,18 +7907,15 @@ fn emitExtInst(
     try bstr(out, s.arena, ");\n");
 }
 
-/// Emit a placeholder for an unhandled opcode.  Many SPIR-V opcodes
-/// produce a result-id (`result_type` + `result_id` as their first
-/// two operands) that downstream code references.  If we just skip
-/// the opcode, the next `lookupId` panics with "id %N referenced
-/// before declaration".
+/// An opcode the translator does not lower. Each one is marked `// ERROR:`, so a `--strict` build - every shader and
+/// kernel build - fails on it instead of shipping WGSL that computes something else:
 ///
-/// Instead, we register the result-id with a default-valued WGSL
-/// expression and emit a `// UNHANDLED opcode N` comment.  The WGSL
-/// output won't render the original computation correctly, but it
-/// WILL compile, and the comment + the warn log together pinpoint
-/// what's missing.  Much better than panicking in the middle of a
-/// 10KLOC shader.
+///   * an instruction with a result - `(result type, result id)` as its first two operands - is bound to a zero of
+///     its type (`emitZeroPlaceholder`), so later uses still read as WGSL. OpCompositeInsert, OpVectorInsertDynamic
+///     and OpVectorExtractDynamic land here: a vector lane written in place, or read at a run-time index;
+///   * one with no result (OpCopyMemory, say) is dropped, and the marker is all that says so.
+///
+/// `OpNoLine` alone passes silently: it ends a debug line range and does nothing else, and Zig emits it.
 fn emitUnhandledPlaceholder(
     s: *State,
     out: *ArrayList(u8),
@@ -7822,30 +7923,18 @@ fn emitUnhandledPlaceholder(
     word_offset: u32,
     ops: []const u32,
 ) !void {
-    // Opcodes with no operands can't carry a result-id and have no
-    // observable effect on the IR - silently skip.  This covers the
-    // common stripped/tool-only opcodes that show up in optimized
-    // SPIR-V (e.g. opcode 255 in chroma's .opt.spv has word_count=1).
-    if (ops.len == 0) {
+    if (opcode == @backingInt(types.Op.NoLine)) {
         return;
     }
-
     warnUnhandled(s, opcode, word_offset);
+    const what: []const u8 = try allocPrint(s.arena, "SPIR-V opcode {d}", .{opcode});
 
-    // Heuristic: opcodes that take a (result_type, result_id) pair as
-    // their first two operands need a placeholder.  We detect this by
-    // checking whether ops[0] is a valid type id.  This is imperfect
-    // (some opcodes have (type, id) followed by no other operands;
-    // others have neither) but catches the common case.
-    if (ops.len < 2) {
-        return;
-    }
-    const maybe_type: u32 = ops[0];
-    if (@as(usize, maybe_type) >= s.ids.len) {
-        return;
-    }
-    const tinfo: IdInfo = s.ids[maybe_type];
-    switch (tinfo.kind) {
+    // The first two operands are a result type and a result id when the first names a type a value can have. The
+    // test reads the id table directly, not through `lookupId`, which would give an id nothing declared yet - a local
+    // variable, say - an `__unresolved_` name for good; and an operand that is a literal may be past the table's end.
+    const operands_fit_a_result: bool = ops.len >= 2 and ops[0] < s.ids.len and ops[1] != 0 and ops[1] < s.ids.len;
+    const first_operand_kind: IdKind = if (operands_fit_a_result) s.ids[ops[0]].kind else .unknown;
+    const has_result: bool = switch (first_operand_kind) {
         .type_scalar,
         .type_vector,
         .type_matrix,
@@ -7855,27 +7944,84 @@ fn emitUnhandledPlaceholder(
         .type_image,
         .type_sampler,
         .type_sampled_image,
-        => {},
-        else => return,
-    }
-    const result: u32 = ops[1];
-    if (result == 0 or @as(usize, result) >= s.ids.len) {
+        => true,
+        else => false,
+    };
+    if (has_result) {
+        try emitZeroPlaceholder(s, out, ops[0], ops[1], what);
         return;
     }
-
-    const name: []const u8 = try tempName(s.arena, result);
-    setId(s, result, .{
-        .kind = .value,
-        .type_id = maybe_type,
-        .wgsl_name = name,
-    });
-    try bindLhs(out, s, result, name, tinfo.wgsl_name);
     try bprint(
         out,
         s.arena,
-        "{s}();  // UNHANDLED spv opcode {d}\n",
-        .{ tinfo.wgsl_name, opcode },
+        "  // ERROR: {s} has no WGSL lowering - an instruction with no result, dropped\n",
+        .{what},
     );
+}
+
+test "no lowering is never silent: an opcode or GLSL.std.450 instruction without one leaves an // ERROR: marker" {
+    // `warnUnhandled` names each opcode at `warn` in a Debug build: the diagnostic working, but a passing test prints
+    // nothing, so the bar is raised for this test.
+    const saved_log_level: std.log.Level = std.testing.log_level;
+    std.testing.log_level = .err;
+    defer std.testing.log_level = saved_log_level;
+    var arena_state: ArenaAllocator = .init(testing_allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    // A module header whose id bound covers the ids set by hand below; no instruction is read.
+    const header: [5]u32 = .{ 0x07230203, 0x00010000, 0, 32, 0 };
+    var s: State = try .init(arena, &header);
+    const function_memory: u32 = @backingInt(types.StorageClass.Function);
+    setId(&s, 1, .{ .kind = .type_void });
+    setId(&s, 2, .{ .kind = .type_scalar, .wgsl_name = "f32" });
+    setId(&s, 3, .{ .kind = .type_vector, .wgsl_name = "vec4<f32>", .extra_a = 4, .extra_b = 2 });
+    setId(&s, 4, .{ .kind = .value, .type_id = 3, .wgsl_name = "v" });
+    setId(&s, 5, .{ .kind = .value, .type_id = 2, .wgsl_name = "x" });
+    setId(&s, 6, .{ .kind = .type_pointer, .wgsl_name = "f32", .extra_a = function_memory, .extra_b = 2 });
+    setId(&s, 7, .{ .kind = .variable, .type_id = 6, .wgsl_name = "a", .extra_a = function_memory, .extra_b = 2 });
+    setId(&s, 8, .{ .kind = .variable, .type_id = 6, .wgsl_name = "b", .extra_a = function_memory, .extra_b = 2 });
+    var out: ArrayList(u8) = .empty;
+
+    // OpVectorExtractDynamic (77), a lane read at a run-time index: its result is a zero, marked - and declared, so a
+    // later use names `_10` rather than `__unresolved_10__`.
+    try emitUnhandledPlaceholder(&s, &out, 77, 0, &.{ 2, 10, 4, 5 });
+    try expectEqualStrings(
+        "  let _10: f32 = f32();  // ERROR: SPIR-V opcode 77 has no WGSL lowering - " ++
+            "this value is a zero placeholder\n",
+        out.items,
+    );
+    try expectEqualStrings("_10", lookupId(&s, 10).wgsl_name);
+
+    // OpCopyMemory (63) has no result - its first operand is a variable, not a type - so it is dropped, and marked.
+    out.clearRetainingCapacity();
+    try emitUnhandledPlaceholder(&s, &out, 63, 0, &.{ 7, 8 });
+    try expectEqualStrings(
+        "  // ERROR: SPIR-V opcode 63 has no WGSL lowering - an instruction with no result, dropped\n",
+        out.items,
+    );
+
+    // OpNoLine ends a debug line range and does nothing else: no output at all.
+    out.clearRetainingCapacity();
+    try emitUnhandledPlaceholder(&s, &out, @backingInt(types.Op.NoLine), 0, &.{});
+    try expectEqual(@as(usize, 0), out.items.len);
+
+    // GLSL.std.450, imported as id 12. `Fma` (50) has no lowering: a zero and a marker, where its uses would name
+    // `__unresolved_13__`. `Sqrt` (31) has one, and gets no marker.
+    s.glsl_ext_set = 12;
+    out.clearRetainingCapacity();
+    try emitExtInst(&s, &out, &.{ 2, 13, 12, 50, 5, 5, 5 });
+    try expect(startsWith(u8, out.items, "  let _13: f32 = f32();  // ERROR: GLSL.std.450 instruction 50 has no "));
+    out.clearRetainingCapacity();
+    try emitExtInst(&s, &out, &.{ 2, 14, 12, 31, 5 });
+    try expectEqualStrings("  let _14: f32 = sqrt(x);\n", out.items);
+
+    // Another instruction set (id 16): a value is marked; a void instruction - debug information - is skipped.
+    out.clearRetainingCapacity();
+    try emitExtInst(&s, &out, &.{ 2, 15, 16, 1, 5 });
+    try expect(startsWith(u8, out.items, "  let _15: f32 = f32();  // ERROR: instruction 1 of a non-GLSL instruction"));
+    out.clearRetainingCapacity();
+    try emitExtInst(&s, &out, &.{ 1, 17, 16, 1, 5 });
+    try expectEqual(@as(usize, 0), out.items.len);
 }
 
 /// Body of the per-opcode switch, used by `emitBlockBodyOnly` for each
@@ -8479,6 +8625,9 @@ fn emitOneFunction(
 
     // Collect parameters and phis up front.
     var params: ArrayList(u32) = .empty;
+    // Each parameter's name as the signature spells it: a pointer parameter's id is named `(*p)` (below), and the
+    // signature declares the bare `p`.
+    var param_names: ArrayList([]const u8) = .empty;
     var phis: ArrayList(u32) = .empty;
     // Name the function's parameters and its phis. A phi becomes a `var phiN`, declared at the
     // top of the function; the structured IR emits its assignments - a merge's phis on the
@@ -8493,15 +8642,23 @@ fn emitOneFunction(
             const popnds: []const u32 = types.operandsAt(s.spirv, po);
             switch (pop) {
                 .FunctionParameter => {
-                    try params.append(s.arena, popnds[1]);
-                    const pname: []const u8 = if (s.ids[popnds[1]].wgsl_name.len != 0)
-                        s.ids[popnds[1]].wgsl_name
+                    const param_type_id: u32 = popnds[0];
+                    const param_id: u32 = popnds[1];
+                    try params.append(s.arena, param_id);
+                    const pname: []const u8 = if (s.ids[param_id].wgsl_name.len != 0)
+                        s.ids[param_id].wgsl_name
                     else
-                        try allocPrint(s.arena, "p{d}", .{popnds[1]});
-                    setId(s, popnds[1], .{
-                        .kind = .value,
-                        .type_id = popnds[0],
-                        .wgsl_name = pname,
+                        try allocPrint(s.arena, "p{d}", .{param_id});
+                    try param_names.append(s.arena, pname);
+                    // A pointer parameter is a WGSL pointer, `ptr<function, T>` (the signature, below), and the
+                    // body reaches what it points at through `*`: naming the id `(*p)` makes every load, store and
+                    // access chain through it a dereference - `(*p).field_0 = x;` - with no change to their
+                    // emitters, and a call handing it on passes `&(*p)`, which is `p` (`emitFunctionCall`).
+                    const is_pointer: bool = lookupType(s, param_type_id).kind == .type_pointer;
+                    setId(s, param_id, .{
+                        .kind = if (is_pointer) .pointer_parameter else .value,
+                        .type_id = param_type_id,
+                        .wgsl_name = if (is_pointer) try allocPrint(s.arena, "(*{s})", .{pname}) else pname,
                     });
                 },
                 .Phi => {
@@ -8546,50 +8703,49 @@ fn emitOneFunction(
         // "id redefined" warning).
         const fname: []const u8 = s.ids[result].wgsl_name;
         try bprint(&s.body_buf, s.arena, "fn {s}(", .{fname});
-        // Pointer-typed parameters (Zig passes by-pointer) that the body
-        // stores through can't be WGSL `fn` params directly - WGSL `fn`
-        // parameters are immutable bindings, so the body's `OpStore %p`
-        // -> `p = ...` would be "assignment to an immutable binding".  Emit
-        // such a param BY VALUE under a `_param` alias and shadow it with
-        // a function-scope `var <name> = <name>_param;` below, so every
-        // existing `OpStore`/`OpLoad`/access-chain that spells the
-        // pointer as `<name>` keeps working unchanged.  (All such helper
-        // functions in Zig's output are uncalled, so the by-value vs
-        // by-reference distinction is moot for correctness; only
-        // naga-validity matters.
-        // If a called one ever appears, the faithful lowering is a real
-        // `ptr<function,T>` param + `&local` arg at the call site.)
-        var ptr_params: ArrayList(u32) = .empty;
-        for (params.items, 0..) |pid, pi| {
-            if (pi != 0) {
+        // A pointer parameter - `self: *T`, how Zig passes anything a function writes back - is a WGSL pointer,
+        // `p: ptr<function, T>`: the body writes through it (`(*p).field_0 = x;`, the naming above) and the caller
+        // passes `&v` (`emitFunctionCall`), so the writes land in the caller's variable. Lowered by value instead -
+        // the parameter copied into a local - the WGSL compiles just as well and drops every write: zn_mlp's
+        // `norm_fwd` summed into a copy of its `zm.CompensatedSum` and read zero in the browser, while Vulkan, which
+        // runs the SPIR-V itself, was right.
+        //
+        // Core WGSL has pointer parameters in `function` and `private` memory only, and Zig's pointers are function
+        // memory, so any other storage class is refused with a marker - every build passes `--strict`, which fails
+        // on one. The marker goes after the opening brace: a comment inside the signature would cut it short.
+        var foreign_pointer_params: ArrayList(u32) = .empty;
+        for (params.items, param_names.items, 0..) |param_id, param_name, param_index| {
+            if (param_index != 0) {
                 try bstr(&s.body_buf, s.arena, ", ");
             }
-            const pi_info: *const IdInfo = lookupId(s, pid);
-            const pt: *const IdInfo = lookupType(s, pi_info.type_id);
-            if (pt.kind == .type_pointer) {
-                try bprint(&s.body_buf, s.arena, "{s}_param: {s}", .{ pi_info.wgsl_name, pt.wgsl_name });
-                try ptr_params.append(s.arena, pid);
+            const param: *const IdInfo = lookupId(s, param_id);
+            // A pointer type's `wgsl_name` is its pointee's (`emitTypePointer`).
+            const param_type: *const IdInfo = lookupType(s, param.type_id);
+            if (param.kind == .pointer_parameter) {
+                try bprint(&s.body_buf, s.arena, "{s}: ptr<function, {s}>", .{ param_name, param_type.wgsl_name });
+                const points_into_function_memory: bool =
+                    param_type.extra_a == @backingInt(types.StorageClass.Function);
+                if (!points_into_function_memory) {
+                    try foreign_pointer_params.append(s.arena, param_id);
+                }
             } else {
-                try bprint(&s.body_buf, s.arena, "{s}: {s}", .{ pi_info.wgsl_name, pt.wgsl_name });
+                try bprint(&s.body_buf, s.arena, "{s}: {s}", .{ param_name, param_type.wgsl_name });
             }
-            used_local_names.put(pi_info.wgsl_name, {}) catch @panic("OOM");
+            try used_local_names.put(param_name, {});
         }
         try bstr(&s.body_buf, s.arena, ")");
         if (ret_info.kind != .type_void) {
             try bprint(&s.body_buf, s.arena, " -> {s}", .{ret_info.wgsl_name});
         }
         try bstr(&s.body_buf, s.arena, " {\n");
-
-        // Materialize each pointer param as a mutable local seeded from
-        // its by-value `_param` alias.
-        for (ptr_params.items) |pid| {
-            const pi_info: *const IdInfo = lookupId(s, pid);
-            const pt: *const IdInfo = lookupType(s, pi_info.type_id);
+        for (foreign_pointer_params.items) |param_id| {
+            const storage_class: u32 = lookupType(s, lookupId(s, param_id).type_id).extra_a;
             try bprint(
                 &s.body_buf,
                 s.arena,
-                "  var {s}: {s} = {s}_param;\n",
-                .{ pi_info.wgsl_name, pt.wgsl_name, pi_info.wgsl_name },
+                "  // ERROR: pointer parameter %{d} points into SPIR-V storage class {d}, not function memory - " ++
+                    "only `ptr<function, T>` parameters are lowered.\n",
+                .{ param_id, storage_class },
             );
         }
     }
@@ -10784,7 +10940,7 @@ pub const sccp = struct {
 fn checkBufferAccessSurvival(
     arena: Allocator,
     spirv: []const u32,
-    wgsl: []const u8,
+    body: []const u8,
     entry: []const u8,
 ) !void {
     const op_name: u32 = 5;
@@ -10896,13 +11052,15 @@ fn checkBufferAccessSurvival(
         }
     }
 
-    // The WGSL BODY only. The `@binding` declarations name every buffer in the module
-    // whether this kernel uses it or not, so searching the whole file would be vacuous.
-    const body_start: usize = indexOf(u8, wgsl, "@compute") orelse
-        indexOf(u8, wgsl, "@fragment") orelse
-        indexOf(u8, wgsl, "@vertex") orelse 0;
-    const body: []const u8 = wgsl[body_start..];
-
+    // `body` is the FUNCTIONS only (`State.body_buf`), never the header: the `@binding`
+    // declarations name every buffer in the module whether this kernel uses it or not.
+    // Only functions the entry reaches are emitted, so this is the entry's call graph.
+    //
+    // It is every function, not the text after the stage attribute. Functions are emitted
+    // in SPIR-V module order, so a helper Zig placed BEFORE the entry wrapper comes out
+    // above `@compute`. `mse_value` reaches `kbuf_acts` only through `meanSquaredDifference`,
+    // which `stat_mean_square_difference` had already placed earlier in the module: slicing
+    // at `@compute` cut the helper off and failed a healthy kernel.
     var it: AutoHashMapUnmanaged(u32, []const u8).Iterator = names.iterator();
     while (it.next()) |e| {
         if (!touched.contains(e.key_ptr.*)) {
@@ -11067,7 +11225,9 @@ pub fn convertSpirvToWgslEntry(
     // would find nothing. Against the original, a correct fold still passes - SCCP removes only
     // provably dead arms, and a kernel touches its buffers on its live path, so no buffer loses
     // its last access to a correct fold.
-    try checkBufferAccessSurvival(arena, spirv, out, entry orelse "shader");
+    //
+    // It searches `body_buf`, the emitted functions, not `out`: see the function.
+    try checkBufferAccessSurvival(arena, spirv, state.body_buf.items, entry orelse "shader");
 
     // ---- DIAGNOSTIC: EVERY `_N` THE OUTPUT REFERENCES IS DECLARED ----
     //
@@ -11117,6 +11277,34 @@ pub fn convertSpirvToWgslEntry(
 ///   error.OutputIdentifierMissing - internal: a referenced SSA temp wasn't declared
 pub fn convertSpirvToWgsl(arena: Allocator, spirv: []const u32) ![]const u8 {
     return convertSpirvToWgslEntry(arena, spirv, null);
+}
+
+/// Whether `line` of the translator's output is one `--strict` refuses (`tools/spv2wgsl.zig`; every shader and kernel
+/// build passes it). Two kinds:
+///
+///   * an `// ERROR:` marker - the translator's own note that the WGSL there is wrong: a zero standing in for a value
+///     it cannot compute (`emitZeroPlaceholder`), a dropped instruction, a pointer argument WGSL cannot take;
+///   * an `__unresolved_N__` name - an id used before anything declared it (`lookupId`). WGSL reserves every name
+///     that starts with `__`, so a module holding one never compiles on a device; refused here, it fails the build
+///     with its line instead.
+pub fn isStrictViolation(line: []const u8) bool {
+    const has_error_marker: bool = indexOf(u8, line, "// ERROR:") != null;
+    const has_unresolved_name: bool = indexOf(u8, line, "__unresolved_") != null;
+    return has_error_marker or has_unresolved_name;
+}
+
+test "isStrictViolation: an // ERROR: marker or an __unresolved_ name is refused, ordinary WGSL is not" {
+    // The markers as the emitters write them (see the tests beside `emitUnhandledPlaceholder` and `emitFunctionCall`).
+    try expect(isStrictViolation("  let _10: f32 = f32();  // ERROR: SPIR-V opcode 77 has no WGSL lowering"));
+    try expect(isStrictViolation("  // ERROR: SPIR-V opcode 63 has no WGSL lowering - an instruction with no result"));
+    try expect(isStrictViolation("  // ERROR: call passes a pointer into part of a variable (%9, `pair.field_1`)"));
+    // An id nothing declared, which every device refuses: WGSL reserves names beginning `__`.
+    try expect(isStrictViolation("  let _3: f32 = __unresolved_42__ * 2.0;"));
+    try expect(!isStrictViolation("  let _14: f32 = sqrt(x);"));
+    try expect(!isStrictViolation("fn add(p8: ptr<function, S3>, p9: f32) {"));
+    // Words that merely resemble the two spellings are not them.
+    try expect(!isStrictViolation("  var unresolved_count: u32;"));
+    try expect(!isStrictViolation("  // ERRORS are counted elsewhere"));
 }
 
 // =============================================================================

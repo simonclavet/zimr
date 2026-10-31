@@ -3568,6 +3568,10 @@ The migration of `platform_api.md` (section 8), each step leaving both platforms
 
 ### Phase D - Linux on X11 (verified here)
 
+**Planned in detail in `linux_port_plan.md` (Oct 31; decisions agreed, implementation not started).** It supersedes the
+items below where they differ: keys by evdev code rather than XKB names (D2), and "verified here" became "built and
+checked from Windows, run in WSL2" - the work left the Linux sandbox.
+
 - **D1.** The window, after GLFW's `x11_window.c`: libX11 at run time; `WM_DELETE_WINDOW`, `_NET_WM_NAME`, `ConfigureNotify`,
   focus, map state, `Xft.dpi` scale; `VK_KHR_xlib_surface`.
 - **D2.** Input: keys by XKB key names (L10); text through XIM (L11); buttons 1 to 3, 8, 9; the wheel as 4 to 7;

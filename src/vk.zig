@@ -183,6 +183,7 @@ pub const khronos_validation_layer_name: [*:0]const u8 = "VK_LAYER_KHRONOS_valid
 pub const khr_surface_extension_name: [*:0]const u8 = "VK_KHR_surface";
 pub const khr_win32_surface_extension_name: [*:0]const u8 = "VK_KHR_win32_surface";
 pub const khr_swapchain_extension_name: [*:0]const u8 = "VK_KHR_swapchain";
+pub const khr_maintenance5_extension_name: [*:0]const u8 = "VK_KHR_maintenance5";
 pub const ext_debug_utils_extension_name: [*:0]const u8 = "VK_EXT_debug_utils";
 
 // ---- Enumerations: the values zimr uses, non-exhaustive so a driver's other values stay representable ----
@@ -488,6 +489,7 @@ pub const StructureType = enum(i32) {
     memory_allocate_info = 5,
     memory_barrier_2 = 1000314000,
     physical_device_features_2 = 1000059000,
+    physical_device_maintenance_5_features = 1000470000,
     physical_device_vulkan_1_2_features = 51,
     physical_device_vulkan_1_3_features = 53,
     pipeline_color_blend_state_create_info = 26,
@@ -2304,6 +2306,12 @@ pub const PhysicalDeviceVulkan13Features = extern struct {
     dynamic_rendering: Bool32 = 0,
     shader_integer_dot_product: Bool32 = 0,
     maintenance_4: Bool32 = 0,
+};
+
+pub const PhysicalDeviceMaintenance5Features = extern struct {
+    s_type: StructureType = .physical_device_maintenance_5_features,
+    p_next: ?*anyopaque = null,
+    maintenance_5: Bool32 = 0,
 };
 
 pub const DeviceQueueCreateInfo = extern struct {

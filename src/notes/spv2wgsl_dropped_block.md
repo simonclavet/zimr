@@ -163,6 +163,17 @@ Two details, both learned the hard way by re-introducing the bug to test the gua
   3. **Membership, not count.** Emission legitimately merges accesses (CSE, hoisting), so
      demanding the same NUMBER would fire on healthy shaders.
 
+  4. **It searches every emitted function, not the text after `@compute`** (Oct 31). The
+     first version sliced the WGSL at the stage attribute to skip the `@binding` lines. But
+     functions are emitted in SPIR-V module order, and Zig can define a helper BEFORE the
+     entry wrapper: in `zn_mlp`, `meanSquaredDifference` sits at line 6647 of the module
+     and `mse_value`'s wrapper at 31798, because `stat_mean_square_difference` pulled the
+     helper in first. `mse_value` touches `kbuf_acts` only through that helper, so the
+     guard flagged a healthy kernel, in every page that registers `zn_mlp`. The guard now
+     reads `State.body_buf`: every function and nothing from the header. Only functions the
+     entry reaches are emitted, so it is still the entry's call graph, and the region it
+     searches contains the old one, so it fires on everything the old version did.
+
 Verified both ways: with the bug re-introduced it names the exact kernel and buffer —
 
     error: spv2wgsl [computeForce]: `kbuf_starts` is ACCESSED in the SPIR-V but never in the

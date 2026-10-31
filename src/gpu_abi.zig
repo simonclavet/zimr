@@ -320,8 +320,13 @@ pub const BindGroupLayoutEntry = struct {
     view_dimension: TextureViewDimension,
 };
 
-/// The entries of a bind-group layout blob, written into `entries` (which must have room for all of them).
+/// The entries of a bind-group layout blob, written into `entries` (which must have room for all of them). An empty
+/// blob is a layout with no entries, as the web bridge reads it: `createBindGroupLayout(device, &.{}, ...)` makes the
+/// unused group a pipeline layout needs below a used one.
 pub fn decodeBindGroupLayout(blob: []const u8, entries: []BindGroupLayoutEntry) DecodeError![]BindGroupLayoutEntry {
+    if (blob.len == 0) {
+        return entries[0..0];
+    }
     var reader: BlobReader = .{ .bytes = blob };
     const count: u32 = try reader.readU32();
     if (count > entries.len) {
@@ -356,8 +361,12 @@ pub const BindGroupEntry = struct {
     size: u64,
 };
 
-/// The entries of a bind-group blob, written into `entries` (which must have room for all of them).
+/// The entries of a bind-group blob, written into `entries` (which must have room for all of them). An empty blob is
+/// a group with no entries, as the web bridge reads it.
 pub fn decodeBindGroup(blob: []const u8, entries: []BindGroupEntry) DecodeError![]BindGroupEntry {
+    if (blob.len == 0) {
+        return entries[0..0];
+    }
     var reader: BlobReader = .{ .bytes = blob };
     const count: u32 = try reader.readU32();
     if (count > entries.len) {
@@ -622,4 +631,11 @@ test "gpu_abi: a short blob, a bad value and too many entries are named errors" 
     var many: TestBlob = .{};
     many.u32Word(2);
     try expectError(DecodeError.BlobTooManyEntries, decodeBindGroupLayout(many.written(), &room));
+}
+
+test "gpu_abi: an empty blob is a layout or a group with no entries, as the web bridge reads it" {
+    var layout_room: [1]BindGroupLayoutEntry = undefined;
+    try expectEqual(@as(usize, 0), (try decodeBindGroupLayout(&.{}, &layout_room)).len);
+    var group_room: [1]BindGroupEntry = undefined;
+    try expectEqual(@as(usize, 0), (try decodeBindGroup(&.{}, &group_room)).len);
 }
