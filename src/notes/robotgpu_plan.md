@@ -1,10 +1,11 @@
 # robotgpu - MuJoCo Warp in zimr, on the GPU of the web and of Windows - the plan (v1 DRAFT, Oct 31 2026)
 
-STATUS: FINAL (Oct 31) - all 18 decisions answered one at a time and the full list agreed by Simon ("agree. Don't
-implement just yet"). NOT STARTED: implementation, beginning with S0, waits for Simon's explicit go. Written under claude.md's "MAKE A PLAN" procedure: study,
-brainstorm every option, pick, write it down here, then ask the open decisions ONE AT A TIME (section 12) and revise
-after each. **Nothing is implemented and nothing will be until Simon says go.** This file is the one source of truth
-for robotgpu's decisions, status and journal (section 13).
+STATUS (Nov 1): UNDER WAY. The plan was made FINAL on Oct 31 (18 decisions, each asked one at a time and the whole
+list agreed; D19, the web as a later stage, added Nov 1) and Simon said go the same day. DONE ON LAVAPIPE: all of S0
+(the engine prerequisites), S1a-S1d and S1e's first half (the layout, the packing, robotgpu as a kernel module with
+one kernel). NOT YET: any physics on the device (S2 on), and any run on Simon's GPU (an RTX 5060 Laptop) - a stage is
+DONE only when it passes there too. NEXT: S1e-2 (section 8). Written under claude.md's "MAKE A PLAN" procedure. This
+file is the one source of truth for robotgpu's decisions, status and journal (section 13).
 
 Simon's ask (Oct 31): "study deeply how our robot simulator robot.zig works, and is used by our robot tracking project.
 And study even more deeply how mujoco warp works. Make a md plan, in src/notes, for creating robotgpu.zig, similar to
@@ -222,7 +223,13 @@ WHAT THE STUDY FOUND THAT WILL BITE (each verified against the code or the build
      kernel uses a function-local array (slices of them do not compile at all - no variable pointers).
 
 None of this blocks robotgpu. All of it shapes stage S0 (section 8), which exists to retire these risks before a line
-of physics is written. WITH D18 (native only), items 1-3 and the web half of item 5 leave robotgpu's path - Vulkan runs
+of physics is written.
+
+UPDATE (Oct 31, after S0.1-S0.4 c): four statements above no longer hold. Compute builds DO pass spv2wgsl `--strict`
+(shader_codegen.zig), so item 1's markers fail a web build. Vec and Quat ARE in a compute kernel (`robotgpu_probe`'s
+`maths` and `spatial`), and robot.zig DOES compile into one: the profiler compiles to nothing on the GPU, and robot.zig
+and profiler.zig are modules of their own (`addRobotModules`). `run` DOES check the 65,535-workgroup limit, refusing
+by name unless the module sets `Config.large_dispatch`, which spreads workgroups over rows. WITH D18 (native only), items 1-3 and the web half of item 5 leave robotgpu's path - Vulkan runs
 the SPIR-V itself - and stay a bug in the existing web learner, for its own session; items 4 and 6 still apply.
 
 
@@ -909,6 +916,64 @@ asked one at a time; until Simon answers, a pick is a recommendation.
 
   DECIDED Oct 31 (D18): T1, NATIVE ONLY, OFFICIALLY. Sections 0, 1.3, 3.1, 6, 8, 9 and 10 revised to match.
 
+  T4 NATIVE AS IT IS, THE WEB AS A SECOND BUILD OF THE SAME SOURCE (opened Nov 1 by Simon: "evaluate how hard it would
+     be to support webgpu. I know it would be with a reduced perf because of missing features. I dont want native to
+     suffer, so some code would need 2 branches"). Native keeps every T1 feature; the kernel module is compiled a second
+     time for the web, and each native-only feature has a web counterpart CHOSEN AT COMPILE TIME (`host.is_browser`, or
+     a kompute config the web build sets) - the native SPIR-V never contains a fallback, the WGSL never a native-only
+     instruction. What each S0 feature becomes on the web, checked against the browsers on Nov 1, 2026:
+
+       FEATURE              NATIVE (unchanged)          WEB COUNTERPART                                    COST ON THE WEB
+       subgroup reductions  OpGroupNonUniform* (S0.1)   WebGPU's optional `subgroups` feature (Chrome since  a tree reduction in
+                                                        134, not every browser): the web build uses the      shared memory: a few
+                                                        workgroup tree reduction kompute already has, or      more barriers
+                                                        WGSL's subgroupAdd where the feature is present
+                                                        (spv2wgsl refuses subgroup instructions today)
+       push constants       Vulkan push constants       WebGPU IMMEDIATES (`var<immediate>`, setImmediates)  one bind-group offset
+                            (S0.4 e)                    shipped in Chrome 149-150 (June 2026), feature-       per dispatch
+                                                        detected; elsewhere a small uniform ring with
+                                                        DYNAMIC OFFSETS, one 256-byte slot a dispatch -
+                                                        `runPushed`'s web path, the same API
+       large dispatches     rows of 65,535 (S0.4 c)     the same: spv2wgsl already knows `num_workgroups`    none
+       ranged readback      a staging copy and a wait   mapAsync: the web cannot block, so a readback is     results a frame later
+                            (S0.4 a)                    asked for and COLLECTED later (see the S1e rule)
+       timestamps           in the pass (S0.4 d)        the `timestamp-query` feature at pass boundaries,     coarser stage times
+                                                        quantised; optional, profiling only
+       buffer lending       (S0.4 b)                    the same: one GPUBuffer in two bind groups           none
+       shared memory        the device's (32-64 KB):    WebGPU guarantees 16 KB; zimr's web boot asks for    a global-memory Hessian
+                            Geno's 23 KB Hessian        no raised limits today. Ask for the adapter's limit   if the adapter offers
+                            (S0.5, S3's Newton)         (desktop: 32 KB typically); below what a kernel       less - slower Newton
+                                                        needs, its global-memory variant (the Hessian in
+                                                        `scratch`), chosen per build
+       arena sizes          GBs per binding (S0.6)      128 MB per binding and 256 MB per buffer             fewer worlds: Geno's
+                                                        guaranteed; ask for the adapter's limits, and a       constraint rows cap at
+                                                        web sizes file                                        about 2,000 worlds at
+                                                                                                              128 MB
+       the CPU twin         a static `Buffers` in       a web build is GPU-only: the twin's static arenas     none
+                            every binary (kompute)      would sit in wasm memory, so compute_host gains a
+                                                        GPU-only module option that leaves them out
+       float atomics        not used (D7)               not used                                              none
+       precision            G1 bars (D11)               the same functions through Tint; per-browser maths    looser web bars where
+                                                        may differ in the last bits                           measured
+
+     Beyond the table: WGSL's robustness clamps every storage index (a few percent to tens of percent on memory-bound
+     kernels), and a browser's per-dispatch cost is higher (MJW's step is dozens of dispatches). EXPECTED: on the same
+     GPU, the web a small factor slower than native at equal worlds, and fewer worlds unless the adapter's limits are
+     raised. THE WORK: mostly in the engine, shared by every kernel - spv2wgsl (immediates or a uniform for the push
+     block; subgroups where enabled), compute_host's web paths (dynamic-offset pushes, collected readbacks, the GPU-only
+     option), the web boot asking for the adapter's limits and features, a web sizes file - then the few kernel-level
+     branches where a limit differs (Newton's Hessian), a browser page, and parity checks run in Simon's browser (the
+     sandbox has no WebGPU). About 12 to 20 turns.
+     + the tracker trainable in a browser; native unchanged; kernels written once.
+     - a second build to keep compiling; web results checked only in a browser, outside the sandbox.
+
+  DECIDED Nov 1 (D19): T4, LATER - native stays the reference and the speed target; the web joins as stage SW after the
+  tracker (S6), when the whole path it would port exists. FROM S1e ON, two rules keep that stage engine work rather
+  than a rewrite: (1) every robotgpu kernel also compiles in the web configuration and translates to WGSL in the build,
+  each native-only feature reached through kompute or compute_host, which carry the web counterpart; (2) the host API
+  is SUBMIT, THEN COLLECT - a step's results asked for and read later, never waited on mid-frame - which native can
+  still complete at once.
+
 ### 4.S Which simulator judges a GPU-trained policy (part of D14)
 
   S1 robot.zig with the zimrphysics bridge, as today: different contacts from training (box floor, geometric friction,
@@ -1071,13 +1136,16 @@ host reads and REPORTS - never a silent clamp (claude.md: "a silent clamp is a s
         io:      [sizes.io]f32,        // the host's window: uploads (ctrl, resets) and small readbacks
     };
 
-Eight fields - compute_host's ceiling. A `Layout` (an extern struct of named u32 offsets, flat, no arrays - std140
-uniform rules, Vulkan's as WGSL's, pad nested structs and array elements to 16 bytes) rides inside `Params` with the counts (nworld, nbody,
-njnt, nv, nq, ngeom, nu, na...), the step options (timestep, gravity, iterations, tolerances, flags) and the feature
-bits. Per-world arrays are WORLD-MAJOR by default: element i of world w at `offset + w * stride + i`, the stride
-derived from the counts (padded to 4 floats), behind one accessor so the element-major alternative is a comptime
-switch (4.C). Batched model parameters carry a count: `batch_f[offset + (w % count) * stride + i]`, count 1 until a
-caller randomises.
+Eight fields - compute_host's ceiling. A `Layout` rides inside `Params` with the counts (nworld, nbody, njnt, nv, nq,
+ngeom, nu, na...), the step options (timestep, gravity, iterations, tolerances, flags) and the feature bits: ONE STRUCT
+PER ARENA (`layout.world_f`, `layout.model_u`...), each array's place a 16-byte `WorldArray(arena, kind)` or
+`ModelTable(arena, kind)` whose TYPE names its arena and what one item is (a body's vector, a dof's motion...), so a
+kernel reads `layout.world_f.xpos.loadVec(world, body)`, an array cannot index another arena, and an item's width is
+known at compile time (no arrays in the uniform - std140 rules, Vulkan's as WGSL's, pad array elements to 16 bytes).
+Per-world arrays are WORLD-MAJOR by default: item i of world w at `offset + w * stride + width * i`, the stride derived
+from the counts (padded to 4 floats), behind the accessors so the element-major alternative is a comptime switch
+(4.C). Batched model parameters carry a count: `batch_f[offset + (w % count) * stride + i]`, count 1 until a caller
+randomises.
 
 `layoutFor(model, capacities)` computes every offset, checks every arena against its sizes-file length and refuses by
 name (`error.WorldStateTooSmall`...); the host prints which arena, how much it needed and what it had.
@@ -1344,10 +1412,130 @@ Simon's GPU under Vulkan (native only, D18). Every turn inside a stage ends with
   MOVED OUT: the spv2wgsl fixes (pointer parameters, missing opcodes, `--strict` for compute) concern the existing web
   learner, not robotgpu - their own session (proposed Oct 31).
 
+  S0 AS IT STANDS (Nov 1): ALL OF S0 DONE on lavapipe, not yet run on Simon's GPU; S1a-S1d and S1e's first half DONE
+  (section 13). THE TURNS AS PLANNED, EACH ONE TURN, IN THIS ORDER - what is built, where, and the check that says it
+  is done:
+
+  R  REVIEW CARRY-OVERS (the review of Oct 31 - first, before new features):
+     R1 The probe's row layouts as TYPES: `MathsInputs` / `MathsResults` and `SpatialInputs` / `SpatialResults`
+        as extern structs of f32 arrays in robotgpu_probe.zig; every offset `@offsetOf(T, "field") / 4`, every
+        width `@sizeOf` of its field / 4, the row widths `@sizeOf(T) / 4` - replacing `MathsRow` / `SpatialRow`'s
+        hand-counted numbers; vk_host_test's `ProbeResult` takes its offset and width from the same declarations.
+        Check: vk-host-test's measurements unchanged to the digit.
+     R2 vk_gen's name conversion splits digits before a word ("Float32Atomic" -> `float_32atomic`): make it
+        `float32_atomic`, regenerate, `vk-abi-check`. Check: the generator's tests (`vk-gen-test`) and the
+        ABI check; the one use in wgpu_vulkan.zig follows.
+  S0.4 a RANGED READBACK - compute_host.zig. A module's `Config` declares `readback = .ranges` (default `.mirror`,
+        today's behaviour): such a module gets NO heap mirror and NO whole-Buffers staging buffer; `readRange(field,
+        first, count, destination)` copies that range through a staging buffer of `Config.staging_bytes` (in
+        chunks when larger), blocking until it lands. The probe moves to `.ranges`. Check: vk-host-test's probes
+        unchanged; a new check reads three ranges of one field (start, middle, end, one crossing a chunk) against
+        the twin, exactly.
+  S0.4 e PUSH CONSTANTS - the spike is DONE (journal, Oct 31): Zig emits a valid PushConstant block; zimr's check,
+        legaliser and reflection accept it. Three turns follow:
+        E1 THE HOST. spv_vulkan's reflection reports an entry's `push_constant_bytes` (its PushConstant block's size:
+           the last member's offset plus its size, scalar and vector members); the Vulkan host adds a
+           VkPushConstantRange (compute stage, offset 0, that size) to the compute pipeline's layout whenever it is
+           non-zero - automatic, no layout API changes; `vkCmdPushConstants` joins vk_gen's device commands
+           (regenerate, vk-abi-check); `computePassSetPushConstants(pass, bytes)`, Vulkan host only, pushes against
+           the pass's bound layout (`PassSlot.pipeline_layout`). Check: vk-host-test green; a module without push
+           constants unchanged.
+        E2 KOMPUTE AND COMPUTE_HOST. A kernel file declares `pub const PushConstants = extern struct {...}` (a
+           multiple of 4 bytes, at most 128 - the least Vulkan guarantees, refused at compile time past it);
+           `g.push()` reads it (GPU: `@extern(*addrspace(.push_constant) ...)`; CPU: a module variable the twin's loop
+           reads); compute_host's `runPushed(name, n, values)` pushes before each dispatch on every path (single,
+           batch, recording), the CPU path setting the variable; a browser build that calls it is a compile error
+           (`host.is_browser`). Check: compile green; `run` unchanged for modules without PushConstants.
+        E3 THE PROBE. A `write_pushed` entry writes its pushed value into a region its pushed offset names; one batch
+           of three dispatches with three values. Check: each region holds its own value - the per-dispatch
+           parameter level-scheduled kernels need - on the device and the twin.
+  S0.4 d COMPUTE TIMESTAMPS - D1 (bindings and host) DONE (journal, Oct 31). Next:
+        D2 COMPUTE_HOST. `enableTimings()` gives a pipe a timestamp pool of two slots per kernel; with timings on,
+           every GPU path of `dispatchKernel` resets the kernel's two slots, writes the first at the top before the
+           dispatch and the second at the bottom after it; `kernelTimings()` reads the pool (waiting) and returns each
+           kernel's last duration in microseconds - (ticks[1] - ticks[0]) x timestamp_period_ns / 1000 - zero for a
+           kernel not run since, and none of this when timings are off; native only (`host.is_browser`).
+        D3 THE CHECK. A probe entry whose work grows with a pushed count (each invocation iterating `count` times);
+           one dispatch with count c, one with 4c. Check: the second's duration exceeds the first's on lavapipe, and a
+           pipe without timings reports none.
+  S0.4 b BUFFER ADOPTION - compute_host.zig: `initGpu(..., .{ .adopt = &.{ .{ .field = .x, .from = &other_pipe,
+        .other_field = .y } } })`: the field binds the other pipe's buffer (the same VkBuffer) - the learner's ring
+        and robotgpu's arenas shared without copies (6.12). The adopter never frees it; the owner must outlive it
+        (asserted at deinit). Check: a probe pipe writes, an adopting pipe reads the same values with no upload.
+  S0.5  THE WORKGROUP SHAPE - robotgpu_probe's `cholesky` entry: one workgroup of 64 per world, its 76 x 76
+        symmetric positive definite matrix (A = B B^T + 76 I, random B) loaded into shared memory (23 KB, inside
+        lavapipe's 32 KB), factored in place by columns - the diagonal, then the column below it in parallel, then
+        the trailing update in parallel, a barrier between - the bounds uniform (from Params), every lane reaching
+        every barrier; the twin: the first invocation factors it serially from global memory. Check: L L^T against
+        A within 1e-5 relative; device against twin within the reordering bar; two device runs bitwise equal (D7).
+  S0.6  THE MEMORY ENVELOPE - robotgpu's arenas for Geno at nworld 4,096 and 8,192 (section 6.2's sizes): their
+        bytes per arena against each device's maxStorageBufferRange and memory heaps, recorded here; on lavapipe the
+        largest nworld that fits its 128 MB bindings, allocated and touched once. Check: the table in this file.
+  S1    FOUNDATIONS, six turns:
+        S1a THE SKELETON AND THE LAYOUT. src/robotgpu.zig - the kernel module's `Buffers` (the eight arenas, sized by
+            the `robotgpu_sizes` module: robotgpu_sizes.zig for desktop GPUs, robotgpu_sizes_test.zig for tests and
+            lavapipe), `Counts`, `ArrayAt` (offset, stride, count, padding - 16 bytes, so the uniform's layout rules hold
+            by construction), `Layout` (one named `ArrayAt` per array; S2's per-world arrays first, the constraint and
+            contact arrays joining in S3 and S5), `Params`, `layoutFor(counts, capacities)` refusing by name, and the
+            world-major index `offset + world * stride + index`. src/robotgpu_tests.zig, a test-fast root. Check: for
+            Geno's, the humanoid's and the KUKA's counts every array is 4-float aligned, inside its arena and clear of
+            the others; each refusal fires by name.
+        S1b R4 AND THE TOPOLOGY. robot.zig: `Model.body_subtree_count` and the depth-first check (bitwise gate);
+            `pack` of model_u - parents, subtree counts, roots, each body's dof chain, the ancestor bitmasks, the mass
+            matrix's sparsity. Check: pack-then-decode equals the model's tables for the KUKA, the humanoid and Geno.
+        S1c THE CONSTANTS. `pack` of model_f - bodies, joints, dofs, geoms - and invweight0 at qpos0 by robot.zig's own
+            functions; bounding radii. Check: pack-then-decode reproduces every model field.
+        S1d R1, THE SHARED PER-ELEMENT FUNCTIONS. robot.zig's pure `pub fn`s (a body's pose, a joint's cdof, one entry
+            of M, one body's RNE force, ...). GATE: robot.zig's suite, the robot family's tests and the benches'
+            numbers bit-identical before and after.
+        S1e THE HOST AND THE PROGRAM, three turns (the first half - robotgpu as a kernel module, `clear_overflow` on
+            the device - done Nov 1):
+            S1e-2 A RANGED READBACK REQUESTED, THEN COLLECTED (compute_host): `requestRange(field, first, count)` copies
+                  the range into a staging buffer and submits, returning a ticket; `collectRange(ticket, destination)`
+                  copies it out once the GPU has finished - false until then, never blocking - with a waiting form for
+                  callers that want it now. Native now; the web's mapAsync path in SW, a named compile error until
+                  then. The existing whole-field mirror (`readGeneration`, `readLatest`) cannot serve arenas of hundreds
+                  of megabytes. Check: two ranges requested, other work submitted, both collected equal to what was
+                  uploaded.
+            S1e-3 THE HOST: src/robotgpu_host.zig, `Sim` - `init(gpa, device, queue, model, nworld)` (countsOf,
+                  layoutFor, pack, the model arenas uploaded once, `Params`), the STEP PROGRAM (a list of kernels with
+                  how many invocations each runs - per world, per world and body, per world and branch... - built from
+                  the counts; S1's program is `clear_overflow`), `submitStep` (the program as one batch),
+                  `requestOverflow` / `collectOverflow` (S1e-2's tickets), `deinit`. Check: a Sim of Geno at 64 worlds
+                  on the device and on the CPU twin - overflow poisoned, a step submitted, the bits collected as zero.
+            S1e-4 THE WEB CONFIGURATION AND THE DESKTOP BINARY: `addComputeOutput` takes `KernelModules` (robot, the
+                  sizes file) like the native path, and `zig build check` translates robotgpu's kernels to WGSL
+                  (D19's first rule); the vk host test built for Windows at DESKTOP sizes, for Simon to start - the CPU
+                  twin's static arenas near a gigabyte (the risk noted at S1a).
+        S1 REVIEW: the code against MJW's io.py once more; comments; the course gains its chapter on the simulator's
+            data (arenas, the layout, packing, branches, the host) - in the GPU compute course or a page of its own,
+            Simon's choice.
+
 **S1 FOUNDATIONS.** robot.zig R1, R2, R4 under the bitwise gate; robotgpu.zig's Buffers, Params, Layout, sizes files,
 `layoutFor` with refusals by name, `pack` (topology, chains, M sparsity, invweight0, bounds), `program`, overflow bits;
 `robotgpu_host.Sim`; `robotgpu_tests.zig` in test-fast. Check: pack-then-decode reproduces every model field; each
 refusal fires by name; an empty program runs on the CPU and the GPU.
+
+**S2 SMOOTH DYNAMICS, no constraints - its turns, each checked against MJW's kernels (smooth.py, Nov 1):**
+
+    S2a THE TWIN'S HARNESS AND R1's REST: robotgpu_tests runs the CPU twin's kernels directly (the arenas in `g`, an
+        invocation loop) - parity with robot.zig in seconds, no Vulkan; robot.zig's remaining smooth functions shared
+        (one entry of M, one body's RNE force, a joint's share of `differentiatePos`) under the fingerprint gate.
+    S2b KINEMATICS: MJW's `_kinematics_branch` - one invocation per world and branch, root first, `moveByJoint` and
+        `freeJointPose` per body; then geoms and sites, one invocation per world and element. Twin = robot.zig, then
+        the device = the twin.
+    S2c COM_POS AND CRB: subtree sums over depth-first ranges (`body_subtree_count`, MJW's body_subtreenum) -
+        subtree_com, cinert, cdof (`dofAboutAxis`); `_crb_subtree`; the mass matrix's entries.
+    S2d FACTOR_M AND THE SMOOTH SOLVE: the factorisation's tables packed as io.py builds them - tile blocks for small
+        trees, the sparse LDL's `qLD_updates` grouped by depth above them (Geno's 75 dofs) - then qLD, qLDiagInv and
+        qacc_smooth = M^-1 qfrc_smooth.
+    S2e VELOCITIES AND FORCES: com_vel (`_comvel_branch`), rne (`_cacc_branch`, cfrc_int over subtrees,
+        `_qfrc_bias`), passive forces (damping, stiffness), qfrc_applied, actuation (joint transmission, the affine
+        law, the filters).
+    S2f INTEGRATION AND THE PROGRAM: Euler with implicit damping, integratePos (`rotateQuatByAngularVel`), the velocity
+        bound; S2's step program assembled; G1 step by step on the single and double pendulum, the free body, the ball
+        chain, the KUKA, the humanoid and Geno, on the twin and the device.
+    S2 review.
 
 **S2 SMOOTH DYNAMICS, no constraints.** kinematics, com_pos, crb_mass, factor_m, com_vel, rne, passive (joint
 damping and stiffness), qfrc_applied, actuation (joint transmission, the affine law, the filters), qacc_smooth, Euler
@@ -1379,6 +1567,14 @@ zero action reproduces the reference (robot_track.zig:3671's known answer, on th
 gravity reaches every joint within 1% in 0.5 s (robot_geno.zig:4401's); the SERVO BASELINE re-measured on robotgpu's
 physics before any learning; then the A/B that decides G4 and G5 - the night configuration on the CPU fleet (32
 characters) against the device (1,024-4,096 worlds), wall-clock to a judged MTTF.
+
+**SW THE WEB BUILD (D19).** The kernel module compiled for the web with its compile-time counterparts (the table in
+4.T): spv2wgsl's immediates (or a uniform for the push block) and subgroups where enabled; compute_host's web paths -
+pushes through dynamic offsets, readbacks collected a frame later, a GPU-only module without the twin's static arenas;
+the web boot asking for the adapter's limits and the `subgroups`, `timestamp-query` features; a web sizes file; the
+global-memory Hessian where shared memory is short; robotgpu_lab as a page; the tracker's learner (zn_mlp, already on
+the web) lending its buffers as natively. Check, in Simon's browser: the parity checks of S2-S6 at web bars, and the
+page's measured steps per second beside native's.
 
 **S7 MJW PARITY I - the rigid-body set.** Sensors (non-ray, all three stages, cutoff); xfrc_applied; mocap; ball and
 free springs, polynomial damping and stiffness; gravity compensation; actuator dyntypes, gains, biases, clamps,
@@ -1499,6 +1695,8 @@ DECISIONS TAKEN:
     behaviour wins, pinned by an MJW-generated fixture, each row documented.
   - D17 (Oct 31): O1, GENERIC KERNELS + FLAG VARIANTS - one build for every robot; comptime variants only where a flag
     changes a kernel's shape.
+  - D19 (Nov 1): T4, LATER - the web as a second build of the same source, stage SW after S6, native unchanged; from
+    S1e on every kernel also compiles for the web, and the host API is submit-then-collect (4.T).
 
 | # | decision | recommendation | where |
 |---|---|---|---|
@@ -1520,6 +1718,7 @@ DECISIONS TAKEN:
 | D16 | the oracle | DECIDED: MuJoCo C fixtures + robot.zig + the twin; MJW's own fixtures where it deliberately differs | 4.Q |
 | D17 | specialisation | DECIDED: O1, generic kernels, uniform feature flags, comptime variants by shape | 4.O |
 | D18 | target platforms | DECIDED: T1, native only (Windows Vulkan), officially - training never in a browser | 4.T |
+| D19 | the web, revisited | DECIDED: T4 later - the web as stage SW after S6, native unchanged; kernels compile for the web from S1e | 4.T |
 
 ORDER OF ASKING: D1, D15, D8, D12 - the four that change the physics or the scope - then D5, D18 (opened by D5's
 answer), D9, D7, D14, D2, D3, D4, D6, D10, D11, D13, D16, D17.
@@ -1568,3 +1767,538 @@ answer), D9, D7, D14, D2, D3, D4, D6, D10, D11, D13, D16, D17.
   with D5 and D18. Next: the full list read back to Simon for explicit agreement before the plan is called final.
 - Oct 31: THE PLAN IS FINAL. Simon agreed with all 18 decisions: "agree. Don't implement just yet." Nothing is
   implemented; S0 starts only on his go.
+- Oct 31: PREPARED FOR S0 in the sandbox (Simon: "Get zimr to compile and study claude.md and readme.html, including
+  zimrnum and robot tutorials. prepare for implementing the robotgpu mujoco warp plan"). The tree at
+  `/home/claude/zimr` builds with zig 0.18.0-dev.753+1420479be: `zbuild check` green; the bump's tier 2 empty
+  (`lint-fix` migrated nothing, only doc-sync refreshed five mirrored blocks of the backends tutorial); tier 3's
+  `c2js-canary` passes; `tripwires` run. lavapipe and the Khronos validation layer present. MuJoCo Warp unpacked at
+  `/home/claude/mujoco_warp` - this plan's `file.py:line` citations resolve under `mujoco_warp/mujoco_warp/_src/`
+  (core: constraint.py 5,868 lines, solver.py 5,712, smooth.py 5,096, forward.py 3,311, types.py 3,046). S0's
+  starting points verified: `vk.zig` declares maxPushConstantsSize, maxComputeSharedMemorySize and
+  maxComputeWorkGroupCount; the Vulkan host records only maxStorageBufferRange (the binding guard); kompute has no
+  subgroup operations. Waiting for Simon's go.
+- Oct 31: GO (Simon: "Proceed. At the end of this we should have fast robot sim for mocap tracking on vulkan windows.
+  For testing you will use lavapipe. We can trust the plan and mujocowarp sources. Review as you go and prepare to add
+  chapters about gpu in robot tutorial"). S0.1a DONE: `vk.zig` gains `PhysicalDeviceProperties2` and its query,
+  `PhysicalDeviceVulkan11Properties` (the subgroup's size, stages and operations, C layout), `SubgroupFeature`'s bits
+  and `PhysicalDeviceShaderAtomicFloatFeaturesEXT`; the Vulkan host records each device's `ComputeCapabilities` in
+  `Gpu.compute` (`computeCapabilities`: shared memory, push constants, workgroup counts and invocations, subgroup size,
+  whether compute may use subgroups and which operations, float atomic add only when the extension is offered) and
+  says the chosen device's at bring-up. RECORDED ON LAVAPIPE (llvmpipe, LLVM 20.1.2, 256 bits): 32,768 bytes of shared
+  memory per workgroup (Geno's 76 x 76 Hessian, about 23 KB, fits - D9), 256 bytes of push constants, 65,535
+  workgroups per dimension of up to 1,024 invocations, SUBGROUPS OF 8 with arithmetic, shuffle and ballot, float
+  atomic add yes (recorded, unused - D7). Simon's GPU: its line at the first start. `vk-host-test` green.
+  NEXT S0.1b: kompute's subgroup reductions (inline SPIR-V, the capabilities declared by the legaliser), refused in a
+  web build at compile time; the probe kernel against the twin and bitwise run to run.
+  THE TUTORIAL'S GPU CHAPTERS (Simon: "prepare to add chapters about gpu in robot tutorial"), to grow with the stages,
+  in robot-mocap-tutorial.html (robot.zig's own pages link them): 1. many worlds in lockstep - why the GPU, what a
+  world is, the 8 arenas and the layout; 2. the step as a program of kernels - MuJoCo Warp's shapes (one thread per
+  world and element, a workgroup per world), the CPU twin; 3. smooth dynamics on the device - kinematics to the mass
+  matrix and its factor; 4. contacts and constraints - the rows, the approximate diagonal; 5. Newton in a workgroup -
+  the Hessian in shared memory, each world converging on its own; 6. determinism - why no atomics feed the state; 7.
+  checking a simulator - parity with robot.zig, MuJoCo's fixtures, the device against its twin; 8. the tracker on the
+  device. Each lands when its stage does.
+- Oct 31: S0.1b BEGUN. kompute's SUBGROUPS section: `subgroupAdd` and `subgroupMax` (`OpGroupNonUniformFAdd` /
+  `FMax`, Reduce, Subgroup scope, inline SPIR-V as the atomics are) - GPU-only like `localId`, the CPU path computing
+  the same reduction from global memory, native only. `src/gpu/robotgpu_probe.zig`, the plan's probe module: entries
+  `subgroup_sum` (every invocation its subgroup's sum; the twin takes a subgroup to be consecutive invocations, its
+  size from Params) and `workgroup_sum` (64 values halved through shared memory between barriers, every lane reaching
+  every barrier; the twin a loop in order). Registered with vk-host-test's kernels; THE COMPILER ASSEMBLES THE
+  SUBGROUP INSTRUCTION (the module builds to SPIR-V); `vk-host-test` green. NOT YET KNOWN: whether the compiler
+  declared the `GroupNonUniform` capabilities (else the legaliser inserts them - spv_vulkan.zig's `check` refuses every
+  capability but Shader today) and what the device says. NEXT: a `robotgpu probe` check in vk_host_test.zig - both
+  entries on the device against the twin, and twice for bitwise equality; the legaliser's capabilities; the probe
+  kept out of the web's WGSL.
+- Oct 31: S0.1 CHECKED ON LAVAPIPE. THE COMPILER DOES NOT DECLARE A SUBGROUP INSTRUCTION'S CAPABILITY: the first load
+  failed validation ("GroupNonUniformFAdd requires ... GroupNonUniformArithmetic"). So `spv_vulkan.zig` gains a fifth
+  legalization - `subgroupCapabilities` maps every `OpGroupNonUniform*` the module holds to its capability (vote,
+  ballot, shuffle, relative shuffle, arithmetic, quad; clustered for a clustered reduction; `GroupNonUniform` with any)
+  and `legalize` declares the missing ones straight after the header; `check`, the build's gate, accepts the family
+  (`Capability.isAllowed`). `wgpu.computeCapabilities()` hands a program the device's (empty off the native host - a
+  @compileError there fired in builds that analyse every public declaration). vk-host-test's `robotgpu probe` check:
+  both reductions on the device against the twin from 2,373 inputs of mixed sizes and signs, each run twice. ON
+  LAVAPIPE: the subgroup sum EQUALS the twin (gap 0), the workgroup sum within 3.8e-8 of its magnitudes (bar 1e-5),
+  TWO RUNS BITWISE IDENTICAL; no validation error. S0.1's gate holds on lavapipe; Simon's GPU at its first run.
+  NEXT: spv2wgsl refusing `OpGroupNonUniform*` by name (the web's guard, so such a kernel can never become silent
+  zeros in a browser); then S0.2, the maths probe (zimrmath's Vec / Quat / Inertia functions in a kernel against the
+  twin, with ULP bars).
+- Oct 31: REVIEW OF S0.1 (Simon: "When i say review, it means: find bugs, choose better variable names, more verbose
+  even if different from mujoco, more comments. Intermediate locals to simplify expressions. Code should read like a
+  course. With diagrams."). BUGS FIXED: the probe check divided by the subgroup size - 0 on a device without subgroup
+  arithmetic in compute shaders - now the subgroup sum is reported not applicable there (`ProbeOutcome.subgroup_gap`
+  optional, `ComputeCapabilities.hasSubgroupArithmetic`); the kit's device readback was duplicated for the probe -
+  now one generic `deviceReadback(Kernel, pipe, field)`. READING: the probe module opens with both reductions drawn
+  (a subgroup's eight lanes, the workgroup's six halvings), its buffers `values` / `sums`, its names `invocation`,
+  `lane`, `member`, every condition a named local; kompute's subgroup section draws a reduction; the legaliser's
+  subgroup code has the opcode-to-capability table and a reduction's words drawn, `SubgroupInstructions` naming the
+  spec's bounds and `SubgroupCapabilitySet` hiding the indexing (no bare 61 / 333 / 349 / +4 left); the capability
+  query explains Vulkan's `p_next` chain, its locals named for what they hold. vk-host-test green: the subgroup sum
+  equal to the twin, the workgroup sum within 3.8e-8, two runs identical, no validation error.
+- Oct 31: THE WEB'S GUARD, CHECKED. Every shader and kernel build passes spv2wgsl `--strict` (shader_codegen.zig
+  sets it), which refuses an `// ERROR:` line - so section 1.3's "compute builds do not pass --strict" no longer holds,
+  and a subgroup instruction could never have become a silent zero in a browser: the probe's `subgroup_sum` through
+  spv2wgsl exits 5; its `workgroup_sum` (shared memory and barriers) translates cleanly. The refusal now NAMES the
+  instruction (`emitUnhandledPlaceholder`): "subgroup instruction 350 (kompute's subgroup operations, native Vulkan
+  only) has no WGSL lowering". S0.1 DONE on lavapipe. NEXT: S0.2, the maths probe.
+- Oct 31: S0.2 BEGUN - AND STOPPED BY A COMPILER CRASH, the very risk S0.2 exists to find. A `maths` entry in the
+  probe (one invocation per table row: unit quaternion, quaternion, vector, angle in; qmul, conjugate, rotate, both
+  axis-angle forms, normalize3, cross, dot3, length3, atan2Rad, acosRad out) made the SPIR-V compile SEGFAULT. BISECTED
+  with the build's own command, one function a variant: load/store, qmul, conjugate, rotate, quatFromNormAxisAngle,
+  cross, dot3, length3, atan2Rad, acosRad all compile; normalize3 and quatFromAxisAngle (which normalises its axis)
+  crash. In normalize3 the division compiles and THE ASSERTION crashes: `assertf(dot3(v, v) > 0, @src(), ...)`.
+  Further: `unreachable` in a branch compiles; a function taking a `std.builtin.SourceLocation` as a RUN-TIME argument
+  crashes (`ignoresLocation(@src(), x)`). Tried: assertf's GPU form taking the location at COMPILE time - STILL
+  crashes, so `@src()` itself evaluated in GPU code is the trigger (not yet confirmed by a variant). Reverted (no
+  unverified change left in zimrmath); the probe restored to its last state; vk-host-test green. Every robot.zig
+  function that asserts would crash a kernel build - the port depends on the fix. NEXT: confirm the trigger (a bare
+  `_ = @src();` in a kernel; a comptime-only `@src()`), then the fix in zimrmath (assertf's GPU form must not evaluate
+  `@src()` at all on the GPU - e.g. callers' `@src()` made lazy, or an assert form without it for kernels) or a
+  compiler workaround, and a canary kernel in the build so the crash class is caught at once; then the maths entry
+  back, and its device check with ULP bars.
+- Oct 31: THE CRASH, FOUND AND FIXED. Trigger variants: `_ = @src()` compiles; a compile-time-only `@src()` compiles;
+  `@src()` passed as a COMPILE-TIME parameter compiles; zimrmath's real `assertf` crashes. THE CAUSE: a
+  `std.builtin.SourceLocation` (pointers to the file's and function's names) passed as a RUN-TIME argument crashes this
+  compiler's SPIR-V backend (0.18.0-dev.753) - and zimrmath's four location-taking functions took it so: `assert`,
+  `assertf`, `assertUnreachable`, `panicf`. THE FIX (zimrmath): each now has a GPU form taking the location at compile
+  time (`assertOnGpu`, `assertfOnGpu`, `assertUnreachableOnGpu`, `panicfOnGpu`: `unreachable` when the check fails,
+  the location never read) and a CPU form exactly as before (`...OnCpu`, the location at run time, so CPU builds make
+  no instance per call site); the public name picks by `is_gpu` (`pub const assertf = if (is_gpu) assertfOnGpu else
+  assertfOnCpu`). `@src()` is known at compile time at every call site, so no call changes. Checked: the `assertf`,
+  `normalize3` and `quatFromAxisAngle` variants compile; the whole tree's check; lint. THE MATHS ENTRY IS BACK as
+  designed (normalize3 and quatFromAxisAngle included) - building the probe is the canary for this crash class from now
+  on. ALSO FOUND by the validation layer: a helper taking a storage-buffer pointer as a parameter (`loadVec(table,
+  at)`) is invalid SPIR-V without VariablePointers - the helpers now read and write the bindings directly
+  (`loadInput`, `storeOutput`), section 1.3's rule confirmed on the native path too. vk-host-test green, no validation
+  error. NEXT: the maths entry's device check - every function against the twin in units of f32's epsilon, its bars
+  set from the first measurement (plain arithmetic tight, the GPU's sine and cosine looser).
+- Oct 31: REVIEW OF THE CRASH FIX AND THE MATHS ENTRY. FOUND FOR S0.3: outside zimrmath, only `profiler.zig` takes a
+  `SourceLocation` at run time (`zone`, `zoneNamed`, `beginZone`, `internSrc`) - and robot.zig opens profiler zones
+  with `@src()`, so robot.zig in a kernel build would hit THE SAME CRASH, beside the `build_options` dependency 1.3
+  names; S0.3 gives the profiler a GPU form that compiles a zone out (or robot.zig's kernel build drops the zones).
+  READING: the maths row's layout named once (`MathsRow`: every input's and result's offset, the widths, and the rule
+  that the vector and the second quaternion are never zero, as `normalize3` asserts) - the kernel writes through it and
+  the device check will read through it; every result a named local before it is stored (`product`, `conjugated`,
+  `rotated`, `from_unit_axis`, `from_axis`, `crossed`); `storeResult`, `inputs_at`, `results_at`. zimrmath: `assert`'s
+  documentation no longer says "std.debug.assert on GPU"; `assertf`'s draws its two forms (the CPU's location a run-time
+  value, logged; the GPU's a compile-time value, never read) and says why. Lint, the documentation gate, the compile
+  check and vk-host-test green.
+- Oct 31: S0.2 DONE ON LAVAPIPE for zimrmath's functions (robot.zig's `Inertia.rotated` / `translate` / `mul`,
+  `crossMotion`, `crossForce` follow S0.3, which puts robot.zig in a kernel build). vk-host-test's MATHS CHECK
+  (`MathsCheck`, `runRobotgpuMathsProbe`): 1,024 rows from a seeded generator (a unit rotation; a quaternion and a
+  vector whose three-dimensional parts stay away from zero, as normalize3 needs; an angle in [-pi, pi]); the `maths`
+  entry on the device and the twin; each result's largest difference in units of f32's epsilon at its scale
+  (max(1, |twin|)), read through `MathsRow`. MEASURED: conjugate, rotate, normalize3, cross, dot3, length3 EXACT (0);
+  qmul 1.14 (a fused multiply-add); both axis-angle forms 1.00 (zimrmath's GPU sine and cosine within one epsilon of
+  the CPU library); acosRad 1.91; atan2Rad 28 - the least precise, about 1e-5 radian near pi. BARS, one per function
+  with headroom for other devices: 4 for arithmetic and square roots, 8 for sine / cosine and acos, 64 for atan2 - the
+  table in `MathsCheck`'s comment. Every function within its bar; no validation error. NEXT: S0.3 - robot.zig in a
+  kernel build (`wants_robot`): its `build_options` dependency through the profiler, and the profiler's run-time
+  `SourceLocation` (the crash class) given a GPU form; then the spatial-algebra entries in the probe.
+- Oct 31: S0.3 - ROBOT.ZIG COMPILES INTO A KERNEL. The profiler compiles to nothing on the GPU (Simon: "Maybe we
+  should make the profiler compile to nothing on gpu ?"): in a GPU build `build_options` is an empty stand-in, so its
+  own `@hasDecl` check makes `enabled` false, every zone (`inline`) folds away and a zone's `@src()` never becomes a
+  run-time value. The shader pipeline: `KernelModules` (zimrnum, zimrrl, ROBOT), `compileKernelSpirv` (the SPIR-V
+  compile, moved out of `addComputeOutput` unchanged but for `robot`), `addNativeComputeOutput` (SPIR-V alone - a
+  native kernel never gets a WGSL step). The device test's kernel record gains `wants_robot` and `native_only`; the
+  probe is both. The probe's `spatial` entry calls robot.zig's own `crossMotion`, `crossForce`, `Inertia.mul`,
+  `translate`, `rotated` and `dot6` (`SpatialRow` names its 48 inputs and 56 results): its SPIR-V builds and the
+  device test passes. FOUND, A DESIGN QUESTION FOR SIMON: a file belongs to one module only, and the engine module
+  holds robot.zig (and profiler.zig) by relative import - so a CPU twin cannot also have robot.zig as its own module
+  ("file exists in modules 'robot' and 'zimr'"). INTERIM: the probe imports `robot` on the GPU and `zimr.robot` on the
+  CPU. The lasting answer is either robot.zig (and profiler.zig, which it imports) as modules of their own, the engine
+  importing them by name - or robotgpu's twin always reaching robot.zig through the engine. NEXT: the spatial entry's
+  device check (`SpatialCheck`, like `MathsCheck`), after Simon's answer on the modules.
+- Oct 31: ROBOT.ZIG AND PROFILER.ZIG BECOME MODULES OF THEIR OWN (Simon: "I agree"). Sources: every compiled
+  `@import("robot.zig")` / `@import("profiler.zig")` now imports the module by name (35 files; the archived
+  `.zig.txt` probes untouched); the KUKA fixture imports `robot`, and `urdf_import`'s default import is the module's
+  name. Build: `RobotModules`, `addRobotModules` (profiler reads zm and the options; robot reads zm and the profiler)
+  and `addEngineOptionsAndRobot` (an engine module's options made ONE module, shared with the two - two modules rooted
+  at one options file are a compile error) at every engine module (8), the modules rooted at src/tests.zig (the main
+  test module, the WGSL-diff module) and three tools (robot_bench, clip_bake, and the tools loop); the fast test roots
+  and the cartpole test get the two modules; the kernel pipeline gives a robot kernel `robot` and `profiler`; the
+  device test's twin imports the ENGINE'S robot module - one file, one module - and the probe imports `robot`
+  plainly. `zbuild check` green, lint clean. THE TEST GUARD (a module's tests run only from its own root): before, the
+  robot.zig-only test "spec: counts and generated enums" filtered in the robot family ran 2 tests; robot.zig is in the
+  fast list and drops out of the family's members once the family imports it by name, so its own root runs it now -
+  to confirm (running at the end of this turn), with profiler.zig's tests, which have no root of their own yet.
+- Oct 31: THE MODULE REFACTOR VERIFIED, AND S0.3 DONE ON LAVAPIPE. The test guard holds: filtered on the robot.zig-only
+  test's name, robot.zig's own fast root runs 1 test and the robot family 1 - two, as before the refactor; profiler.zig
+  joined the fast list (its tests had no root once it became a module) and its test runs from there. vk-host-test
+  green with the twin on the engine's robot module. THE PROBE CHECK IS NOW ONE DEFINITION: `ProbeResult` (a result's
+  place, width and bar), `measureProbeResults`, `reportProbeResults`, `ProbeTable` and `runProbeTable` (fill, run one
+  entry on device and twin, measure) - the maths table (`MathsCheck`) and the SPATIAL TABLE (`SpatialCheck`: 1,024
+  physically plausible rows) are each a table, a fill function and their bars. MEASURED, robot.zig's own spatial
+  algebra on the device against the CPU engine: Inertia.rotated and dot6 exact; Inertia.mul and Inertia.translate
+  1.00 epsilon; crossMotion 1.62; crossForce 8.61 - cancellation (forces to 20 against velocities to 3 make terms near
+  60, the gap measured at the smaller result's scale), bar 16 with that reason. S0.1-S0.3 DONE on lavapipe. NEXT: S0.4,
+  the compute host - ranged readback without a whole-Buffers mirror, buffer adoption, dispatches past 65,535
+  workgroups, compute timestamps, push constants.
+- Oct 31: S0.4 (c) DONE ON LAVAPIPE - DISPATCHES PAST 65,535 WORKGROUPS. kompute: `Config.large_dispatch` (opt-in, so
+  the web's kernels are untouched) and `linearInvocationId` - a large dispatch's index counts the whole rows before
+  its own, `row x (num_workgroups.x x workgroup) + x`, both installers deriving it. compute_host: `dispatchGrid` (one
+  row when the workgroups fit, else rows of `max_workgroups_per_dimension` = 65,535, WebGPU's limit and the least
+  Vulkan guarantees; a unit test) at all three dispatch sites, and a NAMED REFUSAL for a module without the flag that
+  asks for more than one row - before, nothing checked the limit; the flag read only where `config` has the field
+  (compute_host's own test modules use plain struct literals). The probe: `large_dispatch`, a dispatch capacity of
+  2^23 with its buffers fixed at 2^16 (`table_capacity`), and `dispatch_tally` (each invocation below the count adds
+  one and its index's low sixteen bits, by atomic add). vk-host-test: 5,000,000 invocations = 78,125 workgroups = two
+  rows - device 5,000,000 and index sum 183,050,848, the twin the same, both equal to the host's own sum. The device
+  test's `deviceReadback` takes its element type. NEXT: S0.4 (a), ranged readback without a whole-Buffers mirror.
+- Oct 31: REVIEW (Simon: "Look at everything we have done and the plan for the next few turns. Is there a way to make
+  this code better, more zig idiomatic, easier to read? Review carefully and make the plan more precise"). FOUND: the
+  Vulkan declarations added in S0.1 (`PhysicalDeviceProperties2`, `PhysicalDeviceVulkan11Properties`, the float-atomic
+  features, `vkGetPhysicalDeviceProperties2`) were written BY HAND inside vk.zig's GENERATED sections - a regeneration
+  would have erased them, `vk-abi-check` never covered them, and the subgroup bits were a namespace of u32 constants
+  where the file's idiom is a packed flags struct. FIXED THE HOUSE WAY: the three structures and the command added to
+  `tools/vk_gen.zig`'s lists (with the `PointClippingBehavior` enumeration their field names), vk.zig REGENERATED from
+  Vulkan-Headers 367's registry (97 structures, 35 enumerations, 89 commands), `vk-abi-check` against the official
+  headers green; the generated `SubgroupFeatureFlags` and `ShaderStageFlags` replace the hand constants - the host
+  reads `subgroup_supported_stages.compute` and asks `hasSubgroupOperations(.{ .arithmetic = true })`. (Building the
+  generator compiles vk.zig, so a half-regenerated file needs a stand-in for a missing type before the generator can
+  run again.) Section 1.3's four stale statements corrected in place; section 8 gains THE NEXT TURNS, each one turn
+  with its files and its check: R1 the probe's row layouts as extern structs with @offsetOf, R2 vk_gen's digit
+  naming, S0.4 a ranged readback, e push constants (a spike first), d timestamps, b adoption, S0.5 the cooperative
+  Cholesky, S0.6 the memory envelope, then S1's skeleton.
+- Oct 31: R1 DONE - THE PROBE'S ROWS ARE TYPES. `MathsInputs` / `MathsResults`, `SpatialInputs` / `SpatialResults`
+  (nesting `PairFloats`, a Motion's or Force's eight floats, and `InertiaFloats`, an Inertia's thirteen) as extern
+  structs of f32 arrays, explicit padding where the old layout had it; `floatOffset(Row, .field)`,
+  `floatWidth(Row, .field)` and `rowWidth(Row)` read places and sizes from `@offsetOf` / `@sizeOf` with field names
+  as checked enum literals (`FieldEnum`) - `MathsRow` / `SpatialRow`'s hand-counted numbers gone (and `MathsRow`'s
+  documentation, which an earlier insertion had left attached to `SpatialRow`, with them). vk_host_test's tables build
+  each result with `probeResult(Results, .field, name, bar)`, place and width from the same declarations. CHECK: every
+  measurement unchanged to the digit (maths 1.14 / 0 / 0 / 1.00 / 1.00 / 0 / 0 / 0 / 0 / 28.00 / 1.91, spatial
+  1.62 / 8.61 / 1.00 / 1.00 / 0 / 0, the reductions and the large dispatch as before). NEXT: R2.
+- Oct 31: R2 DONE - THE GENERATOR'S NAMES. `vk_gen.snakeCase`'s rule, stated in one sentence and tested: a word
+  begins at a capital after a lower-case letter, and at a capital followed by a lower-case letter that comes after a
+  capital or a digit (an acronym's end, a word after a number); a number begins at a digit after a letter and stands
+  alone. So `deviceLUIDValid` -> `device_luid_valid` (was `device_luidvalid`), `shaderBufferFloat32AtomicAdd` ->
+  `shader_buffer_float_32_atomic_add` (was `..._32atomic_add`), `storageBuffer8BitAccess` ->
+  `storage_buffer_8_bit_access`, while `maxImageDimension2D` stays `max_image_dimension_2d`. (Refined from the plan's
+  first wording, `float32_atomic`: numbers as words of their own is the rule the file already followed -
+  `shader_float_16`, `maintenance_5` - and `2D` / `3D` must not split.) Regenerated: 24 field names change, every one
+  more readable; one use in wgpu_vulkan.zig followed. vk-gen-test 7/7 (the new naming test among them), vk-abi-check
+  against the official headers green, the compile check green, vk-host-test green. THE REVIEW'S CARRY-OVERS ARE DONE.
+  NEXT: S0.4 a, ranged readback.
+- Oct 31: S0.4 a DONE ON LAVAPIPE - RANGED READBACK. kompute: `Readback` (`.mirror`, today's way and the default;
+  `.ranges`) and `Config.readback` / `Config.staging_bytes`. compute_host: a `.ranges` module gets NO heap mirror (the
+  Gpu record's `mirror` is optional) and a staging buffer of `staging_bytes` rather than the size of all of `Buffers`;
+  `readRange(field, first, destination)` copies the range in chunks of `staging_bytes`, each by a command submitted
+  after every earlier dispatch and waited for (a poll of the timeline), so the range holds everything dispatched
+  before the call; it refuses an open batch or recording, a `.mirror` module, and - at compile time - a browser build
+  (`host.is_browser`: a browser cannot wait for the GPU); `readLatest` refuses a `.ranges` module by name. The CPU
+  path copies from the module's globals, so a twin reads the same way. The probe is `.ranges` with 4,096-byte staging
+  (1,024 floats a chunk, small on purpose); its checks all read through `readRange` now. vk-host-test's new check:
+  an exact pattern uploaded, read back in three ranges - the first 100, 3,000 from 30,000 (across three chunk
+  boundaries), the last 777 - equal bit for bit on the device and the twin; every earlier measurement unchanged.
+  FOR THE NEXT REVIEW: the probe checks' optional results (`?ProbeOutcome`, `?bool`) can no longer be null - a
+  waiting read always lands - so they simplify. NEXT: S0.4 e, push constants (a spike first).
+- Oct 31: THE GPU TUTORIAL BECOMES A COURSE (Simon: "Make the tutorial much more detailed and understandable. Take this
+  opportunity to make a course on zig gpu programming best practices"). gpu-compute-tutorial.html, now "GPU programming
+  in Zig", ten chapters: the execution model and memory (new sections, sketches of the dispatch / workgroup / subgroup
+  hierarchy and the four kinds of memory); WRITING KERNELS WELL (new chapter - one invocation per element and its
+  guard, uniform control flow, helpers that never take a storage pointer, assertions on the GPU and why their location
+  is compile-time, libraries in kernels - is_gpu branches, the profiler compiling to nothing, one file one module - and
+  data layout with rows as extern structs); COOPERATION INSIDE A WORKGROUP (new - the shared-memory tree with its six
+  halvings, subgroups, the twin of a cooperative kernel); the legaliser's subgroup capabilities and native-only
+  kernels; large dispatches, reading ranges and device capabilities in the running chapter; PRECISION AND DETERMINISM
+  (new - why device and twin differ, measuring in epsilons at the result's scale, cancellation, repeatability and float
+  atomics). Twelve new code folds, all filled from the source by `doc-folds`; only built features described; two
+  references by section number became links by name. doc-gate green. The robot tutorial's GPU chapters will link here
+  for the GPU itself and keep to the simulator.
+- Oct 31: S0.4 e - THE PUSH-CONSTANT SPIKE. A kernel declaring `@extern(*addrspace(.push_constant) Push, .{ .name =
+  "push" })` (an extern struct of two u32) and reading it COMPILES with the build's own SPIR-V command; the module
+  declares only the Shader capability; its PushConstant-class variable points at a struct decorated Block with member
+  Offsets 0 and 4 - all Vulkan asks. zimr's `check` requires bindings only of UniformConstant / Uniform / StorageBuffer
+  variables, so it passes; `legalize` handles the module; reflection classifies the block as no resource (no
+  descriptor). `vk.zig` already declares `PushConstantRange` and the layout's push fields. The Vulkan host's compute
+  pass already tracks its bound pipeline's layout (`PassSlot.pipeline_layout`) - what `vkCmdPushConstants` needs.
+  The plan's S0.4 e is now three precise turns, E1 (host), E2 (kompute, compute_host), E3 (probe and check).
+- Oct 31: S0.4 e - E1 DONE (THE HOST). spv_vulkan: `pushConstantBytes(words)` - a module's PushConstant block, its
+  struct's members by their Offset decorations, the block's end at its furthest member's end (scalars by width,
+  vectors by count x component; any other member refused, `Error.PushConstantMemberUnsupported`); measured on the
+  spike's module: 8 bytes. vk_gen: `vkCmdPushConstants` among the device commands - the generator writes its function
+  type AND the dispatch table's entry (the tables are generated too); 90 commands; vk-abi-check green. The Vulkan host:
+  every shader module is measured when made (`ShaderModuleSlot.push_constant_bytes`); a pipeline layout keeps its sets'
+  layouts (`PipelineLayoutSlot.set_layouts`); a compute pipeline whose module has a block gets a layout of its own -
+  the same sets plus one compute-stage range of that size - binds and pushes with it, and destroys it with itself
+  (`PipelineSlot.own_layout`), bind groups staying compatible since both layouts share the sets' layouts;
+  `computePassSetPushConstants(pass, bytes)` writes against the bound pipeline's layout, refusing loudly when no
+  pipeline is bound - Vulkan host only, the web's host declares no such call. Check: the compile check, lint, the ABI
+  check, vk-host-test green with every shader (render ones too) measured on the way - no module has a block yet, and
+  everything is unchanged. NEXT: E2, kompute and compute_host.
+- Oct 31: REVIEW OF S0.4 a AND E1. BUGS FIXED: `readRange` assumed 4-byte elements and a 4-byte-multiple staging size
+  (a Vulkan copy moves whole words) - now a compile error for a field of other elements and for a `.ranges` module
+  whose `staging_bytes` is not a positive multiple of 4; its offsets are computed in 64 bits and refused past the
+  copy's 32-bit offsets; the wait spins with `std.atomic.spinLoopHint`. A push larger than the bound pipeline's range
+  was checked by nothing (a validation error far from its cause) - each compute pipeline now records its
+  `push_constant_bytes`, the pass the bound one's, and a larger push is refused by name with both sizes.
+  `createComputePipeline` leaked its own layout when the pipeline itself was refused - an `errdefer` destroys it; the
+  layout slot's set array is initialised rather than partly undefined. `pushConstantBytes` returned whichever block
+  it met first when a module had several - now the largest (`blockBytes` measures one), which every block fits.
+  The probe checks' results that can no longer be null (a waiting read always lands) are plain values now. TESTED:
+  the measurement's own unit test (`Assembler`): a block { u32 at 0, vec4 at 16 } is 32 bytes, a module without one
+  0, a block with an array member refused; vk-host-test green; lint and the compile check green.
+- Oct 31: S0.4 e DONE ON LAVAPIPE - PUSH CONSTANTS END TO END (E2 and E3 in one turn: E2's code is analysed only when a
+  kernel uses it, so the probe's entry was its first real check). kompute: a kernel file's `PushConstants` (an extern
+  struct, whole 4-byte words, at most 128 bytes - `requirePushConstants`, checked at compile time); `g.push()` - on
+  the GPU an `@extern` in the push-constant address space, on the CPU a module variable the twin's loop reads; both
+  declared only when used. compute_host: `run` and `runPushed` over one `dispatchKernel`, whose compile-time `pushes`
+  keeps the native call out of every module that never pushes; `pushValues` after the bind group on all three paths
+  (single, batch, recording); a browser build calling `runPushed` is a compile error. (Also fixed: `run`'s own
+  documentation, which an earlier insertion had left on `reads_ranges`.) FOUND BY THE VALIDATOR: calling `g.push()`
+  inside a kernel keeps the returned pointer in a function variable, which SPIR-V's logical addressing forbids ("variables
+  may not allocate a pointer type") - the pointer is bound ONCE AT MODULE SCOPE, `const pushed = g.push();`, as
+  `params = g.uniform()` always was; `push()`'s documentation says so. The probe: `PushConstants` { region_start,
+  value }, `write_pushed`, `pushed_words` (its 8th field), `Params.pushed_region_size`. vk-host-test: ONE batch, three
+  `runPushed` dispatches of 1,000 with (0, 11), (1000, 22), (2000, 33) - every word of each region its own value, on
+  the device and the twin; no validation error; everything else unchanged. The course gains 7.8 Push constants and the
+  module-scope rule for kompute's pointers. NEXT: S0.4 d, compute timestamps.
+- Oct 31: S0.4 d - D1 DONE (TIMESTAMP BINDINGS AND HOST). vk_gen: `QueryPoolCreateInfo`, the `QueryType` enumeration
+  (timestamp) and five device commands - create / destroy / reset a query pool, write a timestamp, read results;
+  regenerated (98 structures, 36 enumerations, 95 commands); the `QueryPool` HANDLE declared by hand in vk.zig's
+  hand-written handles section (the generator does not write handles); vk-abi-check green. The Vulkan host: a
+  `QueryPoolSlot` table; `ComputeCapabilities.timestamps_in_compute` (timestampComputeAndGraphics) and
+  `timestamp_period_ns` (timestampPeriod), said at bring-up - LAVAPIPE: timestamps yes, a tick every 1 ns;
+  `createTimestampPool`, `timestampPoolDestroy` (deferred until the GPU is done, a new `Destroy.query_pool`),
+  `computePassResetTimestamps`, `computePassWriteTimestamp` (top of the pipeline before, bottom after),
+  `timestampPoolRead` (64-bit ticks, waiting) - native only, the web's host declares none. Their section opens with
+  how two timestamps time a dispatch. vk-host-test green and unchanged. NEXT: D2.
+- Oct 31: S0.4 d DONE ON LAVAPIPE - COMPUTE TIMESTAMPS (D2 and D3 in one turn, D2's code being analysed only once a
+  pipe uses it). compute_host: `enableTimings()` - a timestamp pool of two slots per kernel, start and end, refused by
+  name on a device that writes no compute timestamps; every GPU path of `dispatchKernel` brackets its dispatch with
+  `timeKernelStart` (reset the kernel's two slots, write the first at the top of the pipeline) and `timeKernelEnd`
+  (write the second at the bottom), both nothing on the web or without a GPU; `kernelTimings(timings)` - each kernel's
+  last duration in microseconds, (ticks[end] - ticks[start], wrapping) x the device's tick, waiting for the
+  dispatches and refusing an open batch or recording, zero for a kernel not dispatched since and for every kernel of a
+  pipe without timings; the pool released with the pipe. The probe: `busy_work` (a pushed number of rounds a value),
+  `PushConstants.iterations`. vk-host-test: 65,536 values, 2,000 rounds 160 ms and 8,000 rounds 634 ms - 3.95x for 4x
+  the work - and a pipe without timings reports none. The course gains 7.9 Timing kernels. NEXT: S0.4 b, buffer
+  adoption.
+- Oct 31: S0.4 b DONE ON LAVAPIPE - BUFFER LENDING; S0.4 IS COMPLETE (a, b, c, d, e). compute_host: `FieldLoan` (a
+  buffer, its bytes, the owner's loan count - file-level, so a pipe of one kernel module can borrow from a pipe of
+  another); `lendField(.field)` (counted); `initGpuBorrowing(..., borrowed)` binds each borrowed field to the lent
+  buffer instead of creating one (asserting it holds the field's bytes) and records the owner's count, `initGpu`
+  being it with nothing borrowed - no caller changes; a failed init destroys only its own buffers; `deinit` gives a
+  borrowed buffer back instead of destroying it, and an owner's `deinit` asserts every loan came back. vk-host-test:
+  an owner zeroes and lends its `pushed_words`, a second pipe borrows it and runs `write_pushed` (77), the owner
+  reads 77 in every word of its own buffer - nothing uploaded or copied between them; every loan returned. The course
+  gains 7.10 Sharing buffers between pipes. NEXT: S0.5, the cooperative Cholesky in a workgroup.
+- Oct 31: S0.5 DONE ON LAVAPIPE - THE WORKGROUP SHAPE (Simon, on zimrnum's tensors: "Would it make sense to use tensors
+  in mujoco? Maybe not..." - agreed: MuJoCo's step is tree-shaped, sparse and fused per element, so robotgpu stays
+  fused kernels over arenas, as MJW itself is; what is genuinely dense - a world's Hessian - is a routine a kernel calls
+  inside one dispatch, checked against zimrnum as an independent reference). The probe's `cholesky`: one workgroup per
+  matrix, order up to `max_matrix_order` = 76 (Geno's Newton Hessian; 23 KB of shared memory), factored in place
+  column by column - the pivot by one invocation, the column and the trailing update with rows spread over the 64
+  lanes, a barrier between; the loop bounds uniform, no barrier in a lane-dependent loop, and a workgroup past the
+  matrices leaving whole. FOUND WHILE DESIGNING: robot.zig's `choleskyFactor` (now public, the twin's routine)
+  subtracts each entry's products in ascending column order, the very order the workgroup's column-by-column updates
+  apply them - the same arithmetic. vk-host-test, eight random SPD matrices of order 76 (B B^T + 76 I): L L^T within
+  4.5e-7 of A (relative to its largest entry); the device EQUAL to the twin (0 epsilons - lavapipe fuses no
+  multiplies); the twin equal to zimrnum's independent `cholesky`; two device runs identical. Bars 128 epsilons both
+  ways - a GPU that fuses each subtraction's multiply may drift over 76 columns - with the reason in the check. The
+  course gains 5.4 A matrix factorisation in a workgroup. NEXT: S0.6, the memory envelope.
+- Oct 31: S0.6 DONE - THE MEMORY ENVELOPE; S0 IS COMPLETE. The device side, in code: `ComputeCapabilities`
+  gains `max_storage_binding_bytes` (maxStorageBufferRange - what one arena may hold) and `device_local_bytes` (the
+  largest device-local heap - what the arenas together must fit), said at bring-up. LAVAPIPE: storage bindings up to
+  128 MB; device-local memory 3,995 MB (the sandbox's own memory - lavapipe runs on the CPU). vk-host-test allocates
+  one arena as large as a binding may span (capped at 256 MB), writes a page at its start and at its very end and
+  reads both back: 128 MB on lavapipe, both pages right. THE ARITHMETIC, Geno's arenas per world (nbody 25, nv 75, nq
+  99, ngeom 21; at most 49 floor contacts - 4 boxes x 4, 16 capsules x 2, 1 sphere - pyramidal, 196 rows, dense J;
+  world_f: the generalized vectors, 96 floats a body, 16 a dof, 16 a geom, the packed mass matrix and its factor
+  (about 1,000 entries each), 32 floats a contact, the tracker's 500; scratch: the 75 x 75 Hessian and Newton's
+  vectors) - estimates until S1's `layoutFor` computes them exactly:
+
+      arena      per world        at 4,096 worlds    at 8,192 worlds
+      world_f     8,940 floats    34.9 KB        140 MB             279 MB
+      efc_f      16,464 floats    64.3 KB        257 MB             514 MB
+      scratch     6,325 floats    24.7 KB         99 MB             198 MB
+      world_u       600 floats     2.3 KB          9 MB              19 MB
+      io            100 floats     0.4 KB          2 MB               3 MB
+      all        32,429 floats   126.7 KB        507 MB            1013 MB
+
+  THE LARGEST ARENA IS THE CONSTRAINT ROWS (efc_f, the dense Jacobian). On a desktop GPU - bindings of 2 to 4 GB,
+  memory of 8 GB and more - 8,192 worlds fit with room. On lavapipe the 128 MB binding caps efc_f at 2,038 worlds
+  (about 252 MB in all, within its 3,995 MB): the sandbox's tests run at most that many, and far fewer in
+  practice, lavapipe being a CPU. A chain-sparse Jacobian (the plan's ~70 KB a world) would more than double that.
+  NEXT: S1, foundations - robotgpu.zig's skeleton.
+- Oct 31: S1a DONE - THE SKELETON AND THE LAYOUT. src/robotgpu.zig: the kernel module's `config` (workgroups of 64, a
+  large dispatch, readback by ranges), `Buffers` (the eight arenas, sized by the `robotgpu_sizes` module), `ArrayAt`
+  (offset, stride, count, padding: 16 bytes, so arrays of them sit in a uniform as written), `Counts`, `Layout` - ONE
+  DEFINITION: `world_arrays`, a table of S2's 29 per-world arrays with what each one's length is made of (`PerWorld`:
+  positions, velocities, body vectors / motions / frames, dof motions, geom vectors / frames, mass entries), from which
+  `Layout`'s named fields are made (`@Struct`, this compiler's reification) and `layoutFor` places each array -
+  world-major, every world's block padded to four floats, refusing a too-small `world_f` by name
+  (`WorldStateTooSmall`); `worldIndex` = offset + world x stride + index; compile-time checks that `ArrayAt` is 16 bytes
+  and `Params` whole 16-byte rows. The head of the file is a short course: the arenas, and world-major arrays drawn.
+  src/robotgpu_sizes.zig (desktop: Geno at 4,096 worlds with room) and src/robotgpu_sizes_test.zig (64 worlds), the
+  module chosen by the build. src/robotgpu_tests.zig, a test-fast root (the build gives fast roots the test sizes as
+  `robotgpu_sizes`): for Geno's, a humanoid's and the KUKA's counts at 64 worlds every array is 4-float aligned, inside
+  `world_f` and clear of the others; the refusal fires by name; world-major indexing lands where drawn - 3/3. The whole
+  tree's compile check and lint green. NEXT: S1b, R4 and the topology.
+- Oct 31: S1b DONE - R4 AND THE TOPOLOGY. robot.zig (R4): `Model.body_subtree_count`, filled by `countSubtrees` right
+  after `refreshSubtreeMass` in `buildFromSpec` - the one place every model passes through - which also REFUSES a
+  model whose bodies are not depth-first (`BuildError.BodiesNotDepthFirst`: a body outside its parent's run of
+  descendants), the guarantee the GPU's tree sums rely on; `robot_urdf`'s error set extends `BuildError`, so it
+  carries the new error. THE GATE: robot.zig's own tests 124/124, the robot family 643/783 (140 skipped, the slow),
+  no failure - a field and a check, no arithmetic changed. robotgpu.zig: `Counts.nchain`; `model_u_tables`, a second
+  table (21 tables: robot.zig's body / joint / dof index tables and the mass matrix's compressed rows, copied; and,
+  derived, each body's DOF CHAIN - every dof from the root down, the root's first - with its start and length, and
+  the ANCESTOR MASK, a bit per chain dof); `Layout`'s names from both tables; `layoutFor` placing the tables in
+  `model_u` and refusing by name (`ModelTablesTooSmall`); `countsOf(model, nworld)`; `pack` (the chain filled from
+  its end while walking up the parents, so the root's dofs land first); `world_f_array_names`, `model_u_table_names`.
+  robotgpu_tests.zig: the KUKA (its spec), the humanoid and Geno (their MJCF, through mjcf and robot_mjcf) packed
+  and read back - every copied table equal to the model's own, every chain equal to a second derivation (up
+  `dof_parent` from the body's last dof) and every mask bit set; each arena's layout checked on its own (a first
+  version checked them together and saw arenas "overlap" - each starts at 0); both refusals by name: 242/250 (8
+  skipped - the root now holds mjcf's and robot_mjcf's own tests). NEXT: S1c, the constants.
+- Oct 31: TESTS MADE FAST TO WORK WITH (Simon: "Robot tests are three times too long. There is a way to get a report of
+  durations with command line args. Find a way to avoid testing all that as you work. Maybe disable some. Maybe tweak
+  some to take less time."). MEASURED with the project's own runner (`-Dtest-timing`, `-Dtest-shards`; the sandbox has
+  one core now): the robot family was 204 s of tests, and ONE test took 167.5 s of it - "the agent learns on the
+  dance" (300 updates of a small agent with the planner) - every other test at most 1.7 s. That test is now a SLOW
+  test (`-Dslow-tests`), its claim intact; a quick form runs by default ("the agent's parts train on the dance": 20
+  decisions, about 9 updates, every loss finite and the policy updated - 6 s). The robot family: 39 s of tests now,
+  643 pass, 141 skip. robotgpu's root had grown to 242 tests by importing mjcf.zig and robot_mjcf.zig by path (their
+  tests came with them): the MJCF importer is now the `robot_import` MODULE for test-fast roots, with
+  `robot_mjcf.importSource` (parse, read, build in one call), and the root runs its own 7 tests. claude.md's testing
+  section says how to time a suite and to run robotgpu's root alone while working on it.
+- Oct 31: S1c DONE - THE CONSTANTS. robotgpu.zig: `Counts.nsite`; `PerModel` gains what model_f's tables are made
+  of (a vector per body / joint / geom / site, a body's inertia as sixteen floats, two or five numbers per joint);
+  `model_f_tables`, a third table (22: body poses, inertias and masses; joint axes, anchors, ranges, the limits'
+  softness (time constant, damping ratio) and impedance (min, max, width, midpoint, power), margin, damping,
+  stiffness, reference; dof armature; geom poses, sizes in MuJoCo's convention, friction; site poses) and four more
+  model_u tables (joint limited flags, geom types and bodies, site bodies); `layoutFor` places and checks all three
+  arenas (`ModelConstantsTooSmall`); `pack(model, layout, model_u, model_f)` = `packTopology` + `packConstants`, last
+  in the file (entry points last), the chain sketch on the topology half where it belongs. robotgpu_tests.zig: every
+  constant of the KUKA, the humanoid and Geno equal to the model's own BIT FOR BIT - vectors lane by lane, inertias
+  field by field, ranges with their flags, softness and impedance, geom types and sizes, sites; model_f's layout
+  checked and refused like the others: 8/8. SCOPE, decided here: the INVERSE WEIGHTS at qpos0 join with R5 (S3) -
+  robot.zig computes them for its own approximate diagonal and robotgpu packs robot.zig's values, one definition;
+  the BOUNDING RADII join with R3's collision fields (S5); a CONVEX HULL packs its type with zero sizes, its vertices
+  joining with convex collision (S8). NEXT: S1d, R1 - the shared per-element functions, under the bitwise gate.
+- Oct 31: REVIEW AGAINST MUJOCO WARP (Simon: "Read again mujoco warp to make sure we follow closely. Review recent
+  code. Look for bugs. Find the best verbose variable names. Improve comments."). READ: io.py's put_model (what it
+  computes about the tree and the mass matrix) and smooth.py's kernels. FOUND: MJW no longer walks the tree by levels
+  (`body_tree` is unused in smooth.py) but by BRANCHES - `_kinematics_branch`, one invocation per world and leaf,
+  walking `body_branches[body_branch_start[b] .. body_branch_start[b + 1]]` root first; subtree sums run over
+  depth-first ranges (`body_subtreenum` - our `body_subtree_count`); the sparse factorisation's updates are grouped by
+  depth (`qLD_updates`), the dense path tiled. CHANGED: `model_u` gains `body_branches` and `body_branch_start`, as
+  io.py computes them (one chain per leaf, the world excluded, leaves in body order; a leaf found as a subtree of one,
+  thanks to R4), with `Counts.nbranch` / `nbranch_bodies` and a test (each branch starts on the world, steps parent
+  to child, ends at a leaf; every leaf once); every model table carries its MJW NAME as data (`ModelTable.mjw_name`:
+  body_parentid, body_subtreenum, M_rownnz, jnt_solref, qpos_spring, geom_quat...; empty for robotgpu's own chains and
+  masks); GEOM TYPES packed in MuJoCo's numbering (`GeomType` = mjtGeom: plane 0 ... box 6, mesh 7 - robot.zig's tag
+  order differs, and MJW's collision dispatch reads mjtGeom; a hull is MuJoCo's convex mesh); JOINT TYPES pinned at
+  compile time to MuJoCo's order (robot.zig's already is: free, ball, slide, hinge); the deliberate differences from
+  MJW written where they live (the inertia in robot.zig's ten-number form, damping per joint, one friction
+  coefficient); clearer names (`ancestor`, `next_free_world_float` / `_model_word` / `_model_float`,
+  `next_chain_entry`, `next_branch_entry`, `chain_fill_end`, `branch_fill_at`). No bug found in the packing; 8/8.
+  FOR S2: kinematics as MJW's branch kernel; com_pos's subtree sums over ranges; factor_m's tables (`qLD_updates` by
+  depth for the sparse path, or the tiles) computed in pack when factor_m is written, from io.py.
+- Oct 31: S1d DONE, ITS SMOOTH-DYNAMICS PART - R1's SHARED FUNCTIONS FOR S2. robot.zig: `moveByJoint(pose,
+  joint_type, local_axis, local_anchor, coordinates, rest_coordinate) JointMotion` - kinematics' inner step, one
+  joint's motion of the pose built so far (slide along the axis; hinge or ball turning, then the OFF-CENTRE
+  CORRECTION), returning the pose with the joint's world anchor and axis - and `freeJointPose(position, orientation)`;
+  `kinematics` now loops over a body's joints calling them, every operation in its old order (a hinge's or slide's
+  single coordinate read alone, never past qpos's end); `dofAboutAxis` and `rotateQuatByAngularVel`, already pure, made
+  public for the kernels. THE GATE, BIT FOR BIT: a fingerprint of 200 steps (Wyhash over qpos, qvel, body_xpos,
+  body_xrot) - humanoid 2acacc17d2834891, Geno b51c1eb44de302bf - EQUAL before and after; robot.zig's tests 124/124;
+  the robot family 643/784 (141 skipped). The mocap tutorial's block on `rotateQuatByAngularVel` follows the
+  declaration to `pub fn`. THE REST OF R1 joins the stage that ports it, under the same gate: one entry of M, a
+  body's RNE force and a joint's share of `differentiatePos` with S2's kernels; the constraint-row functions (limit
+  distance and sign, pyramid edge, reference acceleration and regulariser) with S3's.
+  THE FINGERPRINT, for the next extraction - a temporary test in robotgpu_tests.zig, run with
+  `-Dtest-filter="R1 gate"` before and after, then removed (std.debug.print is banned in src/):
+      for humanoid.xml and geno.xml: modelFromMjcf; Data.init; 200 x robot.step;
+      Wyhash over sliceAsBytes(data.pos), (data.vel), (data.body_xpos), (data.body_xrot); print the final value
+  NEXT: S1e - the host and the program.
+- Nov 1: S1e, FIRST HALF - ROBOTGPU AS A KERNEL MODULE, ON THE DEVICE. Code comments cleaned of plan and stage
+  references (Simon's rule: comments read like a book) - thirteen of mine in the robotgpu work, five older ones of
+  the same kind; 27 more in older code (retarget_plan.md and others, ten files) are A CLEANUP STILL TO DO, a careful
+  pass since some sit inside sentences. THE BUILD: `ShaderPipeline.KernelModules.robotgpu_sizes`, an optional sizes
+  file - the root's `--dep robotgpu_sizes` and the module's `-M` declaration - and `HostTestKernel.robotgpu_sizes`,
+  given to the SPIR-V and the CPU twin alike, so both declare the same buffers. robotgpu.zig: `world_u`'s first array,
+  `overflow` (a word per world, `PerWorld.single`; `WorldIntegersTooSmall`); the bindings (`g`, `world_u`, the
+  uniform); the first kernel, `clear_overflow` (one invocation per world, through the layout); `kernels` and their
+  installation. vk-host-test: `world_u` poisoned on the device and the twin, `clear_overflow` over 64 Geno-sized
+  worlds, every overflow word zero and every other word still the poison - both. FOUND BY THE VALIDATION LAYER:
+  `Counts` padded itself with `[3]u32` at offset 52, and a uniform aligns every array element to 16 bytes - spirv-val
+  refused the module (lavapipe ran it anyway). Fixed with scalar padding, and `requireNoArraysInUniform(Params)` now
+  refuses any array inside the uniform at compile time, by field name. NEXT: S1e's second half - robotgpu_host.Sim
+  and the step program.
+- Nov 1: WEBGPU EVALUATED, PLANNED AS STAGE SW (D19). Simon asked how hard WebGPU support would be, accepting lower
+  speed but not a slower native. Checked: spv2wgsl translates `num_workgroups` (large dispatches portable) and refuses
+  subgroup instructions; it has no push-constant path; the web boot (bridge.zig) asks for no raised limits, only the
+  optional `timestamp-query` feature; in the browsers, `subgroups` is optional (Chrome since 134, limited elsewhere)
+  and IMMEDIATES - WebGPU's push constants - shipped in Chrome 149-150 (June 2026), feature-detected. Section 4.T gains
+  T4 with the feature-by-feature table and the estimate (about 12-20 turns, mostly engine work shared by every
+  kernel); D19 places the web as stage SW after S6, with two rules from S1e: every kernel compiles in the web
+  configuration too, and the host API is submit-then-collect.
+- Nov 1: REVIEW, AND THE NEXT TURNS MADE EXACT. CODE: robotgpu.zig's layout simplified - the two length enums merged
+  into one, `Elements` (they overlapped: body vectors, geom vectors, mass entries, a dof each), one entry type
+  `ArrayDecl` for all four arenas' tables (renamed `world_f_arrays`, `world_u_arrays`, `model_u_arrays`,
+  `model_f_arrays`), `namesOf`, and `placeArrays` - `layoutFor` was four copies of one loop and is four calls now, its
+  comment no longer naming world_f alone; `ArrayAt.stride` has one meaning (copy to copy: a world's block, or a model
+  table's one copy); `modelIndex` beside `worldIndex`. compute_host's `kernelTimings` takes `*[M.kernels.len]
+  KernelTiming`, so a wrong-length buffer cannot compile. `addNativeComputeOutput`'s comment no longer cites the plan
+  and says which kernels it serves. Checks: robotgpu 8/8; vk-host-test green. PLAN: MJW's smooth stages read again -
+  com_pos and crb sum over subtree ranges, com_vel and rne's accelerations walk branches, factor_m uses tiles below a
+  size and qLD_updates above - all of which the packing already supports except factor_m's own tables, packed with
+  it. FOUND MISSING: a ranged readback that is requested and collected later (the whole-field mirror cannot serve
+  arenas of hundreds of MB, and the web cannot block), now S1e-2, before Sim; `addComputeOutput` lacks robot's and
+  the sizes module, needed for D19's WGSL rule, now S1e-4; a fast parity harness (the twin's kernels called directly
+  in robotgpu_tests), now S2a; the course chapter on the simulator's data, at S1's review.
+- Nov 1: REVIEW AND ESTIMATE, on the Windows machine, nothing compiled (Simon: "Review what has been done, and
+  estimate how much time is remaining before we can train robot tracking on native gpu and webgpu ... Is there a way
+  to make this code more easy to understand, or zig idiomatic?"). WHERE IT STANDS: about 36 turns since the go - the
+  engine side of S0 and the simulator's data side of S1 - and no physics on the device yet. NOTHING HAS RUN ON THE
+  RTX 5060: no `vk_host_test.exe` was ever built on Windows, and the Zig on PATH there is dev.349 while the sandbox
+  built the tree with dev.753 (installed beside it). ESTIMATE, in turns, to the first GPU-trained Geno: the RTX run
+  1-3, S1's rest 4-6, S2 12-20, S3 10-16, S4 3-6, S5 (the floor pairs) 8-12, S6 15-25 - about 55-90; the plan's full
+  S3 and S5 scope adds 7-11. The web after that: SW 12-20, plus the learner's own WGSL check (zn_mlp_web_twin_plan.md,
+  not started) 5-8. The widest ranges: S2d (MJW factors Geno's 75-dof tree by its sparse path, whose updates are float
+  atomics, which D7 rules out - S0.5's workgroup Cholesky already factors 76 x 76), S3's line search, and S6's servo
+  re-baseline on the new contacts. SCOPE THAT D15 ALREADY ALLOWS: Geno has no limits, equalities, actuators or
+  sensors, and only floor pairs; the goal features depend only on clip and frame (`supertrackFeaturesInto` takes them
+  in the reference's own root frame), so they can be a per-clip table. READING (proposed, not applied): `Layout` as
+  declared structs nested by arena, each array's type naming its arena and element kind (fields visible in source,
+  MJW names as doc comments - `mjw_name` is read by nothing - and an array of one arena unable to index another);
+  load and store helpers chosen by the array's type, one set for every kernel, replacing the probe's per-binding
+  copies; `placeArrays` checking capacity before narrowing to 32 bits instead of clamping; the layout tests on
+  `countsOf` of the three real models, not hand-written counts; `kinematics`' two dead stores after the `moveByJoint`
+  extraction; every kernel module's `config` a `k.Config`, so compute_host drops its three `@hasField` reads. NEXT:
+  S1e-2, or the layout refactor first if Simon wants it before S2 multiplies its use sites.
+
+- Nov 1: THE LAYOUT AND ACCESSOR REFACTOR, on the Windows machine, written without compiling - the compile and the
+  runs are Simon's (Simon: "Refactor first. Make sure the code is perfect. I can help you test on this windows
+  machine."). robotgpu.zig: `Layout` is four declared structs, one per arena (`WorldStateLayout`,
+  `WorldIntegersLayout`, `ModelTablesLayout`, `ModelConstantsLayout`), each array's place a `WorldArray(arena, kind)`
+  or a `ModelTable(arena, kind)` - sixteen bytes, as `ArrayAt` was, with the arena and the item kind in the TYPE.
+  `at(world, item)` multiplies by the item's width at compile time; `load` / `store` / `loadVec` / `storeVec` (and
+  `ModelTable.loadInertia`) reach the arena's binding as a compile-time constant (`comptime g.bind(arena)`, the value
+  a module-scope binding has) and refuse at compile time a vector access on a table of scalars, or floats from words;
+  `within` / `fill` / `fillVectors` serve the host's packing; the MJW names are doc comments (`mjw_name` was read by
+  nothing). `placeArrays(arena, ...)` finds the arena's layout by its name, takes the copies from the array's type
+  (`per_world`), refuses at compile time an array whose type names another arena, and checks the capacity before
+  narrowing to 32 bits - no clamp. `pack` zeroes both images first, so a packed model is the same bytes every time.
+  FIXED ON THE WAY: `cinert` and `crb` were `.body_frames`, 12 floats, and robot.zig's `Inertia` is 13 - now
+  `.body_inertias`, 16, as the model's `body_inertia`. `clear_overflow` stores through the accessor. THE PROBE: one
+  `loadVector(comptime field, at)` and one `storeVector` replace `loadInput` / `storeResult` / `loadSpatial` /
+  `storeSpatial` - the device's test of the compile-time binding. TESTS: every count from the three real models
+  (`Fixtures`, `countsOf`; the invented table is gone, and vk_host_test's overflow check takes Geno's counts from the
+  engine's model too); the four refusals, `WorldIntegersTooSmall` new; world-major indexing; a new test of the
+  accessors on the twin's arenas; packing read back through the kernels' accessors, each mask checked for no extra
+  bits, the branches matched to the leaves in body order; a TEMPORARY "R1 gate" test asserting Oct 31's 200-step
+  fingerprints. robot.zig: `kinematics`' two dead stores gone, the body's pose one value (`free:` / `jointed:`
+  blocks), `JointCoordinates` naming the four floats `moveByJoint` takes - no arithmetic changed. DOCS: robots.html's
+  quotes had drifted 22 lines (21 from S1d's extraction, one older), so `doc-sync` was red; its kinematics fold now
+  quotes the source as it stands, with `moveByJoint` beside it; the GPU course's 4.3 shows `loadVector` and explains
+  a compile-time buffer parameter. NOT DONE, the review's item on `@hasField`: compute_host cannot name
+  `kompute.Config` for its own test modules (kompute.zig is a module of its own, and a file belongs to one module),
+  and every real kernel module already uses `k.Config`, where a misspelt field fails to compile - the review
+  overstated it. CHECKED HERE: `zig fmt --check` and `ast-check` (dev.753) on every changed file; all 60 lint rules
+  with the Oct 31 zimrlint (each file shown able to fail by a planted finding: `const y = a + 1;` - a local copied
+  from a bare identifier is exempt from untyped-local, so it proves nothing); doc-sync's rule and doc-folds' rendering
+  by script, 0 drifted and all 18 robot and robotgpu folds equal to their source. NOT CHECKED: any compile or run.
+  NEXT: Simon's runs - robotgpu's root with the R1 gate, robot.zig's root and the robot family, vk-host-test on the
+  RTX 5060 (its first run there), lint-check and the doc checks; then the R1 gate test comes out, and S1e-2.

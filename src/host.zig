@@ -17,9 +17,9 @@
 //!                  surface is its screen, its input a script)
 //!     drives_own_frames  the program calls its own frames (native, headless); the browser calls a page's
 //!
-//! The build chooses the kind: the native (`-windows`) steps set `host = "native"` in `build_options`. Without the
-//! option, a wasm build is `web` and anything else is `none` - the rule every existing build already followed, so
-//! they all keep their behaviour.
+//! The build chooses the kind: the native builds (`-Dplatform=windows`, `-Dplatform=linux`) set `host = "native"` in
+//! `build_options`. Without the option, a wasm build is `web` and anything else is `none` - the rule every existing
+//! build already followed, so they all keep their behaviour.
 
 const build_options = @import("build_options");
 const builtin = @import("builtin");

@@ -32,7 +32,7 @@ const testing_allocator = std.testing.allocator;
 const indexOf = std.mem.indexOf;
 const ArrayList = std.ArrayList;
 const zm = @import("zm");
-const rbt = @import("robot.zig");
+const rbt = @import("robot");
 const zimrphysics = @import("zimrphysics.zig");
 
 const Vec = zm.Vec;

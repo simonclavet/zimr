@@ -38,6 +38,7 @@ const indexOfPos = std.mem.indexOfPos;
 const sliceAsBytes = std.mem.sliceAsBytes;
 const trim = std.mem.trim;
 const wgpu = @import("wgpu.zig");
+const host = @import("host.zig");
 const compute_pass = wgpu.compute_pass;
 const shader_introspect = @import("shader_introspect.zig");
 const jobs = @import("jobs.zig");
@@ -47,6 +48,7 @@ const Vec2 = zm.Vec2;
 const assertf = zm.assertf;
 const assertUnreachable = zm.assertUnreachable;
 const splat2 = zm.splat2;
+const float64 = zm.float64;
 
 /// Where a kompute kernel runs. The SAME kernel source, on any of them.
 ///
@@ -292,6 +294,57 @@ fn unboundUsedBinding(wgsl: []const u8, bound: []const u32) ?WgslBinding {
     return null;
 }
 
+/// The most workgroups one dimension of a dispatch may count: WebGPU's `maxComputeWorkgroupsPerDimension` and the least
+/// Vulkan guarantees (`maxComputeWorkGroupCount`).
+const max_workgroups_per_dimension: u32 = 65535;
+
+/// A dispatch's grid of workgroups: `x` along a row, `y` rows.
+const DispatchGrid = struct {
+    x: u32,
+    y: u32,
+};
+
+/// The grid for `workgroups` workgroups: one row when they fit, else rows of `max_workgroups_per_dimension` - only
+/// for a module that recovers its index from the rows (`kompute.Config.large_dispatch`; `run` refuses the others).
+fn dispatchGrid(workgroups: u32) DispatchGrid {
+    if (workgroups <= max_workgroups_per_dimension) {
+        const one_row: DispatchGrid = .{ .x = workgroups, .y = 1 };
+        return one_row;
+    }
+    const rows: u32 = @divCeil(workgroups, max_workgroups_per_dimension);
+    const grid: DispatchGrid = .{ .x = max_workgroups_per_dimension, .y = rows };
+    return grid;
+}
+
+test "compute_host: a large dispatch spreads over rows of at most 65,535 workgroups" {
+    const small: DispatchGrid = dispatchGrid(10);
+    try expectEqual(@as(u32, 10), small.x);
+    try expectEqual(@as(u32, 1), small.y);
+    const full_row: DispatchGrid = dispatchGrid(65535);
+    try expectEqual(@as(u32, 1), full_row.y);
+    const two_rows: DispatchGrid = dispatchGrid(78125);
+    try expectEqual(@as(u32, 65535), two_rows.x);
+    try expectEqual(@as(u32, 2), two_rows.y);
+    const covered: u64 = @as(u64, two_rows.x) * two_rows.y;
+    try expect(covered >= 78125);
+}
+
+/// A FIELD'S GPU BUFFER, LENT by one pipe to another (`Compute.lendField`, `Compute.initGpuBorrowing`): the buffer, its
+/// bytes, and the owner's count of loans still out, which the borrower decrements when it is done. One copy of the
+/// data serves two kernel modules, with no upload or copy between them:
+///
+///     owner pipe      field `ring`          ----+
+///                                               |   the same GPU buffer, bound by both pipes
+///     borrower pipe   field `observations`  <---+
+///
+/// The owner must outlive every borrower (its `deinit` asserts that every loan came back), and must not move while it
+/// lends: the loan points at its count.
+pub const FieldLoan = struct {
+    buffer: wgpu.BufferHandle,
+    bytes: u64,
+    owner_loans: *u32,
+};
+
 pub fn Compute(comptime M: type) type {
     comptime {
         if (!@hasDecl(M, "config")) {
@@ -447,7 +500,17 @@ pub fn Compute(comptime M: type) type {
             /// that large - a by-value `initGpu` return then overflows the wasm
             /// shadow stack in debug (release elides the copy, so it only crashes
             /// in debug). Allocated in initGpu, freed in deinit.
-            mirror: *Buffers,
+            /// None for a `.ranges` module (`kompute.Readback`), which reads with `readRange` instead.
+            mirror: ?*Buffers,
+            /// TIMINGS (`enableTimings`): a timestamp pool of two slots per kernel, its start and its end - 0 when
+            /// the pipe does not time its kernels - and, per kernel, whether a dispatch wrote its slots since the last
+            /// read.
+            timestamp_pool: u32 = 0,
+            kernel_timed: []bool = &.{},
+            /// LENDING (`lendField`, `initGpuBorrowing`): how many of this pipe's buffers other pipes still borrow,
+            /// and per field the loan count of the pipe this one borrowed it from - null for a buffer of its own.
+            loans_out: u32 = 0,
+            borrowed_from: []?*u32 = &.{},
         };
 
         fn ElemOf(comptime field: Field) type {
@@ -500,6 +563,8 @@ pub fn Compute(comptime M: type) type {
                 self.worker = null;
             }
             if (self.gpu) |*gp| {
+                const every_loan_back: bool = gp.loans_out == 0;
+                assertf(every_loan_back, @src(), "deinit: {d} of this pipe's buffers are still lent", .{gp.loans_out});
                 // GPU resources: one pipeline + one bind group per kernel, the
                 // per-field storage buffers, and the uniform + staging buffers.
                 for (gp.pipelines) |pl| {
@@ -512,11 +577,17 @@ pub fn Compute(comptime M: type) type {
                         wgpu.destroyBindGroup(bg);
                     }
                 }
-                for (gp.field_bufs) |b| {
+                for (gp.field_bufs, gp.borrowed_from) |b, owner_loans| {
+                    if (owner_loans) |loans| {
+                        // A borrowed buffer goes back to its owner, who destroys it.
+                        loans.* -= 1;
+                        continue;
+                    }
                     if (b != .invalid) {
                         wgpu.destroyBuffer(b);
                     }
                 }
+                gp.gpa.free(gp.borrowed_from);
                 if (gp.uniform != .invalid) {
                     wgpu.destroyBuffer(gp.uniform);
                 }
@@ -537,7 +608,11 @@ pub fn Compute(comptime M: type) type {
                 gp.gpa.free(gp.bind_groups);
                 gp.gpa.free(gp.kernel_used);
                 gp.gpa.free(gp.kernel_last_n);
-                gp.gpa.destroy(gp.mirror);
+                if (gp.mirror) |mirror| {
+                    gp.gpa.destroy(mirror);
+                }
+                destroyTimestampPool(gp);
+                gp.gpa.free(gp.kernel_timed);
             }
         }
 
@@ -565,11 +640,55 @@ pub fn Compute(comptime M: type) type {
             wgsl: []const u8,
         };
 
+        /// A field this pipe BORROWS from another rather than owns (`initGpuBorrowing`, `FieldLoan`).
+        pub const Borrowed = struct {
+            field: Field,
+            loan: FieldLoan,
+        };
+
+        /// `initGpuBorrowing` with every field a buffer of the pipe's own.
         pub fn initGpu(
             gpa: Allocator,
             dev: wgpu.DeviceHandle,
             queue: wgpu.QueueHandle,
             kernels: []const KernelWgsl,
+        ) !Self {
+            const owns_every_field: []const Borrowed = &.{};
+            return initGpuBorrowing(gpa, dev, queue, kernels, owns_every_field);
+        }
+
+        /// Lend `field`'s GPU buffer to another pipe, which binds it in place of a buffer of its own
+        /// (`initGpuBorrowing`). Counted until the borrower's `deinit` gives it back; this pipe's `deinit` asserts
+        /// that every loan came back. A GPU pipe only - a CPU pipe's fields are the module's globals.
+        pub fn lendField(self: *Self, comptime field: Field) FieldLoan {
+            assertf(self.backend == .gpu, @src(), "lendField: only a GPU pipe has buffers to lend", .{});
+            const gp: *Gpu = &self.gpu.?;
+            gp.loans_out += 1;
+            const field_bytes: u64 = @sizeOf(@FieldType(Buffers, @tagName(field)));
+            const field_buffer: wgpu.BufferHandle = gp.field_bufs[fieldIndex(@tagName(field))];
+            const loan: FieldLoan = .{ .buffer = field_buffer, .bytes = field_bytes, .owner_loans = &gp.loans_out };
+            return loan;
+        }
+
+        /// The loan `borrowed` holds for the field at `field_index`, if any.
+        fn loanOfField(borrowed: []const Borrowed, field_index: usize) ?FieldLoan {
+            for (borrowed) |entry| {
+                const entry_index: usize = @backingInt(entry.field);
+                if (entry_index == field_index) {
+                    return entry.loan;
+                }
+            }
+            return null;
+        }
+
+        /// THE GPU PIPE, with the fields `borrowed` bound to buffers other pipes lend (`lendField`) instead of buffers
+        /// of its own - each lent buffer at least as large as the field.
+        pub fn initGpuBorrowing(
+            gpa: Allocator,
+            dev: wgpu.DeviceHandle,
+            queue: wgpu.QueueHandle,
+            kernels: []const KernelWgsl,
+            borrowed: []const Borrowed,
         ) !Self {
             assertf(kernels.len >= 1, @src(), "initGpu: need at least one kernel, got {d}", .{kernels.len});
 
@@ -612,18 +731,32 @@ pub fn Compute(comptime M: type) type {
             // Buffers field - the megastruct single-binding shape corrupted
             // on Adreno. Binding numbers are the ones kompute declares (below).
             var field_bufs: [field_count]wgpu.BufferHandle = undefined;
+            const borrowed_from: []?*u32 = try gpa.alloc(?*u32, field_count);
+            errdefer gpa.free(borrowed_from);
+            @memset(borrowed_from, null);
             inline for (buffer_field_names, 0..) |fname, fi| {
-                field_bufs[fi] = wgpu.createBuffer(dev, .{
-                    .size = @sizeOf(@FieldType(Buffers, fname)),
-                    .usage = .{ .storage = true, .copy_src = true, .copy_dst = true },
-                    .label = "kbuf_" ++ fname,
-                });
+                const field_bytes: u64 = @sizeOf(@FieldType(Buffers, fname));
+                if (loanOfField(borrowed, fi)) |loan| {
+                    // A lent buffer: bound as it is, never created or destroyed here.
+                    assertf(loan.bytes >= field_bytes, @src(), "initGpuBorrowing: `" ++ fname ++
+                        "` needs {d} bytes, and the lent buffer has {d}", .{ field_bytes, loan.bytes });
+                    field_bufs[fi] = loan.buffer;
+                    borrowed_from[fi] = loan.owner_loans;
+                } else {
+                    field_bufs[fi] = wgpu.createBuffer(dev, .{
+                        .size = field_bytes,
+                        .usage = .{ .storage = true, .copy_src = true, .copy_dst = true },
+                        .label = "kbuf_" ++ fname,
+                    });
+                }
             }
             // * A FAILED INIT MUST NOT LEAK THEM. Everything below can fail, and the caller never
             // gets a `Self` to deinit - the smoke runner's lifecycle check saw exactly these,
             // buffer+7 per cycle.
-            errdefer for (field_bufs) |fb| {
-                wgpu.destroyBuffer(fb);
+            errdefer for (field_bufs, borrowed_from) |fb, owner_loans| {
+                if (owner_loans == null) {
+                    wgpu.destroyBuffer(fb);
+                }
             };
             // The binding numbers kompute declares (`M.g.bindingOf`, `M.g.uniform_binding`). On the web the WGSL
             // carries the same numbers - spv2wgsl copies them from the SPIR-V - and reading them back must agree;
@@ -645,8 +778,10 @@ pub fn Compute(comptime M: type) type {
                 .usage = .{ .uniform = true, .copy_dst = true },
                 .label = "kompute_params",
             });
+            // The staging buffer: the size of all of `Buffers` for the mirror, `staging_bytes` for ranges.
+            const staging_size: u32 = if (reads_ranges) staging_bytes else buf_bytes;
             const staging: wgpu.BufferHandle = wgpu.createBuffer(dev, .{
-                .size = buf_bytes,
+                .size = staging_size,
                 .usage = .{ .map_read = true, .copy_dst = true },
                 .label = "kompute_staging",
             });
@@ -784,7 +919,7 @@ pub fn Compute(comptime M: type) type {
                 wgpu.destroyPipelineLayout(pipeline_layout);
                 wgpu.destroyShaderModule(module);
             }
-            const mirror: *Buffers = try gpa.create(Buffers);
+            const mirror: ?*Buffers = if (reads_ranges) null else try gpa.create(Buffers);
             return .{
                 .backend = .gpu,
                 .gpu = .{
@@ -792,6 +927,7 @@ pub fn Compute(comptime M: type) type {
                     .dev = dev,
                     .queue = queue,
                     .field_bufs = field_bufs,
+                    .borrowed_from = borrowed_from,
                     .uniform = uniform,
                     .staging = staging,
                     .pipelines = pipelines,
@@ -1246,6 +1382,22 @@ pub fn Compute(comptime M: type) type {
             }
         }
 
+        /// Whether this module reads ranges rather than keeping a mirror (`kompute.Readback`), and its staging buffer's
+        /// bytes when it does. A module whose `config` is a plain struct literal without the fields keeps the mirror.
+        const reads_ranges: bool = @hasField(@TypeOf(M.config), "readback") and M.config.readback == .ranges;
+        const staging_bytes: u32 = if (@hasField(@TypeOf(M.config), "staging_bytes")) M.config.staging_bytes else 0;
+        comptime {
+            // A GPU copy moves whole 4-byte words: the staging buffer's chunks must be a positive multiple of 4.
+            const staging_fits_words: bool = staging_bytes > 0 and staging_bytes % 4 == 0;
+            if (reads_ranges and !staging_fits_words) {
+                @compileError("a `.ranges` module's `staging_bytes` must be a positive multiple of 4");
+            }
+        }
+
+        /// Whether this module recovers its index from rows of workgroups (`kompute.Config.large_dispatch`). A module
+        /// whose `config` is a plain struct literal without the field dispatches one row.
+        const large_dispatch: bool = @hasField(@TypeOf(M.config), "large_dispatch") and M.config.large_dispatch;
+
         /// Run kernel `name` over exactly `n` invocations. `n` is the dispatch
         /// width FOR THIS CALL - explicit, because a multi-kernel pipeline mixes
         /// widths (clearGrid over grid_cells, the particle kernels over
@@ -1258,6 +1410,176 @@ pub fn Compute(comptime M: type) type {
         ///        batch pass if one is active, else a fresh single-dispatch submit.
         /// Readback is unaffected by `n`; it slices by `element_count` (set once).
         pub fn run(self: *Self, comptime name: []const u8, n: u32) void {
+            const no_push_constants: []const u8 = &.{};
+            self.dispatchKernel(name, n, false, no_push_constants);
+        }
+
+        /// `run`, with PUSH CONSTANTS for this dispatch (`kompute`'s `PushConstants`): `values` are written into the
+        /// command stream just before the dispatch, so each dispatch of a batch carries its own - what a kernel run
+        /// once for each level of a tree needs, the level pushed every time:
+        ///
+        ///     one batch:   [ push level 0 | dispatch ]  [ push level 1 | dispatch ]  [ push level 2 | dispatch ]
+        ///
+        /// On the CPU twin the values go into the module's variable the kernel loop reads (`g.push()`). Native only:
+        /// WebGPU has no push constants, so a browser build that calls this does not compile.
+        pub fn runPushed(
+            self: *Self,
+            comptime name: []const u8,
+            n: u32,
+            values: M.PushConstants,
+        ) void {
+            if (comptime host.is_browser) {
+                @compileError("runPushed: push constants are native only, and WebGPU has none");
+            }
+            M.g.pushed_values = values;
+            const values_bytes: []const u8 = asBytes(&values);
+            self.dispatchKernel(name, n, true, values_bytes);
+        }
+
+        /// Push constants for the pass's next dispatch (`wgpu_vulkan.computePassSetPushConstants`): nothing to do
+        /// without a GPU.
+        fn pushValues(pass: wgpu.ComputePassEncoderHandle, bytes: []const u8) void {
+            if (comptime !host.has_gpu) {
+                return;
+            }
+            wgpu.vulkan_host.computePassSetPushConstants(@backingInt(pass), bytes.ptr, bytes.len);
+        }
+
+        /// TIME THIS PIPE'S KERNELS ON THE GPU. From now on every dispatch is bracketed by two timestamps - the GPU's
+        /// clock at the top of the pipeline before it and at the bottom after it, in the kernel's two slots of a pool -
+        /// and `kernelTimings` reads each kernel's last duration:
+        ///
+        ///     kernel k's slots:   2k = start, 2k + 1 = end
+        ///     a dispatch:         [ reset 2k, 2k + 1 ] [ write 2k at the top ] [ dispatch ]
+        ///                         [ write 2k + 1 at the bottom ]
+        ///
+        /// Native only - Vulkan's timestamps; WebGPU's cover render passes alone - and a pipe on the CPU has nothing to
+        /// time. The device must write timestamps in compute (`ComputeCapabilities.timestamps_in_compute`).
+        pub fn enableTimings(self: *Self) Allocator.Error!void {
+            if (comptime host.is_browser) {
+                @compileError("enableTimings: GPU timestamps for compute are native only");
+            }
+            if (self.backend != .gpu) {
+                return;
+            }
+            const gp: *Gpu = &self.gpu.?;
+            if (gp.timestamp_pool != 0) {
+                return;
+            }
+            const capabilities: wgpu.vulkan_host.ComputeCapabilities = wgpu.computeCapabilities();
+            const no_timestamps: []const u8 = "enableTimings: this device writes no compute timestamps";
+            assertf(capabilities.timestamps_in_compute, @src(), no_timestamps, .{});
+            const kernel_count: usize = gp.kernel_names.len;
+            gp.kernel_timed = try gp.gpa.alloc(bool, kernel_count);
+            @memset(gp.kernel_timed, false);
+            const slot_count: u32 = @intCast(2 * kernel_count);
+            gp.timestamp_pool = wgpu.vulkan_host.createTimestampPool(slot_count);
+        }
+
+        /// One kernel's last time on the GPU (`kernelTimings`).
+        pub const KernelTiming = struct {
+            name: []const u8,
+            microseconds: f64,
+        };
+
+        /// Each kernel's last duration on the GPU, in microseconds, into `timings` in the pipe's kernel order - zero
+        /// for a kernel not dispatched since the last read, and for every kernel of a pipe without timings. A duration
+        /// is the difference of the kernel's two timestamps, in ticks, times the device's tick in nanoseconds. It waits
+        /// until the dispatches have run, so not inside an open batch or recording, whose commands are not yet
+        /// submitted.
+        pub fn kernelTimings(self: *Self, timings: *[M.kernels.len]KernelTiming) void {
+            if (comptime host.is_browser) {
+                @compileError("kernelTimings: GPU timestamps for compute are native only");
+            }
+            for (timings) |*timing| {
+                timing.* = .{ .name = "", .microseconds = 0 };
+            }
+            if (self.backend != .gpu) {
+                return;
+            }
+            const gp: *Gpu = &self.gpu.?;
+            if (gp.timestamp_pool == 0) {
+                return;
+            }
+            const outside_batch: bool = gp.batch_enc == .invalid and gp.rec_enc == .invalid;
+            assertf(outside_batch, @src(), "kernelTimings inside an open batch or recording", .{});
+            const tick_nanoseconds: f64 = wgpu.computeCapabilities().timestamp_period_ns;
+            for (gp.kernel_names, gp.kernel_timed, timings, 0..) |name, *was_timed, *timing, kernel_index| {
+                timing.name = name;
+                if (!was_timed.*) {
+                    continue;
+                }
+                var ticks: [2]u64 = undefined;
+                const first_slot: u32 = @intCast(2 * kernel_index);
+                const answered: bool = wgpu.vulkan_host.timestampPoolRead(gp.timestamp_pool, first_slot, 2, &ticks);
+                if (answered) {
+                    // A clock with fewer than 64 valid bits wraps: the difference wraps with it.
+                    const elapsed_ticks: u64 = ticks[1] -% ticks[0];
+                    const elapsed_nanoseconds: f64 = float64(elapsed_ticks) * tick_nanoseconds;
+                    timing.microseconds = elapsed_nanoseconds / 1000.0;
+                }
+                was_timed.* = false;
+            }
+        }
+
+        /// With timings on: kernel `kernel_index`'s two slots reset, and the GPU's clock written into the first, at the
+        /// top of the pipeline, before the dispatch that follows. Nothing on the web or without a GPU.
+        fn timeKernelStart(
+            gp: *Gpu,
+            pass: wgpu.ComputePassEncoderHandle,
+            kernel_index: usize,
+        ) void {
+            if (comptime host.is_browser or !host.has_gpu) {
+                return;
+            }
+            if (gp.timestamp_pool == 0) {
+                return;
+            }
+            const pass_id: u32 = @backingInt(pass);
+            const start_slot: u32 = @intCast(2 * kernel_index);
+            wgpu.vulkan_host.computePassResetTimestamps(pass_id, gp.timestamp_pool, start_slot, 2);
+            wgpu.vulkan_host.computePassWriteTimestamp(pass_id, gp.timestamp_pool, start_slot, false);
+        }
+
+        /// With timings on: the GPU's clock written into kernel `kernel_index`'s second slot, at the bottom of the
+        /// pipeline, once the dispatch before has finished.
+        fn timeKernelEnd(
+            gp: *Gpu,
+            pass: wgpu.ComputePassEncoderHandle,
+            kernel_index: usize,
+        ) void {
+            if (comptime host.is_browser or !host.has_gpu) {
+                return;
+            }
+            if (gp.timestamp_pool == 0) {
+                return;
+            }
+            const pass_id: u32 = @backingInt(pass);
+            const end_slot: u32 = @intCast(2 * kernel_index + 1);
+            wgpu.vulkan_host.computePassWriteTimestamp(pass_id, gp.timestamp_pool, end_slot, true);
+            gp.kernel_timed[kernel_index] = true;
+        }
+
+        /// The timings' pool released with the pipe.
+        fn destroyTimestampPool(gp: *Gpu) void {
+            if (comptime host.is_browser or !host.has_gpu) {
+                return;
+            }
+            if (gp.timestamp_pool != 0) {
+                wgpu.vulkan_host.timestampPoolDestroy(gp.timestamp_pool);
+                gp.timestamp_pool = 0;
+            }
+        }
+
+        /// `run` and `runPushed`'s body: `pushes` (compile-time, so a module that never pushes never reaches the
+        /// native call) says whether `push_bytes` go into the pass before the dispatch.
+        fn dispatchKernel(
+            self: *Self,
+            comptime name: []const u8,
+            n: u32,
+            comptime pushes: bool,
+            push_bytes: []const u8,
+        ) void {
             assertf(n > 0, @src(), "run('" ++ name ++ "'): n must be > 0", .{});
             assertf(
                 n <= M.config.max,
@@ -1328,6 +1650,16 @@ pub fn Compute(comptime M: type) type {
                 .gpu => {
                     const gp: *Gpu = &self.gpu.?;
                     const workgroups: u32 = @divCeil(n, M.config.workgroup);
+                    // More than one row of workgroups only for a module that recovers its index from the rows.
+                    const fits_one_row: bool = workgroups <= max_workgroups_per_dimension;
+                    assertf(
+                        fits_one_row or large_dispatch,
+                        @src(),
+                        "run('" ++ name ++ "'): {d} workgroups, past {d} - a module dispatching more sets " ++
+                            "`config.large_dispatch`",
+                        .{ workgroups, max_workgroups_per_dimension },
+                    );
+                    const grid: DispatchGrid = dispatchGrid(workgroups);
                     // Find this kernel's slot so we get BOTH its pipeline and its
                     // own bind group - each kernel binds a different subset of the
                     // buffers now, so the two always travel together.
@@ -1365,7 +1697,12 @@ pub fn Compute(comptime M: type) type {
                         const rp: wgpu.ComputePassEncoderHandle = compute_pass.begin(gp.rec_enc);
                         compute_pass.setPipeline(rp, pipeline);
                         compute_pass.setBindGroup(rp, 0, bind_group);
-                        compute_pass.dispatchWorkgroups(rp, .{ .x = workgroups });
+                        if (comptime pushes) {
+                            pushValues(rp, push_bytes);
+                        }
+                        timeKernelStart(gp, rp, ki);
+                        compute_pass.dispatchWorkgroups(rp, .{ .x = grid.x, .y = grid.y });
+                        timeKernelEnd(gp, rp, ki);
                         compute_pass.end(rp);
                         gp.rec_count += 1;
                         return;
@@ -1378,7 +1715,12 @@ pub fn Compute(comptime M: type) type {
                         // hoisted to beginBatch the way the old shared one was.
                         compute_pass.setPipeline(gp.batch_pass, pipeline);
                         compute_pass.setBindGroup(gp.batch_pass, 0, bind_group);
-                        compute_pass.dispatchWorkgroups(gp.batch_pass, .{ .x = workgroups });
+                        if (comptime pushes) {
+                            pushValues(gp.batch_pass, push_bytes);
+                        }
+                        timeKernelStart(gp, gp.batch_pass, ki);
+                        compute_pass.dispatchWorkgroups(gp.batch_pass, .{ .x = grid.x, .y = grid.y });
+                        timeKernelEnd(gp, gp.batch_pass, ki);
                         return;
                     }
                     self.syncParamsUniform(gp);
@@ -1386,7 +1728,12 @@ pub fn Compute(comptime M: type) type {
                     const cp: wgpu.ComputePassEncoderHandle = compute_pass.begin(enc);
                     compute_pass.setPipeline(cp, pipeline);
                     compute_pass.setBindGroup(cp, 0, bind_group);
-                    compute_pass.dispatchWorkgroups(cp, .{ .x = workgroups });
+                    if (comptime pushes) {
+                        pushValues(cp, push_bytes);
+                    }
+                    timeKernelStart(gp, cp, ki);
+                    compute_pass.dispatchWorkgroups(cp, .{ .x = grid.x, .y = grid.y });
+                    timeKernelEnd(gp, cp, ki);
                     compute_pass.end(cp);
                     const cmd: wgpu.CommandBufferHandle = wgpu.finishCommandEncoder(enc);
                     // Both dispatch paths go through `submitDispatch`, which counts. I
@@ -1520,6 +1867,81 @@ pub fn Compute(comptime M: type) type {
             }
         }
 
+        /// A RANGE OF ONE FIELD, read back now: `destination.len` elements of `field` from element `first`, into
+        /// `destination`. CPU: copied from the module's globals. GPU - a `.ranges` module (`kompute.Readback`): each
+        /// chunk of up to `staging_bytes` is copied into the staging buffer by a command submitted after every dispatch
+        /// so far, and waited for, so the range holds what every earlier dispatch wrote:
+        ///
+        ///     field   [ .......... first [ chunk 0 | chunk 1 | chunk 2 ] .......... ]
+        ///                                    |          |          |
+        ///     staging                     [ one chunk at a time ] -> destination, in order
+        ///
+        /// Not inside an open batch or recording, whose dispatches are not yet submitted. Native only: the wait is a
+        /// poll of the device's timeline, which a browser cannot do.
+        pub fn readRange(
+            self: *Self,
+            comptime field: Field,
+            first: u32,
+            destination: []ElemOf(field),
+        ) void {
+            const Element: type = ElemOf(field);
+            const field_length: usize = @field(M.g.B, @tagName(field)).len;
+            const end: usize = @as(usize, first) + destination.len;
+            assertf(end <= field_length, @src(), "readRange: elements {d}..{d} of a field of {d}", .{
+                first,
+                end,
+                field_length,
+            });
+            switch (self.backend) {
+                .cpu => {
+                    const source: []const Element = @field(M.g.B, @tagName(field))[first..end];
+                    @memcpy(destination, source);
+                },
+                .worker => {
+                    assertUnreachable(@src(), "readRange: a worker pipe reads through readLatest", .{});
+                },
+                .gpu => {
+                    if (comptime host.is_browser) {
+                        @compileError("readRange waits for the GPU, which a browser cannot: `.ranges` is native only");
+                    }
+                    if (comptime @sizeOf(Element) % 4 != 0) {
+                        @compileError("readRange: the GPU copies whole 4-byte words, and `" ++ @tagName(field) ++
+                            "` holds " ++ @typeName(Element));
+                    }
+                    assertf(reads_ranges, @src(), "readRange on a `.mirror` module: use readLatest", .{});
+                    const gp: *Gpu = &self.gpu.?;
+                    const outside_batch: bool = gp.batch_enc == .invalid and gp.rec_enc == .invalid;
+                    assertf(outside_batch, @src(), "readRange inside an open batch or recording", .{});
+                    const field_buffer: wgpu.BufferHandle = gp.field_bufs[fieldIndex(@tagName(field))];
+                    const destination_bytes: []u8 = sliceAsBytes(destination);
+                    // The copy's offsets are 32-bit: the range must end within the field's first 4 GB.
+                    const first_byte_wide: u64 = @as(u64, first) * @sizeOf(Element);
+                    const end_byte_wide: u64 = first_byte_wide + destination_bytes.len;
+                    const within_32_bits: bool = end_byte_wide <= zm.maxInt(u32);
+                    assertf(within_32_bits, @src(), "readRange: bytes up to {d}, past a copy's 32-bit offsets", .{
+                        end_byte_wide,
+                    });
+                    const first_byte: u32 = @intCast(first_byte_wide);
+                    var copied: u32 = 0;
+                    const total: u32 = @intCast(destination_bytes.len);
+                    while (copied < total) {
+                        const chunk: u32 = @min(staging_bytes, total - copied);
+                        const encoder: wgpu.CommandEncoderHandle = wgpu.createCommandEncoder(gp.dev);
+                        wgpu.copyBufferToBuffer(encoder, field_buffer, first_byte + copied, gp.staging, 0, chunk);
+                        const commands: wgpu.CommandBufferHandle = wgpu.finishCommandEncoder(encoder);
+                        wgpu.queueSubmit(gp.queue, commands);
+                        const read: wgpu.BufferRead = wgpu.bufferReadStart(gp.staging, chunk);
+                        while (!wgpu.bufferReadPoll(read)) {
+                            std.atomic.spinLoopHint();
+                        }
+                        wgpu.bufferReadInto(read, destination_bytes[copied..][0..chunk]);
+                        wgpu.bufferReadRelease(read);
+                        copied += chunk;
+                    }
+                },
+            }
+        }
+
         pub fn readLatest(self: *Self, comptime field: Field) ?[]const ElemOf(field) {
             // Variable-count fields (pos/vel/...) are sized to capacity and slice to
             // the live `element_count`; fixed fields (grid_counts, cell_start) must
@@ -1558,6 +1980,9 @@ pub fn Compute(comptime M: type) type {
                     return null;
                 },
                 .gpu => {
+                    const keeps_a_mirror: bool = !reads_ranges;
+                    const no_mirror: []const u8 = "readLatest on a `.ranges` module, which has no mirror: readRange";
+                    assertf(keeps_a_mirror, @src(), no_mirror, .{});
                     const gp: *Gpu = &self.gpu.?;
                     const copy_has_landed: bool = gp.read != .invalid and wgpu.bufferReadPoll(gp.read);
                     if (copy_has_landed and gp.discard_copy_in_flight) {
@@ -1567,7 +1992,7 @@ pub fn Compute(comptime M: type) type {
                         gp.read = .invalid;
                         gp.discard_copy_in_flight = false;
                     } else if (copy_has_landed) {
-                        const mirror_bytes: []u8 = asBytes(gp.mirror);
+                        const mirror_bytes: []u8 = asBytes(gp.mirror.?);
                         wgpu.bufferReadInto(gp.read, mirror_bytes[0..gp.read_bytes]);
                         unpackPrefixes(mirror_bytes, gp.read_count);
                         wgpu.bufferReadRelease(gp.read);
@@ -1620,7 +2045,7 @@ pub fn Compute(comptime M: type) type {
                     if (!gp.have_read) {
                         return null;
                     }
-                    return @field(gp.mirror.*, @tagName(field))[0..n];
+                    return @field(gp.mirror.?.*, @tagName(field))[0..n];
                 },
             }
         }

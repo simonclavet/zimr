@@ -30,7 +30,7 @@ const zn = @import("zn");
 const compute_host = @import("compute_host.zig");
 const latent = @import("robot_latent.zig");
 
-const rbt = @import("robot.zig");
+const rbt = @import("robot");
 const track = @import("robot_track.zig");
 const kit_mlp = @import("kit_mlp.zig");
 const bmpc_kit = @import("robot_bmpc_kit.zig");

@@ -43,7 +43,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const zm = @import("zm");
-const rbt = @import("robot.zig");
+const rbt = @import("robot");
 
 // * ONE ALIAS BLOCK FOR THE WHOLE FILE. Four files' worth of planning and control live here
 // now, and each used to carry its own copy of these; the merge kept exactly one.

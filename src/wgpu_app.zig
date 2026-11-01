@@ -84,7 +84,7 @@ const Vec2 = zm.Vec2;
 
 const wgpu = @import("wgpu.zig");
 const Shader2D = @import("shader2d.zig").Shader2D;
-const profiler = @import("profiler.zig");
+const profiler = @import("profiler");
 const memwatch = @import("memwatch.zig");
 const leakwatch = @import("leakwatch.zig");
 const sound = @import("sound.zig");

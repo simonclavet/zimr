@@ -71,9 +71,10 @@
 //! rebuild (a resize, `OUT_OF_DATE`, `SUBOPTIMAL`) refreshes the views behind the same handles.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const vk = @import("vk.zig");
 const native_os = @import("native_os.zig");
-const win32 = @import("win32.zig");
+const native_window = @import("native_window.zig");
 const gpu_abi = @import("gpu_abi.zig");
 const spv_vulkan = @import("spv_vulkan.zig");
 const zm = @import("zm");
@@ -250,6 +251,9 @@ const SamplerSlot = struct {
 
 const ShaderModuleSlot = struct {
     module: vk.ShaderModule,
+    /// The bytes of the module's push-constant block, 0 without one (`spv_vulkan.pushConstantBytes`): a compute
+    /// pipeline made from it gets a layout with a push-constant range of this size (`createComputePipeline`).
+    push_constant_bytes: u32 = 0,
 };
 
 const BindGroupLayoutSlot = struct {
@@ -302,6 +306,9 @@ const GroupSet = std.bit_set.IntegerBitSet(max_bind_groups);
 const PipelineLayoutSlot = struct {
     layout: vk.PipelineLayout,
     set_count: u32,
+    /// The layout's sets' layouts, kept so a pipeline whose shader has push constants can make a layout of its own
+    /// from the same sets (`createComputePipeline`).
+    set_layouts: [max_bind_groups]vk.DescriptorSetLayout = @splat(.null_handle),
     /// The sets whose layout has no bindings - no shader reads them, so nothing is bound there (`bindDirtyGroups`).
     empty_sets: GroupSet = .empty,
     /// How many live pipelines were made from this layout.
@@ -311,9 +318,21 @@ const PipelineLayoutSlot = struct {
 };
 
 /// A render or compute pipeline, with its layout: a pass binds bind groups against the layout of the pipeline bound.
+/// A pool of timestamp queries (`createTimestampPool`): the slots a command writes the GPU's clock into.
+const QueryPoolSlot = struct {
+    pool: vk.QueryPool,
+    count: u32,
+};
+
 const PipelineSlot = struct {
     pipeline: vk.Pipeline,
+    /// The layout the pipeline binds and pushes with: the app's, or `own_layout` when it has one.
     layout: vk.PipelineLayout,
+    /// A layout made for this pipeline alone - its shader's push-constant range added to the app's sets - and
+    /// destroyed with it; null when the app's layout serves.
+    own_layout: vk.PipelineLayout = .null_handle,
+    /// The bytes of push constants the pipeline's layout holds (0 without a range): what a push may write.
+    push_constant_bytes: u32 = 0,
     /// The pipeline layout's handle: the pipeline holds one of its references (`PipelineLayoutSlot.pipeline_count`).
     layout_handle: u32,
     set_count: u32,
@@ -329,6 +348,8 @@ const PassSlot = struct {
     /// Which pipelines and groups the pass binds: a render pass's, or a compute pass's.
     bind_point: vk.PipelineBindPoint = .graphics,
     pipeline_layout: vk.PipelineLayout = .null_handle,
+    /// The bound pipeline's push-constant bytes (`PipelineSlot.push_constant_bytes`): a larger push is refused.
+    pipeline_push_constant_bytes: u32 = 0,
     pipeline_set_count: u32 = 0,
     /// The bound pipeline's sets with no bindings, which no group is bound to.
     pipeline_empty_sets: GroupSet = .empty,
@@ -345,6 +366,42 @@ const PassSlot = struct {
 pub const MessageCounts = struct {
     errors: u32 = 0,
     warnings: u32 = 0,
+};
+
+/// A device's compute capabilities as the host records them (`Gpu.compute`).
+/// Its defaults describe a device with none - no shared memory, no subgroups: what `wgpu.computeCapabilities`
+/// reports off the native host.
+pub const ComputeCapabilities = struct {
+    max_shared_memory_bytes: u32 = 0,
+    max_push_constant_bytes: u32 = 0,
+    max_workgroup_count: [3]u32 = @splat(0),
+    max_workgroup_invocations: u32 = 0,
+    subgroup_size: u32 = 0,
+    subgroups_in_compute: bool = false,
+    subgroup_operations: vk.SubgroupFeatureFlags = .{},
+    float32_atomic_add: bool = false,
+    /// Whether compute queues write timestamps (`VkPhysicalDeviceLimits::timestampComputeAndGraphics`), and how many
+    /// nanoseconds one tick of the timestamp clock lasts (`timestampPeriod`) - what turns two timestamps into a time.
+    timestamps_in_compute: bool = false,
+    timestamp_period_ns: f32 = 0,
+    /// THE MEMORY ENVELOPE: the most bytes one storage-buffer binding may span (`maxStorageBufferRange`) - what one
+    /// arena of a simulation may hold - and the largest heap of device-local memory, the GPU's own, which the arenas
+    /// together must fit.
+    max_storage_binding_bytes: u64 = 0,
+    device_local_bytes: u64 = 0,
+
+    /// Whether compute shaders may use every subgroup operation in `operations`.
+    pub fn hasSubgroupOperations(capabilities: ComputeCapabilities, operations: vk.SubgroupFeatureFlags) bool {
+        const wanted: vk.Flags = @bitCast(operations);
+        const offered: vk.Flags = @bitCast(capabilities.subgroup_operations);
+        const all_offered: bool = offered & wanted == wanted;
+        return capabilities.subgroups_in_compute and all_offered;
+    }
+
+    /// Whether compute shaders may use the subgroup reductions - sums, minima, maxima (`kompute.subgroupAdd`).
+    pub fn hasSubgroupArithmetic(capabilities: ComputeCapabilities) bool {
+        return capabilities.hasSubgroupOperations(.{ .arithmetic = true });
+    }
 };
 
 /// The GPU chosen at bring-up: its handle and name, and the queue family that renders, computes and presents.
@@ -364,6 +421,11 @@ const Gpu = struct {
     /// some devices, gigabytes on most desktops. A binding past it is refused loudly (`createBindGroup`) - the device
     /// would otherwise read and write past what it bound, with no error unless validation is on.
     max_storage_buffer_range: u32,
+    /// THE COMPUTE CAPABILITIES robotgpu's kernels are shaped by (`computeCapabilities`): the shared memory one
+    /// workgroup may hold (a world's Hessian lives there), the push-constant block, the workgroups one dispatch may
+    /// launch and the invocations one may hold, and the SUBGROUP - its size, whether compute shaders may use subgroup
+    /// operations, and which (`vk.SubgroupFeatureFlags`). Float atomics on storage buffers are recorded, never enabled.
+    compute: ComputeCapabilities,
 };
 
 /// A command buffer waiting for the timeline to pass `serial`, after which it is reset and reused.
@@ -430,6 +492,7 @@ const Destroy = union(enum) {
     descriptor_set_layout: vk.DescriptorSetLayout,
     pipeline_layout: vk.PipelineLayout,
     pipeline: vk.Pipeline,
+    query_pool: vk.QueryPool,
 };
 
 /// A destroy waiting for the timeline to pass `serial`.
@@ -520,7 +583,7 @@ const Host = struct {
     gpa: Allocator,
     /// The window drawn into; null for a headless host, which draws only into textures (the host's tests, offline
     /// rendering) and has no surface, no swapchain, and none of their commands.
-    window: ?*win32.Window,
+    window: ?*native_window.Window,
     /// A headless host's screen, when it has one (`Screen`); null with a window, which has its swapchain instead.
     screen: ?Screen = null,
     /// Whether each frame a window presents is copied for reading back (`KeptFrame`), and the copy.
@@ -581,6 +644,7 @@ const Host = struct {
     render_pipelines: Pool(PipelineSlot) = .{},
     render_passes: Pool(PassSlot) = .{},
     compute_pipelines: Pool(PipelineSlot) = .{},
+    query_pools: Pool(QueryPoolSlot) = .{},
     compute_passes: Pool(PassSlot) = .{},
     reads: Pool(ReadSlot) = .{},
     /// Descriptor pool pages, oldest first. A bind group's set comes from the newest page with room; a new page is
@@ -619,13 +683,13 @@ fn outOfMemory() noreturn {
 }
 
 /// The host's window; a headless host has none, and fails by name where a window is needed.
-fn theWindow(self: *Host) *win32.Window {
+fn theWindow(self: *Host) *native_window.Window {
     return self.window orelse panic("vulkan host: this host is headless - no window, no surface", .{});
 }
 
 /// Gives the host the window it draws into. The native loop calls this after opening the window and before the
 /// engine's first GPU call; Vulkan itself comes up in `initDevice`.
-pub fn attachWindow(window: *win32.Window) Allocator.Error!void {
+pub fn attachWindow(window: *native_window.Window) Allocator.Error!void {
     if (host != null) {
         panic("vulkan host: a host has already started", .{});
     }
@@ -733,6 +797,9 @@ const BringUpError = error{
     RequestedGpuNotFound,
     /// The window's surface offers no format the host can present.
     NoSurfaceFormat,
+    /// This system has no window layer written yet (macOS, Android): no surface to make. No window opens there
+    /// (`native_loop.has_window_loop`), so a host never asks for one.
+    WindowSystemUnwritten,
 } || vk.ResultError || vk.LoadError || native_os.VulkanLibraryError || Allocator.Error;
 
 /// The debug messenger's callback. The validation layer calls it - usually during the call it reports, on that call's
@@ -831,7 +898,7 @@ fn createInstance(self: *Host, get_instance_proc_address: vk.PfnGetInstanceProcA
     var extension_count: u32 = 0;
     if (self.window != null) {
         extensions[0] = vk.khr_surface_extension_name;
-        extensions[1] = vk.khr_win32_surface_extension_name;
+        extensions[1] = native_window.surface_extension_name;
         extension_count = 2;
     }
     if (validate) {
@@ -909,6 +976,61 @@ fn hasDeviceExtension(
         extensions.ptr,
     ));
     return hasExtensionNamed(extensions[0..count], name);
+}
+
+/// A device's compute capabilities (`ComputeCapabilities`), from three sources:
+///
+///     the core limits             shared memory, push constants, workgroups   (`limits`, already read)
+///     Vulkan 1.1's properties     the subgroup: size, stages, operations      (vkGetPhysicalDeviceProperties2)
+///     VK_EXT_shader_atomic_float  float atomic add on storage buffers         (vkGetPhysicalDeviceFeatures2)
+///
+/// Vulkan extends a query with a `p_next` CHAIN: the outer structure points at a further structure the driver fills
+/// in the same call - here `PhysicalDeviceProperties2` at `PhysicalDeviceVulkan11Properties`. The atomic-float
+/// structure may join a features query only when the device offers its extension, so it is asked for only then.
+fn computeCapabilities(
+    self: *Host,
+    physical_device: vk.PhysicalDevice,
+    limits: vk.PhysicalDeviceLimits,
+) !ComputeCapabilities {
+    var vulkan_11_properties: vk.PhysicalDeviceVulkan11Properties = .{};
+    var properties_query: vk.PhysicalDeviceProperties2 = .{ .p_next = &vulkan_11_properties };
+    self.instance_dispatch.getPhysicalDeviceProperties2(physical_device, &properties_query);
+    const atomic_float_name: [*:0]const u8 = vk.ext_shader_atomic_float_extension_name;
+    const offers_atomic_float: bool = try hasDeviceExtension(self, physical_device, atomic_float_name);
+    var atomic_float_features: vk.PhysicalDeviceShaderAtomicFloatFeaturesEXT = .{};
+    if (offers_atomic_float) {
+        var features_query: vk.PhysicalDeviceFeatures2 = .{ .p_next = &atomic_float_features };
+        self.instance_dispatch.getPhysicalDeviceFeatures2(physical_device, &features_query);
+    }
+    const subgroup_stages: vk.ShaderStageFlags = vulkan_11_properties.subgroup_supported_stages;
+    const compute_uses_subgroups: bool = subgroup_stages.compute;
+    const has_float_atomic_add: bool = atomic_float_features.shader_buffer_float_32_atomic_add == vk.bool_true;
+    const writes_timestamps: bool = limits.timestamp_compute_and_graphics == vk.bool_true;
+    // The largest heap of device-local memory: the GPU's own memory (on a CPU driver, the system's).
+    var memory_properties: vk.PhysicalDeviceMemoryProperties = .{};
+    self.instance_dispatch.getPhysicalDeviceMemoryProperties(physical_device, &memory_properties);
+    const heaps: []const vk.MemoryHeap = memory_properties.memory_heaps[0..memory_properties.memory_heap_count];
+    var largest_device_local: u64 = 0;
+    for (heaps) |memory_heap| {
+        if (memory_heap.flags.device_local) {
+            largest_device_local = @max(largest_device_local, memory_heap.size);
+        }
+    }
+    const capabilities: ComputeCapabilities = .{
+        .max_shared_memory_bytes = limits.max_compute_shared_memory_size,
+        .max_push_constant_bytes = limits.max_push_constants_size,
+        .max_workgroup_count = limits.max_compute_work_group_count,
+        .max_workgroup_invocations = limits.max_compute_work_group_invocations,
+        .subgroup_size = vulkan_11_properties.subgroup_size,
+        .subgroups_in_compute = compute_uses_subgroups,
+        .subgroup_operations = vulkan_11_properties.subgroup_supported_operations,
+        .float32_atomic_add = has_float_atomic_add,
+        .timestamps_in_compute = writes_timestamps,
+        .timestamp_period_ns = limits.timestamp_period,
+        .max_storage_binding_bytes = limits.max_storage_buffer_range,
+        .device_local_bytes = largest_device_local,
+    };
+    return capabilities;
 }
 
 /// The queue family the host would use on `physical_device`, or null when that GPU cannot run the host. A GPU's
@@ -1013,6 +1135,7 @@ fn chooseGpu(self: *Host) BringUpError!Gpu {
             .max_memory_allocations = properties.limits.max_memory_allocation_count,
             .max_bound_descriptor_sets = properties.limits.max_bound_descriptor_sets,
             .max_storage_buffer_range = properties.limits.max_storage_buffer_range,
+            .compute = try computeCapabilities(self, physical_device, properties.limits),
         };
         if (choice) |wanted| {
             const index_wanted: ?usize = parseInt(usize, wanted, 10) catch null;
@@ -1032,6 +1155,31 @@ fn chooseGpu(self: *Host) BringUpError!Gpu {
     }
     const chosen: Gpu = requested orelse best orelse return BringUpError.NoSuitableGpu;
     log.info("using {s}", .{vk.fixedName(&chosen.name)});
+    // Its compute capabilities, said once: what a kernel may count on here (`ComputeCapabilities`).
+    const compute: ComputeCapabilities = chosen.compute;
+    const reductions: vk.SubgroupFeatureFlags = .{ .arithmetic = true, .shuffle = true, .ballot = true };
+    const has_reductions: bool = compute.hasSubgroupOperations(reductions);
+    const subgroup_operations: []const u8 =
+        if (has_reductions) " (arithmetic, shuffle, ballot)" else " (not all of arithmetic, shuffle, ballot)";
+    log.info("compute: {d} bytes shared, {d} bytes of push constants, {d} x {d} x {d} workgroups of up to {d}; " ++
+        "subgroups of {d}{s}; float atomic add {s}", .{
+        compute.max_shared_memory_bytes,
+        compute.max_push_constant_bytes,
+        compute.max_workgroup_count[0],
+        compute.max_workgroup_count[1],
+        compute.max_workgroup_count[2],
+        compute.max_workgroup_invocations,
+        compute.subgroup_size,
+        subgroup_operations,
+        if (compute.float32_atomic_add) "yes" else "no",
+    });
+    const timestamps: []const u8 = if (compute.timestamps_in_compute) "yes" else "no";
+    log.info("compute: timestamps {s}, a tick every {d} ns", .{ timestamps, compute.timestamp_period_ns });
+    const megabyte: u64 = 1 << 20;
+    log.info("compute: storage bindings up to {d} MB; device-local memory {d} MB", .{
+        compute.max_storage_binding_bytes / megabyte,
+        compute.device_local_bytes / megabyte,
+    });
     return chosen;
 }
 
@@ -1140,6 +1288,29 @@ fn createFrameObjects(self: *Host) BringUpError!void {
     }
 }
 
+/// The window's surface, made by its own system's creation command - the one window-system command that differs between
+/// systems, so its table is loaded here, for this one call: Win32's from the window's module and handle, X11's from its
+/// connection to the server and its window.
+fn createWindowSurface(
+    self: *Host,
+    get_instance_proc_address: vk.PfnGetInstanceProcAddr,
+    window: *native_window.Window,
+) BringUpError!void {
+    if (comptime native_window.is_x11) {
+        const creation: vk.XlibSurfaceDispatch =
+            try vk.loadXlibSurfaceDispatch(get_instance_proc_address, self.instance);
+        var surface_info: vk.XlibSurfaceCreateInfoKHR = .{ .dpy = window.display, .window = window.handle };
+        try vk.check(creation.createXlibSurfaceKHR(self.instance, &surface_info, null, &self.surface));
+    } else if (comptime builtin.target.os.tag == .windows) {
+        const creation: vk.Win32SurfaceDispatch =
+            try vk.loadWin32SurfaceDispatch(get_instance_proc_address, self.instance);
+        var surface_info: vk.Win32SurfaceCreateInfoKHR = .{ .hinstance = window.module, .hwnd = window.handle };
+        try vk.check(creation.createWin32SurfaceKHR(self.instance, &surface_info, null, &self.surface));
+    } else {
+        return BringUpError.WindowSystemUnwritten;
+    }
+}
+
 /// Everything from the loader to the device, in order: each step needs the one before (the surface comes before
 /// the GPU choice, because presenting to it is part of what makes a GPU suitable). A headless host skips every
 /// window-system step.
@@ -1149,13 +1320,8 @@ fn bringUp(self: *Host) BringUpError!void {
     const get_instance_proc_address: vk.PfnGetInstanceProcAddr = library.get_instance_proc_address;
     self.global = try vk.loadGlobalDispatch(get_instance_proc_address);
     try createInstance(self, get_instance_proc_address);
-    // The window's surface: Win32's, from the window's module and handle.
     if (self.window) |window| {
-        var surface_info: vk.Win32SurfaceCreateInfoKHR = .{
-            .hinstance = window.module,
-            .hwnd = window.handle,
-        };
-        try vk.check(self.surface_dispatch.createWin32SurfaceKHR(self.instance, &surface_info, null, &self.surface));
+        try createWindowSurface(self, get_instance_proc_address, window);
     }
     self.gpu = try chooseGpu(self);
     // Each bind group is a descriptor set, and a pipeline may use all of them at once.
@@ -1289,6 +1455,7 @@ fn executeDestroy(self: *Host, destroy: Destroy) void {
         .descriptor_set_layout => |layout| self.device_dispatch.destroyDescriptorSetLayout(self.device, layout, null),
         .pipeline_layout => |layout| self.device_dispatch.destroyPipelineLayout(self.device, layout, null),
         .pipeline => |pipeline| self.device_dispatch.destroyPipeline(self.device, pipeline, null),
+        .query_pool => |pool| self.device_dispatch.destroyQueryPool(self.device, pool, null),
     }
 }
 
@@ -1679,7 +1846,7 @@ fn createSwapchain(self: *Host, old: vk.SwapchainKHR) BringUpError!void {
     const surface_states_size: bool = capabilities.current_extent.width != maxInt(u32);
     var extent: vk.Extent2D = capabilities.current_extent;
     if (!surface_states_size) {
-        const window: *win32.Window = theWindow(self);
+        const window: *native_window.Window = theWindow(self);
         extent = .{
             .width = clamp(
                 window.client_width,
@@ -1850,7 +2017,7 @@ pub fn tryAcquireAhead() bool {
     if (completed < self.present_serials[self.frame_slot]) {
         return false;
     }
-    const window: *win32.Window = theWindow(self);
+    const window: *native_window.Window = theWindow(self);
     const is_stale: bool = self.swapchain_dirty or window.size_changed or self.swapchain.handle == .null_handle;
     if (is_stale) {
         return true;
@@ -1884,7 +2051,7 @@ fn acquireImage(self: *Host) BringUpError!u32 {
     try waitTimeline(self, self.present_serials[self.frame_slot]);
     try retireCompleted(self);
     // A stale swapchain - the window resized, or a present reported a mismatch - is rebuilt before acquiring.
-    const window: *win32.Window = theWindow(self);
+    const window: *native_window.Window = theWindow(self);
     if (window.size_changed) {
         self.swapchain_dirty = true;
         window.size_changed = false;
@@ -2522,11 +2689,16 @@ fn createShaderModule(
         else => panic("vulkan host: shader `{s}` cannot run on Vulkan: {s}", .{ label, @errorName(err) }),
     };
     defer self.gpa.free(legal);
+    // A module with a push-constant block: each compute pipeline made from it needs a range this size.
+    const push_constant_bytes: u32 = spv_vulkan.pushConstantBytes(self.gpa, legal) catch |err| {
+        panic("vulkan host: shader `{s}`'s push constants: {s}", .{ label, @errorName(err) });
+    };
     const module_info: vk.ShaderModuleCreateInfo = .{ .code_size = legal.len * 4, .p_code = legal.ptr };
     var module: vk.ShaderModule = .null_handle;
     try vk.check(self.device_dispatch.createShaderModule(self.device, &module_info, null, &module));
     nameObject(self, .shader_module, @backingInt(module), label);
-    return self.shader_modules.add(self.gpa, .{ .module = module });
+    const slot: ShaderModuleSlot = .{ .module = module, .push_constant_bytes = push_constant_bytes };
+    return self.shader_modules.add(self.gpa, slot);
 }
 
 // ---- Bind groups and layouts ----
@@ -2800,7 +2972,7 @@ fn createPipelineLayout(
             max_bind_groups,
         });
     }
-    var set_layouts: [max_bind_groups]vk.DescriptorSetLayout = undefined;
+    var set_layouts: [max_bind_groups]vk.DescriptorSetLayout = @splat(.null_handle);
     var empty_sets: GroupSet = .empty;
     for (layout_handles, set_layouts[0..layout_handles.len], 0..) |handle, *set_layout, index| {
         if (handle == 0) {
@@ -2824,6 +2996,7 @@ fn createPipelineLayout(
     return self.pipeline_layouts.add(self.gpa, .{
         .layout = layout,
         .set_count = @intCast(layout_handles.len),
+        .set_layouts = set_layouts,
         .empty_sets = empty_sets,
     });
 }
@@ -3340,11 +3513,38 @@ fn createComputePipeline(
     label: []const u8,
 ) BringUpError!PipelineSlot {
     const layout: PipelineLayoutSlot = self.pipeline_layouts.get(layout_handle, "pipeline layout").*;
-    const module: vk.ShaderModule = self.shader_modules.get(module_handle, "shader module").module;
+    const module_slot: ShaderModuleSlot = self.shader_modules.get(module_handle, "shader module").*;
+    const module: vk.ShaderModule = module_slot.module;
     const entry: EntryName = entryName(entry_point, label);
+    // PUSH CONSTANTS: a module with a push-constant block needs a layout with a range for it, which the app's layout -
+    // made from its bind groups alone, before any shader - cannot hold. The pipeline gets a layout of its own: the
+    // same sets, plus one compute-stage range covering the block. Bind groups stay compatible, since they are made
+    // against the sets' layouts, which the two pipeline layouts share.
+    var own_layout: vk.PipelineLayout = .null_handle;
+    if (module_slot.push_constant_bytes > 0) {
+        const push_range: vk.PushConstantRange = .{
+            .stage_flags = .{ .compute = true },
+            .offset = 0,
+            .size = module_slot.push_constant_bytes,
+        };
+        const own_info: vk.PipelineLayoutCreateInfo = .{
+            .set_layout_count = layout.set_count,
+            .p_set_layouts = &layout.set_layouts,
+            .push_constant_range_count = 1,
+            .p_push_constant_ranges = @ptrCast(&push_range),
+        };
+        try vk.check(self.device_dispatch.createPipelineLayout(self.device, &own_info, null, &own_layout));
+        nameObject(self, .pipeline_layout, @backingInt(own_layout), label);
+    }
+    // When the pipeline itself is refused below, its own layout goes with it.
+    errdefer if (own_layout != .null_handle) {
+        self.device_dispatch.destroyPipelineLayout(self.device, own_layout, null);
+    };
+    const has_own_layout: bool = own_layout != .null_handle;
+    const pipeline_layout: vk.PipelineLayout = if (has_own_layout) own_layout else layout.layout;
     const create_info: vk.ComputePipelineCreateInfo = .{
         .stage = .{ .stage = .{ .compute = true }, .module = module, .p_name = &entry },
-        .layout = layout.layout,
+        .layout = pipeline_layout,
         // Not derived from another pipeline.
         .base_pipeline_index = -1,
     };
@@ -3372,7 +3572,9 @@ fn createComputePipeline(
     retainPipelineLayout(self, layout_handle);
     return .{
         .pipeline = pipeline,
-        .layout = layout.layout,
+        .layout = pipeline_layout,
+        .own_layout = own_layout,
+        .push_constant_bytes = module_slot.push_constant_bytes,
         .layout_handle = layout_handle,
         .set_count = layout.set_count,
         .empty_sets = layout.empty_sets,
@@ -3566,7 +3768,7 @@ pub fn surfaceGetSize(surface: u32) u32 {
         return packSize(screen.width, screen.height);
     }
     if (self.swapchain.handle == .null_handle) {
-        const window: *win32.Window = theWindow(self);
+        const window: *native_window.Window = theWindow(self);
         return packSize(@max(window.client_width, 1), @max(window.client_height, 1));
     }
     return packSize(self.swapchain.extent.width, self.swapchain.extent.height);
@@ -3580,7 +3782,7 @@ pub fn surfaceGetCssSize(surface: u32) u32 {
     if (self.screen) |screen| {
         return packSize(screen.width, screen.height);
     }
-    const window: *win32.Window = theWindow(self);
+    const window: *native_window.Window = theWindow(self);
     const scale: f32 = window.scale();
     const width: f32 = @floatFromInt(@max(window.client_width, 1));
     const height: f32 = @floatFromInt(@max(window.client_height, 1));
@@ -4365,6 +4567,9 @@ pub fn computePipelineDestroy(
     const self: *Host = theHost();
     const slot: PipelineSlot = self.compute_pipelines.remove(self.gpa, id, "compute pipeline") catch outOfMemory();
     deferDestroy(self, .{ .pipeline = slot.pipeline }) catch outOfMemory();
+    if (slot.own_layout != .null_handle) {
+        deferDestroy(self, .{ .pipeline_layout = slot.own_layout }) catch outOfMemory();
+    }
     releasePipelineLayout(self, slot.layout_handle, .dependent);
 }
 
@@ -4392,9 +4597,131 @@ pub fn computePassSetPipeline(
     self.device_dispatch.cmdBindPipeline(slot.command_buffer, .compute, bound.pipeline);
     // Every group binds again at the next dispatch, against this pipeline's layout.
     slot.pipeline_layout = bound.layout;
+    slot.pipeline_push_constant_bytes = bound.push_constant_bytes;
     slot.pipeline_set_count = bound.set_count;
     slot.pipeline_empty_sets = bound.empty_sets;
     slot.dirty_groups = .full;
+}
+
+// ---- Timestamps ----
+//
+// A TIMESTAMP is the GPU's clock, written into a query slot by a command at a point of the command stream - at the top
+// of the pipeline before a dispatch, at its bottom after - and read back by the host once the commands have run. The
+// difference of two, in ticks, times `ComputeCapabilities.timestamp_period_ns`, is the time the GPU spent between them:
+//
+//     [ reset slots 0, 1 ] [ write slot 0 at the top ] [ dispatch ] [ write slot 1 at the bottom ]
+//                                                                  ->  (ticks[1] - ticks[0]) x period
+//
+// A slot is reset before it is written again. Native only: WebGPU's timestamps cover render passes alone, and the web's
+// host declares none of these calls.
+
+/// A pool of `count` timestamp queries, its handle.
+pub fn createTimestampPool(
+    count: u32,
+) u32 {
+    const self: *Host = theHost();
+    const create_info: vk.QueryPoolCreateInfo = .{ .query_type = .timestamp, .query_count = count };
+    var pool: vk.QueryPool = .null_handle;
+    vk.check(self.device_dispatch.createQueryPool(self.device, &create_info, null, &pool)) catch |err| {
+        panic("vulkan host: creating a pool of {d} timestamps failed: {s}", .{ count, @errorName(err) });
+    };
+    const slot: QueryPoolSlot = .{ .pool = pool, .count = count };
+    return self.query_pools.add(self.gpa, slot) catch outOfMemory();
+}
+
+/// Releases a timestamp pool, once the GPU has finished every command that writes it.
+pub fn timestampPoolDestroy(
+    id: u32,
+) void {
+    if (id == 0) {
+        return;
+    }
+    const self: *Host = theHost();
+    const slot: QueryPoolSlot = self.query_pools.remove(self.gpa, id, "timestamp pool") catch outOfMemory();
+    deferDestroy(self, .{ .query_pool = slot.pool }) catch outOfMemory();
+}
+
+/// Resets `count` slots of a timestamp pool from `first`, in the pass's command stream: a slot is reset before each
+/// new write.
+pub fn computePassResetTimestamps(
+    pass: u32,
+    pool_id: u32,
+    first: u32,
+    count: u32,
+) void {
+    const self: *Host = theHost();
+    const slot: *PassSlot = self.compute_passes.get(pass, "compute pass");
+    const pool: QueryPoolSlot = self.query_pools.get(pool_id, "timestamp pool").*;
+    self.device_dispatch.cmdResetQueryPool(slot.command_buffer, pool.pool, first, count);
+}
+
+/// Writes the GPU's clock into slot `query`: at the top of the pipeline - before the work that follows begins - or,
+/// with `after_work`, at its bottom - once the work before has finished.
+pub fn computePassWriteTimestamp(
+    pass: u32,
+    pool_id: u32,
+    query: u32,
+    after_work: bool,
+) void {
+    const self: *Host = theHost();
+    const slot: *PassSlot = self.compute_passes.get(pass, "compute pass");
+    const pool: QueryPoolSlot = self.query_pools.get(pool_id, "timestamp pool").*;
+    const top: vk.PipelineStageFlags = .{ .top_of_pipe = true };
+    const bottom: vk.PipelineStageFlags = .{ .bottom_of_pipe = true };
+    const write_stage: vk.PipelineStageFlags = if (after_work) bottom else top;
+    self.device_dispatch.cmdWriteTimestamp(slot.command_buffer, write_stage, pool.pool, query);
+}
+
+/// Reads `count` slots from `first` into `ticks`, WAITING until the commands that write them have run. Returns
+/// whether the device answered with every slot.
+pub fn timestampPoolRead(
+    pool_id: u32,
+    first: u32,
+    count: u32,
+    ticks_ptr: [*]u64,
+) bool {
+    const self: *Host = theHost();
+    const pool: QueryPoolSlot = self.query_pools.get(pool_id, "timestamp pool").*;
+    const flags: vk.QueryResultFlags = .{ .@"64" = true, .wait = true };
+    const bytes: usize = @as(usize, count) * @sizeOf(u64);
+    const stride: vk.DeviceSize = @sizeOf(u64);
+    const result: vk.Result = self.device_dispatch.getQueryPoolResults(
+        self.device,
+        pool.pool,
+        first,
+        count,
+        bytes,
+        ticks_ptr,
+        stride,
+        flags,
+    );
+    return result == .success;
+}
+
+/// PUSH CONSTANTS for the pass's next dispatches: `bytes` written into the command stream at offset 0, against the
+/// layout of the pipeline bound now, which carries the range (`createComputePipeline`). Native only - WebGPU has no
+/// push constants - so the web's host declares no such call. A pipeline must be bound first.
+pub fn computePassSetPushConstants(
+    pass: u32,
+    bytes_ptr: [*]const u8,
+    bytes_len: usize,
+) void {
+    const self: *Host = theHost();
+    const slot: *PassSlot = self.compute_passes.get(pass, "compute pass");
+    const has_pipeline: bool = slot.pipeline_layout != .null_handle;
+    if (!has_pipeline) {
+        panic("vulkan host: push constants before any pipeline is bound in this pass", .{});
+    }
+    const size: u32 = @intCast(bytes_len);
+    const fits_range: bool = size <= slot.pipeline_push_constant_bytes;
+    if (!fits_range) {
+        panic("vulkan host: {d} bytes of push constants, and the bound pipeline's shader declares {d}", .{
+            size,
+            slot.pipeline_push_constant_bytes,
+        });
+    }
+    const compute_stage: vk.ShaderStageFlags = .{ .compute = true };
+    self.device_dispatch.cmdPushConstants(slot.command_buffer, slot.pipeline_layout, compute_stage, 0, size, bytes_ptr);
 }
 
 /// Sets a bind group for the pass's next dispatches, bound at the next dispatch against the pipeline bound then.
@@ -4493,6 +4820,12 @@ fn vendorName(vendor_id: u32) ?[]const u8 {
         0x10005 => "Mesa",
         else => null,
     };
+}
+
+/// The chosen device's compute capabilities (`ComputeCapabilities`), as the host recorded them at bring-up.
+pub fn deviceComputeCapabilities() ComputeCapabilities {
+    const self: *Host = theHost();
+    return self.gpu.compute;
 }
 
 /// The GPU, described as the browser's adapter info is - `vendor | device | description` - into `ptr[0..cap]`:

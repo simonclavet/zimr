@@ -418,6 +418,17 @@ Prior arc (`src/notes/mocap_plan.md`, §11-12): BVH/FBX loading, skinning, and t
                                                      self-hosted backend compiles incrementally; Oct 18)
     zig build test-<stem> -Dtest-report              also print the robot tests' measurement tables,
                                                      and run the MEASUREMENT tests, which skip otherwise
+    zig build test-fast -Dfast-root=src/<root>.zig -Dtest-timing [-Dtest-shards=N]
+                                                     each process lists its tests of a second or more, slowest
+                                                     first - check where a suite's time goes before trimming it
+                                                     (the shard count must differ from the last run's, or a passed
+                                                     run is cached and nothing is timed)
+
+★ **WHILE WORKING ON ROBOTGPU, RUN ITS ROOT ALONE**: `-Dfast-root=src/robotgpu_tests.zig` - its own tests and
+nothing else (it reaches the MJCF importer as the `robot_import` module, so the importer's tests stay in theirs).
+The robot family (`src/robot_tests.zig`) runs only when robot.zig itself changes, as a bitwise gate: about 40 s of
+tests by default since Oct 31 - one learning test took 167 of its 204 s and is a slow test now, its quick form
+("the agent's parts train on the dance") running by default.
     zig build test -Dtest-timing                     each fast-tier test process lists its tests of 1 s or more
     zig build test -Dtest-shards=1                   the robot family in one process (default: one per CPU)
     zig build test -Dslow-tests -Dparked-tests       also the PARKED tests (`grep -n "report.parked()" src`)
@@ -497,6 +508,10 @@ steps in this file. Name a new plan here when work on it begins; finished plans 
 
 Work in hand (Oct 11): `platforms_plan.md`, step C5, sound. Every other plan here, active or paused, resumes only
 when Simon names it.
+
+- `linux_port_plan.md` - **being implemented (since Nov 1, Simon: "implement carefully").** `platforms_plan.md`'s
+  Phase D in detail: zimr on Linux through X11 (Xlib) and Vulkan, built and checked from Windows, run in WSL first.
+  Stages L1-L11; where the implementation stands, and what each stage left to check, is the plan's journal.
 
 - `platforms_plan.md` - **THE CURRENT PLAN (since Oct 7).** The backends and sound plan: zimr on every
   platform from the same app code - the web and Windows first, then Linux, macOS, Android and iOS - with the API every

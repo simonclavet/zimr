@@ -9,8 +9,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const zm = @import("zm");
-const rbt = @import("robot.zig");
+const rbt = @import("robot");
 const mjcf = @import("mjcf.zig");
+const codecs = @import("codecs.zig");
 const scene = @import("robot_scene.zig");
 
 const Vec = zm.Vec;
@@ -669,6 +670,16 @@ fn reorderQuat(q: *[4]f32) void {
     q[3] = w;
 }
 
+/// A robot from MJCF TEXT in one call: parsed (`codecs.xml`), read (`mjcf.readRobot`) and built (`build`) - the three
+/// steps every caller holding a document's text takes. The caller owns the result (`Imported.deinit`).
+pub fn importSource(gpa: Allocator, source: []const u8, options: rbt.Options) !Imported {
+    var document: codecs.xml.Document = try codecs.xml.parse(gpa, source, null);
+    defer document.deinit();
+    var described: mjcf.Robot = try mjcf.readRobot(gpa, &document);
+    defer described.deinit();
+    return build(gpa, &described, options);
+}
+
 /// Write a keyframe's `qpos` into a `Data`.
 ///
 /// * THE POSE A LEGGED ROBOT HAS TO START FROM. A quadruped at its zero pose is a tangle of
@@ -744,7 +755,6 @@ pub fn applyKeyframe(model: *const rbt.Model, data: *rbt.Data, key: mjcf.Keyfram
 // Tests
 // =============================================================================
 
-const codecs = @import("codecs.zig");
 const robot_scene = @import("robot_scene.zig");
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;

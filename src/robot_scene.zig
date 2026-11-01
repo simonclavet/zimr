@@ -35,7 +35,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const zm = @import("zm");
-const rbt = @import("robot.zig");
+const rbt = @import("robot");
 
 const Vec = zm.Vec;
 const Quat = zm.Quat;

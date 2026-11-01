@@ -20,7 +20,7 @@
 
 const std = @import("std");
 const zm = @import("zm");
-const rbt = @import("robot.zig");
+const rbt = @import("robot");
 const track = @import("robot_track.zig");
 const policy = @import("robot_policy.zig");
 const track_env = @import("robot_track_env.zig");

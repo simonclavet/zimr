@@ -24,7 +24,7 @@ const std = @import("std");
 const report = @import("test_report.zig");
 const Allocator = std.mem.Allocator;
 const zm = @import("zm");
-const rbt = @import("robot.zig");
+const rbt = @import("robot");
 const codecs = @import("codecs.zig");
 
 const Vec = zm.Vec;

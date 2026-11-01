@@ -1474,7 +1474,7 @@ fn boundsHalfExtent(points: []const Vec) Vec {
 ///
 /// `import_path` is how the generated file reaches the robot engine. It is spliced in as an
 /// EXPRESSION rather than a path, because the two places this model is emitted reach it
-/// differently: a file inside `src/` says `@import("../../../robot.zig")`, while an example
+/// differently: a file inside `src/` says `@import("robot")` - robot.zig is a module of its own - while an example
 /// reaches it through the module as `@import("zimr").robot`. Passing the whole expression
 /// keeps the emitter from having to know which world it is writing for.
 pub fn emitZig(

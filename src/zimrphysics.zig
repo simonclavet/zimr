@@ -62,7 +62,7 @@ const sortSlice = std.mem.sort;
 const zm = @import("zm");
 const turnsFromRad = zm.turnsFromRad;
 const radFromTurns = zm.radFromTurns;
-const profiler = @import("profiler.zig");
+const profiler = @import("profiler");
 const entities = @import("entities.zig");
 const physics_common = @import("physics_common.zig");
 

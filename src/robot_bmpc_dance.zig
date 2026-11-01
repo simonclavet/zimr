@@ -33,7 +33,7 @@
 const std = @import("std");
 const zm = @import("zm");
 const zn = @import("zn");
-const rbt = @import("robot.zig");
+const rbt = @import("robot");
 const dance = @import("robot_dance.zig");
 const track = @import("robot_track.zig");
 const track_env = @import("robot_track_env.zig");
@@ -437,11 +437,57 @@ test "TrackCharacter: the same seeds run the same dance, bit for bit" {
     }
 }
 
+test "the agent's parts train on the dance: a few updates, every loss finite" {
+    // The quick form of the test below, run by default: the same small agent and characters, 12 decisions of random
+    // actions, one pretraining update, then the planner with one update after each of 8 decisions - about 9 updates.
+    // The claim kept is that every part, assembled on Geno, trains: each world-model loss and each policy loss finite,
+    // and the policy updated once pretraining is over. Whether the world model's loss FALLS takes the long run.
+    const gpa: Allocator = testing_allocator;
+    var setup: GenoDance = undefined;
+    try setup.init(gpa);
+    defer setup.deinit();
+    var arena_state: ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    const learner: robot_lab.TdmpcLearner = testLearner(30);
+    const characters: []TrackCharacter = try testCharacters(arena, &setup, learner);
+    defer for (characters) |*character| {
+        character.deinit();
+    };
+    const quick_schedule: Agent.Schedule = .{ .seed_frames = 12, .burst_updates = 1, .updates_per_frame = 1 };
+    var trainer: DanceTrainer = try trainerWithSchedule(arena, characters, learner, quick_schedule);
+    const frames: usize = 20;
+    var policy_updates: usize = 0;
+    for (0..frames) |_| {
+        const frame_plan: Agent.Schedule.Frame = try trainer.runFrame();
+        if (frame_plan.updates == 0) {
+            continue;
+        }
+        const update_report: Agent.LearnerReport = trainer.last_report.?;
+        const world: Agent.WorldModelReport = update_report.world_model;
+        const world_losses = [_]f32{ world.consistency, world.reward, world.value, world.total, world.gradient_norm };
+        for (world_losses) |loss| {
+            try expect(isFinite(loss));
+        }
+        if (update_report.policy) |policy| {
+            try expect(isFinite(policy.total));
+            policy_updates += 1;
+        }
+    }
+    try expect(policy_updates > 0);
+}
+
 test "the agent learns on the dance: its losses finite, the world model's falling" {
     // A small agent (every width 16, two dynamics heads) on two characters: 60 decisions of random actions, one
     // pretraining update, then the planner with two updates after every decision - 300 updates in all, reanalyze
     // among them. Not mastery - the claim is that the parts, assembled on Geno, train: every loss stays finite, the
-    // policy learns once pretraining is over, and the world model's loss ends below where it began.
+    // policy learns once pretraining is over, and the world model's loss ends below where it began. A SLOW TEST
+    // (`-Dslow-tests`): nearly three minutes on one core, most of the robot family's time - the test above keeps
+    // its quick part by default.
+    const options = @import("build_options");
+    if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
+        return error.SkipZigTest;
+    }
     const gpa: Allocator = testing_allocator;
     var setup: GenoDance = undefined;
     try setup.init(gpa);

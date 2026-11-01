@@ -2,8 +2,10 @@
 //!
 //! `vk.zig` is declared by hand, and a hand-declared structure that is wrong does not fail: the driver reads
 //! plausible garbage. This tool makes the compiler the judge. The build translates the official headers with
-//! `translate-c` (module `vk_c`) and compiles this file against both modules FOR THE WINDOWS TARGET; every check is a
-//! comptime comparison, so compiling it is running it, and a mismatch is a compile error naming the declaration:
+//! `translate-c` (module `vk_c`) and compiles this file against both modules, ONCE FOR WINDOWS AND ONCE FOR LINUX -
+//! each target against its own translation, since a C `unsigned long` (X11's `Window`) is 4 bytes on one and 8 on the
+//! other; every check is a comptime comparison, so compiling it is running it, and a mismatch is a compile error
+//! naming the declaration:
 //!
 //!     structures and unions   size, alignment, field count, and each field's offset and size, by position
 //!     enumerations            each tag's value against its C constant
@@ -36,6 +38,7 @@ const constants_without_twin = [_][]const u8{
     "khronos_validation_layer_name",
     "khr_surface_extension_name",
     "khr_win32_surface_extension_name",
+    "khr_xlib_surface_extension_name",
     "khr_swapchain_extension_name",
     "ext_debug_utils_extension_name",
 };

@@ -26,7 +26,7 @@ const compute_host = @import("compute_host.zig");
 const resident = @import("robot_track_resident.zig");
 const zn_mlp = @import("gpu/zn_mlp.zig");
 const lab = @import("robot_lab.zig");
-const rbt = @import("robot.zig");
+const rbt = @import("robot");
 const robot_policy = @import("robot_policy.zig");
 
 const Allocator = std.mem.Allocator;

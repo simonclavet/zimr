@@ -681,6 +681,17 @@ pub fn destroyBuffer(buffer: BufferHandle) void {
     gpu_host.bufferDestroy(@backingInt(buffer));
 }
 
+/// THE DEVICE'S COMPUTE CAPABILITIES (`wgpu_vulkan.ComputeCapabilities`): the shared memory a workgroup may hold, the
+/// push-constant block, the workgroup limits, the subgroup's size and operations, float atomic add. The native Vulkan
+/// host's alone: a build without it - the web, or no GPU at all - reports none (no subgroups, no shared memory), and
+/// what needs them runs natively only (robotgpu, its plan's D18).
+pub fn computeCapabilities() vulkan_host.ComputeCapabilities {
+    return switch (host.kind) {
+        .native, .headless => vulkan_host.deviceComputeCapabilities(),
+        .web, .none => .{},
+    };
+}
+
 /// Fetch the adapter's vendor/architecture/device/description string -
 /// the on-device answer to "which WebGPU backend did this page get?"
 /// (t1178: Vulkan vs compat/GLES is the live coherency question).

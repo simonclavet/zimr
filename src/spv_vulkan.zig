@@ -20,6 +20,10 @@
 //!      the decoration means nothing, so `legalize` drops it.
 //!   4. `OpSource` names the source language, and Zig's value (12) was added to SPIR-V in 2024: validators built
 //!      before then reject the whole module over it. It is debug information only, so `legalize` declares `Unknown`.
+//!   5. A SUBGROUP instruction (`OpGroupNonUniform*`, written by kompute's inline assembly) needs its capability
+//!      declared - `GroupNonUniformArithmetic` for a sum, `GroupNonUniformShuffle` for a shuffle - and the compiler's
+//!      assembler declares none. `legalize` declares each one the module's instructions need
+//!      (`findSubgroupCapabilities`). Native only: the web's WGSL has no subgroups, and these kernels never go there.
 //!
 //! And three refusals, each by name: `Capability Linkage`, which marks a module that is not a complete program (some
 //! compiler versions emit it on every module); a vertex shader that writes a storage buffer; and a struct holding a
@@ -77,6 +81,8 @@ pub const header_word_count: usize = 5;
 pub const Error = error{
     /// The words do not start with SPIR-V's magic number, or are shorter than the header.
     NotSpirv,
+    /// A push-constant block with a member that is neither a scalar nor a vector of scalars (`pushConstantBytes`).
+    PushConstantMemberUnsupported,
     /// An instruction's length is zero or runs past the end of the module.
     Truncated,
     /// `Capability Linkage`: not a complete program, which Vulkan cannot load.
@@ -157,7 +163,25 @@ pub const Op = enum(u16) {
 pub const Capability = enum(u32) {
     Shader = 1,
     Linkage = 5,
+    GroupNonUniform = 61,
+    GroupNonUniformVote = 62,
+    GroupNonUniformArithmetic = 63,
+    GroupNonUniformBallot = 64,
+    GroupNonUniformShuffle = 65,
+    GroupNonUniformShuffleRelative = 66,
+    GroupNonUniformClustered = 67,
+    GroupNonUniformQuad = 68,
     _,
+
+    /// Whether a native module may declare this capability: `Shader`, and the subgroup family kompute's subgroup
+    /// operations need (`findSubgroupCapabilities`).
+    pub fn isAllowed(capability: Capability) bool {
+        const value: u32 = @backingInt(capability);
+        const first_subgroup_value: u32 = @backingInt(Capability.GroupNonUniform);
+        const last_subgroup_value: u32 = @backingInt(Capability.GroupNonUniformQuad);
+        const is_subgroup_capability: bool = value >= first_subgroup_value and value <= last_subgroup_value;
+        return capability == .Shader or is_subgroup_capability;
+    }
 };
 
 pub const ExecutionModel = enum(u32) {
@@ -263,6 +287,91 @@ pub const InstructionReader = struct {
         return instruction;
     }
 };
+
+/// THE SUBGROUP INSTRUCTIONS AND THE CAPABILITIES THEY NEED. SPIR-V numbers its subgroup ("group non-uniform")
+/// instructions 333 to 366. A module using any of them must declare `GroupNonUniform`, and one capability more by kind:
+///
+///     opcodes    instructions                                       the capability beside GroupNonUniform
+///     333        Elect                                              -
+///     334-336    All, Any, AllEqual                                 GroupNonUniformVote
+///     337-344    Broadcast, BroadcastFirst, Ballot and its kin      GroupNonUniformBallot
+///     345-346    Shuffle, ShuffleXor                                GroupNonUniformShuffle
+///     347-348    ShuffleUp, ShuffleDown                             GroupNonUniformShuffleRelative
+///     349-364    the reductions - sums, products, minima, maxima,   GroupNonUniformArithmetic, and
+///                bitwise and logical                                GroupNonUniformClustered when clustered
+///     365-366    QuadBroadcast, QuadSwap                            GroupNonUniformQuad
+///
+/// A reduction's words, its group operation the fourth after the head (Reduce 0, InclusiveScan 1, ExclusiveScan 2,
+/// ClusteredReduce 3):
+///
+///     [ head | result type | result id | scope id | group operation | value (| cluster size) ]
+const SubgroupInstructions = struct {
+    const first_op: u16 = 333;
+    const last_op: u16 = 366;
+    const first_reduction_op: u16 = 349;
+    const last_reduction_op: u16 = 364;
+    const group_operation_word: usize = 4;
+    const clustered_reduce: u32 = 3;
+
+    /// The capability the instruction `op` needs beside `GroupNonUniform`, by the table above; none for Elect.
+    fn capabilityBesideBase(op: u16) ?Capability {
+        return switch (op) {
+            334...336 => .GroupNonUniformVote,
+            337...344 => .GroupNonUniformBallot,
+            345...346 => .GroupNonUniformShuffle,
+            347...348 => .GroupNonUniformShuffleRelative,
+            first_reduction_op...last_reduction_op => .GroupNonUniformArithmetic,
+            365...366 => .GroupNonUniformQuad,
+            else => null,
+        };
+    }
+};
+
+/// A set of the eight subgroup capabilities, `GroupNonUniform` (61) to `GroupNonUniformQuad` (68), each present or not.
+const SubgroupCapabilitySet = struct {
+    const first_value: u32 = @backingInt(Capability.GroupNonUniform);
+    const count: usize = 8;
+
+    present: [count]bool = @splat(false),
+
+    fn add(set: *SubgroupCapabilitySet, capability: Capability) void {
+        const offset: u32 = @backingInt(capability) - first_value;
+        set.present[offset] = true;
+    }
+
+    /// The capability `offset` places after `GroupNonUniform`.
+    fn capabilityAt(offset: usize) Capability {
+        const value: u32 = first_value + @as(u32, @intCast(offset));
+        return @fromBackingInt(value);
+    }
+};
+
+/// Every capability the subgroup instructions in `words` need (the table at `SubgroupInstructions`), added to
+/// `needed`: `GroupNonUniform` with any of them, the capability of each one's kind, and `GroupNonUniformClustered`
+/// with a clustered reduction.
+fn findSubgroupCapabilities(words: []const u32, needed: *SubgroupCapabilitySet) Error!void {
+    var reader: InstructionReader = try .init(words);
+    while (try reader.next()) |instruction| {
+        const op: u16 = @backingInt(instruction.op);
+        const is_subgroup: bool = op >= SubgroupInstructions.first_op and op <= SubgroupInstructions.last_op;
+        if (!is_subgroup) {
+            continue;
+        }
+        needed.add(.GroupNonUniform);
+        if (SubgroupInstructions.capabilityBesideBase(op)) |capability| {
+            needed.add(capability);
+        }
+        const is_reduction: bool =
+            op >= SubgroupInstructions.first_reduction_op and op <= SubgroupInstructions.last_reduction_op;
+        const has_group_operation: bool = instruction.word_count > SubgroupInstructions.group_operation_word;
+        if (is_reduction and has_group_operation) {
+            const group_operation: u32 = words[instruction.start + SubgroupInstructions.group_operation_word];
+            if (group_operation == SubgroupInstructions.clustered_reduce) {
+                needed.add(.GroupNonUniformClustered);
+            }
+        }
+    }
+}
 
 /// A literal string inside an instruction: its text (without the terminating zero) and the words it occupies.
 const LiteralString = struct { text: []const u8, word_count: usize };
@@ -673,6 +782,79 @@ fn describeGlobal(module: Module, global_id: u32, variable: Module.Variable) Glo
     };
 }
 
+/// The bytes of a scalar type (an integer's or a float's width in bits, over 8) or of a vector of one (its count of
+/// components times a component's bytes); refused for anything else.
+fn scalarOrVectorBytes(module: Module, type_id: u32) Error!u32 {
+    const declaration: Instruction = module.types.get(type_id) orelse return Error.PushConstantMemberUnsupported;
+    switch (declaration.op) {
+        // OpTypeInt and OpTypeFloat: the result id, then the width in bits.
+        .TypeInt, .TypeFloat => {
+            const width_bits: u32 = declaration.operands[1];
+            return width_bits / 8;
+        },
+        // OpTypeVector: the result id, the component type, the component count.
+        .TypeVector => {
+            const component_bytes: u32 = try scalarOrVectorBytes(module, declaration.operands[1]);
+            const component_count: u32 = declaration.operands[2];
+            return component_bytes * component_count;
+        },
+        else => return Error.PushConstantMemberUnsupported,
+    }
+}
+
+/// The bytes of the struct `struct_id`: as far as its furthest member reaches, each member at its `Offset`.
+fn blockBytes(module: Module, struct_id: u32) Error!u32 {
+    const declaration: Instruction = module.types.get(struct_id) orelse return Error.PushConstantMemberUnsupported;
+    // OpTypeStruct's operands: the result id, then each member's type.
+    const member_types: []const u32 = declaration.operands[1..];
+    var block_end: u32 = 0;
+    var reader: InstructionReader = try .init(module.words);
+    while (try reader.next()) |instruction| {
+        if (instruction.op != .MemberDecorate) {
+            continue;
+        }
+        // OpMemberDecorate's operands: the struct, the member's index, the decoration, its value.
+        const operands: []const u32 = instruction.operands;
+        const is_offset_of_block: bool = operands.len >= 4 and operands[0] == struct_id and
+            operands[2] == @backingInt(Decoration.Offset);
+        if (!is_offset_of_block) {
+            continue;
+        }
+        const member_index: u32 = operands[1];
+        const member_offset: u32 = operands[3];
+        const member_bytes: u32 = try scalarOrVectorBytes(module, member_types[member_index]);
+        block_end = @max(block_end, member_offset + member_bytes);
+    }
+    return block_end;
+}
+
+/// THE BYTES OF A MODULE'S PUSH-CONSTANT BLOCK, or 0 when it has none. Push constants are a few values the host writes
+/// into the command stream itself for each dispatch, with no buffer: a kernel declares them as one variable in the
+/// PushConstant storage class, a struct decorated Block whose members carry their `Offset`s. The block reaches as far
+/// as its furthest member:
+///
+///     struct { value: u32, other: u32 }    member 0 at offset 0, 4 bytes; member 1 at offset 4, 4 bytes -> 8 bytes
+///
+/// The host gives a pipeline whose module has such a block a layout with a push-constant range of this size. A module
+/// holding several blocks - one entry point's each - gets the largest, which every one of them fits. A member is a
+/// scalar (an integer or a float) or a vector of them; another kind is refused (`Error.PushConstantMemberUnsupported`).
+pub fn pushConstantBytes(gpa: Allocator, words: []const u32) Error!u32 {
+    var module: Module = try .parse(gpa, words);
+    defer module.deinit(gpa);
+    var largest_block: u32 = 0;
+    var variable_iterator: AutoHashMapUnmanaged(u32, Module.Variable).Iterator = module.variables.iterator();
+    while (variable_iterator.next()) |entry| {
+        if (entry.value_ptr.storage_class != .PushConstant) {
+            continue;
+        }
+        const block_type: ?u32 = module.pointee(entry.value_ptr.pointer_type);
+        const struct_id: u32 = block_type orelse return Error.PushConstantMemberUnsupported;
+        const block_bytes: u32 = try blockBytes(module, struct_id);
+        largest_block = @max(largest_block, block_bytes);
+    }
+    return largest_block;
+}
+
 /// The interface of the entry point named `entry_name`: what the host needs to lay out descriptor sets and vertex
 /// inputs for it.
 pub fn reflect(
@@ -977,7 +1159,7 @@ pub fn check(gpa: Allocator, words: []const u32) Error![]Violation {
     errdefer violations.deinit(gpa);
 
     for (module.capabilities.items) |capability| {
-        if (capability != .Shader) {
+        if (!capability.isAllowed()) {
             try violations.append(gpa, .{ .kind = .capability_not_allowed, .id = @backingInt(capability) });
         }
     }
@@ -1086,12 +1268,28 @@ pub fn legalize(gpa: Allocator, words: []const u32) Error![]u32 {
         return Error.RuntimeArrayOutsideBlock;
     }
 
-    // 4. The copy: every instruction in order, the new ones at their sections' ends, the dropped ones skipped.
+    // 4. The capabilities to declare: those the module's subgroup instructions need that it does not declare.
+    var subgroup_needs: SubgroupCapabilitySet = .{};
+    try findSubgroupCapabilities(words, &subgroup_needs);
+    var new_capabilities: ArrayList(u32) = .empty;
+    defer new_capabilities.deinit(gpa);
+    for (subgroup_needs.present, 0..) |is_needed, offset| {
+        const capability: Capability = SubgroupCapabilitySet.capabilityAt(offset);
+        const is_missing: bool = is_needed and !module.hasCapability(capability);
+        if (is_missing) {
+            const declaration = [2]u32{ instructionHead(.Capability, 2), @backingInt(capability) };
+            try new_capabilities.appendSlice(gpa, &declaration);
+        }
+    }
+    // 5. The copy: every instruction in order, the new ones at their sections' ends - the capabilities first of all,
+    // straight after the header, the capability section being the module's first - the dropped ones skipped.
     var legal: ArrayList(u32) = .empty;
     errdefer legal.deinit(gpa);
-    const added_word_count: usize = new_execution_modes.items.len + new_decorations.items.len;
+    const added_word_count: usize = new_capabilities.items.len + new_execution_modes.items.len +
+        new_decorations.items.len;
     try legal.ensureTotalCapacity(gpa, words.len + added_word_count);
     try legal.appendSlice(gpa, words[0..header_word_count]);
+    try legal.appendSlice(gpa, new_capabilities.items);
     var reader: InstructionReader = try .init(words);
     while (try reader.next()) |instruction| {
         if (instruction.start == module.execution_modes_end) {
@@ -1420,6 +1618,45 @@ test "spv_vulkan: reflect names every global of the compiler's fragment shader" 
     }
     try expect(found_color and found_depth);
     try expectError(Error.NoSuchEntryPoint, reflect(gpa, &depth_fs_words, "not_main"));
+}
+
+test "spv_vulkan: a push-constant block reaches its furthest member; none is 0, an array member is refused" {
+    const gpa: Allocator = testing_allocator;
+    // %13 a Block struct { u32 at offset 0, vec4 of f32 at offset 16 }: 16 + 16 = 32 bytes.
+    var assembler: Assembler = try .init(gpa, 40);
+    defer assembler.deinit(gpa);
+    try assembler.add(gpa, .Capability, &.{@backingInt(Capability.Shader)});
+    try assembler.add(gpa, .MemoryModel, &.{ 0, 1 });
+    try assembler.addWithString(gpa, .EntryPoint, &.{ @backingInt(ExecutionModel.GLCompute), 1 }, "main", &.{20});
+    try assembler.add(gpa, .Decorate, &.{ 13, @backingInt(Decoration.Block) });
+    try assembler.add(gpa, .MemberDecorate, &.{ 13, 0, @backingInt(Decoration.Offset), 0 });
+    try assembler.add(gpa, .MemberDecorate, &.{ 13, 1, @backingInt(Decoration.Offset), 16 });
+    try assembler.add(gpa, .TypeFloat, &.{ 10, 32 });
+    try assembler.add(gpa, .TypeVector, &.{ 11, 10, 4 });
+    try assembler.add(gpa, .TypeInt, &.{ 12, 32, 0 });
+    try assembler.add(gpa, .TypeStruct, &.{ 13, 12, 11 });
+    try assembler.add(gpa, .TypePointer, &.{ 14, @backingInt(StorageClass.PushConstant), 13 });
+    try assembler.add(gpa, .Variable, &.{ 14, 20, @backingInt(StorageClass.PushConstant) });
+    try expectEqual(@as(u32, 32), try pushConstantBytes(gpa, assembler.words.items));
+    // No block: 0.
+    var plain: Assembler = try .init(gpa, 40);
+    defer plain.deinit(gpa);
+    try plain.add(gpa, .Capability, &.{@backingInt(Capability.Shader)});
+    try plain.add(gpa, .MemoryModel, &.{ 0, 1 });
+    try expectEqual(@as(u32, 0), try pushConstantBytes(gpa, plain.words.items));
+    // A block whose member is an array: refused.
+    var with_array: Assembler = try .init(gpa, 40);
+    defer with_array.deinit(gpa);
+    try with_array.add(gpa, .Capability, &.{@backingInt(Capability.Shader)});
+    try with_array.add(gpa, .MemoryModel, &.{ 0, 1 });
+    try with_array.add(gpa, .Decorate, &.{ 13, @backingInt(Decoration.Block) });
+    try with_array.add(gpa, .MemberDecorate, &.{ 13, 0, @backingInt(Decoration.Offset), 0 });
+    try with_array.add(gpa, .TypeFloat, &.{ 10, 32 });
+    try with_array.add(gpa, .TypeArray, &.{ 11, 10, 30 });
+    try with_array.add(gpa, .TypeStruct, &.{ 13, 11 });
+    try with_array.add(gpa, .TypePointer, &.{ 14, @backingInt(StorageClass.PushConstant), 13 });
+    try with_array.add(gpa, .Variable, &.{ 14, 20, @backingInt(StorageClass.PushConstant) });
+    try expectError(Error.PushConstantMemberUnsupported, pushConstantBytes(gpa, with_array.words.items));
 }
 
 test "spv_vulkan: words that are not SPIR-V, or end mid-instruction, are refused" {

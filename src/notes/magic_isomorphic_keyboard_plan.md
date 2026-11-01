@@ -1,6 +1,6 @@
 # magic isomorphic keyboard - the computer keyboard as an instrument, laid out in thirds and fifths, playing the scale star's chords and progressions - the plan (v1 FINAL, Oct 31 2026)
 
-STATUS: FINAL (Oct 31) - D1-D9 taken and the final list (section 9.1) agreed. NOT IMPLEMENTED: S0 starts only on Simon's go. Written under
+STATUS: FINAL (Oct 31) - D1-D9 taken and agreed; D10, the layout played, Nov 1. IN PROGRESS (Simon's go, Nov 1): S0 and S1 written, S1 on the fifths layout, awaiting Simon's build. Written under
 claude.md's "MAKE A PLAN" procedure. **Nothing is implemented, and nothing will be until Simon says go.** This file is
 the one source of truth for the demo's decisions, status and journal (section 11).
 
@@ -135,6 +135,35 @@ What the plan takes from it:
     letter (5.7, 5.11).
   * THE STICKERS' COLOURS as an option beside the degree colours: white naturals, lilac sharps (5.7).
   * A HEXAGON VIEW of the same grid, as the first picture draws it, as an option beside the keyboard view (3.9).
+
+### 1.2 Simon's drawing (Nov 1): fifths along the rows - THE LAYOUT PLAYED (D10)
+
+Simon, Nov 1: "I want the layout to be such that we go to the fifth when going to the right, to the major third when
+going downright, and to the minor third when going top right" - with a drawing of the laptop's keys, the naturals
+written in: 1 to 7 F C G D A E B; Q W E A E B and O P [ ] \ F C G D A; G to ' F C G D A E B; Z to M F C G D A E B.
+Every one of them fits
+
+    one key right          +7   a fifth up                one key left          -7
+    up-right               +3   a minor third up          down-left             -3
+    down-right             +4   a major third up          up-left               -4
+
+anchored at F on 1 - in the plan's terms `step_right` 7, `step_up_right` 3. The same Tonnetz as the photo's, turned:
+the circle of fifths runs along each row, and what follows from it changes shape:
+
+  * A MAJOR SCALE IS SEVEN KEYS IN A ROW (F C G D A E B for C major), its sharps continuing to the right. With the
+    tonic on F, C major is the home row from D to L - the tonic under the left index finger, its fifth under the next.
+  * A MAJOR TRIAD is a downward triangle: its root, the key to its right (the fifth) and the key below between them
+    (the third) - C major is F G V. A MINOR TRIAD is an upward one: its root, the key above on its right (the minor
+    third) and the key to its right (the fifth) - A minor is J I K.
+  * The circle of thirds, the star's path, is still a zigzag: C (F) down-right to E (V), up-right to G (G), down-right
+    to B (B), up-right to D (H), up-right again to F (U) - two minor thirds in a straight line, vii's flat step - then
+    down-right to A (J) and up-right to C (I).
+  * In pitch, a row of fifths spans far: with the tonic C4 on F the grid runs from C1 at the backquote to B8 at the
+    backslash, seven octaves. The Shepard default hears only pitch classes; the real-octave mode (S7, D9) must choose
+    its octaves another way - D9 is to be asked again when S7 comes.
+
+The photo's layout stays in the code as `thirds_layout` (with its tests), one of the layouts S2 offers; the tonic on F
+(1.1) stays the anchor.
 
 
 ## 2. What zimr already has
@@ -675,9 +704,12 @@ Each stage ends with something Simon can run, and its tests green.
      capture opt-in if ' or / misbehave in Chrome or Firefox, the ISO key if an ISO keyboard is to be played.
   D9 REAL OCTAVES - DECIDED (Simon, Oct 31): literal. The F key plays the tonic in middle C's octave (60 + its pitch
      class, as star_hands' `midiKeyOfDegree`), every other key by the rule - in C major the grid runs from B1 at /
-     to D6 at the backquote, rising upward and to the left.
+     to D6 at the backquote, rising upward and to the left. TO ASK AGAIN AT S7: decided for the photo's layout; with
+     fifths along the rows (D10) the literal rule spans seven octaves.
+  D10 THE LAYOUT PLAYED - DECIDED (Simon, Nov 1): fifths to the right, major thirds down-right, minor thirds up-right
+     (1.2), replacing the photo's as the layout played; the photo's kept as one of the layouts offered.
 
-### 9.1 The final list - agreed by Simon, Oct 31
+### 9.1 The final list - agreed by Simon, Oct 31 (D10 added Nov 1)
 
   D1  a new example, `magic_isomorphic_keyboard`, "zimr - magic isomorphic keyboard"
   D2  the theory in `examples/music_theory/music_theory.zig` (std + zm), star_hands switched to it in S0
@@ -689,7 +721,9 @@ Each stage ends with something Simon can run, and its tests green.
       function); the compass, triangles and staircase on the grid, each switchable
   D7  the track: boxes filled from star_hands' progressions list (S5); recording a box from a chord played (S5b)
   D8  engine changes only if S1 measures a need: the page swallowing the keys the app plays; the ISO key
-  D9  real octaves: the tonic on F in middle C's octave, the rest literal from the rule (B1 to D6 in C major)
+  D9  real octaves: the tonic on F in middle C's octave, the rest literal from the rule (B1 to D6 in C major) - to ask
+      again at S7, for the fifths layout
+  D10 the layout played: fifths right, major thirds down-right, minor thirds up-right (Simon's drawing, 1.2)
   --  from Simon's second picture (1.1), taken as given: the tonic on the F key by default, the grid moving with the
       scale; labels by interval from the tonic; the stickers' colours and a hexagon view as options
 
@@ -744,3 +778,53 @@ Oct 31 - D9 decided: literal octaves, the tonic on F in middle C's octave. Every
 put to Simon for agreement.
 
 Oct 31 - Simon: "mark final, but don't implement". The plan is FINAL; nothing is implemented until he says go.
+
+Nov 1 - Simon: "implement". S0 written, not compiled here (Simon builds):
+  * `examples/music_theory/music_theory.zig` (new): 44 declarations moved verbatim from star_hands by a script -
+    the scale (all_degrees ... the circle-of-thirds check), the progressions and `writeSongKey`, the tonics and modes
+    the options offer (`ListedTonic` ... `writeAlterations`), chord naming (`PitchClassSet` ... `numeralNameOf` and
+    the two comptime name checks), `functionNameOfDegree`. Made `pub`, methods included. Imports `std` alone (no zm:
+    nothing moved needed it). Nine tests appended, each against hand-written expectations: D major's spelling and
+    F#/G# majors' sevenths, no scale offered beyond two accidentals, four modes' semitones, C Dorian's chords, Hotel
+    California in D, borrowed chords' alterations, song-key and mode-alteration labels, song tonics, the seventh's
+    function name.
+  * star_hands: the 44 removed; 29 bound by name from `music_theory`; `eql`, `startsWith`, `endsWith` aliases dropped
+    (their only users moved); the header's file-order paragraph says where the theory went.
+  * build.zig: `AppContext.music_theory_mod`, one module a target in the five contexts (web, Windows, Linux,
+    headless, the platform check), imported by every example as `music_theory`; `zig build test-music-theory`.
+  * Checked here: `zig fmt --check`, `zig ast-check` (undeclared names included) and zimrlint with every rule on the
+    three files - clean.
+
+Nov 1 - Simon: "proceed". S1 written, not compiled here:
+  * `examples/magic_isomorphic_keyboard/magic_isomorphic_keyboard.zig` (new, 1013 lines): the 47 keys (`playing_keys`,
+    each with its engine key's name; `engine_keys` read from those names when compiling, kept apart so the tests need
+    no engine), the photo's layout as two numbers (`Isomorphic`, `thirds_layout`), the anchorings (`tonic_on_f`, and
+    `stickers_anchoring` for the photo), `midiKeyOf`, Shepard sound keys (`soundKeyOf`: pitch class in middle C's
+    octave, so 9 and X sound once), holds counted per sound key, computer keys through `onInput` with the per-frame
+    fallback (repeats ignored; Escape and focus loss let go of everything), pointers with the 6-pixel switch distance
+    and the nearest key within reach, the start-screen press ignored until lifted. Drawn as an ANSI keyboard - the
+    other keys dark - in the stickers' colours: white naturals, lilac sharps, orange while sounding (every key of a
+    sounding pitch class lights). Footer: the computer keys held (risk R1, rollover) and the latency readout (G3).
+  * Tests (std + zm + music_theory, no engine): G1, the 41 stickers transcribed from the photo, under the stickers'
+    anchoring; Simon's second picture, C major and G major with the tonic on F; middle C on F, B1 at /, D6 at the
+    backquote (D9); every downward triangle a major triad, every upward one minor, all 24 present (G2).
+  * Headless check (G4): `check.script` plays F, T, R, G, V alone, then F T R (C), D F R (Cm), G F T (Am), R 4 5 (G);
+    `check.expect` worked out by hand as `audio_scale_star`'s.
+  * build.zig: the app's entry in `wgpu_apps`; `zig build test-magic-isomorphic-keyboard`;
+    `zig build magic-isomorphic-keyboard-check` (in the scale star's check block, sharing its checker).
+  * examples_catalog.md: a row. The editor configs must be regenerated (`generate_editor_configs.bat`) - a new row in
+    `wgpu_apps` makes `tripwires` fail until they are.
+
+Nov 1 - Simon's drawing, a new layout to focus on: fifths to the right, major thirds down-right, minor thirds up-right
+(1.2, D10). S1 moved to it before any build:
+  * `fifths_layout` (`step_right` 7, `step_up_right` 3) is the layout played, held in `State.layout` so S2 can change
+    it; the photo's `thirds_layout` stays, tested, for S2's catalogue. `drawing_anchoring` (F1 on 1) for the drawing's
+    test. The header's doc, the legend and `midiKeyOf`'s doc describe the new layout.
+  * Tests (7): the drawing's 29 naturals; the home row D to L as C major and G major with the tonic on F; C4 on F, C1
+    at the backquote, B8 at the backslash; every major and minor triangle and all 24 triads - and the same three for
+    the photo's layout (stickers, second picture, triangles), through shared helpers (`expectKeyNotes`,
+    `expectAllTriads`, `TriangleShape`).
+  * The headless check now plays F, G, V, H, D alone, then F G V (C), F T G (Cm), J I K (Am), G H B (G).
+  * A slip on the way: a shell concatenation wrote over the example with its tests alone (its head file had not been
+    written); the head was rebuilt from this session's record of the file, every edit since included, and re-checked
+    (fmt, ast-check, lint). A copy of the result is kept in the session's scratchpad.

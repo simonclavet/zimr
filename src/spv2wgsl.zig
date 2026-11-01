@@ -7927,7 +7927,18 @@ fn emitUnhandledPlaceholder(
         return;
     }
     warnUnhandled(s, opcode, word_offset);
-    const what: []const u8 = try allocPrint(s.arena, "SPIR-V opcode {d}", .{opcode});
+    // A SUBGROUP instruction (`OpGroupNonUniform*`, SPIR-V opcodes 333 to 366) is named for what it is: kompute's
+    // subgroup operations exist on the native Vulkan host alone, so a kernel using them never becomes WGSL - and the
+    // refusal says so, rather than only giving the opcode's number.
+    const first_subgroup_opcode: u32 = 333;
+    const last_subgroup_opcode: u32 = 366;
+    const is_subgroup_instruction: bool = opcode >= first_subgroup_opcode and opcode <= last_subgroup_opcode;
+    const subgroup_description: []const u8 =
+        "subgroup instruction {d} (kompute's subgroup operations, native Vulkan only)";
+    const what: []const u8 = if (is_subgroup_instruction)
+        try allocPrint(s.arena, subgroup_description, .{opcode})
+    else
+        try allocPrint(s.arena, "SPIR-V opcode {d}", .{opcode});
 
     // The first two operands are a result type and a result id when the first names a type a value can have. The
     // test reads the id table directly, not through `lookupId`, which would give an id nothing declared yet - a local

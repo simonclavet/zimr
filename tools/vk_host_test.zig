@@ -55,6 +55,9 @@ const zn_binary = @import("zn_binary");
 const zn_train = @import("zn_train");
 const zn_mlp = @import("zn_mlp");
 const zn_matmul = @import("zn_matmul");
+const robotgpu_probe = @import("robotgpu_probe");
+const robotgpu = @import("robotgpu");
+const zn = @import("zn");
 const zn_unary = @import("zn_unary");
 const zrl_binary = @import("zrl_binary");
 const z = @import("zimr");
@@ -71,7 +74,9 @@ const fieldNames = std.meta.fieldNames;
 const FieldEnum = std.meta.FieldEnum;
 const float = zm.float;
 const inf = zm.inf;
+const pi = zm.pi;
 const sliceAsBytes = std.mem.sliceAsBytes;
+const Random = std.Random;
 const sort = sortSlice;
 
 const wgpu = z.wgpu;
@@ -516,6 +521,8 @@ const zn_binary_spirv: []const u8 = @embedFile("zn_binary_spv");
 const zn_matmul_spirv: []const u8 = @embedFile("zn_matmul_spv");
 const zn_unary_spirv: []const u8 = @embedFile("zn_unary_spv");
 const zrl_binary_spirv: []const u8 = @embedFile("zrl_binary_spv");
+const robotgpu_probe_spirv: []const u8 = @embedFile("robotgpu_probe_spv");
+const robotgpu_spirv: []const u8 = @embedFile("robotgpu_spv");
 
 /// A kernel file's entry table for `Compute.initGpu`: every entry the file declares (`kernels`), each with the file's
 /// SPIR-V - natively the module is per file, and the pipeline names its entry.
@@ -526,6 +533,996 @@ fn spirvEntries(comptime Kernel: type, spirv: []const u8) [Kernel.kernels.len]z.
     }
     return table;
 }
+
+/// The device's readback of `field`, once it holds every dispatch so far - polled as `runEngineCompute` polls.
+fn deviceReadback(
+    comptime Kernel: type,
+    comptime Element: type,
+    pipe: *z.Compute(Kernel),
+    comptime field: FieldEnum(Kernel.Buffers),
+) ?[]const Element {
+    const dispatched: u64 = pipe.readGeneration().submitted;
+    var polls: u32 = 0;
+    while (polls < engine_poll_limit) : (polls += 1) {
+        const latest: ?[]const Element = pipe.readLatest(field);
+        const holds_every_dispatch: bool = pipe.readGeneration().mirrored >= dispatched;
+        if (latest != null and holds_every_dispatch) {
+            return latest;
+        }
+    }
+    return null;
+}
+
+/// What the robotgpu probe found (`runRobotgpuProbe`): each reduction's largest gap from the twin, as a share of the
+/// sum of the magnitudes it added - null for the subgroup sum on a device without subgroup arithmetic in compute
+/// shaders - and whether two runs on the device gave the same bits.
+const ProbeOutcome = struct {
+    subgroup_gap: ?f32,
+    workgroup_gap: f32,
+    repeats_exactly: bool,
+};
+
+/// The largest gap between `device_sums` and `twin_sums`, each sum measured against the sum of the magnitudes it was
+/// made from (`magnitude_sums`): adding n numbers in another order moves the result by at most about n x epsilon of
+/// that, which is the scale on which a reordering's rounding shows - and nothing else should.
+fn reductionGap(
+    device_sums: []const f32,
+    twin_sums: []const f32,
+    magnitude_sums: []const f32,
+) f32 {
+    var largest_gap: f32 = 0;
+    for (device_sums, twin_sums, magnitude_sums) |device_sum, twin_sum, magnitude_sum| {
+        const difference: f32 = @abs(device_sum - twin_sum);
+        const scale: f32 = @max(magnitude_sum, 1.0e-30);
+        largest_gap = @max(largest_gap, difference / scale);
+    }
+    return largest_gap;
+}
+
+/// THE ROBOTGPU PROBE: its two reductions - a subgroup's sum in one instruction, a workgroup's
+/// through shared memory and barriers (`robotgpu_probe.zig`'s head) - on the device and on the twin, from the same
+/// values of mixed sizes and signs, and each run twice on the device:
+///
+///     values --> device: subgroup_sum --> sums --+--> against the twin's, within the reordering's rounding
+///                                                +--> against a second device run, bit for bit
+///     values --> device: workgroup_sum --> sums --- the same two comparisons
+///
+/// A device without subgroup arithmetic in compute shaders skips the subgroup sum (its gap null).
+fn runRobotgpuProbe(
+    gpa: Allocator,
+    device: wgpu.DeviceHandle,
+    queue: wgpu.QueueHandle,
+) !ProbeOutcome {
+    const capabilities: wgpu.vulkan_host.ComputeCapabilities = wgpu.computeCapabilities();
+    const ProbeCompute: type = z.Compute(robotgpu_probe);
+    const entries: [robotgpu_probe.kernels.len]ProbeCompute.KernelWgsl =
+        spirvEntries(robotgpu_probe, robotgpu_probe_spirv);
+    var on_device: ProbeCompute = try .initGpu(gpa, device, queue, &entries);
+    defer on_device.deinit();
+    var twin: ProbeCompute = .initCpu();
+    defer twin.deinit();
+    // 37 full workgroups and 5 values more, so the last workgroup and the last subgroup are partly empty.
+    const workgroup_size: u32 = robotgpu_probe.config.workgroup;
+    const value_count: u32 = 37 * workgroup_size + 5;
+    const workgroup_count: u32 = (value_count + workgroup_size - 1) / workgroup_size;
+    const values: []f32 = try gpa.alloc(f32, value_count);
+    defer gpa.free(values);
+    for (values, 0..) |*value, index| {
+        const position: f32 = @floatFromInt(index);
+        const size: f32 = @floatFromInt(1 + index % 7);
+        value.* = @sin(0.37 * position) * size;
+    }
+    const has_subgroup_sums: bool = capabilities.hasSubgroupArithmetic();
+    const subgroup_size: u32 = if (has_subgroup_sums) capabilities.subgroup_size else 1;
+    const pipes = [2]*ProbeCompute{ &on_device, &twin };
+    for (pipes) |pipe| {
+        pipe.element_count = value_count;
+        pipe.upload(.values, values);
+        pipe.params = .{ .value_count = value_count, .subgroup_size = subgroup_size };
+    }
+    // Each sum's scale: the sum of the magnitudes of the values it adds, by the partition each entry adds over.
+    const subgroup_magnitudes: []f32 = try gpa.alloc(f32, value_count);
+    defer gpa.free(subgroup_magnitudes);
+    const workgroup_magnitudes: []f32 = try gpa.alloc(f32, workgroup_count);
+    defer gpa.free(workgroup_magnitudes);
+    @memset(workgroup_magnitudes, 0);
+    for (subgroup_magnitudes, 0..) |*magnitude_sum, index| {
+        const first_of_subgroup: usize = index - index % subgroup_size;
+        const end_of_subgroup: usize = @min(first_of_subgroup + subgroup_size, value_count);
+        var total: f32 = 0;
+        for (values[first_of_subgroup..end_of_subgroup]) |value| {
+            total += @abs(value);
+        }
+        magnitude_sum.* = total;
+        workgroup_magnitudes[index / workgroup_size] += @abs(values[index]);
+    }
+    var outcome: ProbeOutcome = .{ .subgroup_gap = null, .workgroup_gap = 0, .repeats_exactly = true };
+    const entry_names = [2][:0]const u8{ "subgroup_sum", "workgroup_sum" };
+    const sum_counts = [2]u32{ value_count, workgroup_count };
+    inline for (entry_names, sum_counts, 0..) |entry_name, sum_count, entry_index| {
+        const is_subgroup_entry: bool = entry_index == 0;
+        const runs_here: bool = !is_subgroup_entry or has_subgroup_sums;
+        if (runs_here) {
+            on_device.run(entry_name, value_count);
+            twin.run(entry_name, value_count);
+            const first_sums: []f32 = try gpa.alloc(f32, sum_count);
+            defer gpa.free(first_sums);
+            on_device.readRange(.sums, 0, first_sums);
+            const twin_sums: []f32 = try gpa.alloc(f32, sum_count);
+            defer gpa.free(twin_sums);
+            twin.readRange(.sums, 0, twin_sums);
+            const magnitude_sums: []const f32 = if (is_subgroup_entry) subgroup_magnitudes else workgroup_magnitudes;
+            const gap: f32 = reductionGap(first_sums, twin_sums, magnitude_sums);
+            if (is_subgroup_entry) {
+                outcome.subgroup_gap = gap;
+            } else {
+                outcome.workgroup_gap = gap;
+            }
+            on_device.run(entry_name, value_count);
+            const second_sums: []f32 = try gpa.alloc(f32, sum_count);
+            defer gpa.free(second_sums);
+            on_device.readRange(.sums, 0, second_sums);
+            const first_bits: []const u32 = @ptrCast(first_sums);
+            const second_bits: []const u32 = @ptrCast(second_sums);
+            outcome.repeats_exactly = outcome.repeats_exactly and eql(u32, first_bits, second_bits);
+        }
+    }
+    return outcome;
+}
+
+/// ONE RESULT OF A PROBE TABLE (`runProbeTable`): its name, where it sits in a row of results, how many floats it
+/// spans, and its BAR - how far the device may stray from the twin, in units of f32's epsilon at the result's scale.
+const ProbeResult = struct {
+    name: []const u8,
+    offset: u32,
+    width: u32,
+    bar_epsilons: f32,
+};
+
+/// The draws a probe table's inputs are made of, from a seeded generator so every run sees the same table.
+const ProbeInputs = struct {
+    /// One float in [low, high).
+    fn uniform(random: Random, low: f32, high: f32) f32 {
+        const unit: f32 = random.float(f32);
+        return low + unit * (high - low);
+    }
+
+    /// A three-dimensional direction scaled to a length in [min_length, max_length): never near zero, as
+    /// `normalize3` needs.
+    fn awayFromZero(random: Random, min_length: f32, max_length: f32) [3]f32 {
+        while (true) {
+            const along_x: f32 = uniform(random, -1.0, 1.0);
+            const along_y: f32 = uniform(random, -1.0, 1.0);
+            const along_z: f32 = uniform(random, -1.0, 1.0);
+            const direction_length: f32 = @sqrt(along_x * along_x + along_y * along_y + along_z * along_z);
+            if (direction_length < 0.1 or direction_length > 1.0) {
+                continue;
+            }
+            const wanted_length: f32 = uniform(random, min_length, max_length);
+            const scale: f32 = wanted_length / direction_length;
+            return .{ along_x * scale, along_y * scale, along_z * scale };
+        }
+    }
+
+    /// A unit quaternion (x y z w): a random axis turned by a random angle in [-pi, pi].
+    fn unitQuaternion(random: Random) [4]f32 {
+        const axis: [3]f32 = awayFromZero(random, 1.0, 1.0);
+        const half_angle: f32 = uniform(random, -pi, pi) * 0.5;
+        const sine: f32 = @sin(half_angle);
+        return .{ axis[0] * sine, axis[1] * sine, axis[2] * sine, @cos(half_angle) };
+    }
+
+    /// A three-dimensional value into `inputs` at `at`, its fourth lane `w`.
+    fn putVector(inputs: []f32, at: u32, value: [3]f32, w: f32) void {
+        inputs[at] = value[0];
+        inputs[at + 1] = value[1];
+        inputs[at + 2] = value[2];
+        inputs[at + 3] = w;
+    }
+};
+
+/// Each result's largest difference between `device_outputs` and `twin_outputs` over `row_count` rows of
+/// `output_width` floats, in units of f32's epsilon at the result's scale (`max(1, |twin|)`: results near one in units
+/// of epsilon itself, larger ones relative to their size), into `gaps` in `results`' order.
+fn measureProbeResults(
+    results: []const ProbeResult,
+    row_count: u32,
+    output_width: u32,
+    device_outputs: []const f32,
+    twin_outputs: []const f32,
+    gaps: []f32,
+) void {
+    // f32's epsilon, 2^-23: the gap between 1 and the next float.
+    const epsilon: f32 = 0x1p-23;
+    for (results, gaps) |result, *gap| {
+        var largest: f32 = 0;
+        var row: u32 = 0;
+        while (row < row_count) : (row += 1) {
+            const first: u32 = row * output_width + result.offset;
+            for (first..first + result.width) |at| {
+                const twin_value: f32 = twin_outputs[at];
+                const scale: f32 = @max(1.0, @abs(twin_value));
+                const difference: f32 = @abs(device_outputs[at] - twin_value);
+                largest = @max(largest, difference / (epsilon * scale));
+            }
+        }
+        gap.* = largest;
+    }
+}
+
+/// Each result against its bar, printed under `label`; whether every one is within its bar.
+fn reportProbeResults(
+    label: []const u8,
+    results: []const ProbeResult,
+    gaps: []const f32,
+) bool {
+    var every_result_holds: bool = true;
+    for (results, gaps) |result, gap| {
+        const within: bool = gap <= result.bar_epsilons;
+        every_result_holds = every_result_holds and within;
+        const verdict: []const u8 = if (within) "" else "  OVER THE BAR";
+        print("vk-host-test: {s}: {s} {d:.2} epsilons from the twin (bar {d}){s}\n", .{
+            label,
+            result.name,
+            gap,
+            result.bar_epsilons,
+            verdict,
+        });
+    }
+    return every_result_holds;
+}
+
+/// The probe module's buffer fields, by name.
+const ProbeField = FieldEnum(robotgpu_probe.Buffers);
+
+/// A PROBE TABLE: one entry of `robotgpu_probe` run once per row, its inputs and results in two fields of the module
+/// - how many rows, how wide each, how the inputs are filled, the parameters that size the run, and the results to
+/// compare with their bars.
+const ProbeTable = struct {
+    entry_name: [:0]const u8,
+    inputs_field: ProbeField,
+    outputs_field: ProbeField,
+    row_count: u32,
+    input_width: u32,
+    output_width: u32,
+    fill: *const fn ([]f32) void,
+    params: robotgpu_probe.Params,
+    results: []const ProbeResult,
+};
+
+/// One probe table on the device and on the twin from the same inputs, each result's largest gap into `gaps`
+/// (`measureProbeResults`). Returns false when a readback never came.
+fn runProbeTable(
+    gpa: Allocator,
+    device: wgpu.DeviceHandle,
+    queue: wgpu.QueueHandle,
+    comptime table: ProbeTable,
+    gaps: []f32,
+) !bool {
+    const ProbeCompute: type = z.Compute(robotgpu_probe);
+    const entries: [robotgpu_probe.kernels.len]ProbeCompute.KernelWgsl =
+        spirvEntries(robotgpu_probe, robotgpu_probe_spirv);
+    var on_device: ProbeCompute = try .initGpu(gpa, device, queue, &entries);
+    defer on_device.deinit();
+    var twin: ProbeCompute = .initCpu();
+    defer twin.deinit();
+    const input_count: u32 = table.row_count * table.input_width;
+    const output_count: u32 = table.row_count * table.output_width;
+    const inputs: []f32 = try gpa.alloc(f32, input_count);
+    defer gpa.free(inputs);
+    table.fill(inputs);
+    const pipes = [2]*ProbeCompute{ &on_device, &twin };
+    for (pipes) |pipe| {
+        pipe.element_count = @max(input_count, output_count);
+        pipe.upload(table.inputs_field, inputs);
+        pipe.params = table.params;
+        pipe.run(table.entry_name, table.row_count);
+    }
+    const device_results: []f32 = try gpa.alloc(f32, output_count);
+    defer gpa.free(device_results);
+    on_device.readRange(table.outputs_field, 0, device_results);
+    const twin_results: []f32 = try gpa.alloc(f32, output_count);
+    defer gpa.free(twin_results);
+    twin.readRange(table.outputs_field, 0, twin_results);
+    measureProbeResults(table.results, table.row_count, table.output_width, device_results, twin_results, gaps);
+    return true;
+}
+
+/// THE SIMULATOR'S FIRST KERNEL: `clear_overflow` over 64 worlds of Geno (the engine's own model), on the device and on
+/// its CPU twin. `world_u` starts full of a poison word; afterwards every world's overflow word must be zero and every
+/// other word still the poison - the kernel found each world's word through the layout, and wrote nothing else:
+///
+///     world_u before   [ P P P P P P P P ... ]                 P = 0xdeadbeef
+///     after            [ 0 P P P 0 P P P ... ]                 each world's overflow word at offset + w x stride
+fn runRobotgpuOverflow(
+    gpa: Allocator,
+    device: wgpu.DeviceHandle,
+    queue: wgpu.QueueHandle,
+) !bool {
+    const RobotgpuCompute: type = z.Compute(robotgpu);
+    const entries: [robotgpu.kernels.len]RobotgpuCompute.KernelWgsl = spirvEntries(robotgpu, robotgpu_spirv);
+    var on_device: RobotgpuCompute = try .initGpu(gpa, device, queue, &entries);
+    defer on_device.deinit();
+    var twin: RobotgpuCompute = .initCpu();
+    defer twin.deinit();
+    var geno: z.robot_mjcf.Imported = try z.robot_mjcf.importSource(gpa, z.robot_geno_model, .{});
+    defer geno.deinit();
+    const counts: robotgpu.Counts = robotgpu.countsOf(&geno.model, 64);
+    const layout: robotgpu.Layout = try robotgpu.layoutFor(counts, .{});
+    const overflow: robotgpu.WorldArray(.world_u, .single) = layout.world_u.overflow;
+    const poison: u32 = 0xdead_beef;
+    const word_count: u32 = 4096;
+    const poisoned: []u32 = try gpa.alloc(u32, word_count);
+    defer gpa.free(poisoned);
+    @memset(poisoned, poison);
+    const read_back: []u32 = try gpa.alloc(u32, word_count);
+    defer gpa.free(read_back);
+    const pipes = [2]*RobotgpuCompute{ &on_device, &twin };
+    for (pipes) |pipe| {
+        pipe.upload(.world_u, poisoned);
+        pipe.params = .{ .counts = counts, .layout = layout };
+        pipe.run("clear_overflow", counts.nworld);
+        pipe.readRange(.world_u, 0, read_back);
+        for (read_back, 0..) |word, index| {
+            const word_index: u32 = @intCast(index);
+            const relative: u32 = word_index -% overflow.offset;
+            const in_overflow: bool = word_index >= overflow.offset and
+                relative < overflow.stride * counts.nworld and relative % overflow.stride == 0;
+            const expected: u32 = if (in_overflow) 0 else poison;
+            if (word != expected) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/// THE MEMORY ENVELOPE'S CHECK: one storage buffer as large as a binding may span - the most
+/// one arena of a simulation can hold, capped at 256 MB to spare the machine the test runs on - allocated, a page of
+/// words written at its start and at its very end, and both read back:
+///
+///     [ start page | .................. the arena .................. | end page ]
+///         write          (nothing touched in between)                    write
+///         read back                                                      read back
+///
+/// Returns the bytes allocated, or null when either page came back wrong.
+fn runMemoryEnvelope(
+    gpa: Allocator,
+    device: wgpu.DeviceHandle,
+    queue: wgpu.QueueHandle,
+) !?u64 {
+    const capabilities: wgpu.vulkan_host.ComputeCapabilities = wgpu.computeCapabilities();
+    const sandbox_cap: u64 = 256 << 20;
+    const arena_bytes: u32 = @intCast(@min(capabilities.max_storage_binding_bytes, sandbox_cap));
+    const arena: wgpu.BufferHandle = wgpu.createBuffer(device, .{
+        .size = arena_bytes,
+        .usage = .{ .storage = true, .copy_src = true, .copy_dst = true },
+        .label = "envelope_arena",
+    });
+    defer wgpu.destroyBuffer(arena);
+    const page_words: u32 = 1024;
+    const page_bytes: u32 = page_words * @sizeOf(u32);
+    const end_page_at: u32 = arena_bytes - page_bytes;
+    const start_page: []u32 = try gpa.alloc(u32, page_words);
+    defer gpa.free(start_page);
+    const end_page: []u32 = try gpa.alloc(u32, page_words);
+    defer gpa.free(end_page);
+    for (start_page, end_page, 0..) |*start_word, *end_word, index| {
+        const word_index: u32 = @intCast(index);
+        start_word.* = 0x5_7a77 + word_index;
+        end_word.* = 0xe_d000 + word_index;
+    }
+    wgpu.queueWriteBuffer(queue, arena, 0, sliceAsBytes(start_page));
+    wgpu.queueWriteBuffer(queue, arena, end_page_at, sliceAsBytes(end_page));
+    const staging: wgpu.BufferHandle = wgpu.createBuffer(device, .{
+        .size = 2 * page_bytes,
+        .usage = .{ .map_read = true, .copy_dst = true },
+        .label = "envelope_staging",
+    });
+    defer wgpu.destroyBuffer(staging);
+    const encoder: wgpu.CommandEncoderHandle = wgpu.createCommandEncoder(device);
+    wgpu.copyBufferToBuffer(encoder, arena, 0, staging, 0, page_bytes);
+    wgpu.copyBufferToBuffer(encoder, arena, end_page_at, staging, page_bytes, page_bytes);
+    wgpu.queueSubmit(queue, wgpu.finishCommandEncoder(encoder));
+    const read: wgpu.BufferRead = wgpu.bufferReadStart(staging, 2 * page_bytes);
+    while (!wgpu.bufferReadPoll(read)) {
+        std.atomic.spinLoopHint();
+    }
+    const read_back: []u32 = try gpa.alloc(u32, 2 * page_words);
+    defer gpa.free(read_back);
+    wgpu.bufferReadInto(read, sliceAsBytes(read_back));
+    wgpu.bufferReadRelease(read);
+    const start_matches: bool = eql(u32, read_back[0..page_words], start_page);
+    const end_matches: bool = eql(u32, read_back[page_words..], end_page);
+    return if (start_matches and end_matches) arena_bytes else null;
+}
+
+/// What the Cholesky check measured (`runCholesky`): the device's L L^T against A, relative to A's largest entry;
+/// the device's L against the twin's, and the twin's against zimrnum's `cholesky`, in epsilons at each entry's scale;
+/// and whether two device runs gave the same bits.
+const CholeskyOutcome = struct {
+    reconstruction_relative: f64,
+    device_twin_epsilons: f32,
+    twin_zimrnum_epsilons: f32,
+    repeats_exactly: bool,
+};
+
+/// The largest gap between two lower triangles of `matrix_count` matrices of `order`, in epsilons at each entry's
+/// scale (`max(1, |reference|)`).
+fn lowerTriangleGap(
+    left: []const f32,
+    reference: []const f32,
+    order: usize,
+    matrix_count: usize,
+) f32 {
+    // f32's epsilon, 2^-23: the gap between 1 and the next float.
+    const epsilon: f32 = 0x1p-23;
+    var largest: f32 = 0;
+    for (0..matrix_count) |matrix| {
+        const start: usize = matrix * order * order;
+        for (0..order) |row| {
+            for (0..row + 1) |column| {
+                const at: usize = start + row * order + column;
+                const scale: f32 = @max(1.0, @abs(reference[at]));
+                const difference: f32 = @abs(left[at] - reference[at]);
+                largest = @max(largest, difference / (epsilon * scale));
+            }
+        }
+    }
+    return largest;
+}
+
+/// THE CHOLESKY CHECK: eight random symmetric positive-definite matrices of order 76 - the
+/// size of Geno's Newton Hessian - A = B B^T + 76 I with B uniform in [-1, 1], factored by `cholesky`, one workgroup
+/// each, on the device and on the twin (robot.zig's `choleskyFactor`), and by zimrnum's `cholesky` as an independent
+/// reference:
+///
+///     L L^T - A                  the factorisation itself, relative to A's largest entry
+///     device L - twin L          the same arithmetic in the same order: only fused multiplies may differ
+///     twin L - zimrnum's L       two independent implementations
+///     device run 1 - run 2       bit for bit (D7)
+///
+/// The bars: measured 0 epsilons both ways on lavapipe, which fuses no multiplies. A GPU whose compiler fuses each
+/// subtraction's multiply rounds once less per step, and over the 76 columns that can accumulate - 128 epsilons, the
+/// order twice over, leaves room for it.
+fn runCholesky(
+    gpa: Allocator,
+    device: wgpu.DeviceHandle,
+    queue: wgpu.QueueHandle,
+) !CholeskyOutcome {
+    const ProbeCompute: type = z.Compute(robotgpu_probe);
+    const entries: [robotgpu_probe.kernels.len]ProbeCompute.KernelWgsl =
+        spirvEntries(robotgpu_probe, robotgpu_probe_spirv);
+    var on_device: ProbeCompute = try .initGpu(gpa, device, queue, &entries);
+    defer on_device.deinit();
+    var twin: ProbeCompute = .initCpu();
+    defer twin.deinit();
+    const order: u32 = robotgpu_probe.max_matrix_order;
+    const matrix_count: u32 = 8;
+    const element_count: u32 = order * order * matrix_count;
+    const matrices: []f32 = try gpa.alloc(f32, element_count);
+    defer gpa.free(matrices);
+    var generator: Random.DefaultPrng = .init(0xc0_1e5c);
+    const random: Random = generator.random();
+    const factors: []f64 = try gpa.alloc(f64, order * order);
+    defer gpa.free(factors);
+    for (0..matrix_count) |matrix| {
+        for (factors) |*factor| {
+            factor.* = random.float(f64) * 2.0 - 1.0;
+        }
+        const start: usize = matrix * order * order;
+        for (0..order) |row| {
+            for (0..order) |column| {
+                var product: f64 = 0;
+                for (0..order) |inner| {
+                    product += factors[row * order + inner] * factors[column * order + inner];
+                }
+                const diagonal_boost: f64 = if (row == column) @floatFromInt(order) else 0;
+                matrices[start + row * order + column] = @floatCast(product + diagonal_boost);
+            }
+        }
+    }
+    const pipes = [2]*ProbeCompute{ &on_device, &twin };
+    for (pipes) |pipe| {
+        pipe.upload(.values, matrices);
+        pipe.params = .{ .value_count = 0, .subgroup_size = 1, .matrix_order = order, .matrix_count = matrix_count };
+        pipe.run("cholesky", matrix_count * robotgpu_probe.config.workgroup);
+    }
+    const device_factors: []f32 = try gpa.alloc(f32, element_count);
+    defer gpa.free(device_factors);
+    on_device.readRange(.sums, 0, device_factors);
+    const twin_factors: []f32 = try gpa.alloc(f32, element_count);
+    defer gpa.free(twin_factors);
+    twin.readRange(.sums, 0, twin_factors);
+    // L L^T against A, over the lower triangle, relative to A's largest entry.
+    var largest_entry: f64 = 0;
+    for (matrices) |entry| {
+        largest_entry = @max(largest_entry, @abs(@as(f64, entry)));
+    }
+    var reconstruction_gap: f64 = 0;
+    for (0..matrix_count) |matrix| {
+        const start: usize = matrix * order * order;
+        for (0..order) |row| {
+            for (0..row + 1) |column| {
+                var product: f64 = 0;
+                for (0..column + 1) |inner| {
+                    const left: f64 = device_factors[start + row * order + inner];
+                    const right: f64 = device_factors[start + column * order + inner];
+                    product += left * right;
+                }
+                const original: f64 = matrices[start + row * order + column];
+                reconstruction_gap = @max(reconstruction_gap, @abs(product - original));
+            }
+        }
+    }
+    // zimrnum's own Cholesky of each matrix, an independent implementation.
+    const zimrnum_factors: []f32 = try gpa.alloc(f32, element_count);
+    defer gpa.free(zimrnum_factors);
+    for (0..matrix_count) |matrix| {
+        const start: usize = matrix * order * order;
+        const shape = [2]usize{ order, order };
+        const original_tensor: zn.Tensor(f32) = try .fromSlice(matrices[start..][0 .. order * order], &shape);
+        const factor_tensor: zn.Tensor(f32) = try .fromSlice(zimrnum_factors[start..][0 .. order * order], &shape);
+        try zn.cholesky(f32, factor_tensor, original_tensor);
+    }
+    // A second device run, for repeatability.
+    on_device.run("cholesky", matrix_count * robotgpu_probe.config.workgroup);
+    const second_factors: []f32 = try gpa.alloc(f32, element_count);
+    defer gpa.free(second_factors);
+    on_device.readRange(.sums, 0, second_factors);
+    const first_bits: []const u32 = @ptrCast(device_factors);
+    const second_bits: []const u32 = @ptrCast(second_factors);
+    const outcome: CholeskyOutcome = .{
+        .reconstruction_relative = reconstruction_gap / largest_entry,
+        .device_twin_epsilons = lowerTriangleGap(device_factors, twin_factors, order, matrix_count),
+        .twin_zimrnum_epsilons = lowerTriangleGap(twin_factors, zimrnum_factors, order, matrix_count),
+        .repeats_exactly = eql(u32, first_bits, second_bits),
+    };
+    return outcome;
+}
+
+/// BUFFER LENDING'S CHECK: a second probe pipe BORROWS the first's `pushed_words` buffer
+/// (`lendField`, `initGpuBorrowing`) and runs `write_pushed` into it; the first reads its own buffer and finds the
+/// second's writes - one buffer, two pipes, nothing uploaded or copied between them:
+///
+///     owner      pushed_words  [ 0 0 0 ... ]  --lent-->  borrower runs write_pushed (77)
+///     owner      reads its own pushed_words:  [ 77 77 77 ... ]
+fn runBorrowing(
+    gpa: Allocator,
+    device: wgpu.DeviceHandle,
+    queue: wgpu.QueueHandle,
+) !bool {
+    const ProbeCompute: type = z.Compute(robotgpu_probe);
+    const entries: [robotgpu_probe.kernels.len]ProbeCompute.KernelWgsl =
+        spirvEntries(robotgpu_probe, robotgpu_probe_spirv);
+    var owner: ProbeCompute = try .initGpu(gpa, device, queue, &entries);
+    defer owner.deinit();
+    const word_count: u32 = 1000;
+    const zeroed: []u32 = try gpa.alloc(u32, word_count);
+    defer gpa.free(zeroed);
+    @memset(zeroed, 0);
+    owner.upload(.pushed_words, zeroed);
+    const borrowed = [1]ProbeCompute.Borrowed{.{ .field = .pushed_words, .loan = owner.lendField(.pushed_words) }};
+    var borrower: ProbeCompute = try .initGpuBorrowing(gpa, device, queue, &entries, &borrowed);
+    defer borrower.deinit();
+    borrower.params = .{ .value_count = 0, .subgroup_size = 1, .pushed_region_size = word_count };
+    const push: robotgpu_probe.PushConstants = .{ .region_start = 0, .value = 77 };
+    borrower.runPushed("write_pushed", word_count, push);
+    const owner_words: []u32 = try gpa.alloc(u32, word_count);
+    defer gpa.free(owner_words);
+    owner.readRange(.pushed_words, 0, owner_words);
+    var every_word_written: bool = true;
+    for (owner_words) |word| {
+        every_word_written = every_word_written and word == 77;
+    }
+    return every_word_written;
+}
+
+/// What the timings check measured (`runTimings`): `busy_work`'s duration with some rounds and with four times as
+/// many, in microseconds, and whether a pipe without timings reported none.
+const TimingOutcome = struct {
+    one_times_microseconds: f64,
+    four_times_microseconds: f64,
+    untimed_reports_none: bool,
+};
+
+/// TIMINGS' CHECK: `busy_work` over 65,536 values, timed on the GPU - once with 2,000 rounds
+/// a value, once with 8,000 - on a pipe with timings; then a pipe without them, which must report nothing:
+///
+///     [ start timestamp ] [ busy_work, 2,000 rounds ] [ end timestamp ]   ->  t1
+///     [ start timestamp ] [ busy_work, 8,000 rounds ] [ end timestamp ]   ->  t4, longer than t1
+fn runTimings(
+    gpa: Allocator,
+    device: wgpu.DeviceHandle,
+    queue: wgpu.QueueHandle,
+) !TimingOutcome {
+    const ProbeCompute: type = z.Compute(robotgpu_probe);
+    const entries: [robotgpu_probe.kernels.len]ProbeCompute.KernelWgsl =
+        spirvEntries(robotgpu_probe, robotgpu_probe_spirv);
+    var on_device: ProbeCompute = try .initGpu(gpa, device, queue, &entries);
+    defer on_device.deinit();
+    try on_device.enableTimings();
+    var twin: ProbeCompute = .initCpu();
+    defer twin.deinit();
+    const value_count: u32 = robotgpu_probe.table_capacity;
+    const starting_values: []f32 = try gpa.alloc(f32, value_count);
+    defer gpa.free(starting_values);
+    @memset(starting_values, 1.0);
+    on_device.upload(.values, starting_values);
+    on_device.params = .{ .value_count = value_count, .subgroup_size = 1 };
+    const busy_index: usize = comptime blk: {
+        for (robotgpu_probe.kernels, 0..) |kernel_name, index| {
+            if (eql(u8, kernel_name, "busy_work")) {
+                break :blk index;
+            }
+        }
+        @compileError("the probe has no busy_work entry");
+    };
+    var timings: [robotgpu_probe.kernels.len]ProbeCompute.KernelTiming = undefined;
+    const base_rounds: u32 = 2000;
+    const once: robotgpu_probe.PushConstants = .{ .region_start = 0, .value = 0, .iterations = base_rounds };
+    on_device.runPushed("busy_work", value_count, once);
+    on_device.kernelTimings(&timings);
+    const one_times: f64 = timings[busy_index].microseconds;
+    const four_times_rounds: u32 = 4 * base_rounds;
+    const four_times_push: robotgpu_probe.PushConstants = .{
+        .region_start = 0,
+        .value = 0,
+        .iterations = four_times_rounds,
+    };
+    on_device.runPushed("busy_work", value_count, four_times_push);
+    on_device.kernelTimings(&timings);
+    const four_times: f64 = timings[busy_index].microseconds;
+    twin.kernelTimings(&timings);
+    var untimed_reports_none: bool = true;
+    for (timings) |timing| {
+        untimed_reports_none = untimed_reports_none and timing.microseconds == 0;
+    }
+    const outcome: TimingOutcome = .{
+        .one_times_microseconds = one_times,
+        .four_times_microseconds = four_times,
+        .untimed_reports_none = untimed_reports_none,
+    };
+    return outcome;
+}
+
+/// PUSH CONSTANTS' CHECK: `write_pushed` dispatched three times in ONE batch - one `Params`
+/// for all three - each with its own push, a region's start and a value. Each region must hold its own value, on the
+/// device and on the twin:
+///
+///     batch:  [ push (0, 11) | dispatch ]  [ push (1000, 22) | dispatch ]  [ push (2000, 33) | dispatch ]
+///     words:  [ 11 11 ... 11 ][ 22 22 ... 22 ][ 33 33 ... 33 ]
+fn runPushedBatch(
+    gpa: Allocator,
+    device: wgpu.DeviceHandle,
+    queue: wgpu.QueueHandle,
+) !bool {
+    const ProbeCompute: type = z.Compute(robotgpu_probe);
+    const entries: [robotgpu_probe.kernels.len]ProbeCompute.KernelWgsl =
+        spirvEntries(robotgpu_probe, robotgpu_probe_spirv);
+    var on_device: ProbeCompute = try .initGpu(gpa, device, queue, &entries);
+    defer on_device.deinit();
+    var twin: ProbeCompute = .initCpu();
+    defer twin.deinit();
+    const region_size: u32 = 1000;
+    const pushed_values = [3]u32{ 11, 22, 33 };
+    const word_count: u32 = region_size * pushed_values.len;
+    const zeroed: []u32 = try gpa.alloc(u32, word_count);
+    defer gpa.free(zeroed);
+    @memset(zeroed, 0);
+    const batch_params: robotgpu_probe.Params = .{
+        .value_count = 0,
+        .subgroup_size = 1,
+        .pushed_region_size = region_size,
+    };
+    const pipes = [2]*ProbeCompute{ &on_device, &twin };
+    for (pipes) |pipe| {
+        pipe.upload(.pushed_words, zeroed);
+        pipe.beginBatch(batch_params);
+        for (pushed_values, 0..) |value, region| {
+            const region_index: u32 = @intCast(region);
+            const push: robotgpu_probe.PushConstants = .{ .region_start = region_index * region_size, .value = value };
+            pipe.runPushed("write_pushed", region_size, push);
+        }
+        pipe.endBatch();
+    }
+    const words: []u32 = try gpa.alloc(u32, word_count);
+    defer gpa.free(words);
+    var every_region_holds: bool = true;
+    for (pipes) |pipe| {
+        pipe.readRange(.pushed_words, 0, words);
+        for (pushed_values, 0..) |value, region| {
+            const region_words: []const u32 = words[region * region_size ..][0..region_size];
+            for (region_words) |word| {
+                every_region_holds = every_region_holds and word == value;
+            }
+        }
+    }
+    return every_region_holds;
+}
+
+/// RANGED READBACK'S CHECK: an exact pattern uploaded into the probe's `values`, then read
+/// back in three ranges through the probe's 4,096-byte staging buffer (1,024 floats a chunk) - the start, a stretch
+/// crossing three chunk boundaries, and the end - each equal to the pattern bit for bit, on the device and on the twin.
+fn runRangedReadback(
+    gpa: Allocator,
+    device: wgpu.DeviceHandle,
+    queue: wgpu.QueueHandle,
+) !bool {
+    const ProbeCompute: type = z.Compute(robotgpu_probe);
+    const entries: [robotgpu_probe.kernels.len]ProbeCompute.KernelWgsl =
+        spirvEntries(robotgpu_probe, robotgpu_probe_spirv);
+    var on_device: ProbeCompute = try .initGpu(gpa, device, queue, &entries);
+    defer on_device.deinit();
+    var twin: ProbeCompute = .initCpu();
+    defer twin.deinit();
+    const capacity: u32 = robotgpu_probe.table_capacity;
+    const pattern: []f32 = try gpa.alloc(f32, capacity);
+    defer gpa.free(pattern);
+    for (pattern, 0..) |*value, index| {
+        // Halves of whole numbers below 2^24: every one exact in f32.
+        const position: f32 = @floatFromInt(index);
+        value.* = position * 0.5 + 1.0;
+    }
+    const pipes = [2]*ProbeCompute{ &on_device, &twin };
+    for (pipes) |pipe| {
+        pipe.upload(.values, pattern);
+    }
+    const Range = struct {
+        first: u32,
+        count: u32,
+    };
+    const ranges = [3]Range{
+        .{ .first = 0, .count = 100 },
+        .{ .first = 30_000, .count = 3_000 },
+        .{ .first = capacity - 777, .count = 777 },
+    };
+    var every_range_matches: bool = true;
+    for (ranges) |range| {
+        const read_back: []f32 = try gpa.alloc(f32, range.count);
+        defer gpa.free(read_back);
+        const expected: []const f32 = pattern[range.first..][0..range.count];
+        for (pipes) |pipe| {
+            pipe.readRange(.values, range.first, read_back);
+            const expected_bits: []const u32 = @ptrCast(expected);
+            const read_bits: []const u32 = @ptrCast(read_back);
+            every_range_matches = every_range_matches and eql(u32, expected_bits, read_bits);
+        }
+    }
+    return every_range_matches;
+}
+
+/// THE LARGE DISPATCH'S CHECK: `dispatch_tally` over 5,000,000 invocations - 78,125
+/// workgroups of 64, past the 65,535 one row holds, so the grid has two rows (`compute_host.dispatchGrid`). Every
+/// index below the count must run exactly once: the device's two counters, and the twin's, must both equal the count
+/// and the sum of the indices' low sixteen bits worked out here. Returns whether they do.
+fn runDispatchTally(
+    gpa: Allocator,
+    device: wgpu.DeviceHandle,
+    queue: wgpu.QueueHandle,
+) !bool {
+    const ProbeCompute: type = z.Compute(robotgpu_probe);
+    const entries: [robotgpu_probe.kernels.len]ProbeCompute.KernelWgsl =
+        spirvEntries(robotgpu_probe, robotgpu_probe_spirv);
+    var on_device: ProbeCompute = try .initGpu(gpa, device, queue, &entries);
+    defer on_device.deinit();
+    var twin: ProbeCompute = .initCpu();
+    defer twin.deinit();
+    const invocation_count: u32 = 5_000_000;
+    // The expected counters: the count, and the sum of every index's low sixteen bits, wrapping as a u32 does.
+    var expected_sum: u32 = 0;
+    var index: u32 = 0;
+    while (index < invocation_count) : (index += 1) {
+        expected_sum +%= index & 0xffff;
+    }
+    const zeroed = [2]u32{ 0, 0 };
+    const pipes = [2]*ProbeCompute{ &on_device, &twin };
+    for (pipes) |pipe| {
+        pipe.element_count = 2;
+        pipe.upload(.dispatch_tally, &zeroed);
+        pipe.params = .{ .value_count = 0, .subgroup_size = 1, .tally_count = invocation_count };
+        pipe.run("dispatch_tally", invocation_count);
+    }
+    var device_tally: [2]u32 = undefined;
+    on_device.readRange(.dispatch_tally, 0, &device_tally);
+    var twin_tally: [2]u32 = undefined;
+    twin.readRange(.dispatch_tally, 0, &twin_tally);
+    print("vk-host-test: robotgpu large dispatch: device {d} invocations, index sum {d}; twin {d}, {d}; " ++
+        "expected {d}, {d}\n", .{
+        device_tally[0],
+        device_tally[1],
+        twin_tally[0],
+        twin_tally[1],
+        invocation_count,
+        expected_sum,
+    });
+    const device_right: bool = device_tally[0] == invocation_count and device_tally[1] == expected_sum;
+    const twin_right: bool = twin_tally[0] == invocation_count and twin_tally[1] == expected_sum;
+    return device_right and twin_right;
+}
+
+/// The probe's row types and the helpers that read their layout (`robotgpu_probe.floatOffset`).
+const MathsInputs = robotgpu_probe.MathsInputs;
+const MathsResults = robotgpu_probe.MathsResults;
+const SpatialInputs = robotgpu_probe.SpatialInputs;
+const SpatialResults = robotgpu_probe.SpatialResults;
+const PairFloats = robotgpu_probe.PairFloats;
+const InertiaFloats = robotgpu_probe.InertiaFloats;
+const floatOffset = robotgpu_probe.floatOffset;
+const floatWidth = robotgpu_probe.floatWidth;
+const rowWidth = robotgpu_probe.rowWidth;
+
+/// The result at `field` of a probe table's result row `Results`, its place and width read from the declaration.
+fn probeResult(
+    comptime Results: type,
+    comptime field: FieldEnum(Results),
+    name: []const u8,
+    bar_epsilons: f32,
+) ProbeResult {
+    const result: ProbeResult = .{
+        .name = name,
+        .offset = floatOffset(Results, field),
+        .width = floatWidth(Results, field),
+        .bar_epsilons = bar_epsilons,
+    };
+    return result;
+}
+
+/// THE MATHS PROBE'S TABLE: every zimrmath function robot.zig's arithmetic calls, in
+/// `robotgpu_probe.MathsResults`' order. The bars were set from the first measurement on lavapipe, 1,024 rows, with
+/// headroom for the fused multiply-adds and square roots of other devices:
+///
+///     result                   measured    bar    what is behind it
+///     conjugate, rotate,       0           4      plain arithmetic and square roots - exact on lavapipe; a device
+///     normalize3, cross,                          may fuse a multiply into an add, or round a square root once more
+///     dot3, length3
+///     qmul                     1.14        4      the same, one fused multiply-add showing
+///     the two axis-angle       1.00        8      zimrmath's GPU sine and cosine (polynomials) against the CPU's
+///     forms                                       library: within one epsilon
+///     acosRad                  1.91        8      zimrmath's GPU acos
+///     atan2Rad                 28          64     zimrmath's GPU atan2 - the least precise, about 1e-5 radian
+///                                                 near pi, far below what the physics resolves
+const MathsCheck = struct {
+    const row_count: u32 = 1024;
+
+    const results = [_]ProbeResult{
+        probeResult(MathsResults, .product, "qmul", 4),
+        probeResult(MathsResults, .conjugated, "conjugate", 4),
+        probeResult(MathsResults, .rotated, "rotate", 4),
+        probeResult(MathsResults, .from_unit_axis, "quatFromNormAxisAngle", 8),
+        probeResult(MathsResults, .from_axis, "quatFromAxisAngle", 8),
+        probeResult(MathsResults, .normalized, "normalize3", 4),
+        probeResult(MathsResults, .crossed, "cross", 4),
+        probeResult(MathsResults, .dot_product, "dot3", 4),
+        probeResult(MathsResults, .vector_length, "length3", 4),
+        probeResult(MathsResults, .heading, "atan2Rad", 64),
+        probeResult(MathsResults, .angle_between, "acosRad", 8),
+    };
+
+    /// Per row: a unit rotation; a quaternion and a vector whose three-dimensional parts stay away from zero; an angle
+    /// in [-pi, pi] (`MathsInputs` places each).
+    fn fillInputs(inputs: []f32) void {
+        var generator: Random.DefaultPrng = .init(0x5eed_0b07);
+        const random: Random = generator.random();
+        var row: u32 = 0;
+        while (row < row_count) : (row += 1) {
+            const at: u32 = row * rowWidth(MathsInputs);
+            const rotation: [4]f32 = ProbeInputs.unitQuaternion(random);
+            @memcpy(inputs[at + floatOffset(MathsInputs, .rotation) ..][0..4], &rotation);
+            const other_part: [3]f32 = ProbeInputs.awayFromZero(random, 0.2, 1.5);
+            const other_w: f32 = ProbeInputs.uniform(random, -1.5, 1.5);
+            ProbeInputs.putVector(inputs, at + floatOffset(MathsInputs, .other), other_part, other_w);
+            const vector: [3]f32 = ProbeInputs.awayFromZero(random, 0.2, 2.0);
+            ProbeInputs.putVector(inputs, at + floatOffset(MathsInputs, .vector), vector, 0.0);
+            inputs[at + floatOffset(MathsInputs, .angle)] = ProbeInputs.uniform(random, -pi, pi);
+        }
+    }
+
+    const table: ProbeTable = .{
+        .entry_name = "maths",
+        .inputs_field = .maths_inputs,
+        .outputs_field = .maths_outputs,
+        .row_count = row_count,
+        .input_width = rowWidth(MathsInputs),
+        .output_width = rowWidth(MathsResults),
+        .fill = &fillInputs,
+        .params = .{ .value_count = 0, .subgroup_size = 1, .maths_rows = row_count },
+        .results = &results,
+    };
+};
+
+/// THE SPATIAL PROBE'S TABLE: robot.zig's spatial algebra in `robotgpu_probe.SpatialResults`'
+/// order - plain arithmetic throughout, no transcendental function. The bars were set from the first measurement on
+/// lavapipe, 1,024 rows:
+///
+///     result                   measured    bar    what is behind it
+///     Inertia.rotated, dot6    0           4      exact on lavapipe
+///     Inertia.mul,             1.00        4      one fused multiply-add showing
+///     Inertia.translate
+///     crossMotion              1.62        4      the same, a little cancellation (velocities up to 3: terms to 9)
+///     crossForce               8.61        16     CANCELLATION: forces up to 20 against velocities up to 3 make
+///                                                 terms near 60; where they cancel, the result is far smaller than
+///                                                 what was rounded, and the gap is measured at the result's scale
+/// The inputs are physically plausible: velocities
+/// and forces whose parts stay away from zero, a mass in [0.5, 5], a centre of mass within 0.3 of the origin (so
+/// `h` = mass x centre of mass), positive principal moments with small products of inertia, a unit rotation and an
+/// offset within 0.5.
+const SpatialCheck = struct {
+    const row_count: u32 = 1024;
+
+    const results = [_]ProbeResult{
+        probeResult(SpatialResults, .motion_cross, "crossMotion", 4),
+        probeResult(SpatialResults, .force_cross, "crossForce", 16),
+        probeResult(SpatialResults, .inertia_times_motion, "Inertia.mul", 4),
+        probeResult(SpatialResults, .translated, "Inertia.translate", 4),
+        probeResult(SpatialResults, .rotated, "Inertia.rotated", 4),
+        probeResult(SpatialResults, .power, "dot6", 4),
+    };
+
+    /// A Motion's or a Force's two parts into `inputs` at `at`, each a vector of a length in [min_length, max_length).
+    fn putPair(
+        random: Random,
+        inputs: []f32,
+        at: u32,
+        min_length: f32,
+        max_length: f32,
+    ) void {
+        const angular: [3]f32 = ProbeInputs.awayFromZero(random, min_length, max_length);
+        const linear: [3]f32 = ProbeInputs.awayFromZero(random, min_length, max_length);
+        ProbeInputs.putVector(inputs, at + floatOffset(PairFloats, .angular), angular, 0.0);
+        ProbeInputs.putVector(inputs, at + floatOffset(PairFloats, .linear), linear, 0.0);
+    }
+
+    fn fillInputs(inputs: []f32) void {
+        var generator: Random.DefaultPrng = .init(0x5ba7_1a15);
+        const random: Random = generator.random();
+        var row: u32 = 0;
+        while (row < row_count) : (row += 1) {
+            const at: u32 = row * rowWidth(SpatialInputs);
+            putPair(random, inputs, at + floatOffset(SpatialInputs, .velocity), 0.1, 3.0);
+            putPair(random, inputs, at + floatOffset(SpatialInputs, .motion), 0.1, 3.0);
+            putPair(random, inputs, at + floatOffset(SpatialInputs, .force), 0.1, 20.0);
+            const inertia_at: u32 = at + floatOffset(SpatialInputs, .inertia);
+            const mass: f32 = ProbeInputs.uniform(random, 0.5, 5.0);
+            const centre_of_mass: [3]f32 = ProbeInputs.awayFromZero(random, 0.01, 0.3);
+            const principal: [3]f32 = .{
+                ProbeInputs.uniform(random, 0.02, 0.5),
+                ProbeInputs.uniform(random, 0.02, 0.5),
+                ProbeInputs.uniform(random, 0.02, 0.5),
+            };
+            const products: [3]f32 = .{
+                ProbeInputs.uniform(random, -0.02, 0.02),
+                ProbeInputs.uniform(random, -0.02, 0.02),
+                ProbeInputs.uniform(random, -0.02, 0.02),
+            };
+            const first_moment: [3]f32 = .{
+                mass * centre_of_mass[0],
+                mass * centre_of_mass[1],
+                mass * centre_of_mass[2],
+            };
+            ProbeInputs.putVector(inputs, inertia_at + floatOffset(InertiaFloats, .diag), principal, 0.0);
+            ProbeInputs.putVector(inputs, inertia_at + floatOffset(InertiaFloats, .off), products, 0.0);
+            ProbeInputs.putVector(inputs, inertia_at + floatOffset(InertiaFloats, .h), first_moment, 0.0);
+            inputs[inertia_at + floatOffset(InertiaFloats, .mass)] = mass;
+            const rotation: [4]f32 = ProbeInputs.unitQuaternion(random);
+            @memcpy(inputs[at + floatOffset(SpatialInputs, .rotation) ..][0..4], &rotation);
+            const offset: [3]f32 = ProbeInputs.awayFromZero(random, 0.01, 0.5);
+            ProbeInputs.putVector(inputs, at + floatOffset(SpatialInputs, .offset), offset, 0.0);
+        }
+    }
+
+    const table: ProbeTable = .{
+        .entry_name = "spatial",
+        .inputs_field = .spatial_inputs,
+        .outputs_field = .spatial_outputs,
+        .row_count = row_count,
+        .input_width = rowWidth(SpatialInputs),
+        .output_width = rowWidth(SpatialResults),
+        .fill = &fillInputs,
+        .params = .{ .value_count = 0, .subgroup_size = 1, .spatial_rows = row_count },
+        .results = &results,
+    };
+};
 
 /// Every pipeline of zimrnum's two training kernel files, made and released: `zn_train` (the two-layer network) and
 /// `zn_mlp` (dense layers, their gradients, the optimisers). The sweep runs single operations; these files' kernels
@@ -1041,20 +2038,6 @@ fn largestRelativeGap(device_values: []const f32, twin_values: []const f32) f32 
 /// The kit's buffers the check reads back.
 const KitField = FieldEnum(zn_mlp.Buffers);
 
-/// The device's readback of `field`, once it holds every dispatch so far - polled as `runEngineCompute` polls.
-fn deviceReadback(pipe: *z.Compute(zn_mlp), comptime field: KitField) ?[]const f32 {
-    const dispatched: u64 = pipe.readGeneration().submitted;
-    var polls: u32 = 0;
-    while (polls < engine_poll_limit) : (polls += 1) {
-        const latest: ?[]const f32 = pipe.readLatest(field);
-        const holds_every_dispatch: bool = pipe.readGeneration().mirrored >= dispatched;
-        if (latest != null and holds_every_dispatch) {
-            return latest;
-        }
-    }
-    return null;
-}
-
 /// EfficientTDMPC's kernels of the kit on the device and on its CPU twin, from the same data, in the same order (this
 /// file's head): every value each sequence leaves, compared. The two run the same Zig source, but the device's
 /// transcendental functions are zimrmath's portable forms where the twin's are the host's, and its compiler may fuse
@@ -1094,7 +2077,7 @@ fn runKitKernels(
         runKitSteps(&on_device, sequence);
         runKitSteps(&twin, sequence);
         inline for (fields, field_ends) |field, field_end| {
-            const device_values: []const f32 = deviceReadback(&on_device, field) orelse return null;
+            const device_values: []const f32 = deviceReadback(zn_mlp, f32, &on_device, field) orelse return null;
             const twin_values: []const f32 = twin.readLatest(field) orelse return null;
             const gap: f32 = largestRelativeGap(device_values[0..field_end], twin_values[0..field_end]);
             largest_gap = @max(largest_gap, gap);
@@ -1613,6 +2596,21 @@ pub fn main() !u8 {
     const zimrnum_failures: u32 = try runZimrnumSweep(debug_allocator.allocator(), device, queue);
     try makeTrainingPipelines(debug_allocator.allocator(), device, queue);
     const kit_gap: ?f32 = try runKitKernels(debug_allocator.allocator(), device, queue);
+    const probe: ProbeOutcome = try runRobotgpuProbe(debug_allocator.allocator(), device, queue);
+    const tally_holds: bool = try runDispatchTally(debug_allocator.allocator(), device, queue);
+    const ranges_match: bool = try runRangedReadback(debug_allocator.allocator(), device, queue);
+    const pushes_hold: bool = try runPushedBatch(debug_allocator.allocator(), device, queue);
+    const timing: TimingOutcome = try runTimings(debug_allocator.allocator(), device, queue);
+    const lending_holds: bool = try runBorrowing(debug_allocator.allocator(), device, queue);
+    const factorisation: CholeskyOutcome = try runCholesky(debug_allocator.allocator(), device, queue);
+    const envelope_bytes: ?u64 = try runMemoryEnvelope(debug_allocator.allocator(), device, queue);
+    const overflow_cleared: bool = try runRobotgpuOverflow(debug_allocator.allocator(), device, queue);
+    var maths_gaps: [MathsCheck.results.len]f32 = undefined;
+    const maths_read: bool =
+        try runProbeTable(debug_allocator.allocator(), device, queue, MathsCheck.table, &maths_gaps);
+    var spatial_gaps: [SpatialCheck.results.len]f32 = undefined;
+    const spatial_read: bool =
+        try runProbeTable(debug_allocator.allocator(), device, queue, SpatialCheck.table, &spatial_gaps);
     const constants_land: bool = try runConstantIndex(debug_allocator.allocator(), device, queue);
     const engine_leaked: bool = debug_allocator.deinit() == .leak;
     const sort_matches: bool = runCountingSort(device, queue);
@@ -1658,6 +2656,101 @@ pub fn main() !u8 {
     }
     if (!kit_matches) {
         print("vk-host-test: FAILED - the kit's learning kernels differ from their CPU twin\n", .{});
+        return 1;
+    }
+    // The robotgpu probe: within the reordering's rounding of the twin, and exactly itself run after run.
+    const probe_gap_limit: f32 = 1.0e-5;
+    if (probe.subgroup_gap) |gap| {
+        print("vk-host-test: robotgpu probe: subgroup sum {e} of its magnitudes from the twin\n", .{gap});
+    } else {
+        print("vk-host-test: robotgpu probe: subgroup sum not applicable - no subgroup arithmetic in compute\n", .{});
+    }
+    const two_runs: []const u8 = if (probe.repeats_exactly) "identical" else "DIFFERENT";
+    print("vk-host-test: robotgpu probe: workgroup sum {e} of its magnitudes from the twin; two device runs {s}\n", .{
+        probe.workgroup_gap,
+        two_runs,
+    });
+    const subgroup_holds: bool = if (probe.subgroup_gap) |gap| gap <= probe_gap_limit else true;
+    const workgroup_holds: bool = probe.workgroup_gap <= probe_gap_limit;
+    const probe_holds: bool = subgroup_holds and workgroup_holds and probe.repeats_exactly;
+    if (!probe_holds) {
+        print("vk-host-test: FAILED - the robotgpu probe's reductions\n", .{});
+        return 1;
+    }
+    // The simulator's first kernel: every world's overflow word cleared, nothing else touched, device and twin alike.
+    if (!overflow_cleared) {
+        print("vk-host-test: FAILED - robotgpu's clear_overflow\n", .{});
+        return 1;
+    }
+    print("vk-host-test: robotgpu clear_overflow: 64 worlds' overflow words cleared, nothing else written\n", .{});
+    // The memory envelope: an arena as large as a binding may span, its first and last pages written and read back.
+    const arena_bytes: u64 = envelope_bytes orelse {
+        print("vk-host-test: FAILED - an arena as large as a binding came back wrong at its start or end\n", .{});
+        return 1;
+    };
+    print("vk-host-test: robotgpu memory envelope: a {d} MB arena, its first and last pages written and read back\n", .{
+        arena_bytes >> 20,
+    });
+    // The workgroup Cholesky: a true factorisation, the twin's arithmetic, and the same bits every run.
+    print("vk-host-test: robotgpu Cholesky: L L^T within {e} of A; device {d:.2} epsilons from the twin; " ++
+        "twin {d:.2} from zimrnum's; two device runs {s}\n", .{
+        factorisation.reconstruction_relative,
+        factorisation.device_twin_epsilons,
+        factorisation.twin_zimrnum_epsilons,
+        if (factorisation.repeats_exactly) "identical" else "DIFFERENT",
+    });
+    const factorisation_holds: bool = factorisation.reconstruction_relative <= 1.0e-5 and
+        factorisation.device_twin_epsilons <= 128 and factorisation.twin_zimrnum_epsilons <= 128 and
+        factorisation.repeats_exactly;
+    if (!factorisation_holds) {
+        print("vk-host-test: FAILED - the robotgpu Cholesky\n", .{});
+        return 1;
+    }
+    // Lending: a borrower's writes are in the owner's buffer, with nothing copied between them.
+    if (!lending_holds) {
+        print("vk-host-test: FAILED - a borrowing pipe's writes are not in the owner's buffer\n", .{});
+        return 1;
+    }
+    print("vk-host-test: robotgpu buffer lending: the borrower's writes read back from the owner's buffer\n", .{});
+    // Timings: four times the work takes longer; a pipe without timings reports none.
+    const timing_ratio: f64 = timing.four_times_microseconds / @max(timing.one_times_microseconds, 1.0e-9);
+    print("vk-host-test: robotgpu timings: busy_work {d:.0} us, four times the rounds {d:.0} us ({d:.2}x)\n", .{
+        timing.one_times_microseconds,
+        timing.four_times_microseconds,
+        timing_ratio,
+    });
+    const timings_hold: bool = timing.one_times_microseconds > 0 and
+        timing.four_times_microseconds > timing.one_times_microseconds and timing.untimed_reports_none;
+    if (!timings_hold) {
+        print("vk-host-test: FAILED - the robotgpu timings\n", .{});
+        return 1;
+    }
+    // Push constants: three dispatches of one batch, each with its own push, each region its own value.
+    if (!pushes_hold) {
+        print("vk-host-test: FAILED - a robotgpu pushed dispatch wrote another dispatch's value\n", .{});
+        return 1;
+    }
+    print("vk-host-test: robotgpu push constants: one batch, three dispatches, each region its own value\n", .{});
+    // Ranged readback: three ranges of one field, through chunks of the staging buffer, equal to what was uploaded.
+    if (!ranges_match) {
+        print("vk-host-test: FAILED - a robotgpu ranged readback differs from what was uploaded\n", .{});
+        return 1;
+    }
+    print("vk-host-test: robotgpu ranged readback: three ranges, one across three chunks, equal to the upload\n", .{});
+    // The large dispatch: every index below the count run exactly once, across two rows of workgroups.
+    if (!tally_holds) {
+        print("vk-host-test: FAILED - the robotgpu large dispatch did not run every index exactly once\n", .{});
+        return 1;
+    }
+    // The maths and spatial probes: each result within its bar of the twin, in epsilons at the result's scale.
+    if (!maths_read or !spatial_read) {
+        print("vk-host-test: FAILED - a robotgpu probe table's readback never came\n", .{});
+        return 1;
+    }
+    const maths_holds: bool = reportProbeResults("robotgpu maths probe", &MathsCheck.results, &maths_gaps);
+    const spatial_holds: bool = reportProbeResults("robotgpu spatial probe", &SpatialCheck.results, &spatial_gaps);
+    if (!maths_holds or !spatial_holds) {
+        print("vk-host-test: FAILED - a robotgpu probe table\n", .{});
         return 1;
     }
     if (!constants_land) {

@@ -28,7 +28,7 @@ const swap = std.mem.swap;
 const eql = std.mem.eql;
 
 const zm = @import("zm");
-const rbt = @import("robot.zig");
+const rbt = @import("robot");
 const float = zm.float;
 const radFromDeg = zm.radFromDeg;
 const quat_identity = zm.quat_identity;

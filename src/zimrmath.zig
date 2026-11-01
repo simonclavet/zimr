@@ -899,32 +899,42 @@ pub fn isPowerOfTwo(x: anytype) bool {
 /// `unreachable` in this mode unless `-Dassert-log` forces them back on.
 const is_stripped: bool = builtin.mode == .small or builtin.mode == .fast;
 
+/// `assert` on the GPU: a failed check is `unreachable`; the location, a compile-time parameter, is never read.
+fn assertOnGpu(ok: bool, comptime src: std.builtin.SourceLocation) void {
+    _ = src;
+    if (!ok) {
+        unreachable;
+    }
+}
+
+/// `assert` on the CPU: a failed check logs its location, then panics in development, logs and continues under
+/// `assert_log`, and is `unreachable` in ship.
+fn assertOnCpu(ok: bool, src: std.builtin.SourceLocation) void {
+    if (!ok) {
+        if (comptime !is_stripped) {
+            std.log.err("assert failed at {s}:{d}:{d}", .{ src.file, src.line, src.column });
+            @panic("assertion failed");
+        } else if (comptime build_options.assert_log) {
+            std.log.err("assert failed at {s}:{d}:{d}", .{ src.file, src.line, src.column });
+        } else {
+            unreachable;
+        }
+    }
+}
+
 /// Assertion with a source location but no message - cheaper to write than
-/// `assertf` when the condition is self-explanatory. `std.debug.assert` on GPU.
+/// `assertf` when the condition is self-explanatory. On the GPU a failed check
+/// is `unreachable` (`assertOnGpu`).
 /// On CPU: a dev (debug) build logs file:line + `@panic`s; a release build with
 /// `assert_log` (e.g. the on-device standalones) logs file:line to the page's
 /// log overlay and KEEPS RUNNING (a frozen canvas is a worse failure than a
 /// logged, recoverable glitch - callers that need to bail must do so themselves);
 /// a ship build compiles the check out (`unreachable`).
 /// assert(len > 0, @src());
-pub fn assert(ok: bool, src: std.builtin.SourceLocation) void {
-    if (comptime is_gpu) {
-        if (!ok) {
-            unreachable;
-        }
-    } else {
-        if (!ok) {
-            if (comptime !is_stripped) {
-                std.log.err("assert failed at {s}:{d}:{d}", .{ src.file, src.line, src.column });
-                @panic("assertion failed");
-            } else if (comptime build_options.assert_log) {
-                std.log.err("assert failed at {s}:{d}:{d}", .{ src.file, src.line, src.column });
-            } else {
-                unreachable;
-            }
-        }
-    }
-}
+///
+/// The GPU and the CPU each have their own form, as `assertf` does and for the same reason (`assertfOnGpu`): on the
+/// GPU the location is a compile-time parameter, never a run-time one. A call reads the same on both.
+pub const assert = if (is_gpu) assertOnGpu else assertOnCpu;
 
 pub fn Log2Int(comptime T: type) type {
     if (T == comptime_int) {
@@ -3090,6 +3100,49 @@ pub const is_wasm: bool = builtin.target.cpu.arch.isWasm();
 /// whole codebase shares one assert home.)
 pub const allow_assert: bool = !is_stripped or build_options.assert_log;
 
+/// `assertf` on the GPU: a failed check is `unreachable`, nothing else - the location, message and arguments are
+/// never read. The location is a COMPILE-TIME parameter here: a `SourceLocation` holds pointers to the file's and the
+/// function's names, and the SPIR-V backend crashes on one passed as a run-time argument (a compile-time one, and
+/// `@src()` itself, it compiles). `@src()` is known at compile time at every call site, so a call reads the same on
+/// either side.
+fn assertfOnGpu(
+    ok: bool,
+    comptime src: std.builtin.SourceLocation,
+    comptime fmt: []const u8,
+    args: anytype,
+) void {
+    _ = src;
+    _ = fmt;
+    _ = args;
+    if (!ok) {
+        unreachable;
+    }
+}
+
+/// `assertf` on the CPU: a failed check is logged with its location and message, then panics in development, logs
+/// and continues under `assert_log`, and is `unreachable` - an assumption - in ship.
+fn assertfOnCpu(
+    ok: bool,
+    src: std.builtin.SourceLocation,
+    comptime fmt: []const u8,
+    args: anytype,
+) void {
+    if (!ok) {
+        if (comptime !is_stripped) {
+            std.log.err("assert failed at {s}:{d}:{d}: " ++ fmt, .{ src.file, src.line, src.column } ++ args);
+            @panic("assertion failed");
+        } else if (comptime build_options.assert_log) {
+            // Release (not ship): surface on the page's log overlay (std.log.err ->
+            // console.error -> overlay) but keep running. A frozen canvas is a worse
+            // failure than a logged, recoverable glitch; a caller that must bail after a
+            // failed check does so itself (e.g. drops the batch), since this returns.
+            std.log.err("assert failed at {s}:{d}:{d}: " ++ fmt, .{ src.file, src.line, src.column } ++ args);
+        } else {
+            unreachable;
+        }
+    }
+}
+
 /// Formatted assertion - the canonical assert for the whole codebase.
 ///
 /// On GPU (SPIR-V) it is exactly `std.debug.assert`: `if (!ok) unreachable`,
@@ -3114,36 +3167,40 @@ pub const allow_assert: bool = !is_stripped or build_options.assert_log;
 /// only assert invariants that genuinely cannot be false in a shipped build; if
 /// you are not certain it holds, it is not an assert - handle it as a real case.
 ///
-/// Pass `@src()`: this fn is `inline`, so an internal `@src()` would resolve to
-/// `zimrmath.zig`, and wasm stack traces are unsymbolicated - the caller-side
-/// `@src()` is our only localisation when one fires.
+/// Pass `@src()`: an `@src()` inside would name `zimrmath.zig`, and wasm stack
+/// traces are unsymbolicated - the caller's `@src()` is our only localisation
+/// when one fires. The GPU and the CPU each have their own form, and a call reads
+/// the same on both:
+///
+///     assertf(len < cap, @src(), "ring overflow: len={d}", .{len})
+///         a CPU build    assertfOnCpu   the location a run-time value - logged when the check fails
+///         a GPU build    assertfOnGpu   the location a compile-time value, never read - unreachable
+///
+/// On the GPU the location must not be a run-time value: a `SourceLocation`
+/// holds pointers to the file's and function's names, and the SPIR-V backend
+/// crashes on one passed at run time. `assert`, `assertUnreachable` and `panicf`
+/// have the same two forms for the same reason.
 /// assertf(len < cap, @src(), "ring overflow: len={d} cap={d}", .{ len, cap });
-pub fn assertf(
-    ok: bool,
+pub const assertf = if (is_gpu) assertfOnGpu else assertfOnCpu;
+
+/// `assertUnreachable` on the GPU: `unreachable`, the location a compile-time parameter.
+fn assertUnreachableOnGpu(
+    comptime src: std.builtin.SourceLocation,
+    comptime fmt: []const u8,
+    args: anytype,
+) void {
+    // lint:off prefer-assert-unreachable: this IS assertUnreachable's own implementation
+    assertfOnGpu(false, src, fmt, args);
+}
+
+/// `assertUnreachable` on the CPU: `assertf` with a condition that failed.
+fn assertUnreachableOnCpu(
     src: std.builtin.SourceLocation,
     comptime fmt: []const u8,
     args: anytype,
 ) void {
-    if (comptime is_gpu) {
-        if (!ok) {
-            unreachable;
-        }
-    } else {
-        if (!ok) {
-            if (comptime !is_stripped) {
-                std.log.err("assert failed at {s}:{d}:{d}: " ++ fmt, .{ src.file, src.line, src.column } ++ args);
-                @panic("assertion failed");
-            } else if (comptime build_options.assert_log) {
-                // Release (not ship): surface on the page's log overlay (std.log.err ->
-                // console.error -> overlay) but keep running. A frozen canvas is a worse
-                // failure than a logged, recoverable glitch; a caller that must bail after a
-                // failed check does so itself (e.g. drops the batch), since this returns.
-                std.log.err("assert failed at {s}:{d}:{d}: " ++ fmt, .{ src.file, src.line, src.column } ++ args);
-            } else {
-                unreachable;
-            }
-        }
-    }
+    // lint:off prefer-assert-unreachable: this IS assertUnreachable's own implementation
+    assertfOnCpu(false, src, fmt, args);
 }
 
 /// `assertUnreachable(@src(), fmt, args)` == `assertf(false, @src(), fmt, args)`:
@@ -3153,13 +3210,34 @@ pub fn assertf(
 /// logs+continues under `assert_log`, bare `unreachable` on GPU and in ship.
 /// Returns `void`, so it fits a void-result `catch`:
 /// list.append(gpa, x) catch assertUnreachable(@src(), "OOM", .{});
-pub fn assertUnreachable(
+/// Its GPU and CPU forms follow `assertf`'s, the GPU's taking the location at compile time.
+pub const assertUnreachable = if (is_gpu) assertUnreachableOnGpu else assertUnreachableOnCpu;
+
+/// `panicf` on the GPU: `unreachable`, the location a compile-time parameter.
+fn panicfOnGpu(
+    comptime src: std.builtin.SourceLocation,
+    comptime fmt: []const u8,
+    args: anytype,
+) noreturn {
+    _ = src;
+    _ = fmt;
+    _ = args;
+    unreachable;
+}
+
+/// `panicf` on the CPU: the location and message logged, then a panic - in development and under `assert_log` - or
+/// `unreachable` in ship.
+fn panicfOnCpu(
     src: std.builtin.SourceLocation,
     comptime fmt: []const u8,
     args: anytype,
-) void {
-    // lint:off prefer-assert-unreachable: this IS assertUnreachable's own impl
-    assertf(false, src, fmt, args);
+) noreturn {
+    if (comptime (!is_stripped or build_options.assert_log)) {
+        std.log.err("panic at {s}:{d}:{d}: " ++ fmt, .{ src.file, src.line, src.column } ++ args);
+        @panic("panicf");
+    } else {
+        unreachable;
+    }
 }
 
 /// `panicf(@src(), fmt, args)` -- like assertUnreachable but `noreturn`, so it
@@ -3167,20 +3245,8 @@ pub fn assertUnreachable(
 /// const w = gpa.create(Window) catch panicf(@src(), "OOM", .{});
 /// Diverges in every non-ship build (dev + assert_log both `@panic` with the
 /// message); GPU + ship lower to bare `unreachable` (free, UB if it fires).
-pub fn panicf(
-    src: std.builtin.SourceLocation,
-    comptime fmt: []const u8,
-    args: anytype,
-) noreturn {
-    if (comptime is_gpu) {
-        unreachable;
-    } else if (comptime (!is_stripped or build_options.assert_log)) {
-        std.log.err("panic at {s}:{d}:{d}: " ++ fmt, .{ src.file, src.line, src.column } ++ args);
-        @panic("panicf");
-    } else {
-        unreachable;
-    }
-}
+/// Its GPU and CPU forms follow `assertf`'s, the GPU's taking the location at compile time.
+pub const panicf = if (is_gpu) panicfOnGpu else panicfOnCpu;
 
 //
 // 1. Initialization functions
@@ -10769,7 +10835,7 @@ test "zm.euler XYZ and ZXY genuinely differ" {
 // ============================================================================
 // Z-shader-parity - generic helpers that mirror `src/shadermath.zig`'s API.
 // ============================================================================
-// Added S1.2 of the Zig-shader-pipeline arc.  These exist so a function
+// These exist so a function
 // written once can be called from both CPU and GPU code without renaming.
 // See `src/notes/zig-shader-pipeline-plan.md` section 0.3 for the design lock.
 //

@@ -12,12 +12,14 @@
 //                                      machine's).  web: zig-out/web/<app_name>/ and
 //                                      zig-out/standalone/<app_name>.html
 //                                      (`hello-world` -> web/hello_world/); windows:
-//                                      the program in zig-out/windows/; android: the
+//                                      the program in zig-out/windows/; linux: the
+//                                      program in zig-out/linux/; android: the
 //                                      single-file page in an app, zig-out/android/
 //                                      <app_name>.apk (needs the Android SDK and a JDK).
 //   zig build run-<app-step>        -- builds one app the same way, then runs it.
 //                                      android: installs it on the phone adb sees and
-//                                      starts it.  windows: the program.  web: its page, through
+//                                      starts it.  windows: the program.  linux: the
+//                                      program - from Windows, in WSL.  web: its page, through
 //                                      the dev server, in the default browser; when a
 //                                      server already runs, it reloads the tabs showing
 //                                      the page instead (opening one if none does) and
@@ -1637,16 +1639,17 @@ fn addWgpuStandalone(
 }
 
 /// Where a build's apps run (`-Dplatform`): in a browser - the wasm, as a served page and as a single
-/// self-contained HTML file, both from one compile - natively, as a program with a window, or on an Android phone, as
-/// the single-file page in an app of its own (`addAndroidBuild`). Every app has one step, `zig build <app>`, which
-/// builds it for the chosen platform, and `run-<app>`, which builds it and runs it there.
-pub const Platform = enum { web, windows, android };
+/// self-contained HTML file, both from one compile - natively on Windows or Linux, as a program with a window, or on an
+/// Android phone, as the single-file page in an app of its own (`addAndroidBuild`). Every app has one step,
+/// `zig build <app>`, which builds it for the chosen platform, and `run-<app>`, which builds it and runs it there.
+pub const Platform = enum { web, windows, linux, android };
 
 /// The platform of the machine running the build, when zimr has one for it: the default for `-Dplatform`. Null
 /// elsewhere, where each app's step fails with a message naming the choices instead of guessing.
 fn hostPlatform() ?Platform {
     return switch (builtin.os.tag) {
         .windows => .windows,
+        .linux => .linux,
         else => null,
     };
 }
@@ -1775,6 +1778,48 @@ fn runtimeJs(b: *std.Build, c2js_exe: *Compile) LazyPath {
     return to_js.captureStdOut(.{});
 }
 
+/// ROBOT.ZIG AND PROFILER.ZIG AS MODULES OF THEIR OWN. The engine imports them by name, and so do robotgpu's kernels
+/// and its CPU twin: a file may belong to one module only, so a program holding both the engine and robotgpu's twin
+/// needs each file in one module, shared. `options_mod` is the build options' single module, shared with the engine -
+/// two modules rooted at the same options file are a compile error too.
+const RobotModules = struct {
+    robot: *Module,
+    profiler: *Module,
+};
+
+/// robot.zig's and profiler.zig's modules (`RobotModules`): the profiler reads zm and the build options; robot.zig
+/// reads zm and the profiler.
+fn addRobotModules(
+    b: *std.Build,
+    zimrmath_mod: *Module,
+    options_mod: *Module,
+) RobotModules {
+    const profiler_mod: *Module = b.createModule(.{ .root_source_file = b.path("src/profiler.zig") });
+    profiler_mod.addImport("zm", zimrmath_mod);
+    profiler_mod.addImport("build_options", options_mod);
+    const robot_mod: *Module = b.createModule(.{ .root_source_file = b.path("src/robot.zig") });
+    robot_mod.addImport("zm", zimrmath_mod);
+    robot_mod.addImport("profiler", profiler_mod);
+    const modules: RobotModules = .{ .robot = robot_mod, .profiler = profiler_mod };
+    return modules;
+}
+
+/// An engine module's build options, made ONE module and shared with robot.zig's and profiler.zig's modules, which the
+/// engine imports by name (`RobotModules`). Returns those two, for a caller that hands them on.
+fn addEngineOptionsAndRobot(
+    b: *std.Build,
+    engine_mod: *Module,
+    options: *Step.Options,
+    zimrmath_mod: *Module,
+) RobotModules {
+    const options_mod: *Module = options.createModule();
+    engine_mod.addImport("build_options", options_mod);
+    const robot_modules: RobotModules = addRobotModules(b, zimrmath_mod, options_mod);
+    engine_mod.addImport("robot", robot_modules.robot);
+    engine_mod.addImport("profiler", robot_modules.profiler);
+    return robot_modules;
+}
+
 fn buildJobKernels(
     b: *std.Build,
     name: []const u8,
@@ -1818,7 +1863,7 @@ fn buildJobKernels(
     });
     engine_mod.addImport("zm", zm_mod);
     engine_mod.addImport("shader_interface", iface_mod);
-    engine_mod.addOptions("build_options", build_opts_wgpu);
+    _ = addEngineOptionsAndRobot(b, engine_mod, build_opts_wgpu, zm_mod);
 
     // A kompute MODULE can be a job kernel - `komputeRegistry(M)` derives the whole worker
     // backend from one - so the kernel wasm's graph has to carry `kompute` too.
@@ -2189,6 +2234,12 @@ const HostTestKernel = struct {
     entry: []const u8,
     wants_zimrnum: bool = false,
     wants_zimrrl: bool = false,
+    /// The kernel imports robot.zig (`ShaderPipeline.KernelModules.robot`).
+    wants_robot: bool = false,
+    /// Native only: its SPIR-V alone, no WGSL ever made (`ShaderPipeline.addNativeComputeOutput`).
+    native_only: bool = false,
+    /// A robotgpu kernel's arena lengths, imported as `robotgpu_sizes` by its SPIR-V and its CPU twin alike.
+    robotgpu_sizes: ?[]const u8 = null,
 };
 
 /// The kernels the test runs: `double_it` (the compute and engine checks), `sort_min` (its atomics are the sort
@@ -2210,6 +2261,21 @@ const host_test_kernels = [_]HostTestKernel{
         .wants_zimrnum = true,
     },
     .{ .import_name = "zn_matmul", .source = "src/gpu/zn_matmul.zig", .entry = "matmul" },
+    .{
+        .import_name = "robotgpu_probe",
+        .source = "src/gpu/robotgpu_probe.zig",
+        .entry = "subgroup_sum",
+        .wants_robot = true,
+        .native_only = true,
+    },
+    .{
+        .import_name = "robotgpu",
+        .source = "src/robotgpu.zig",
+        .entry = "clear_overflow",
+        .wants_robot = true,
+        .native_only = true,
+        .robotgpu_sizes = "src/robotgpu_sizes_test.zig",
+    },
     .{ .import_name = "zn_unary", .source = "src/gpu/zn_unary.zig", .entry = "nan_direct" },
     .{
         .import_name = "zrl_binary",
@@ -2248,7 +2314,7 @@ fn addVulkanHostTest(
     engine_mod.addImport("zm", inputs.zimrmath_mod);
     engine_mod.addImport("zn", numerics.zimrnum);
     engine_mod.addImport("zrl", numerics.zimrrl);
-    engine_mod.addOptions("build_options", native_options);
+    const engine_robot: RobotModules = addEngineOptionsAndRobot(b, engine_mod, native_options, inputs.zimrmath_mod);
     const test_mod: *Module = b.createModule(.{
         .root_source_file = b.path("tools/vk_host_test.zig"),
         .target = target,
@@ -2262,16 +2328,28 @@ fn addVulkanHostTest(
     conformance_mod.addImport("zn", numerics.zimrnum);
     conformance_mod.addImport("zrl", numerics.zimrrl);
     test_mod.addImport("zn_conformance", conformance_mod);
+    // zimrnum itself, for the checks that compare with its CPU functions (the robotgpu probe's Cholesky).
+    test_mod.addImport("zn", numerics.zimrnum);
     for (host_test_kernels) |kernel| {
         const kernel_source: LazyPath = b.path(kernel.source);
-        const kernel_output: ShaderPipeline.ComputeOutput = inputs.shader_pipeline.addComputeOutput(
-            kernel_source,
-            kernel.entry,
-            kernel.wants_zimrnum,
-            kernel.wants_zimrrl,
-        );
+        const sizes_file: ?LazyPath = if (kernel.robotgpu_sizes) |sizes_path| b.path(sizes_path) else null;
+        const kernel_modules: ShaderPipeline.KernelModules = .{
+            .zimrnum = kernel.wants_zimrnum,
+            .zimrrl = kernel.wants_zimrrl,
+            .robot = kernel.wants_robot,
+            .robotgpu_sizes = sizes_file,
+        };
+        const kernel_spirv: LazyPath = if (kernel.native_only)
+            inputs.shader_pipeline.addNativeComputeOutput(kernel_source, kernel_modules)
+        else
+            inputs.shader_pipeline.addComputeOutput(
+                kernel_source,
+                kernel.entry,
+                kernel.wants_zimrnum,
+                kernel.wants_zimrrl,
+            ).spv;
         const spirv_import_name: []const u8 = b.fmt("{s}_spv", .{kernel.import_name});
-        test_mod.addAnonymousImport(spirv_import_name, .{ .root_source_file = kernel_output.spv });
+        test_mod.addAnonymousImport(spirv_import_name, .{ .root_source_file = kernel_spirv });
         const kernel_mod: *Module = b.createModule(.{ .root_source_file = kernel_source });
         kernel_mod.addImport("kompute", numerics.kompute);
         kernel_mod.addImport("zm", inputs.zimrmath_mod);
@@ -2280,6 +2358,14 @@ fn addVulkanHostTest(
         }
         if (kernel.wants_zimrrl) {
             kernel_mod.addImport("zrl", numerics.zimrrl);
+        }
+        if (kernel.wants_robot) {
+            // The engine's own robot module: one file, one module, shared by the engine and the twin.
+            kernel_mod.addImport("robot", engine_robot.robot);
+        }
+        if (sizes_file) |sizes_root| {
+            const sizes_mod: *Module = b.createModule(.{ .root_source_file = sizes_root });
+            kernel_mod.addImport("robotgpu_sizes", sizes_mod);
         }
         test_mod.addImport(kernel.import_name, kernel_mod);
     }
@@ -2318,7 +2404,7 @@ fn addGenoTrainer(
     engine_mod.addImport("zm", inputs.zimrmath_mod);
     engine_mod.addImport("zn", numerics.zimrnum);
     engine_mod.addImport("zrl", numerics.zimrrl);
-    engine_mod.addOptions("build_options", native_options);
+    _ = addEngineOptionsAndRobot(b, engine_mod, native_options, inputs.zimrmath_mod);
     const trainer_mod: *Module = b.createModule(.{
         .root_source_file = b.path("tools/geno_trainer.zig"),
         .target = target,
@@ -2372,20 +2458,20 @@ fn addNativeWgslCheck(b: *std.Build, check_exe: *Compile, program: *Compile) *St
 }
 
 /// An example with no native build yet, and why.
-const WindowsPending = struct {
+const NativePending = struct {
     name: []const u8,
     reason: []const u8,
 };
 
-/// The examples with no native build yet - left out of `all-examples-windows`, and shown in the native gallery with
-/// the reason. Each reason names what is missing; the platforms plan has the step that writes it.
-const windows_pending = [_]WindowsPending{
+/// The examples with no native build yet - on Windows or Linux - left out of `all-examples` there, and shown in the
+/// native gallery with the reason. Each reason names what is missing; the platforms plan has the step that writes it.
+const native_pending = [_]NativePending{
     .{ .name = "net_rtc_smoke", .reason = "WebRTC exists only in the browser" },
 };
 
 /// The reason `name` has no native build yet, or null when it has one.
-fn windowsPendingReason(name: []const u8) ?[]const u8 {
-    for (windows_pending) |pending| {
+fn nativePendingReason(name: []const u8) ?[]const u8 {
+    for (native_pending) |pending| {
         if (eql(u8, pending.name, name)) {
             return pending.reason;
         }
@@ -2402,11 +2488,12 @@ fn appBuildFor(
     name: []const u8,
     web_builds: *const StringHashMap(*Step),
     windows_builds: *const StringHashMap(*Step.InstallArtifact),
+    linux_builds: *const StringHashMap(*Step.InstallArtifact),
     android_builds: *const StringHashMap(AndroidBuild),
 ) *Step {
     const chosen: Platform = platform orelse {
         const message: []const u8 = b.fmt("zimr has no platform for this machine yet: build {s} with " ++
-            "-Dplatform=web, -Dplatform=windows or -Dplatform=android", .{name});
+            "-Dplatform=web, -Dplatform=windows, -Dplatform=linux or -Dplatform=android", .{name});
         return &b.addFail(message).step;
     };
     switch (chosen) {
@@ -2416,13 +2503,16 @@ fn appBuildFor(
         .windows => if (windows_builds.get(name)) |install| {
             return &install.step;
         },
+        .linux => if (linux_builds.get(name)) |install| {
+            return &install.step;
+        },
         .android => if (android_builds.get(name)) |android_build| {
             return android_build.install;
         },
     }
     const reason: []const u8 = switch (chosen) {
         .web, .android => "it runs only natively",
-        .windows => windowsPendingReason(name) orelse "it runs only on the web",
+        .windows, .linux => nativePendingReason(name) orelse "it runs only on the web",
     };
     return &b.addFail(b.fmt("{s} has no {s} build: {s}", .{ name, @tagName(chosen), reason })).step;
 }
@@ -2449,10 +2539,51 @@ fn addServeRun(
     return run;
 }
 
+/// The settings a zimr program reads from its environment, as WSL's `WSLENV` lists them: each one set in Windows is
+/// shared with the Linux program WSL starts, and `/p` marks a path, turned from Windows' form into Linux's on the way.
+const zimr_wslenv: []const u8 = "ZIMR_GPU:ZIMR_VK_VALIDATE:ZIMR_LOG_INPUT:ZIMR_SKIP_START_SCREEN:ZIMR_FOLLOW:" ++
+    "ZIMR_SCALE:ZIMR_SCRIPT/p:ZIMR_CAPTURE_DIR/p:ZIMR_VALUES_DIR/p";
+
+/// What `run-<app>` does with a Linux program once `app_step` has built and installed it: on Linux, runs it; on
+/// Windows, runs it in WSL - `wsl.exe --exec ./<name>` from zig-out/linux/, where WSL starts it - with zimr's settings
+/// shared into it (`zimr_wslenv`, after the caller's own `WSLENV`, which may share other settings already). A Windows
+/// machine without WSL has `wsl.exe` all the same, and it answers that WSL is not installed. Anywhere else the step
+/// fails naming where the program runs.
+fn linuxRun(b: *std.Build, install: *Step.InstallArtifact, app_step: *Step) *Step {
+    switch (builtin.os.tag) {
+        .linux => {
+            const program_run: *Run = b.addRunArtifact(install.artifact);
+            program_run.step.dependOn(app_step);
+            return &program_run.step;
+        },
+        .windows => {
+            const program_path: []const u8 = b.fmt("./{s}", .{install.artifact.name});
+            const wsl_run: *Run = b.addSystemCommand(&.{ "wsl.exe", "--exec", program_path });
+            wsl_run.setCwd(b.graph.path(.install_prefix, "linux"));
+            const caller_wslenv: []const u8 = b.graph.environ_map.get("WSLENV") orelse "";
+            const wslenv: []const u8 = if (caller_wslenv.len == 0)
+                zimr_wslenv
+            else
+                b.fmt("{s}:{s}", .{ caller_wslenv, zimr_wslenv });
+            wsl_run.setEnvironmentVariable("WSLENV", wslenv);
+            wsl_run.has_side_effects = true;
+            wsl_run.step.dependOn(app_step);
+            return &wsl_run.step;
+        },
+        else => {
+            const message: []const u8 = b.fmt("{s} is a Linux program: run it on Linux, or from Windows in WSL", .{
+                install.artifact.name,
+            });
+            return &b.addFail(message).step;
+        },
+    }
+}
+
 /// What `zig build run-<app>` does for `platform`, once `app_step` - the app's `zig build <app>` - has built it: runs
-/// the installed program (installed, so the native gallery finds the examples beside it), shows the app's page
-/// through the dev server (`addServeRun`), or puts its Android app on the phone and starts it. An app with no build for
-/// the platform has none to run either: `app_step` already fails saying why, and running is that failure.
+/// the installed program (installed, so the native gallery finds the examples beside it) - a Linux one in WSL when the
+/// build runs on Windows (`linuxRun`) - shows the app's page through the dev server (`addServeRun`), or puts its
+/// Android app on the phone and starts it. An app with no build for the platform has none to run either: `app_step`
+/// already fails saying why, and running is that failure.
 fn appRunFor(
     b: *std.Build,
     platform: ?Platform,
@@ -2461,6 +2592,7 @@ fn appRunFor(
     serve_exe: *Compile,
     web_builds: *const StringHashMap(*Step),
     windows_builds: *const StringHashMap(*Step.InstallArtifact),
+    linux_builds: *const StringHashMap(*Step.InstallArtifact),
     android_builds: *const StringHashMap(AndroidBuild),
 ) *Step {
     const chosen: Platform = platform orelse return app_step;
@@ -2470,6 +2602,10 @@ fn appRunFor(
             const program_run: *Run = b.addRunArtifact(install.artifact);
             program_run.step.dependOn(app_step);
             return &program_run.step;
+        },
+        .linux => {
+            const install: *Step.InstallArtifact = linux_builds.get(name) orelse return app_step;
+            return linuxRun(b, install, app_step);
         },
         .android => {
             const android_build: AndroidBuild = android_builds.get(name) orelse return app_step;
@@ -2756,6 +2892,42 @@ fn addWindowsApp(
     return installWindowsApp(ctx.b, ctx, nativeAppExe(ctx, app_mod, name, own_frame));
 }
 
+/// The oldest glibc a Linux program of zimr's starts on: written into the Linux target's triple, so that Zig links
+/// against that version's symbols, and checked on the linked launcher by `platforms-check` (`tools/elf_needs.zig`).
+/// 2.31 is Zig's own default for x86_64 Linux, pinned so that a toolchain change cannot raise it.
+const linux_glibc_floor: []const u8 = "2.31";
+
+/// Installs a Linux program into `b`'s zig-out/linux/. Its debug information is inside it, as ELF keeps it: no file
+/// goes beside it.
+fn installLinuxProgram(b: *std.Build, exe: *Compile) *InstallArtifact {
+    return b.addInstallArtifact(exe, .{ .dest_dir = .{ .override = .{ .custom = "linux" } } });
+}
+
+/// Installs a Linux program into `install_builder`'s zig-out/linux/, once it has passed the context's native check (no
+/// WGSL inside): `installWindowsApp`'s twin.
+fn installLinuxApp(
+    install_builder: *std.Build,
+    ctx: AppContext,
+    exe: *Compile,
+) *Step.InstallArtifact {
+    const install: *Step.InstallArtifact = installLinuxProgram(install_builder, exe);
+    if (ctx.native_wgsl_check) |check_exe| {
+        install.step.dependOn(&addNativeWgslCheck(install_builder, check_exe, exe).step);
+    }
+    return install;
+}
+
+/// A program for the native Linux host (`nativeAppExe`), installed as `zig-out/linux/<name>` once it has passed the
+/// context's native check: `addWindowsApp`'s twin.
+fn addLinuxApp(
+    ctx: AppContext,
+    app_mod: *Module,
+    name: []const u8,
+    own_frame: bool,
+) *Step.InstallArtifact {
+    return installLinuxApp(ctx.b, ctx, nativeAppExe(ctx, app_mod, name, own_frame));
+}
+
 /// The row of `apps` named `name`; a name with no row is a mistake in this file.
 fn appNamed(apps: []const App, name: []const u8) App {
     for (apps) |app| {
@@ -2777,9 +2949,9 @@ const PlatformCheckTarget = struct {
     triple: []const u8,
 };
 
-/// The systems `platforms-check` compiles the launcher for beyond the web and Windows: Linux, macOS and Android.
+/// The systems `platforms-check` compiles the launcher for beyond the web, Windows and Linux, whose launchers are
+/// programs of their own: macOS and Android.
 const platform_check_targets = [_]PlatformCheckTarget{
-    .{ .name = "linux", .triple = "x86_64-linux-gnu" },
     .{ .name = "macos", .triple = "aarch64-macos" },
     .{ .name = "android", .triple = "aarch64-linux-android" },
 };
@@ -2818,6 +2990,8 @@ pub const AppContext = struct {
     /// each in exactly ONE module across the whole build - required so a launcher
     /// that imports many example modules into one binary does not duplicate them.
     common_mod: *Module,
+    /// The music theory the scale demos share (`examples/music_theory`): one module a target, as `common_mod` is.
+    music_theory_mod: *Module,
     roboto_mod: *Module,
     atkinson_mod: *Module,
     ogg_mod: *Module,
@@ -2865,6 +3039,7 @@ pub const AppContext = struct {
         user_mod.addImport("zrl", ctx.zimrrl_mod);
         user_mod.addImport("shader_interface", ctx.shader_interface_mod);
         user_mod.addImport("example_common", ctx.common_mod);
+        user_mod.addImport("music_theory", ctx.music_theory_mod);
         user_mod.addImport("roboto_mono_ttf", ctx.roboto_mod);
         user_mod.addImport("atkinson_mono_ttf", ctx.atkinson_mod);
         user_mod.addImport("sample_ogg", ctx.ogg_mod);
@@ -3308,9 +3483,11 @@ pub const Mode = enum {
 /// dev server. `builder` is zimr's builder, the key `Project.init` looks it up by.
 const PublishedEngine = struct {
     builder: *std.Build,
-    /// The web build's context, and the Windows one: a project builds its apps with the one `-Dplatform` picks.
+    /// The web build's context, and the Windows and Linux ones: a project builds its apps with the one `-Dplatform`
+    /// picks.
     ctx: AppContext,
     windows_ctx: AppContext,
+    linux_ctx: AppContext,
     serve_exe: *Compile,
     /// The build-log distiller, which a project installs into its own zig-out/bin (`zig build zbuild`).
     zbuild_exe: *Compile,
@@ -3346,6 +3523,7 @@ fn publishEngine(
     b: *std.Build,
     ctx: AppContext,
     windows_ctx: AppContext,
+    linux_ctx: AppContext,
     serve_exe: *Compile,
     zbuild_exe: *Compile,
     editor_configs_exe: *Compile,
@@ -3359,10 +3537,14 @@ fn publishEngine(
     var published_windows: AppContext = windows_ctx;
     published_windows.shader_pipeline = pipeline;
     published_windows.shader_cache = newShaderCache(b);
+    var published_linux: AppContext = linux_ctx;
+    published_linux.shader_pipeline = pipeline;
+    published_linux.shader_cache = newShaderCache(b);
     published_engines.append(b.allocator, .{
         .builder = b,
         .ctx = published,
         .windows_ctx = published_windows,
+        .linux_ctx = published_linux,
         .serve_exe = serve_exe,
         .zbuild_exe = zbuild_exe,
         .editor_configs_exe = editor_configs_exe,
@@ -3403,7 +3585,7 @@ pub const Project = struct {
     b: *std.Build,
     /// The zimr dependency, resolved with this project's `-Dmode`.
     dep: *std.Build.Dependency,
-    /// zimr's engine for the platform the apps are built for (`platform`) - the web's or Windows' - with a
+    /// zimr's engine for the platform the apps are built for (`platform`) - the web's, Windows' or Linux's - with a
     /// shader cache of the project's own: shader basenames are the project's choice, and its `julia_fs` must not
     /// resolve to zimr's.
     ctx: AppContext,
@@ -3413,7 +3595,7 @@ pub const Project = struct {
     /// zimr has no platform for, where each app's step fails naming the choices.
     platform: ?Platform,
     mode: Mode,
-    /// The apps' target - the web's wasm, or Windows' - and optimize mode, for adding another package's module
+    /// The apps' target - the web's wasm, Windows' or Linux's - and optimize mode, for adding another package's module
     /// to an app (`b.dependency("foo", .{ .target = project.target, ... })`).
     target: ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
@@ -3521,13 +3703,20 @@ pub const Project = struct {
         const platform: ?Platform = b.option(
             Platform,
             "platform",
-            "web | windows | android (default: this machine's platform, when zimr has one)",
+            "web | windows | linux | android (default: this machine's platform, when zimr has one)",
         ) orelse hostPlatform();
         var web_ctx: AppContext = engine.ctx;
         web_ctx.shader_cache = newShaderCache(b);
         var windows_ctx: AppContext = engine.windows_ctx;
         windows_ctx.shader_cache = newShaderCache(b);
-        const ctx: AppContext = if (platform == .windows) windows_ctx else web_ctx;
+        var linux_ctx: AppContext = engine.linux_ctx;
+        linux_ctx.shader_cache = newShaderCache(b);
+        // Each native platform builds with its own engine; the web and Android (its page in an app) with the web's.
+        const ctx: AppContext = switch (platform orelse .web) {
+            .windows => windows_ctx,
+            .linux => linux_ctx,
+            .web, .android => web_ctx,
+        };
         const web_dir: std.Build.InstallDir = .{ .custom = "web" };
 
         const p: *Project = b.allocator.create(Project) catch @panic("OOM");
@@ -3651,10 +3840,12 @@ pub const Project = struct {
         return run;
     }
 
-    /// How an app's `run-<name>` runs it once built (`appRun`): the installed Windows program, its page through the dev
-    /// server, or the run that puts its Android app on the phone and starts it (`AndroidBuild.phone_run`).
+    /// How an app's `run-<name>` runs it once built (`appRun`): the installed Windows program, the installed Linux one
+    /// (`linuxRun`: natively, or in WSL from Windows), its page through the dev server, or the run that puts its
+    /// Android app on the phone and starts it (`AndroidBuild.phone_run`).
     const AppRunner = union(enum) {
         program: *Compile,
+        linux_program: *Step.InstallArtifact,
         page,
         phone: *Run,
     };
@@ -3677,6 +3868,7 @@ pub const Project = struct {
                 program_run.step.dependOn(app_step);
                 return &program_run.step;
             },
+            .linux_program => |install| return linuxRun(b, install, app_step),
             .phone => |phone_run| {
                 phone_run.step.dependOn(app_step);
                 return &phone_run.step;
@@ -3731,9 +3923,9 @@ pub const Project = struct {
             wireEngineShaders(ctx, user_mod);
         }
         const app_step: *Step = b.step(app.name, b.fmt(
-            "Build {s} for -Dplatform: zig-out/web/{s}/ and zig-out/standalone/{s}.html, zig-out/windows/{s}.exe or " ++
-                "zig-out/android/{s}.apk",
-            .{ app.name, app.name, app.name, app.name, app.name },
+            "Build {s} for -Dplatform: zig-out/web/{s}/ and zig-out/standalone/{s}.html, zig-out/windows/{s}.exe, " ++
+                "zig-out/linux/{s} or zig-out/android/{s}.apk",
+            .{ app.name, app.name, app.name, app.name, app.name, app.name },
         ));
         if (p.lint_step) |lint_step| {
             app_step.dependOn(lint_step);
@@ -3750,6 +3942,15 @@ pub const Project = struct {
             app_step.dependOn(&windows_install.step);
             p.addAppRun(app.name, app_step, .{ .program = windows_exe });
             return .{ .exe = windows_exe, .module = user_mod };
+        }
+        if (p.platform == .linux) {
+            // The Windows program's twin: jobs run in the program itself here too.
+            const linux_exe: *Compile = nativeAppExe(ctx, user_mod, app.name, app.own_frame);
+            const linux_install: *InstallArtifact = installLinuxApp(b, ctx, linux_exe);
+            b.getInstallStep().dependOn(&linux_install.step);
+            app_step.dependOn(&linux_install.step);
+            p.addAppRun(app.name, app_step, .{ .linux_program = linux_install });
+            return .{ .exe = linux_exe, .module = user_mod };
         }
         const kernel_wasm: ?LazyPath = if (app.job_kernels)
             buildJobKernels(
@@ -3826,7 +4027,7 @@ pub const Project = struct {
         // A machine zimr has no platform for builds nothing it would have to guess at.
         if (p.platform == null) {
             const message: []const u8 = b.fmt("zimr has no platform for this machine yet: build {s} with " ++
-                "-Dplatform=web, -Dplatform=windows or -Dplatform=android", .{app.name});
+                "-Dplatform=web, -Dplatform=windows, -Dplatform=linux or -Dplatform=android", .{app.name});
             app_step.dependOn(&b.addFail(message).step);
             p.addAppRun(app.name, app_step, .page);
             return .{ .exe = exe, .module = user_mod };
@@ -4284,7 +4485,7 @@ fn wireHostTestImports(
     test_mod.addAnonymousImport("atomic_buildgrid_spv", .{
         .root_source_file = b.path("tests/fixtures/atomics/atomic_buildgrid.spv"),
     });
-    test_mod.addOptions("build_options", wiring.build_opts);
+    _ = addEngineOptionsAndRobot(b, test_mod, wiring.build_opts, wiring.zimrmath_mod);
 }
 
 /// `zig build vorbis-reference`: the engine's Vorbis decoder against stb_vorbis, decoding the same file, compared frame
@@ -4396,7 +4597,7 @@ pub fn build(b: *std.Build) void {
     const platform: ?Platform = b.option(
         Platform,
         "platform",
-        "web | windows | android (default: this machine's platform, when zimr has one)",
+        "web | windows | linux | android (default: this machine's platform, when zimr has one)",
     ) orelse hostPlatform();
     const wasm_optimize: std.builtin.OptimizeMode = switch (mode) {
         .debug => .Debug,
@@ -4642,20 +4843,21 @@ pub fn build(b: *std.Build) void {
     build_opts_wgpu.addOption(bool, "assert_log", assert_log);
     build_opts_wgpu.addOption(bool, "profile_enabled", profile_enabled);
     build_opts_wgpu.addOption(bool, "ui_backend_wgpu", true);
-    zimr_mod.addOptions("build_options", build_opts_wgpu);
+    _ = addEngineOptionsAndRobot(b, zimr_mod, build_opts_wgpu, zimrmath_mod);
 
-    // ---- The zimr module for the native Windows host (vulkan_port_plan_v2.md, stage S2): the same source as the
+    // ---- The zimr module for the native Windows host: the same source as the
     // web module, built for x86_64-windows-gnu with `host = "native"`, so `wgpu.zig` routes every GPU call to the
     // Vulkan host. The engine shaders below are wired into it as SPIR-V under the import names the web module gets
     // as WGSL, so engine code embeds "<name>.wgsl" unchanged and receives what its host loads.
     const windows_target: ResolvedTarget = b.resolveTargetQuery(std.Target.Query.parse(.{
         .arch_os_abi = "x86_64-windows-gnu",
     }) catch unreachable); // lint:off catch-suppression: hardcoded-valid triple
-    const build_opts_windows: *Options = b.addOptions();
-    build_opts_windows.addOption(bool, "assert_log", assert_log);
-    build_opts_windows.addOption(bool, "profile_enabled", profile_enabled);
-    build_opts_windows.addOption(bool, "ui_backend_wgpu", true);
-    build_opts_windows.addOption([]const u8, "host", "native");
+    // The options of every native engine with a window - Windows' and Linux's: the same four.
+    const build_opts_native: *Options = b.addOptions();
+    build_opts_native.addOption(bool, "assert_log", assert_log);
+    build_opts_native.addOption(bool, "profile_enabled", profile_enabled);
+    build_opts_native.addOption(bool, "ui_backend_wgpu", true);
+    build_opts_native.addOption([]const u8, "host", "native");
     // The numerics modules built for Windows: the engine, the apps' kernels and their zimrnum all on one `kompute`.
     const windows_numerics: NumericsModules = addNumericsModules(b, windows_target, native_optimize, zimrmath_mod);
     const zimr_windows_mod: *Module = b.createModule(.{
@@ -4668,7 +4870,29 @@ pub fn build(b: *std.Build) void {
     zimr_windows_mod.addImport("zm", zimrmath_mod);
     zimr_windows_mod.addImport("zn", windows_numerics.zimrnum);
     zimr_windows_mod.addImport("zrl", windows_numerics.zimrrl);
-    zimr_windows_mod.addOptions("build_options", build_opts_windows);
+    _ = addEngineOptionsAndRobot(b, zimr_windows_mod, build_opts_native, zimrmath_mod);
+
+    // ---- The zimr module for the native Linux host (linux_port_plan.md): the Windows module's twin, its window X11's
+    // (`native_window.zig`). Built here, on any machine: Zig links glibc from its own stubs, no Linux headers or
+    // libraries needed. glibc 2.31 - Zig's own floor for x86_64 Linux - is written into the triple, so that a
+    // toolchain change cannot raise the oldest Linux the programs start on; `tools/elf_needs.zig` checks the linked
+    // launcher against it in `platforms-check`. Every system library - X11, ALSA, Vulkan - is opened at run time with
+    // the C library's `dlopen`, so it links libc and nothing else.
+    const linux_target: ResolvedTarget = b.resolveTargetQuery(std.Target.Query.parse(.{
+        .arch_os_abi = "x86_64-linux-gnu." ++ linux_glibc_floor,
+    }) catch unreachable); // lint:off catch-suppression: hardcoded-valid triple
+    const linux_numerics: NumericsModules = addNumericsModules(b, linux_target, native_optimize, zimrmath_mod);
+    const zimr_linux_mod: *Module = b.createModule(.{
+        .root_source_file = b.path("src/zimr.zig"),
+        .target = linux_target,
+        .optimize = native_optimize,
+        .link_libc = true,
+    });
+    zimr_linux_mod.addImport("shader_interface", shader_interface_mod);
+    zimr_linux_mod.addImport("zm", zimrmath_mod);
+    zimr_linux_mod.addImport("zn", linux_numerics.zimrnum);
+    zimr_linux_mod.addImport("zrl", linux_numerics.zimrrl);
+    _ = addEngineOptionsAndRobot(b, zimr_linux_mod, build_opts_native, zimrmath_mod);
 
     // ---- The zimr module for a headless run (platforms_plan.md B8): the Windows module's twin for the machine the
     // build runs on, with `host = "headless"` - no window; the Vulkan host draws into a screen of its own, on a GPU or
@@ -4690,12 +4914,12 @@ pub fn build(b: *std.Build) void {
     zimr_headless_mod.addImport("zm", zimrmath_mod);
     zimr_headless_mod.addImport("zn", headless_numerics.zimrnum);
     zimr_headless_mod.addImport("zrl", headless_numerics.zimrrl);
-    zimr_headless_mod.addOptions("build_options", build_opts_headless);
+    _ = addEngineOptionsAndRobot(b, zimr_headless_mod, build_opts_headless, zimrmath_mod);
 
-    // ---- The engine for the systems the unwritten platform stands for (platforms_plan.md B9): Linux, macOS and
-    // Android, each the Windows module's twin for its own target, with `host = "native"` - built by `platforms-check`
-    // alone, which compiles the launcher for them, so that code compiling only for Windows or the browser is found the
-    // day it is written. Each opens the Vulkan loader with the C library's `dlopen`, so it links libc.
+    // ---- The engine for the systems the unwritten platform stands for (platforms_plan.md B9): macOS and Android, each
+    // the Windows module's twin for its own target, with `host = "native"` - built by `platforms-check` alone, which
+    // compiles the launcher for them, so that code compiling only for Windows or the browser is found the day it is
+    // written. Each opens the Vulkan loader with the C library's `dlopen`, so it links libc.
     var platform_check_engines: [platform_check_targets.len]PlatformCheckEngine = undefined;
     for (platform_check_targets, &platform_check_engines) |check_target, *check_engine| {
         const check_resolved: ResolvedTarget = b.resolveTargetQuery(std.Target.Query.parse(.{
@@ -4717,7 +4941,7 @@ pub fn build(b: *std.Build) void {
         check_zimr_mod.addImport("zm", zimrmath_mod);
         check_zimr_mod.addImport("zn", check_numerics.zimrnum);
         check_zimr_mod.addImport("zrl", check_numerics.zimrrl);
-        check_zimr_mod.addOptions("build_options", check_options);
+        _ = addEngineOptionsAndRobot(b, check_zimr_mod, check_options, zimrmath_mod);
         check_engine.* = .{ .target = check_resolved, .zimr_mod = check_zimr_mod, .numerics = check_numerics };
     }
 
@@ -4949,7 +5173,7 @@ pub fn build(b: *std.Build) void {
     });
     zimr_native_mod.addImport("zm", zimrmath_mod);
     zimr_native_mod.addImport("shader_interface", shader_interface_mod);
-    zimr_native_mod.addOptions("build_options", build_opts_wgpu);
+    _ = addEngineOptionsAndRobot(b, zimr_native_mod, build_opts_wgpu, zimrmath_mod);
     const native_plot_png_exe: *Compile = b.addExecutable(.{
         .name = "native_plot_png",
         .root_module = b.createModule(.{
@@ -4985,7 +5209,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     robot_bench_exe.root_module.addImport("zm", zimrmath_mod);
-    robot_bench_exe.root_module.addOptions("build_options", build_opts_wgpu);
+    _ = addEngineOptionsAndRobot(b, robot_bench_exe.root_module, build_opts_wgpu, zimrmath_mod);
     const robot_bench_run: *Run = b.addRunArtifact(robot_bench_exe);
     const robot_bench_step: *Step = b.step(
         "robot-bench",
@@ -5006,7 +5230,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     clip_bake_exe.root_module.addImport("zm", zimrmath_mod);
-    clip_bake_exe.root_module.addOptions("build_options", build_opts_wgpu);
+    _ = addEngineOptionsAndRobot(b, clip_bake_exe.root_module, build_opts_wgpu, zimrmath_mod);
     const clip_bake_run: *Run = b.addRunArtifact(clip_bake_exe);
     clip_bake_run.has_side_effects = true;
     const clip_bake_step: *Step = b.step("clip-bake", "Bake the tracking clips into the pages' compact binaries");
@@ -5041,7 +5265,7 @@ pub fn build(b: *std.Build) void {
         exe.root_module.addImport("zn", zimrnum_mod);
         exe.root_module.addImport("zrl", zimrrl_mod);
         exe.root_module.addImport("cli", cli_mod);
-        exe.root_module.addOptions("build_options", build_opts);
+        _ = addEngineOptionsAndRobot(b, exe.root_module, build_opts, zimrmath_mod);
         const install: *Step.InstallArtifact = b.addInstallArtifact(exe, .{
             .dest_dir = .{ .override = .{ .custom = "../tools/zig-out/bin" } },
         });
@@ -5292,6 +5516,7 @@ pub fn build(b: *std.Build) void {
             const wgsl_import_name: []const u8 = b.fmt("{s}.wgsl", .{sh_name});
             zimr_mod.addAnonymousImport(wgsl_import_name, .{ .root_source_file = wgsl_path });
             zimr_windows_mod.addAnonymousImport(wgsl_import_name, .{ .root_source_file = out.spv });
+            zimr_linux_mod.addAnonymousImport(wgsl_import_name, .{ .root_source_file = out.spv });
             zimr_headless_mod.addAnonymousImport(wgsl_import_name, .{ .root_source_file = out.spv });
             for (&platform_check_engines) |*check_engine| {
                 check_engine.zimr_mod.addAnonymousImport(wgsl_import_name, .{ .root_source_file = out.spv });
@@ -5326,6 +5551,7 @@ pub fn build(b: *std.Build) void {
             zimr_mod.addImport(b.fmt("{s}_externs", .{sh_name}), externs_mod);
             zimr_native_mod.addImport(b.fmt("{s}_externs", .{sh_name}), externs_mod);
             zimr_windows_mod.addImport(b.fmt("{s}_externs", .{sh_name}), externs_mod);
+            zimr_linux_mod.addImport(b.fmt("{s}_externs", .{sh_name}), externs_mod);
             zimr_headless_mod.addImport(b.fmt("{s}_externs", .{sh_name}), externs_mod);
             for (&platform_check_engines) |*check_engine| {
                 check_engine.zimr_mod.addImport(b.fmt("{s}_externs", .{sh_name}), externs_mod);
@@ -5418,8 +5644,8 @@ pub fn build(b: *std.Build) void {
     }
 
     // ---- vk-shader-probe: every engine shader, legalized as the native host loads it, created as a Vulkan shader
-    // module with the Khronos validation layer validating its SPIR-V (vulkan_port_plan_v2.md 5.5, the probe's GPU
-    // half). It runs on the build machine, with whatever Vulkan driver is there: a GPU, or Mesa's software driver
+    // module with the Khronos validation layer validating its SPIR-V (the probe's GPU half). It runs on the build
+    // machine, with whatever Vulkan driver is there: a GPU, or Mesa's software driver
     // (lavapipe) on a machine without one. It needs the validation layer (the Vulkan SDK, or the
     // `vulkan-validationlayers` package).
     {
@@ -5480,8 +5706,10 @@ pub fn build(b: *std.Build) void {
     bridge_import_check_exe.root_module.addImport("cli", cli_mod);
 
     // The headless trainer's Windows install (`geno-trainer-windows`, below). The training lab starts runs with the
-    // trainer beside its own executable, so the lab's Windows build installs it too.
+    // trainer beside its own executable, so the lab's Windows build installs it too - and its Linux build, under
+    // `-Dplatform=linux`, the Linux trainer.
     var geno_trainer_windows_install: ?*Step = null;
+    var geno_trainer_linux_install: ?*Step = null;
     // ---- vk-host-test: the Vulkan host headless, driven through `wgpu.zig` as the engine drives it, with the
     // validation layer on; plus `native_os.zig`'s tests. Built for the build machine and run on its Vulkan driver - a
     // GPU, or Mesa's software driver (lavapipe) on a machine without one. Needs the validation layer.
@@ -5559,6 +5787,12 @@ pub fn build(b: *std.Build) void {
         );
         windows_trainer_step.dependOn(&windows_trainer_install.step);
         geno_trainer_windows_install = &windows_trainer_install.step;
+        // The Linux trainer, made only for a Linux build, whose lab installs it beside itself in zig-out/linux/.
+        if (platform == .linux) {
+            const linux_trainer_exe: *Compile =
+                addGenoTrainer(b, linux_target, host_test_inputs, cli_mod, trainer_portable);
+            geno_trainer_linux_install = &installLinuxProgram(b, linux_trainer_exe).step;
+        }
     }
 
     // ---- The example build context, shared with projects that depend on zimr.
@@ -5590,6 +5824,12 @@ pub fn build(b: *std.Build) void {
     });
     shared_common_mod.addImport("zimr", zimr_mod);
     shared_common_mod.addImport("zm", zimrmath_mod);
+    // The music theory imports `std` alone, so each context's is only its target.
+    const shared_music_theory_mod: *Module = b.createModule(.{
+        .root_source_file = b.path("examples/music_theory/music_theory.zig"),
+        .target = wasm_target,
+        .optimize = wasm_optimize,
+    });
     const shared_roboto_mod: *Module = b.createModule(.{
         .root_source_file = b.path("assets/RobotoMono-Regular.ttf"),
     });
@@ -5622,6 +5862,7 @@ pub fn build(b: *std.Build) void {
         .engine_shader_embeds = web_engine_embeds.items,
         .mesh_bake_exe = mesh_bake_exe,
         .common_mod = shared_common_mod,
+        .music_theory_mod = shared_music_theory_mod,
         .roboto_mod = shared_roboto_mod,
         .atkinson_mod = shared_atkinson_mod,
         .ogg_mod = shared_ogg_mod,
@@ -5641,12 +5882,18 @@ pub fn build(b: *std.Build) void {
     });
     windows_common_mod.addImport("zimr", zimr_windows_mod);
     windows_common_mod.addImport("zm", zimrmath_mod);
+    const windows_music_theory_mod: *Module = b.createModule(.{
+        .root_source_file = b.path("examples/music_theory/music_theory.zig"),
+        .target = windows_target,
+        .optimize = native_optimize,
+    });
     var windows_shader_cache: StringHashMap(ShaderDep) = .init(b.allocator);
     var windows_app_ctx: AppContext = wgpu_app_ctx;
     windows_app_ctx.target = windows_target;
     windows_app_ctx.optimize = native_optimize;
     windows_app_ctx.zimr_mod = zimr_windows_mod;
     windows_app_ctx.common_mod = windows_common_mod;
+    windows_app_ctx.music_theory_mod = windows_music_theory_mod;
     windows_app_ctx.kompute_mod = windows_numerics.kompute;
     windows_app_ctx.zimrnum_mod = windows_numerics.zimrnum;
     windows_app_ctx.zimrrl_mod = windows_numerics.zimrrl;
@@ -5655,6 +5902,32 @@ pub fn build(b: *std.Build) void {
     windows_app_ctx.native_wgsl_check = native_wgsl_check_exe;
     windows_app_ctx.pdb_void_workaround = pdb_void_workaround_exe;
     windows_app_ctx.engine_shader_embeds = native_engine_embeds.items;
+    // ---- The Linux apps' context: the Windows context's twin for the Linux engine (`zimr_linux_mod`). Its programs
+    // keep their debug information inside (ELF), so no PDB workaround; the native check stays - it reads bytes, in any
+    // format. Above the phase split with the Windows one, so a project builds Linux programs too.
+    const linux_common_mod: *Module = b.createModule(.{
+        .root_source_file = b.path("examples/example_common/example_common.zig"),
+        .target = linux_target,
+        .optimize = native_optimize,
+    });
+    linux_common_mod.addImport("zimr", zimr_linux_mod);
+    linux_common_mod.addImport("zm", zimrmath_mod);
+    const linux_music_theory_mod: *Module = b.createModule(.{
+        .root_source_file = b.path("examples/music_theory/music_theory.zig"),
+        .target = linux_target,
+        .optimize = native_optimize,
+    });
+    var linux_shader_cache: StringHashMap(ShaderDep) = .init(b.allocator);
+    var linux_app_ctx: AppContext = windows_app_ctx;
+    linux_app_ctx.target = linux_target;
+    linux_app_ctx.zimr_mod = zimr_linux_mod;
+    linux_app_ctx.common_mod = linux_common_mod;
+    linux_app_ctx.music_theory_mod = linux_music_theory_mod;
+    linux_app_ctx.kompute_mod = linux_numerics.kompute;
+    linux_app_ctx.zimrnum_mod = linux_numerics.zimrnum;
+    linux_app_ctx.zimrrl_mod = linux_numerics.zimrrl;
+    linux_app_ctx.shader_cache = &linux_shader_cache;
+    linux_app_ctx.pdb_void_workaround = null;
     // A project's build.zig (see `Project`) runs after this function has returned,
     // and reaches the engine through this handle - so it is published ABOVE the
     // phase split, the last point a dependency's build() gets to.
@@ -5662,6 +5935,7 @@ pub fn build(b: *std.Build) void {
         b,
         wgpu_app_ctx,
         windows_app_ctx,
+        linux_app_ctx,
         serve_exe,
         tools.zbuild,
         tools.editor_configs,
@@ -5692,11 +5966,17 @@ pub fn build(b: *std.Build) void {
     });
     headless_common_mod.addImport("zimr", zimr_headless_mod);
     headless_common_mod.addImport("zm", zimrmath_mod);
+    const headless_music_theory_mod: *Module = b.createModule(.{
+        .root_source_file = b.path("examples/music_theory/music_theory.zig"),
+        .target = headless_target,
+        .optimize = native_optimize,
+    });
     var headless_shader_cache: StringHashMap(ShaderDep) = .init(b.allocator);
     var headless_app_ctx: AppContext = windows_app_ctx;
     headless_app_ctx.target = headless_target;
     headless_app_ctx.zimr_mod = zimr_headless_mod;
     headless_app_ctx.common_mod = headless_common_mod;
+    headless_app_ctx.music_theory_mod = headless_music_theory_mod;
     headless_app_ctx.kompute_mod = headless_numerics.kompute;
     headless_app_ctx.zimrnum_mod = headless_numerics.zimrnum;
     headless_app_ctx.zimrrl_mod = headless_numerics.zimrrl;
@@ -6144,6 +6424,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "audio_keyboard", .title = "zimr - keyboard" },
         .{ .name = "audio_scale_star", .title = "zimr - the major scale in thirds" },
         .{ .name = "audio_scale_star_hands", .title = "zimr - the scale star, two hands" },
+        .{ .name = "magic_isomorphic_keyboard", .title = "zimr - magic isomorphic keyboard" },
         .{ .name = "ui_shortcuts", .title = "zimr - ui shortcuts (B2 capstone)" },
         .{ .name = "ui_mouse_drag", .title = "zimr - ui mouse drag (B1 capstone)" },
         .{ .name = "ui_custom_rendering", .title = "zimr - UI custom rendering" },
@@ -7059,6 +7340,9 @@ pub fn build(b: *std.Build) void {
     // `run-<app>` step runs.
     var web_builds: StringHashMap(*Step) = .init(b.allocator);
     var windows_builds: StringHashMap(*Step.InstallArtifact) = .init(b.allocator);
+    // The Linux programs: every example and the gallery under `-Dplatform=linux` only, the launcher always (for
+    // `platforms-check`) - so that no other build pays the configure time of a fourth set of programs.
+    var linux_builds: StringHashMap(*Step.InstallArtifact) = .init(b.allocator);
     // Under `-Dplatform=android`, each web app's Android build, by app name: its page in an APK. Nothing of it exists
     // under another platform, so no other build looks for the Android SDK.
     var android_builds: StringHashMap(AndroidBuild) = .init(b.allocator);
@@ -7136,7 +7420,7 @@ pub fn build(b: *std.Build) void {
     );
     const shot_names_option: ?[]const u8 = b.option([]const u8, "shots", "gallery-shots: only these examples");
     for (wgpu_apps) |wgpu_app| {
-        if (windowsPendingReason(wgpu_app.name) != null) {
+        if (nativePendingReason(wgpu_app.name) != null) {
             continue;
         }
         const headless_exe: *Compile = addHeadlessRun(b, headless_app_ctx, wgpu_app, script_path);
@@ -7198,15 +7482,46 @@ pub fn build(b: *std.Build) void {
             "Run the scale star headless with its script and check the sound it saved (tools/sound_capture_check.zig)",
         );
         scale_star_check_step.dependOn(&run_sound_check.step);
+
+        // ---- magic-isomorphic-keyboard-check: the magic isomorphic keyboard the same way - single keys, then
+        // triangles of keys, the tonic C on F - and the same checker on the sound it saved.
+        const keyboard_app: App = appNamed(&wgpu_apps, "magic_isomorphic_keyboard");
+        const keyboard_module: *Module = headless_app_ctx.buildAppModule(keyboard_app);
+        const keyboard_exe: *Compile = nativeAppExe(
+            headless_app_ctx,
+            keyboard_module,
+            "magic_isomorphic_keyboard",
+            false,
+        );
+        const keyboard_install: *Step.InstallArtifact = b.addInstallArtifact(keyboard_exe, .{
+            .dest_dir = .{ .override = .{ .custom = "headless/bin" } },
+        });
+        const run_keyboard: *Run = b.addRunArtifact(keyboard_exe);
+        run_keyboard.has_side_effects = true;
+        run_keyboard.setCwd(b.path("."));
+        run_keyboard.setEnvironmentVariable("ZIMR_SCRIPT", "examples/magic_isomorphic_keyboard/check.script");
+        run_keyboard.setEnvironmentVariable("ZIMR_CAPTURE_DIR", "zig-out/headless/magic_isomorphic_keyboard");
+        run_keyboard.step.dependOn(&keyboard_install.step);
+        const run_keyboard_sound_check: *Run = b.addRunArtifact(sound_check_exe);
+        run_keyboard_sound_check.has_side_effects = true;
+        run_keyboard_sound_check.setCwd(b.path("."));
+        run_keyboard_sound_check.addArg("zig-out/headless/magic_isomorphic_keyboard_check.wav");
+        run_keyboard_sound_check.addArg("examples/magic_isomorphic_keyboard/check.expect");
+        run_keyboard_sound_check.step.dependOn(&run_keyboard.step);
+        const keyboard_check_step: *Step = b.step(
+            "magic-isomorphic-keyboard-check",
+            "Run the magic isomorphic keyboard headless with its script and check the sound it saved",
+        );
+        keyboard_check_step.dependOn(&run_keyboard_sound_check.step);
     }
 
     // ---- Every example for Windows, and the gallery that starts them: each its own executable, as the web serves
     // each its own page, built through the Windows context so each app is wired exactly as on the web. Recorded in
-    // `windows_builds` for the apps' steps; an example the native host cannot run yet is on `windows_pending`, with
-    // the reason its step and the gallery show.
+    // `windows_builds` for the apps' steps; an example the native host cannot run yet is on `native_pending`, with
+    // the reason its step and the gallery show. The same for Linux under `-Dplatform=linux`, in `linux_builds`.
     {
         for (wgpu_apps) |wgpu_app| {
-            if (windowsPendingReason(wgpu_app.name) != null) {
+            if (nativePendingReason(wgpu_app.name) != null) {
                 continue;
             }
             const example_mod: *Module = windows_app_ctx.buildAppModule(wgpu_app);
@@ -7218,9 +7533,9 @@ pub fn build(b: *std.Build) void {
             );
             windows_builds.put(wgpu_app.name, example_install) catch @panic("oom");
         }
-        var pending_names: [windows_pending.len][]const u8 = undefined;
-        var pending_reasons: [windows_pending.len][]const u8 = undefined;
-        for (windows_pending, &pending_names, &pending_reasons) |pending, *name, *reason| {
+        var pending_names: [native_pending.len][]const u8 = undefined;
+        var pending_reasons: [native_pending.len][]const u8 = undefined;
+        for (native_pending, &pending_names, &pending_reasons) |pending, *name, *reason| {
             name.* = pending.name;
             reason.* = pending.reason;
         }
@@ -7245,6 +7560,34 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/web/manifest.json"),
         });
         _ = addHeadlessRunOf(b, headless_app_ctx, gallery_headless_mod, "zimr_gallery", false, script_path);
+        // Linux: every example and the gallery, each a program in zig-out/linux/, through the Linux context.
+        if (platform == .linux) {
+            for (wgpu_apps) |wgpu_app| {
+                if (nativePendingReason(wgpu_app.name) != null) {
+                    continue;
+                }
+                const linux_example_mod: *Module = linux_app_ctx.buildAppModule(wgpu_app);
+                const linux_example_install: *Step.InstallArtifact = addLinuxApp(
+                    linux_app_ctx,
+                    linux_example_mod,
+                    wgpu_app.name,
+                    wgpu_app.own_frame,
+                );
+                linux_builds.put(wgpu_app.name, linux_example_install) catch @panic("oom");
+            }
+            const linux_gallery_mod: *Module = linux_app_ctx.buildUserModShared("zimr_gallery");
+            linux_gallery_mod.addOptions("gallery_options", gallery_options);
+            linux_gallery_mod.addAnonymousImport("examples_manifest", .{
+                .root_source_file = b.path("src/web/manifest.json"),
+            });
+            const linux_gallery_install: *Step.InstallArtifact = addLinuxApp(
+                linux_app_ctx,
+                linux_gallery_mod,
+                "zimr_gallery",
+                false,
+            );
+            linux_builds.put("zimr_gallery", linux_gallery_install) catch @panic("oom");
+        }
     }
     // The launcher's examples, one name each; `examples/launcher` imports each as `ex_<name>`.
     const flagships = [_][]const u8{
@@ -7297,18 +7640,48 @@ pub fn build(b: *std.Build) void {
             false,
         );
         windows_builds.put("launcher", launcher_windows_install) catch @panic("oom");
+        // Linux's launcher, whatever `-Dplatform` says: `platforms-check` links it and reads what it needs.
+        const launcher_linux_mod: *Module = linux_app_ctx.buildUserModShared("launcher");
+        inline for (flagships) |flagship_name| {
+            const flagship_mod: *Module = linux_app_ctx.buildAppModule(appNamed(&wgpu_apps, flagship_name));
+            launcher_linux_mod.addImport("ex_" ++ flagship_name, flagship_mod);
+        }
+        const launcher_linux_install: *Step.InstallArtifact = addLinuxApp(
+            linux_app_ctx,
+            launcher_linux_mod,
+            "launcher",
+            false,
+        );
+        linux_builds.put("launcher", launcher_linux_install) catch @panic("oom");
     }
     // ---- `platforms-check` (platforms_plan.md B9): the launcher - every flagship in one program - compiled for every
-    // platform: the web's page and Windows' program, as their own steps build them, and for Linux, macOS and Android
-    // an object of the launcher's program on the unwritten platform (`platform/unwritten.zig`), compiled and not
-    // linked, so that no system's libraries are needed here. Code that compiles only for Windows or the browser fails
-    // here the day it is written. The web's page joins it below, once every web build is registered.
+    // platform: the web's page, Windows' and Linux's programs, as their own steps build them, and for macOS and
+    // Android an object of the launcher's program on the unwritten platform (`platform/unwritten.zig`), compiled and
+    // not linked, so that no system's libraries are needed here. Code that compiles only for Windows or the browser
+    // fails here the day it is written. Linux's program is read too (`tools/elf_needs.zig`): it must start on glibc
+    // `linux_glibc_floor` and link no library but glibc's own, every other one being opened at run time. The web's
+    // page joins it below, once every web build is registered.
     const platforms_check_step: *Step = b.step(
         "platforms-check",
         "Compile the launcher for the web, Windows, Linux, macOS and Android",
     );
     {
         platforms_check_step.dependOn(&windows_builds.get("launcher").?.step);
+        const elf_needs_exe: *Compile = b.addExecutable(.{
+            .name = "elf_needs",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("tools/elf_needs.zig"),
+                .target = b.graph.host,
+                .optimize = .ReleaseSafe,
+            }),
+        });
+        elf_needs_exe.root_module.addImport("cli", cli_mod);
+        const linux_launcher_install: *Step.InstallArtifact = linux_builds.get("launcher").?;
+        const elf_needs_run: *Run = b.addRunArtifact(elf_needs_exe);
+        elf_needs_run.addArgs(&.{ "--glibc-at-most", linux_glibc_floor });
+        elf_needs_run.addFileArg(linux_launcher_install.artifact.getEmittedBin());
+        platforms_check_step.dependOn(&linux_launcher_install.step);
+        platforms_check_step.dependOn(&elf_needs_run.step);
         for (platform_check_targets, &platform_check_engines) |check_target, *check_engine| {
             const check_common_mod: *Module = b.createModule(.{
                 .root_source_file = b.path("examples/example_common/example_common.zig"),
@@ -7317,6 +7690,11 @@ pub fn build(b: *std.Build) void {
             });
             check_common_mod.addImport("zimr", check_engine.zimr_mod);
             check_common_mod.addImport("zm", zimrmath_mod);
+            const check_music_theory_mod: *Module = b.createModule(.{
+                .root_source_file = b.path("examples/music_theory/music_theory.zig"),
+                .target = check_engine.target,
+                .optimize = native_optimize,
+            });
             const check_shader_cache: *StringHashMap(ShaderDep) = b.allocator.create(StringHashMap(ShaderDep)) catch
                 @panic("oom");
             check_shader_cache.* = StringHashMap(ShaderDep).init(b.allocator);
@@ -7324,6 +7702,7 @@ pub fn build(b: *std.Build) void {
             check_ctx.target = check_engine.target;
             check_ctx.zimr_mod = check_engine.zimr_mod;
             check_ctx.common_mod = check_common_mod;
+            check_ctx.music_theory_mod = check_music_theory_mod;
             check_ctx.kompute_mod = check_engine.numerics.kompute;
             check_ctx.zimrnum_mod = check_engine.numerics.zimrnum;
             check_ctx.zimrrl_mod = check_engine.numerics.zimrrl;
@@ -7527,14 +7906,28 @@ pub fn build(b: *std.Build) void {
                 }
             }
             const dash_name: []const u8 = std.mem.replaceOwned(u8, b.allocator, name, "_", "-") catch @panic("oom");
-            const app_build: *Step = appBuildFor(b, platform, name, &web_builds, &windows_builds, &android_builds);
-            const app_step: *Step = b.step(dash_name, b.fmt("Build {s} for -Dplatform (web, windows or android)", .{
+            const app_build: *Step = appBuildFor(
+                b,
+                platform,
                 name,
-            }));
+                &web_builds,
+                &windows_builds,
+                &linux_builds,
+                &android_builds,
+            );
+            const app_step: *Step = b.step(dash_name, b.fmt(
+                "Build {s} for -Dplatform (web, windows, linux or android)",
+                .{name},
+            ));
             app_step.dependOn(app_build);
-            const is_lab_for_windows: bool = eql(u8, name, "geno_lab") and platform == .windows;
+            const is_lab: bool = eql(u8, name, "geno_lab");
+            const is_lab_for_windows: bool = is_lab and platform == .windows;
             if (is_lab_for_windows) {
                 app_step.dependOn(geno_trainer_windows_install.?);
+            }
+            const is_lab_for_linux: bool = is_lab and platform == .linux;
+            if (is_lab_for_linux) {
+                app_step.dependOn(geno_trainer_linux_install.?);
             }
             // `all-examples` builds the apps the platform has; one it lacks (the gallery on the web, an app still
             // pending natively) is left out, and its own step says why. With no platform at all every app's step
@@ -7542,6 +7935,7 @@ pub fn build(b: *std.Build) void {
             const in_all_examples: bool = if (platform) |chosen| switch (chosen) {
                 .web => web_builds.contains(name),
                 .windows => windows_builds.contains(name),
+                .linux => linux_builds.contains(name),
                 .android => android_builds.contains(name),
             } else true;
             if (in_all_examples) {
@@ -7563,6 +7957,7 @@ pub fn build(b: *std.Build) void {
                 serve_exe,
                 &web_builds,
                 &windows_builds,
+                &linux_builds,
                 &android_builds,
             ));
             if (eql(u8, name, "zimr_gallery")) {
@@ -7601,6 +7996,7 @@ pub fn build(b: *std.Build) void {
                 serve_exe,
                 &web_builds,
                 &windows_builds,
+                &linux_builds,
                 &android_builds,
             );
             gallery_run.dependOn(all_examples_step);
@@ -8009,14 +8405,9 @@ pub fn build(b: *std.Build) void {
         bmpc_cartpole_codecs_mod.addImport("zm", zimrmath_mod);
         bmpc_cartpole_codecs_mod.addImport("build_options", bmpc_cartpole_options_mod);
         bmpc_cartpole_mod.addImport("codecs", bmpc_cartpole_codecs_mod);
-        const bmpc_cartpole_robot_mod: *Module = b.createModule(.{
-            .root_source_file = b.path("src/robot.zig"),
-            .target = native_target,
-            .optimize = .ReleaseFast,
-        });
-        bmpc_cartpole_robot_mod.addImport("zm", zimrmath_mod);
-        bmpc_cartpole_robot_mod.addImport("build_options", bmpc_cartpole_options_mod);
-        bmpc_cartpole_mod.addImport("robot", bmpc_cartpole_robot_mod);
+        const bmpc_cartpole_robot: RobotModules = addRobotModules(b, zimrmath_mod, bmpc_cartpole_options_mod);
+        bmpc_cartpole_mod.addImport("robot", bmpc_cartpole_robot.robot);
+        bmpc_cartpole_mod.addImport("profiler", bmpc_cartpole_robot.profiler);
         const bmpc_cartpole_test: *Compile = b.addTest(.{ .root_module = bmpc_cartpole_mod });
         if (test_filter) |f| {
             bmpc_cartpole_test.filters = b.allocator.dupe([]const u8, &.{f}) catch @panic("OOM");
@@ -8025,6 +8416,48 @@ pub fn build(b: *std.Build) void {
         bmpc_cartpole_run.has_side_effects = true;
         const bmpc_cartpole_step: *Step = b.step("bmpc-cartpole", "BMPC learns to balance a cartpole (on demand)");
         bmpc_cartpole_step.dependOn(&bmpc_cartpole_run.step);
+    }
+
+    // test-music-theory: the tests at the end of `examples/music_theory/music_theory.zig` - the scales' spelling, the
+    // chords, the progressions, the names - for the build's machine. The module imports `std` alone, so they compile in
+    // moments; Debug, as `test-goban` is, for `--watch -fincremental`.
+    {
+        const music_theory_test_mod: *Module = b.createModule(.{
+            .root_source_file = b.path("examples/music_theory/music_theory.zig"),
+            .target = native_target,
+            .optimize = .Debug,
+        });
+        const music_theory_test: *Compile = b.addTest(.{ .root_module = music_theory_test_mod });
+        if (test_filter) |f| {
+            music_theory_test.filters = b.allocator.dupe([]const u8, &.{f}) catch @panic("OOM");
+        }
+        const music_theory_test_run: *Run = b.addRunArtifact(music_theory_test);
+        const music_theory_test_step: *Step = b.step(
+            "test-music-theory",
+            "The shared music theory's tests: spelling, chords, progressions, chord names",
+        );
+        music_theory_test_step.dependOn(&music_theory_test_run.step);
+
+        // test-magic-isomorphic-keyboard: the keyboard's own tests - Simon's drawing, the photo's stickers, the tonic
+        // on F, the triangles - built from the example's file as `test-goban` is. They reach only the layouts'
+        // arithmetic, so the module needs `zm` and the music theory above, and nothing of the engine is compiled.
+        const keyboard_test_mod: *Module = b.createModule(.{
+            .root_source_file = b.path("examples/magic_isomorphic_keyboard/magic_isomorphic_keyboard.zig"),
+            .target = native_target,
+            .optimize = .Debug,
+        });
+        keyboard_test_mod.addImport("zm", zimrmath_mod);
+        keyboard_test_mod.addImport("music_theory", music_theory_test_mod);
+        const keyboard_test: *Compile = b.addTest(.{ .root_module = keyboard_test_mod });
+        if (test_filter) |f| {
+            keyboard_test.filters = b.allocator.dupe([]const u8, &.{f}) catch @panic("OOM");
+        }
+        const keyboard_test_run: *Run = b.addRunArtifact(keyboard_test);
+        const keyboard_test_step: *Step = b.step(
+            "test-magic-isomorphic-keyboard",
+            "The magic isomorphic keyboard's tests: Simon's drawing, the photo, the tonic on F, the triangles",
+        );
+        keyboard_test_step.dependOn(&keyboard_test_run.step);
     }
 
     // test-goban: the tests at the end of `examples/goban/goban.zig`, built from the example's own file for the build's
@@ -8190,7 +8623,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("tests/fixtures/atomics/atomic_buildgrid.spv"),
         });
         diff_mod.addImport("shader_interface", shader_interface_mod);
-        diff_mod.addOptions("build_options", build_opts);
+        _ = addEngineOptionsAndRobot(b, diff_mod, build_opts, zimrmath_mod);
         const t: *Compile = b.addTest(.{
             .root_module = diff_mod,
             .filters = &.{
@@ -8583,6 +9016,16 @@ pub fn build(b: *std.Build) void {
     });
     native_wgsl_check_test.root_module.addImport("cli", cli_mod);
     tools_test_step.dependOn(&b.addRunArtifact(native_wgsl_check_test).step);
+    // elf_needs: a hand-written ELF's interpreter, libraries and glibc versions, and the version past the floor.
+    const elf_needs_test: *Compile = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/elf_needs.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+    elf_needs_test.root_module.addImport("cli", cli_mod);
+    tools_test_step.dependOn(&b.addRunArtifact(elf_needs_test).step);
     const pdb_void_workaround_test: *Compile = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("tools/pdb_void_workaround.zig"),
@@ -8753,8 +9196,8 @@ pub fn build(b: *std.Build) void {
             // `std`, shader-free for the same reason, so it belongs to this tier; `zig build test-zimrrl` runs it
             // alone.
             "src/zimrrl.zig",
-            // `spv_vulkan.zig` - the Vulkan host's SPIR-V reading, checking and legalizing (vulkan_port_plan_v2.md
-            // 5.5). Std only, so it runs here on every platform; its tests carry real modules from the compiler.
+            // `spv_vulkan.zig` - the Vulkan host's SPIR-V reading, checking and legalizing. Std only, so it runs here
+            // on every platform; its tests carry real modules from the compiler.
             "src/spv_vulkan.zig",
             // `page_audio.zig` - the page's sound output, written for the bridge but kept apart to be tested: its
             // tests touch no JavaScript handle (the panel's text builder), so they run here; what does touch them runs
@@ -8775,6 +9218,10 @@ pub fn build(b: *std.Build) void {
             // `zig build test-codecs` runs its own tests alone.
             "src/codecs.zig",
             "src/robot.zig",
+            // robotgpu, the simulator on the GPU: its layout, packing and twin.
+            "src/robotgpu_tests.zig",
+            // A module of its own (`addRobotModules`), so its tests run from a root of their own.
+            "src/profiler.zig",
             "src/robot_physics.zig",
             "src/robot_control.zig",
             "src/robot_mpc.zig",
@@ -8874,18 +9321,29 @@ pub fn build(b: *std.Build) void {
             });
             codecs_mod.addImport("zm", zimrmath_mod);
             codecs_mod.addImport("build_options", fast_options_mod);
-            const robot_mod: *Module = b.createModule(.{
-                .root_source_file = b.path("src/robot.zig"),
-                .target = native_target,
-                .optimize = fast_optimize,
-            });
-            robot_mod.addImport("zm", zimrmath_mod);
-            robot_mod.addImport("build_options", fast_options_mod);
+            const fast_robot: RobotModules = addRobotModules(b, zimrmath_mod, fast_options_mod);
             fast_mod.addImport("codecs", codecs_mod);
-            fast_mod.addImport("robot", robot_mod);
+            fast_mod.addImport("robot", fast_robot.robot);
+            fast_mod.addImport("profiler", fast_robot.profiler);
             // `zimrnum` authors its GPU kernels through the kompute DSL, so it needs the same
             // one shared kompute module every compute example uses.
             fast_mod.addImport("kompute", kompute_mod);
+            // robotgpu's arena lengths for tests and lavapipe (`robotgpu_sizes_test.zig`, under the module's name).
+            const robotgpu_test_sizes_mod: *Module = b.createModule(.{
+                .root_source_file = b.path("src/robotgpu_sizes_test.zig"),
+            });
+            fast_mod.addImport("robotgpu_sizes", robotgpu_test_sizes_mod);
+            // The MJCF importer as a MODULE of its own (robot_mjcf.zig and the files it reaches by path), for a root
+            // that needs a robot from MJCF text without running the importer's own tests - robotgpu's. A root that
+            // imports robot_mjcf.zig by path (the robot family) never names this module, so the two never meet.
+            const robot_import_mod: *Module = b.createModule(.{
+                .root_source_file = b.path("src/robot_mjcf.zig"),
+            });
+            robot_import_mod.addImport("zm", zimrmath_mod);
+            robot_import_mod.addImport("robot", fast_robot.robot);
+            robot_import_mod.addImport("zn", zimrnum_mod);
+            robot_import_mod.addImport("build_options", fast_options_mod);
+            fast_mod.addImport("robot_import", robot_import_mod);
             // `src/gpu/zn_conformance.zig` holds the CPU reference the GPU sweep is judged
             // against, so it imports zimrnum itself. Offered to every fast root for the same
             // reason `codecs` and `robot` are: cheaper than a second list to keep in step.
@@ -9054,12 +9512,13 @@ pub fn build(b: *std.Build) void {
         }
     }
 
-    // ---- vk-abi-check: `src/vk.zig` against the official Vulkan headers (vulkan_port_plan_v2.md 5.8).
+    // ---- vk-abi-check: `src/vk.zig` against the official Vulkan headers.
     // `vk.zig` is declared by hand; a wrong structure would make the driver read plausible garbage. This step
     // translates the headers with translate-c and compiles `tools/vk_abi_check.zig` against both, for
-    // x86_64-windows-gnu: every comparison is comptime, so the compile IS the check. Development-only - it needs the
-    // headers' include directory: `-Dvulkan-headers=<dir>`, or `VULKAN_SDK` (its `Include`). Nothing else in the
-    // build ever needs the headers.
+    // x86_64-windows-gnu and for x86_64-linux-gnu - each against its own translation, since X11's `Window` is C's
+    // `unsigned long`, 4 bytes on Windows and 8 on Linux: every comparison is comptime, so the compile IS the check.
+    // Development-only - it needs the headers' include directory: `-Dvulkan-headers=<dir>`, or `VULKAN_SDK` (its
+    // `Include`). Nothing else in the build ever needs the headers.
     const vk_abi_check_step: *Step = b.step(
         "vk-abi-check",
         "Compare src/vk.zig with the Vulkan headers (needs -Dvulkan-headers=<include dir> or VULKAN_SDK)",
@@ -9073,11 +9532,9 @@ pub fn build(b: *std.Build) void {
     const vulkan_headers: ?[]const u8 = vulkan_headers_option orelse
         if (vulkan_sdk) |sdk| b.pathJoin(&.{ sdk, "Include" }) else null;
     if (vulkan_headers) |headers_directory| {
-        const abi_target: ResolvedTarget = b.resolveTargetQuery(std.Target.Query.parse(.{
-            .arch_os_abi = "x86_64-windows-gnu",
-        }) catch unreachable); // lint:off catch-suppression: hardcoded-valid triple
-        // The reference header: the core API, the few Windows types vulkan_win32.h names, then vulkan_win32.h -
-        // what vulkan.h includes for Win32, without windows.h (whose intrinsics translate-c cannot read).
+        // The reference header: the core API; the few Windows types vulkan_win32.h names, then vulkan_win32.h; the few
+        // X11 types vulkan_xlib.h names, then vulkan_xlib.h - what vulkan.h includes for Win32 and Xlib, without
+        // windows.h (whose intrinsics translate-c cannot read) or Xlib.h (no X11 headers here).
         const reference_files: *Step.WriteFile = b.addWriteFiles();
         const reference_header: LazyPath = reference_files.add("vk_abi_reference.h",
             \\#include <stdint.h>
@@ -9092,33 +9549,44 @@ pub fn build(b: *std.Build) void {
             \\typedef struct _SECURITY_ATTRIBUTES SECURITY_ATTRIBUTES;
             \\#define VK_USE_PLATFORM_WIN32_KHR 1
             \\#include <vulkan/vulkan_win32.h>
+            \\typedef struct _XDisplay Display;
+            \\typedef unsigned long XID;
+            \\typedef XID Window;
+            \\typedef XID VisualID;
+            \\#define VK_USE_PLATFORM_XLIB_KHR 1
+            \\#include <vulkan/vulkan_xlib.h>
             \\
         );
-        const reference_translation: *Step.TranslateC = b.addTranslateC(.{
-            .root_source_file = reference_header,
-            .target = abi_target,
-            .optimize = .Debug,
-            .link_libc = true,
-        });
-        reference_translation.addIncludePath(.{ .cwd_relative = headers_directory });
-        const vk_module_for_check: *Module = b.createModule(.{
-            .root_source_file = b.path("src/vk.zig"),
-            .target = abi_target,
-            .optimize = .Debug,
-        });
-        const abi_check: *Compile = b.addExecutable(.{
-            .name = "vk_abi_check",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("tools/vk_abi_check.zig"),
+        for ([_][]const u8{ "x86_64-windows-gnu", "x86_64-linux-gnu" }) |abi_triple| {
+            const abi_target: ResolvedTarget = b.resolveTargetQuery(std.Target.Query.parse(.{
+                .arch_os_abi = abi_triple,
+            }) catch unreachable); // lint:off catch-suppression: hardcoded-valid triples
+            const reference_translation: *Step.TranslateC = b.addTranslateC(.{
+                .root_source_file = reference_header,
                 .target = abi_target,
                 .optimize = .Debug,
-                .imports = &.{
-                    .{ .name = "vk", .module = vk_module_for_check },
-                    .{ .name = "vk_c", .module = reference_translation.createModule() },
-                },
-            }),
-        });
-        vk_abi_check_step.dependOn(&abi_check.step);
+                .link_libc = true,
+            });
+            reference_translation.addIncludePath(.{ .cwd_relative = headers_directory });
+            const vk_module_for_check: *Module = b.createModule(.{
+                .root_source_file = b.path("src/vk.zig"),
+                .target = abi_target,
+                .optimize = .Debug,
+            });
+            const abi_check: *Compile = b.addExecutable(.{
+                .name = b.fmt("vk_abi_check_{s}", .{@tagName(abi_target.result.os.tag)}),
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("tools/vk_abi_check.zig"),
+                    .target = abi_target,
+                    .optimize = .Debug,
+                    .imports = &.{
+                        .{ .name = "vk", .module = vk_module_for_check },
+                        .{ .name = "vk_c", .module = reference_translation.createModule() },
+                    },
+                }),
+            });
+            vk_abi_check_step.dependOn(&abi_check.step);
+        }
     } else {
         vk_abi_check_step.dependOn(&b.addFail(
             "vk-abi-check needs the Vulkan headers: -Dvulkan-headers=<include dir>, or set VULKAN_SDK",
@@ -9179,7 +9647,7 @@ pub fn build(b: *std.Build) void {
     // Debug, so a panic prints a stack trace from the .pdb installed beside it.
     const vk_hello_step: *Step = b.step(
         "vk-hello-windows",
-        "Build zig-out/windows/vk_hello.exe: a window that clears through Vulkan (stage S1)",
+        "Build zig-out/windows/vk_hello.exe: a window that clears through Vulkan",
     );
     {
         const vk_hello_exe: *Compile = b.addExecutable(.{

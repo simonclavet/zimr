@@ -1,5 +1,5 @@
-//! NATIVE INPUT - Windows' input messages, translated into the engine's input calls exactly as the browser bridge
-//! makes them.
+//! NATIVE INPUT - the native windows' input messages, Windows' and X11's, translated into the engine's input calls
+//! exactly as the browser bridge makes them.
 //!
 //! The engine receives input through a handful of calls (`wgpu_app.zig`'s `inputPush*`): a key down or up, a typed
 //! character, the mouse's position, a button, the wheel. In the browser the bridge makes those calls from DOM events.
@@ -23,11 +23,17 @@
 //!     focus     the window gaining and losing the keyboard's focus become events. The engine, not this file,
 //!               releases what is held when focus leaves, as it does for the browser's blur.
 //!
-//! Platform-neutral on purpose: `win32.zig` supplies only the messages' numbers, nothing here calls Windows, and so
-//! every rule is tested on any host, from the messages' own bits.
+//! X11's window (`x11.zig`) hands over the same facts as plain messages (`x11.InputMessage`), and `translateX11`
+//! applies the same rules to them: a key by its X keycode - the Linux kernel's evdev code for its position, plus 8 -
+//! text already composed, as UTF-8, and positions in physical pixels.
+//!
+//! Platform-neutral on purpose: `win32.zig` and `x11.zig` supply only the messages' numbers, nothing here calls either
+//! system, and so every rule is tested on any host, from the messages' own bits.
 
 const std = @import("std");
 const utf8Encode = std.unicode.utf8Encode;
+const utf8ByteSequenceLength = std.unicode.utf8ByteSequenceLength;
+const utf8Decode = std.unicode.utf8Decode;
 const startsWith = std.mem.startsWith;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
@@ -36,6 +42,7 @@ const dom_input = @import("dom_input.zig");
 const types = @import("types.zig");
 const contract = @import("platform/contract.zig");
 const win32 = @import("win32.zig");
+const x11 = @import("x11.zig");
 
 const KeyboardKey = types.KeyboardKey;
 const StaticBitSet = std.bit_set.StaticBitSet;
@@ -230,6 +237,186 @@ pub fn engineKeyFromScancode(scancode: u16) ?KeyboardKey {
         return null;
     }
     return engine_key_by_scancode[scancode];
+}
+
+// ---- X11's keys: evdev codes ----
+
+/// One key's evdev code - the Linux kernel's number for a key by its position (`linux/input-event-codes.h`), which an
+/// X server on Linux reports as its keycode, plus 8 - and the DOM code naming the same key.
+const EvdevName = struct {
+    code: u16,
+    dom_code: []const u8,
+};
+
+/// Every key the bridge's table names, by its evdev code, in the scancode table's groups (`KEY_A` is 30). ContextMenu
+/// has two rows: the PC keyboard's menu key is `KEY_COMPOSE`, and some keyboards send `KEY_MENU`.
+const evdev_names = [_]EvdevName{
+    // Letters.
+    .{ .code = 30, .dom_code = "KeyA" },
+    .{ .code = 48, .dom_code = "KeyB" },
+    .{ .code = 46, .dom_code = "KeyC" },
+    .{ .code = 32, .dom_code = "KeyD" },
+    .{ .code = 18, .dom_code = "KeyE" },
+    .{ .code = 33, .dom_code = "KeyF" },
+    .{ .code = 34, .dom_code = "KeyG" },
+    .{ .code = 35, .dom_code = "KeyH" },
+    .{ .code = 23, .dom_code = "KeyI" },
+    .{ .code = 36, .dom_code = "KeyJ" },
+    .{ .code = 37, .dom_code = "KeyK" },
+    .{ .code = 38, .dom_code = "KeyL" },
+    .{ .code = 50, .dom_code = "KeyM" },
+    .{ .code = 49, .dom_code = "KeyN" },
+    .{ .code = 24, .dom_code = "KeyO" },
+    .{ .code = 25, .dom_code = "KeyP" },
+    .{ .code = 16, .dom_code = "KeyQ" },
+    .{ .code = 19, .dom_code = "KeyR" },
+    .{ .code = 31, .dom_code = "KeyS" },
+    .{ .code = 20, .dom_code = "KeyT" },
+    .{ .code = 22, .dom_code = "KeyU" },
+    .{ .code = 47, .dom_code = "KeyV" },
+    .{ .code = 17, .dom_code = "KeyW" },
+    .{ .code = 45, .dom_code = "KeyX" },
+    .{ .code = 21, .dom_code = "KeyY" },
+    .{ .code = 44, .dom_code = "KeyZ" },
+    // Digits.
+    .{ .code = 11, .dom_code = "Digit0" },
+    .{ .code = 2, .dom_code = "Digit1" },
+    .{ .code = 3, .dom_code = "Digit2" },
+    .{ .code = 4, .dom_code = "Digit3" },
+    .{ .code = 5, .dom_code = "Digit4" },
+    .{ .code = 6, .dom_code = "Digit5" },
+    .{ .code = 7, .dom_code = "Digit6" },
+    .{ .code = 8, .dom_code = "Digit7" },
+    .{ .code = 9, .dom_code = "Digit8" },
+    .{ .code = 10, .dom_code = "Digit9" },
+    // Punctuation.
+    .{ .code = 41, .dom_code = "Backquote" },
+    .{ .code = 12, .dom_code = "Minus" },
+    .{ .code = 13, .dom_code = "Equal" },
+    .{ .code = 26, .dom_code = "BracketLeft" },
+    .{ .code = 27, .dom_code = "BracketRight" },
+    .{ .code = 43, .dom_code = "Backslash" },
+    .{ .code = 39, .dom_code = "Semicolon" },
+    .{ .code = 40, .dom_code = "Quote" },
+    .{ .code = 51, .dom_code = "Comma" },
+    .{ .code = 52, .dom_code = "Period" },
+    .{ .code = 53, .dom_code = "Slash" },
+    // Whitespace and editing.
+    .{ .code = 57, .dom_code = "Space" },
+    .{ .code = 1, .dom_code = "Escape" },
+    .{ .code = 28, .dom_code = "Enter" },
+    .{ .code = 15, .dom_code = "Tab" },
+    .{ .code = 14, .dom_code = "Backspace" },
+    .{ .code = 110, .dom_code = "Insert" },
+    .{ .code = 111, .dom_code = "Delete" },
+    .{ .code = 102, .dom_code = "Home" },
+    .{ .code = 107, .dom_code = "End" },
+    .{ .code = 104, .dom_code = "PageUp" },
+    .{ .code = 109, .dom_code = "PageDown" },
+    // Arrows.
+    .{ .code = 106, .dom_code = "ArrowRight" },
+    .{ .code = 105, .dom_code = "ArrowLeft" },
+    .{ .code = 108, .dom_code = "ArrowDown" },
+    .{ .code = 103, .dom_code = "ArrowUp" },
+    // Function keys.
+    .{ .code = 59, .dom_code = "F1" },
+    .{ .code = 60, .dom_code = "F2" },
+    .{ .code = 61, .dom_code = "F3" },
+    .{ .code = 62, .dom_code = "F4" },
+    .{ .code = 63, .dom_code = "F5" },
+    .{ .code = 64, .dom_code = "F6" },
+    .{ .code = 65, .dom_code = "F7" },
+    .{ .code = 66, .dom_code = "F8" },
+    .{ .code = 67, .dom_code = "F9" },
+    .{ .code = 68, .dom_code = "F10" },
+    .{ .code = 87, .dom_code = "F11" },
+    .{ .code = 88, .dom_code = "F12" },
+    // Locks and system keys: PrintScreen is the kernel's `KEY_SYSRQ`.
+    .{ .code = 58, .dom_code = "CapsLock" },
+    .{ .code = 70, .dom_code = "ScrollLock" },
+    .{ .code = 69, .dom_code = "NumLock" },
+    .{ .code = 99, .dom_code = "PrintScreen" },
+    .{ .code = 119, .dom_code = "Pause" },
+    // Modifiers, and the menu key twice.
+    .{ .code = 42, .dom_code = "ShiftLeft" },
+    .{ .code = 29, .dom_code = "ControlLeft" },
+    .{ .code = 56, .dom_code = "AltLeft" },
+    .{ .code = 125, .dom_code = "MetaLeft" },
+    .{ .code = 54, .dom_code = "ShiftRight" },
+    .{ .code = 97, .dom_code = "ControlRight" },
+    .{ .code = 100, .dom_code = "AltRight" },
+    .{ .code = 126, .dom_code = "MetaRight" },
+    .{ .code = 127, .dom_code = "ContextMenu" },
+    .{ .code = 139, .dom_code = "ContextMenu" },
+    // The keypad: its keys keep their own codes with Num Lock off, as the browser keeps their codes.
+    .{ .code = 82, .dom_code = "Numpad0" },
+    .{ .code = 79, .dom_code = "Numpad1" },
+    .{ .code = 80, .dom_code = "Numpad2" },
+    .{ .code = 81, .dom_code = "Numpad3" },
+    .{ .code = 75, .dom_code = "Numpad4" },
+    .{ .code = 76, .dom_code = "Numpad5" },
+    .{ .code = 77, .dom_code = "Numpad6" },
+    .{ .code = 71, .dom_code = "Numpad7" },
+    .{ .code = 72, .dom_code = "Numpad8" },
+    .{ .code = 73, .dom_code = "Numpad9" },
+    .{ .code = 83, .dom_code = "NumpadDecimal" },
+    .{ .code = 98, .dom_code = "NumpadDivide" },
+    .{ .code = 55, .dom_code = "NumpadMultiply" },
+    .{ .code = 74, .dom_code = "NumpadSubtract" },
+    .{ .code = 78, .dom_code = "NumpadAdd" },
+    .{ .code = 96, .dom_code = "NumpadEnter" },
+    .{ .code = 117, .dom_code = "NumpadEqual" },
+};
+
+/// How many keycodes X has: one byte's worth. Those below 8 name no key.
+const x11_keycode_count: usize = 256;
+
+/// What X adds to an evdev code to make its keycode.
+const x11_keycode_offset: u16 = 8;
+
+/// The engine key at each X keycode, or null for one the engine has no name for. Built at compile time from the evdev
+/// table, through the bridge's own mapping from DOM codes to engine keys, as the scancode table is.
+const engine_key_by_x11_keycode: [x11_keycode_count]?KeyboardKey = table: {
+    @setEvalBranchQuota(200_000);
+    var keys: [x11_keycode_count]?KeyboardKey = @splat(null);
+    for (evdev_names) |entry| {
+        keys[entry.code + x11_keycode_offset] = dom_input.keyboardKeyFromDomCode(entry.dom_code) orelse
+            @compileError("the bridge's key table has no DOM code " ++ entry.dom_code);
+    }
+    break :table keys;
+};
+
+/// The X keycode of each engine key - the first evdev row naming it, so the menu key's is `KEY_COMPOSE`'s - indexed
+/// by the key's value, null for a key no row names. Built at compile time.
+const x11_keycode_by_engine_key: [512]?u8 = table: {
+    @setEvalBranchQuota(200_000);
+    var keycodes: [512]?u8 = @splat(null);
+    for (evdev_names) |entry| {
+        const key: KeyboardKey = dom_input.keyboardKeyFromDomCode(entry.dom_code).?;
+        const key_index: usize = @intCast(@backingInt(key));
+        if (keycodes[key_index] == null) {
+            const keycode: u8 = @intCast(entry.code + x11_keycode_offset);
+            keycodes[key_index] = keycode;
+        }
+    }
+    break :table keycodes;
+};
+
+/// The engine key at an X keycode - the key's evdev code plus 8 (`x11.zig`) - or null for one it has no name for.
+pub fn engineKeyFromX11Keycode(keycode: u32) ?KeyboardKey {
+    if (keycode >= x11_keycode_count) {
+        return null;
+    }
+    return engine_key_by_x11_keycode[keycode];
+}
+
+/// The X keycode of an engine key; null for a key no evdev code names.
+pub fn x11KeycodeOfEngineKey(key: KeyboardKey) ?u8 {
+    const key_value: i32 = @backingInt(key);
+    if (key_value < 0 or key_value >= x11_keycode_by_engine_key.len) {
+        return null;
+    }
+    return x11_keycode_by_engine_key[@intCast(key_value)];
 }
 
 // ---- Text ----
@@ -429,6 +616,27 @@ pub const InputQueue = struct {
         for (queue.decoder.push(unit, &code_points)) |code_point| {
             if (isTypedText(code_point)) {
                 queue.push(.{ .character = code_point });
+            }
+        }
+    }
+
+    /// Queues the characters of UTF-8 text - X11's - leaving out control characters. A byte that starts no character,
+    /// or a character cut short, becomes U+FFFD, and the reading goes on from the next byte.
+    pub fn pushUtf8(queue: *InputQueue, text: []const u8) void {
+        var index: usize = 0;
+        while (index < text.len) {
+            const sequence_length: usize = utf8ByteSequenceLength(text[index]) catch 0;
+            const sequence_end: usize = index + sequence_length;
+            const is_whole: bool = sequence_length > 0 and sequence_end <= text.len;
+            const decoded: ?u21 = if (is_whole) (utf8Decode(text[index..sequence_end]) catch null) else null;
+            if (decoded) |code_point| {
+                if (isTypedText(code_point)) {
+                    queue.push(.{ .character = code_point });
+                }
+                index += sequence_length;
+            } else {
+                queue.push(.{ .character = replacement_character });
+                index += 1;
             }
         }
     }
@@ -643,6 +851,97 @@ pub fn translate(message: win32.InputMessage, queue: *InputQueue) void {
         win32.message_fullscreen_changed => queue.push(.{ .fullscreen_changed = message.w_param != 0 }),
         win32.message_paste => queue.push(.{ .paste = message.text }),
         else => {},
+    }
+}
+
+// ---- Translation: X11's messages ----
+
+/// A mouse button in the DOM's numbering for an X button number (1 the first): 1, 2 and 3 are left, middle and right;
+/// 8 and 9 the side buttons, back and forward; 10 and up the further ones, numbered on from the DOM's 5. Null for 0
+/// and for the wheel's buttons, 4 to 7, which are no buttons to the engine (`wheelOfX11Button`).
+pub fn domButtonOfX11Button(x11_button: u32) ?DomButton {
+    return switch (x11_button) {
+        1 => .left,
+        2 => .middle,
+        3 => .right,
+        8 => .back,
+        9 => .forward,
+        10...255 => further: {
+            const dom_number: u8 = @intCast(x11_button - 5);
+            const further_button: DomButton = @fromBackingInt(dom_number);
+            break :further further_button;
+        },
+        else => null,
+    };
+}
+
+/// The wheel's turn an X wheel button stands for, one notch: 4 away from the person, 5 toward; 6 to the left, 7 to
+/// the right. Null for every other button.
+pub fn wheelOfX11Button(x11_button: u32) ?WheelMovement {
+    return switch (x11_button) {
+        4 => .{ .horizontal = 0, .vertical = 1 },
+        5 => .{ .horizontal = 0, .vertical = -1 },
+        6 => .{ .horizontal = -1, .vertical = 0 },
+        7 => .{ .horizontal = 1, .vertical = 0 },
+        else => null,
+    };
+}
+
+/// An X11 pointer message's position, in logical pixels.
+fn x11PositionOf(message: x11.InputMessage) Position {
+    return .{ .x = logicalPixels(message.x, message.scale), .y = logicalPixels(message.y, message.scale) };
+}
+
+/// A button message: a wheel's turn when the button is one of the wheel's - its press only, X sending a turn of the
+/// wheel as a press and a release at once - or else the position, then the button, as Windows' rule has it.
+fn translateX11Button(message: x11.InputMessage, queue: *InputQueue) void {
+    const is_press: bool = message.kind == .button_press;
+    if (wheelOfX11Button(message.detail)) |wheel| {
+        if (is_press) {
+            queue.push(.{ .mouse_wheel = wheel });
+        }
+        return;
+    }
+    const button: DomButton = domButtonOfX11Button(message.detail) orelse return;
+    queue.push(.{ .mouse_move = x11PositionOf(message) });
+    if (is_press) {
+        queue.push(.{ .mouse_button_down = button });
+    } else {
+        queue.push(.{ .mouse_button_up = button });
+    }
+}
+
+/// Turns one of the X11 window's input messages (`x11.InputMessage`) into the engine's events, queued in order - the
+/// rules of `translate` for Windows' messages, from X's numbers: keys by their evdev position, text already composed,
+/// positions in physical pixels over the scale. The pointer entering is the event, then the move to where it entered,
+/// as Windows has them.
+pub fn translateX11(message: x11.InputMessage, queue: *InputQueue) void {
+    switch (message.kind) {
+        .key_press => {
+            const key: KeyboardKey = engineKeyFromX11Keycode(message.detail) orelse return;
+            queue.push(.{ .key_down = .{ .key = key, .repeat = message.is_repeat, .label = message.label } });
+        },
+        .key_release => {
+            const key: KeyboardKey = engineKeyFromX11Keycode(message.detail) orelse return;
+            queue.push(.{ .key_up = key });
+        },
+        .text => queue.pushUtf8(message.text),
+        .button_press, .button_release => translateX11Button(message, queue),
+        .motion => queue.push(.{ .mouse_move = x11PositionOf(message) }),
+        .locked_motion => queue.push(.{ .pointer_motion = .{
+            .dx = logicalPixels(message.x, message.scale),
+            .dy = logicalPixels(message.y, message.scale),
+        } }),
+        .enter => {
+            queue.push(.mouse_enter);
+            queue.push(.{ .mouse_move = x11PositionOf(message) });
+        },
+        .leave => queue.push(.mouse_leave),
+        .focus_in => queue.push(.focus_gained),
+        .focus_out => queue.push(.focus_lost),
+        .pointer_lock_changed => queue.push(.{ .pointer_lock_changed = message.is_on }),
+        .fullscreen_changed => queue.push(.{ .fullscreen_changed = message.is_on }),
+        .paste => queue.push(.{ .paste = message.text }),
     }
 }
 
@@ -1279,4 +1578,122 @@ test "pointer kind: a script's move with .kind = .touch, and the press after it,
     const press: Command = try parseForTest(arena, ".{ .press = .left }");
     const press_events: []const contract.Event = person.eventsFor(press, &out);
     try expectEqual(contract.PointerKind.touch, press_events[0].mouse_button_down.kind);
+}
+
+// ---- Tests: X11's keys and messages ----
+
+fn translatedX11(messages: []const x11.InputMessage) InputQueue {
+    var queue: InputQueue = .{};
+    for (messages) |message| {
+        translateX11(message, &queue);
+    }
+    return queue;
+}
+
+test "native_input: X keycodes name keys by their evdev position" {
+    try expectEqual(@as(?KeyboardKey, .escape), engineKeyFromX11Keycode(9));
+    try expectEqual(@as(?KeyboardKey, .backspace), engineKeyFromX11Keycode(22));
+    try expectEqual(@as(?KeyboardKey, .enter), engineKeyFromX11Keycode(36));
+    try expectEqual(@as(?KeyboardKey, .a), engineKeyFromX11Keycode(38));
+    try expectEqual(@as(?KeyboardKey, .left_shift), engineKeyFromX11Keycode(50));
+    try expectEqual(@as(?KeyboardKey, .caps_lock), engineKeyFromX11Keycode(66));
+    try expectEqual(@as(?KeyboardKey, .left_super), engineKeyFromX11Keycode(133));
+    // The menu key, under both of its evdev codes: KEY_COMPOSE and KEY_MENU.
+    try expectEqual(@as(?KeyboardKey, .kb_menu), engineKeyFromX11Keycode(135));
+    try expectEqual(@as(?KeyboardKey, .kb_menu), engineKeyFromX11Keycode(147));
+    // No key below 8; 94 is the ISO keyboard's extra key (IntlBackslash), which the engine has no name for.
+    try expectEqual(@as(?KeyboardKey, null), engineKeyFromX11Keycode(3));
+    try expectEqual(@as(?KeyboardKey, null), engineKeyFromX11Keycode(94));
+    try expectEqual(@as(?KeyboardKey, null), engineKeyFromX11Keycode(300));
+    try expectEqual(@as(?u8, 38), x11KeycodeOfEngineKey(.a));
+    try expectEqual(@as(?u8, 135), x11KeycodeOfEngineKey(.kb_menu));
+}
+
+test "native_input: the evdev codes name the scancode table's keys, each code once and each key once but the menu" {
+    var seen_codes: StaticBitSet(x11_keycode_count) = .empty;
+    var named_keys: StaticBitSet(key_number_limit) = .empty;
+    for (evdev_names) |entry| {
+        try expectEqual(false, seen_codes.isSet(entry.code));
+        seen_codes.set(entry.code);
+        const keycode: u32 = entry.code + x11_keycode_offset;
+        const key: KeyboardKey = engineKeyFromX11Keycode(keycode) orelse return error.TestUnexpectedResult;
+        named_keys.set(@intCast(@backingInt(key)));
+    }
+    for (scancode_names) |entry| {
+        const key: KeyboardKey = engineKeyFromScancode(entry.scancode) orelse return error.TestUnexpectedResult;
+        try expect(named_keys.isSet(@intCast(@backingInt(key))));
+    }
+    // The same keys as the scancodes name, and no other; one row more, the menu key's second code.
+    try expectEqual(scancode_names.len, named_keys.count());
+    try expectEqual(scancode_names.len + 1, evdev_names.len);
+}
+
+test "native_input: X11 key and text messages - the key by position, repeat, label, text without controls" {
+    // On a French keyboard, the key in QWERTY's A position types q.
+    const queue: InputQueue = translatedX11(&.{
+        .{ .kind = .key_press, .detail = 38, .label = 'q' },
+        .{ .kind = .key_press, .detail = 38, .is_repeat = true, .label = 'q' },
+        .{ .kind = .text, .text = "q\x08\u{e9}\xff" },
+        .{ .kind = .key_release, .detail = 38 },
+        .{ .kind = .key_press, .detail = 94 },
+    });
+    const events: []const InputEvent = queue.pending();
+    try expectEqual(@as(usize, 6), events.len);
+    try expectEqual(KeyDown{ .key = .a, .repeat = false, .label = 'q' }, events[0].key_down);
+    try expectEqual(KeyDown{ .key = .a, .repeat = true, .label = 'q' }, events[1].key_down);
+    try expectEqual(@as(u21, 'q'), events[2].character);
+    try expectEqual(@as(u21, 0xe9), events[3].character);
+    try expectEqual(replacement_character, events[4].character);
+    try expectEqual(KeyboardKey.a, events[5].key_up);
+}
+
+test "native_input: X11 pointer messages - logical pixels, buttons in the DOM's numbers, the wheel's buttons" {
+    const queue: InputQueue = translatedX11(&.{
+        .{ .kind = .enter, .x = 20, .y = 40, .scale = 2 },
+        .{ .kind = .motion, .x = -10, .y = 300, .scale = 2 },
+        .{ .kind = .button_press, .detail = 3, .x = 40, .y = 60, .scale = 2 },
+        .{ .kind = .button_release, .detail = 9, .x = 40, .y = 60, .scale = 2 },
+        .{ .kind = .button_press, .detail = 5, .scale = 2 },
+        .{ .kind = .button_release, .detail = 5, .scale = 2 },
+        .{ .kind = .button_press, .detail = 7, .scale = 2 },
+        .{ .kind = .leave },
+    });
+    const events: []const InputEvent = queue.pending();
+    try expectEqual(@as(usize, 10), events.len);
+    try expectEqual(InputEvent.mouse_enter, events[0]);
+    try expectEqual(Position{ .x = 10, .y = 20 }, events[1].mouse_move);
+    try expectEqual(Position{ .x = -5, .y = 150 }, events[2].mouse_move);
+    try expectEqual(Position{ .x = 20, .y = 30 }, events[3].mouse_move);
+    try expectEqual(DomButton.right, events[4].mouse_button_down);
+    try expectEqual(Position{ .x = 20, .y = 30 }, events[5].mouse_move);
+    try expectEqual(DomButton.forward, events[6].mouse_button_up);
+    try expectEqual(WheelMovement{ .horizontal = 0, .vertical = -1 }, events[7].mouse_wheel);
+    try expectEqual(WheelMovement{ .horizontal = 1, .vertical = 0 }, events[8].mouse_wheel);
+    try expectEqual(InputEvent.mouse_leave, events[9]);
+}
+
+test "native_input: X buttons past 9 go on in the DOM's numbering; 0 and the wheel's are no buttons" {
+    try expectEqual(@as(u8, 5), @backingInt(domButtonOfX11Button(10).?));
+    try expectEqual(@as(?DomButton, .left), domButtonOfX11Button(1));
+    try expectEqual(@as(?DomButton, null), domButtonOfX11Button(0));
+    try expectEqual(@as(?DomButton, null), domButtonOfX11Button(4));
+}
+
+test "native_input: X11 focus, lock, fullscreen, locked motion and paste messages become their events" {
+    const queue: InputQueue = translatedX11(&.{
+        .{ .kind = .focus_out },
+        .{ .kind = .focus_in },
+        .{ .kind = .pointer_lock_changed, .is_on = false },
+        .{ .kind = .fullscreen_changed, .is_on = true },
+        .{ .kind = .locked_motion, .x = -6, .y = 10, .scale = 2 },
+        .{ .kind = .paste, .text = "pasted" },
+    });
+    const events: []const InputEvent = queue.pending();
+    try expectEqual(@as(usize, 6), events.len);
+    try expectEqual(InputEvent.focus_lost, events[0]);
+    try expectEqual(InputEvent.focus_gained, events[1]);
+    try expectEqual(InputEvent{ .pointer_lock_changed = false }, events[2]);
+    try expectEqual(InputEvent{ .fullscreen_changed = true }, events[3]);
+    try expectEqual(PointerMotion{ .dx = -3, .dy = 5 }, events[4].pointer_motion);
+    try expectEqualStrings("pasted", events[5].paste);
 }

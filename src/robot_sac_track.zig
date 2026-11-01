@@ -24,7 +24,7 @@
 //! what it acts on - with its running statistics of that moment, so no stored row ever goes stale as they move.
 
 const std = @import("std");
-const rbt = @import("robot.zig");
+const rbt = @import("robot");
 const dance = @import("robot_dance.zig");
 const gym = @import("robot_gym.zig");
 const track_env = @import("robot_track_env.zig");

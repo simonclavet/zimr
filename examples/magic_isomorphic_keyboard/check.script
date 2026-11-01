@@ -1,0 +1,73 @@
+// magic_isomorphic_keyboard: five keys alone, then four triangles of keys, in C major with the tonic C on the F key
+// and fifths along the rows; each held 0.4 s with 0.6 s of silence after, and the sound saved.
+// `zig build magic-isomorphic-keyboard-check` runs it headless and checks the sound against check.expect
+// (`tools/sound_capture_check.zig`). It first presses the start screen's button, in the middle of the 1000 x 560
+// window, within the six frames before the first key.
+.{ .move = .{ .x = 500, .y = 280 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 5 }
+// the F key: the tonic, C
+.{ .key_down = .f }
+.{ .advance = 24 }
+.{ .key_up = .f }
+.{ .advance = 36 }
+// G, right of F: a fifth up, G
+.{ .key_down = .g }
+.{ .advance = 24 }
+.{ .key_up = .g }
+.{ .advance = 36 }
+// V, down-right of F: a major third up, E
+.{ .key_down = .v }
+.{ .advance = 24 }
+.{ .key_up = .v }
+.{ .advance = 36 }
+// H, two right of F: two fifths up, D
+.{ .key_down = .h }
+.{ .advance = 24 }
+.{ .key_up = .h }
+.{ .advance = 36 }
+// D, left of F: a fifth down, F
+.{ .key_down = .d }
+.{ .advance = 24 }
+.{ .key_up = .d }
+.{ .advance = 36 }
+// F G V, a downward triangle: C major, I
+.{ .key_down = .f }
+.{ .key_down = .g }
+.{ .key_down = .v }
+.{ .advance = 24 }
+.{ .key_up = .f }
+.{ .key_up = .g }
+.{ .key_up = .v }
+.{ .advance = 36 }
+// F T G, an upward triangle: C minor, its parallel
+.{ .key_down = .f }
+.{ .key_down = .t }
+.{ .key_down = .g }
+.{ .advance = 24 }
+.{ .key_up = .f }
+.{ .key_up = .t }
+.{ .key_up = .g }
+.{ .advance = 36 }
+// J I K, an upward triangle: A minor, vi
+.{ .key_down = .j }
+.{ .key_down = .i }
+.{ .key_down = .k }
+.{ .advance = 24 }
+.{ .key_up = .j }
+.{ .key_up = .i }
+.{ .key_up = .k }
+.{ .advance = 36 }
+// G H B, a downward triangle: G major, V
+.{ .key_down = .g }
+.{ .key_down = .h }
+.{ .key_down = .b }
+.{ .advance = 24 }
+.{ .key_up = .g }
+.{ .key_up = .h }
+.{ .key_up = .b }
+.{ .advance = 36 }
+.{ .capture_audio_to = "zig-out/headless/magic_isomorphic_keyboard_check.wav" }
+.quit

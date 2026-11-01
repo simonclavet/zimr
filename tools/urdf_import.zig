@@ -73,7 +73,7 @@ const MeshLoader = struct {
 const ImportArgs = struct {
     input: []const u8,
     output: []const u8,
-    @"import-path": []const u8 = "../../../robot.zig",
+    @"import-path": []const u8 = "robot",
 };
 
 const import_cli: cli.Config(ImportArgs) = .{
@@ -82,7 +82,7 @@ const import_cli: cli.Config(ImportArgs) = .{
     .args = .{
         .input = .{ .description = "the .urdf to read" },
         .output = .{ .description = "the .zig to write" },
-        .@"import-path" = .{ .description = "how the fixture imports robot.zig, relative to the output" },
+        .@"import-path" = .{ .description = "how the fixture imports robot.zig: its module's name, robot" },
     },
 };
 

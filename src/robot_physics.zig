@@ -40,7 +40,7 @@ const testing_allocator = std.testing.allocator;
 
 const zm = @import("zm");
 const zimrphysics = @import("zimrphysics.zig");
-const rbt = @import("robot.zig");
+const rbt = @import("robot");
 const robot_scene = @import("robot_scene.zig");
 
 const Vec = zm.Vec;

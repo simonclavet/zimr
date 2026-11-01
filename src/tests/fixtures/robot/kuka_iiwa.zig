@@ -4,7 +4,7 @@
 //! artifact cannot be reviewed in a diff, and a diff is how a convention regression
 //! gets caught. Regenerate with `zig build urdf-import`.
 
-const rbt = @import("../../../robot.zig");
+const rbt = @import("robot");
 const zm = @import("zm");
 const vec = zm.vec;
 

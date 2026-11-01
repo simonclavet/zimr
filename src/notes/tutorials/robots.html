@@ -989,7 +989,7 @@ fn lastDofOf(m: *const Model, body: u32) u32 {
                 // Armature: an explicit value, or a small fraction of the body's own
                 // inertia so the default scales with the model rather than the units.
                 m.dof_armature[d] = j.armature orelse
-                    default_armature_fraction * representativeInertia(mass_props, j.kind);
+                    (default_armature_fraction * representativeInertia(mass_props, j.kind));
             }</code></pre>
 
 <p>Every DOF on a body chains onto the previous one — <strong>across joints as well as within them</strong>. Three hinges on one body are three links in one chain, not three parallel branches off the parent, and the difference is the sparsity pattern of the entire mass matrix.</p>
@@ -1155,7 +1155,8 @@ pub fn integratePos(m: *const Model, pos: []f32, vel: []const f32, dt: f32) void
 
 <pre><code class="zig">/// Rotate `q` by an angular velocity applied for `dt`. Exact for a constant `w`: build the
 /// rotation the velocity describes over the interval, then compose.
-fn rotateQuatByAngularVel(q: Quat, w: Vec, dt: f32) Quat {
+/// Shared with robotgpu's integrator kernel.
+pub fn rotateQuatByAngularVel(q: Quat, w: Vec, dt: f32) Quat {
     const speed: f32 = length3(w);
     if (speed &lt; 1.0e-12) {
         return q;
@@ -1332,15 +1333,16 @@ pub const Pose = struct {
 
 <p>The doc comment on <code>compose</code> earns its place. <code>qmul(a, b)</code> applies <code>b</code> first, so <code>parent.compose(local)</code> reads "start at the parent, then go local" — the direction a tree walk actually travels. Swap the operands and it compiles, runs, and puts every body in the wrong place in a way that still looks like a robot.</p>
 
-<details class="src-fold"><summary><code>fn kinematics</code><span class="faint"> · 95 lines</span></summary><pre><code class="zig">/// Forward kinematics: world pose of every body, joint anchor, joint axis and site.
+<details class="src-fold"><summary><code>fn kinematics</code><span class="faint"> · 83 lines</span></summary><pre><code class="zig">/// Forward kinematics: world pose of every body, joint anchor, joint axis and site.
 ///
 /// Bodies are visited in index order, which IS parent-before-child because `Spec()`
 /// rejects any spec where a parent is declared after its child. That single validation
 /// rule is what lets this be a flat loop instead of a recursive walk.
 ///
-/// The subtle step is the off-centre correction. A hinge does not rotate the body about
-/// the body's own origin - it rotates it about the ANCHOR. So after composing the
-/// rotation we recompute where the origin must be for the anchor to have stayed put:
+/// The subtle step is the off-centre correction (`moveByJoint`). A hinge does not rotate
+/// the body about the body's own origin - it rotates it about the ANCHOR. So after
+/// composing the rotation we recompute where the origin must be for the anchor to have
+/// stayed put:
 ///
 ///     xpos = xanchor - R_new * jnt_pos
 ///
@@ -1348,6 +1350,8 @@ pub const Pose = struct {
 /// an arc it should never take. Almost every real robot joint is off-centre, so this is
 /// not an edge case.
 pub fn kinematics(m: *const Model, d: *Data) void {
+    const zone: profiler.Zone = profiler.zoneNamed(@src(), "robot.kinematics");
+    defer zone.end();
     // The world never moves.
     d.body_xpos[world_body] = vec_zero;
     d.body_xrot[world_body] = quat_identity;
@@ -1357,62 +1361,47 @@ pub fn kinematics(m: *const Model, d: *Data) void {
         const parent: u32 = m.body_parent[bi];
         const jnt_adr: u32 = m.body_jnt_adr[bi];
         const jnt_num: u32 = m.body_jnt_num[bi];
+        const is_free_body: bool = jnt_num == 1 and m.jnt_type[jnt_adr] == .free;
 
-        var pos: Vec = undefined;
-        var rot: Quat = undefined;
-
-        if (jnt_num == 1 and m.jnt_type[jnt_adr] == .free) {
+        const body_pose: Pose = if (is_free_body) free: {
             // A free joint IS the body's world pose; there is nothing to compose.
             const qadr: u32 = m.jnt_qpos_adr[jnt_adr];
-            pos = vec(d.pos[qadr], d.pos[qadr + 1], d.pos[qadr + 2]);
-            rot = normalizeQuat(.{ d.pos[qadr + 3], d.pos[qadr + 4], d.pos[qadr + 5], d.pos[qadr + 6] });
-            d.jnt_xanchor[jnt_adr] = pos;
+            const position: Vec = vec(d.pos[qadr], d.pos[qadr + 1], d.pos[qadr + 2]);
+            const orientation: Quat = .{ d.pos[qadr + 3], d.pos[qadr + 4], d.pos[qadr + 5], d.pos[qadr + 6] };
+            const free_pose: Pose = freeJointPose(position, orientation);
+            d.jnt_xanchor[jnt_adr] = free_pose.pos;
             d.jnt_xaxis[jnt_adr] = m.jnt_axis[jnt_adr];
-        } else {
-            // Start at the body's rest pose relative to its parent, then let each joint
-            // move it away from there.
+            break :free free_pose;
+        } else jointed: {
+            // Start at the body's rest pose relative to its parent, then let each joint move the pose built so far
+            // (`moveByJoint`), in its declared order.
             const parent_pose: Pose = .{ .pos = d.body_xpos[parent], .rot = d.body_xrot[parent] };
             const rest: Pose = parent_pose.compose(.{ .pos = m.body_pos[bi], .rot = m.body_rot[bi] });
-            pos = rest.pos;
-            rot = rest.rot;
-
+            var pose: Pose = rest;
             for (jnt_adr..jnt_adr + jnt_num) |ji| {
                 const qadr: u32 = m.jnt_qpos_adr[ji];
-
-                // Axis and anchor, in the frame the joint acts in - which is the pose as
-                // built SO FAR, so several joints on one body compose in declared order.
-                const axis: Vec = rotate(rot, m.jnt_axis[ji]);
-                const anchor: Vec = pos + rotate(rot, m.jnt_pos[ji]);
-
-                switch (m.jnt_type[ji]) {
-                    .slide =&gt; {
-                        // Sliding moves the body and leaves its orientation alone, so no
-                        // off-centre correction applies.
-                        pos += axis * splat(d.pos[qadr] - m.qpos0[qadr]);
-                    },
-                    .hinge, .ball =&gt; {
-                        const local: Quat = if (m.jnt_type[ji] == .ball)
-                            normalizeQuat(.{ d.pos[qadr], d.pos[qadr + 1], d.pos[qadr + 2], d.pos[qadr + 3] })
-                        else
-                            zm.quatFromNormAxisAngle(m.jnt_axis[ji], d.pos[qadr] - m.qpos0[qadr]);
-
-                        rot = qmul(rot, local);
-                        // Off-centre correction: put the origin back where it must be for
-                        // the anchor not to have moved.
-                        pos = anchor - rotate(rot, m.jnt_pos[ji]);
-                    },
-                    .free =&gt; unreachable, // handled above; a free joint is never beside others
-                }
-
-                d.jnt_xanchor[ji] = anchor;
-                d.jnt_xaxis[ji] = axis;
+                const joint_type: JointType = m.jnt_type[ji];
+                // A ball's four coordinates; a hinge's or slide's one - never reading past it, past `qpos`'s end.
+                const coordinates: JointCoordinates = if (joint_type == .ball)
+                    .{ d.pos[qadr], d.pos[qadr + 1], d.pos[qadr + 2], d.pos[qadr + 3] }
+                else
+                    .{ d.pos[qadr], 0, 0, 0 };
+                const local_axis: Vec = m.jnt_axis[ji];
+                const local_anchor: Vec = m.jnt_pos[ji];
+                const rest_coordinate: f32 = m.qpos0[qadr];
+                const motion: JointMotion =
+                    moveByJoint(pose, joint_type, local_axis, local_anchor, coordinates, rest_coordinate);
+                pose = motion.pose;
+                d.jnt_xanchor[ji] = motion.anchor;
+                d.jnt_xaxis[ji] = motion.axis;
             }
-        }
+            break :jointed pose;
+        };
 
-        d.body_xrot[bi] = normalizeQuat(rot);
-        d.body_xpos[bi] = pos;
+        d.body_xrot[bi] = normalizeQuat(body_pose.rot);
+        d.body_xpos[bi] = body_pose.pos;
         // The centre of mass, which is what the dynamics actually care about.
-        d.body_xipos[bi] = pos + rotate(d.body_xrot[bi], m.body_ipos[bi]);
+        d.body_xipos[bi] = body_pose.pos + rotate(d.body_xrot[bi], m.body_ipos[bi]);
     }
 
     // Sites ride along on their bodies. They are massless frames, so this is the only
@@ -1426,6 +1415,54 @@ pub fn kinematics(m: *const Model, d: *Data) void {
     }
 
     d.stage = .position;
+}</code></pre></details>
+
+<p>Each joint's motion is one function, <code>moveByJoint</code>: the off-centre correction lives there, and robotgpu's kinematics kernel calls the very same function, so the GPU poses a body with exactly the arithmetic this loop uses. A joint's coordinates travel as four floats whatever the joint - a ball's quaternion, or a hinge's angle in the first lane - so one function serves every joint.</p>
+
+<details class="src-fold"><summary><code>fn moveByJoint</code><span class="faint"> · 45 lines</span></summary><pre><code class="zig">/// ONE JOINT'S MOTION OF A BODY BEING POSED - `kinematics`' inner step, and the function robotgpu's kinematics kernel
+/// calls too, so both engines pose a body with the same arithmetic. `pose` is the body's pose built so far (its rest
+/// pose relative to its parent, then each earlier joint's motion), and the joint acts in that frame, so several joints
+/// on one body compose in their declared order:
+///
+///     axis   = the joint's axis, turned into the world by the pose so far
+///     anchor = the joint's anchor, carried into the world by the pose so far
+///     slide    the body moves along the axis by (q - q0); its orientation stays
+///     hinge    the body turns about the axis by (q - q0)            then the OFF-CENTRE CORRECTION: the origin
+///     ball     the body turns by the quaternion q                   moves back so the anchor stays where it was
+///
+/// `coordinates` holds the joint's position coordinates (`JointCoordinates`), and `rest_coordinate` a hinge's or
+/// slide's value in the reference pose (`qpos0`), which its angle or distance is measured from. Never a free joint
+/// (`freeJointPose`).
+pub fn moveByJoint(
+    pose: Pose,
+    joint_type: JointType,
+    local_axis: Vec,
+    local_anchor: Vec,
+    coordinates: JointCoordinates,
+    rest_coordinate: f32,
+) JointMotion {
+    var pos: Vec = pose.pos;
+    var rot: Quat = pose.rot;
+    const axis: Vec = rotate(rot, local_axis);
+    const anchor: Vec = pos + rotate(rot, local_anchor);
+    switch (joint_type) {
+        .slide =&gt; {
+            // Sliding moves the body and leaves its orientation alone, so no off-centre correction applies.
+            pos += axis * splat(coordinates[0] - rest_coordinate);
+        },
+        .hinge, .ball =&gt; {
+            const local: Quat = if (joint_type == .ball)
+                normalizeQuat(coordinates)
+            else
+                zm.quatFromNormAxisAngle(local_axis, coordinates[0] - rest_coordinate);
+            rot = qmul(rot, local);
+            // Off-centre correction: put the origin back where it must be for the anchor not to have moved.
+            pos = anchor - rotate(rot, local_anchor);
+        },
+        .free =&gt; unreachable, // `freeJointPose`; a free joint is never beside others
+    }
+    const motion: JointMotion = .{ .pose = .{ .pos = pos, .rot = rot }, .anchor = anchor, .axis = axis };
+    return motion;
 }</code></pre></details>
 
 <h3>Differentiating against the accumulated velocity</h3>
@@ -1607,8 +1644,9 @@ pub fn comPos(m: *const Model, d: *Data) void {
 
 <pre><code class="zig">/// The spatial motion a unit rotation about `axis` produces, when the frame's origin sits
 /// `offset` from the axis. Rotating about a line that does not pass through the origin
-/// moves the origin too, and `axis x offset` is exactly how much.
-fn dofAboutAxis(axis: Vec, offset: Vec) Motion {
+/// moves the origin too, and `axis x offset` is exactly how much. Shared with robotgpu's kernels, which compute each
+/// dof's motion with this very function.
+pub fn dofAboutAxis(axis: Vec, offset: Vec) Motion {
     return .{ .ang = axis, .lin = cross(axis, offset) };
 }</code></pre>
 

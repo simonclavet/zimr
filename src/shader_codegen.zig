@@ -36,7 +36,7 @@ const WriteFile = std.Build.Step.WriteFile;
 const LazyPath = std.Build.LazyPath;
 
 // ============================================================================
-// Zig-shader pipeline helpers (S1.2 of the Zig-shader-pipeline arc).
+// Zig-shader pipeline helpers.
 // ============================================================================
 // Author shaders as `_fs.zig` / `_vs.zig` (with a `_io.zig` schema), compile
 // them to SPIR-V, translate to WGSL, and expose the result as an anonymous
@@ -605,21 +605,29 @@ pub const ShaderPipeline = struct {
         return self.addComputeOutput(source, entry, wants_zimrnum, wants_zimrrl).wgsl;
     }
 
-    /// Compile a kernel file to SPIR-V and translate `entry` of it to WGSL, recording both (`compute_outputs`).
-    pub fn addComputeOutput(
+    /// The modules a kernel file may import beside `zm` and `kompute`, each opt-in: Zig rejects a `--dep` for a module
+    /// the file does not import.
+    pub const KernelModules = struct {
+        /// `zn`, so the kernel calls zimrnum's host functions rather than transcribe them.
+        zimrnum: bool = false,
+        /// `zrl`, the reinforcement-learning library. It imports zn, so `zn` is defined whenever this is set.
+        zimrrl: bool = false,
+        /// `robot`, robot.zig: robotgpu's kernels call its per-element formulas - the same functions the CPU engine
+        /// runs. It imports the profiler, a module of its own too, which compiles to nothing on the GPU.
+        robot: bool = false,
+        /// `robotgpu_sizes`, the arena lengths a robotgpu kernel declares its buffers with - the file chosen for this
+        /// build (desktop sizes, or the tests'), so the SPIR-V and the CPU twin declare the same buffers.
+        robotgpu_sizes: ?LazyPath = null,
+    };
+
+    /// Compile a kernel file to SPIR-V, with the modules it imports (`KernelModules`): Zig's SPIR-V backend, the
+    /// same flags as the fragment path. Returns the module's SPIR-V.
+    fn compileKernelSpirv(
         self: *ShaderPipeline,
         source: LazyPath,
-        entry: ?[]const u8,
-        /// Give the kernel `zn`, so it can call the host function rather than transcribe it.
-        /// Opt-in: Zig rejects `--dep` for a module the file does not import.
-        wants_zimrnum: bool,
-        /// Give the kernel `zrl`, the reinforcement-learning library, for the same reason. zrl
-        /// imports zn, so `zn` is defined whenever this is set, and named in the kernel's own
-        /// dependency list only when `wants_zimrnum` is.
-        wants_zimrrl: bool,
-    ) ComputeOutput {
+        modules: KernelModules,
+    ) LazyPath {
         const b: *Build = self.b;
-        // Stage 1: Zig -> SPIR-V (same flags as the fragment path).
         const compile: *Run = b.addSystemCommand(&.{
             b.graph.zig_exe,
             "build-obj",
@@ -638,7 +646,7 @@ pub const ShaderPipeline = struct {
         compile.addArg("zm");
         compile.addArg("--dep");
         compile.addArg("kompute");
-        if (wants_zimrnum) {
+        if (modules.zimrnum) {
             // ROOT'S dependency list. Zig's `--dep` flags attach to the NEXT `-M`, so declaring
             // `-Mzn=` further down gives the module a name without making it visible to the
             // kernel - and the compiler says `module "zn" declared but not used`, which reads
@@ -646,9 +654,17 @@ pub const ShaderPipeline = struct {
             compile.addArg("--dep");
             compile.addArg("zn");
         }
-        if (wants_zimrrl) {
+        if (modules.zimrrl) {
             compile.addArg("--dep");
             compile.addArg("zrl");
+        }
+        if (modules.robot) {
+            compile.addArg("--dep");
+            compile.addArg("robot");
+        }
+        if (modules.robotgpu_sizes != null) {
+            compile.addArg("--dep");
+            compile.addArg("robotgpu_sizes");
         }
         compile.addPrefixedFileArg("-Mroot=", source);
         compile.addPrefixedFileArg("-Mzm=", b.path("src/zimrmath.zig"));
@@ -656,7 +672,7 @@ pub const ShaderPipeline = struct {
         compile.addArg("--dep");
         compile.addArg("zm");
         compile.addPrefixedFileArg("-Mkompute=", b.path("src/kompute.zig"));
-        if (wants_zimrnum or wants_zimrrl) {
+        if (modules.zimrnum or modules.zimrrl) {
             // THE KERNEL CALLS THE HOST FUNCTION INSTEAD OF RESTATING IT
             //
             // zimrnum compiles to SPIR-V - checked directly with `build-obj -ofmt=spirv` before
@@ -669,7 +685,7 @@ pub const ShaderPipeline = struct {
             compile.addArg("kompute");
             compile.addPrefixedFileArg("-Mzn=", b.path("src/zimrnum.zig"));
         }
-        if (wants_zimrrl) {
+        if (modules.zimrrl) {
             // zrl's own dependency list: it imports zm and zn.
             compile.addArg("--dep");
             compile.addArg("zm");
@@ -677,6 +693,53 @@ pub const ShaderPipeline = struct {
             compile.addArg("zn");
             compile.addPrefixedFileArg("-Mzrl=", b.path("src/zimrrl.zig"));
         }
+        if (modules.robot) {
+            // robot.zig's own dependency list - zm and the profiler, a module of its own too, which reads only zm on
+            // the GPU: it compiles to nothing there (profiler.zig's head).
+            compile.addArg("--dep");
+            compile.addArg("zm");
+            compile.addArg("--dep");
+            compile.addArg("profiler");
+            compile.addPrefixedFileArg("-Mrobot=", b.path("src/robot.zig"));
+            compile.addArg("--dep");
+            compile.addArg("zm");
+            compile.addPrefixedFileArg("-Mprofiler=", b.path("src/profiler.zig"));
+        }
+        if (modules.robotgpu_sizes) |sizes_file| {
+            // The sizes file imports nothing.
+            compile.addPrefixedFileArg("-Mrobotgpu_sizes=", sizes_file);
+        }
+        return raw_spv;
+    }
+
+    /// A NATIVE-ONLY kernel: its SPIR-V alone, which the Vulkan host runs - no WGSL is made, so no web build can try to
+    /// translate it. For kernels that use what WebGPU does not have, such as subgroup operations and push constants:
+    /// the robotgpu probe's, and robotgpu's native build.
+    pub fn addNativeComputeOutput(
+        self: *ShaderPipeline,
+        source: LazyPath,
+        modules: KernelModules,
+    ) LazyPath {
+        return self.compileKernelSpirv(source, modules);
+    }
+
+    /// Compile a kernel file to SPIR-V and translate `entry` of it to WGSL, recording both (`compute_outputs`).
+    pub fn addComputeOutput(
+        self: *ShaderPipeline,
+        source: LazyPath,
+        entry: ?[]const u8,
+        /// Give the kernel `zn`, so it can call the host function rather than transcribe it.
+        /// Opt-in: Zig rejects `--dep` for a module the file does not import.
+        wants_zimrnum: bool,
+        /// Give the kernel `zrl`, the reinforcement-learning library, for the same reason. zrl
+        /// imports zn, so `zn` is defined whenever this is set, and named in the kernel's own
+        /// dependency list only when `wants_zimrnum` is.
+        wants_zimrrl: bool,
+    ) ComputeOutput {
+        const b: *Build = self.b;
+        // Stage 1: Zig -> SPIR-V.
+        const modules: KernelModules = .{ .zimrnum = wants_zimrnum, .zimrrl = wants_zimrrl };
+        const raw_spv: LazyPath = self.compileKernelSpirv(source, modules);
 
         // Stage 2: SPIR-V -> WGSL. @workgroup_size comes from the SPIR-V LocalSize.
         const w: *Run = if (self.spv2wgsl_exe) |exe| awblk: {

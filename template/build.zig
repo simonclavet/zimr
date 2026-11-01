@@ -1,10 +1,12 @@
 // build.zig - an application project built on zimr.
 //
-//   zig build                      -- build every app (debug) for this machine's platform - Windows, natively;
-//                                     on a machine zimr has no platform for, name one with -Dplatform
+//   zig build                      -- build every app (debug) for this machine's platform - Windows or Linux,
+//                                     natively; on a machine zimr has no platform for, name one with -Dplatform
 //   zig build -Dplatform=web       -- every app for the browser: zig-out/web/<name>/ (served) and
 //                                     zig-out/standalone/<name>.html (one file, opens from disk)
 //   zig build -Dplatform=windows   -- every app as a Windows program: zig-out/windows/<name>.exe
+//   zig build -Dplatform=linux     -- every app as a Linux program: zig-out/linux/<name> (built on any machine;
+//                                     run-<name> on Windows starts it in WSL)
 //   zig build -Dplatform=android   -- every app as an Android app: zig-out/android/<name>.apk, its single-file page
 //                                     in a full-screen WebView (needs the Android SDK and a JDK; Android Studio
 //                                     installs both)

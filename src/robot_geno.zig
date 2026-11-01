@@ -53,7 +53,7 @@ const robot_policy = @import("robot_policy.zig");
 const robot_gym = @import("robot_gym.zig");
 /// The task's servo - the law a policy acts through - which Geno must be driven by unchanged (R8a).
 const robot_track = @import("robot_track.zig");
-const rbt = @import("robot.zig");
+const rbt = @import("robot");
 /// The stable spring both servo laws share.
 const robot_maximal = @import("robot_maximal.zig");
 /// The collision shapes `tools/geno_fit.py` fitted to Geno's mesh (R4), in bind-pose world coordinates.

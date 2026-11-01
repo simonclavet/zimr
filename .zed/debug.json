@@ -1343,6 +1343,17 @@
     },
     {
         "adapter": "JavaScript",
+        "label": "Debug: magic-isomorphic-keyboard",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/magic_isomorphic_keyboard/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build magic-isomorphic-keyboard"
+    },
+    {
+        "adapter": "JavaScript",
         "label": "Debug: mandel-julia",
         "type": "chrome",
         "request": "launch",
@@ -5048,6 +5059,18 @@
             "settings set target.use-fast-stepping false"
         ],
         "build": "zig: build logo-raylib-anim (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: magic-isomorphic-keyboard (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/magic_isomorphic_keyboard.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build magic-isomorphic-keyboard (windows)"
     },
     {
         "adapter": "CodeLLDB",

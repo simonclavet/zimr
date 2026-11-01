@@ -26,13 +26,13 @@ const Allocator = std.mem.Allocator;
 
 const zm = @import("zm");
 const clamp = zm.clamp;
-const rbt = @import("robot.zig");
+const rbt = @import("robot");
 const codecs = @import("codecs.zig");
 const mjcf = @import("mjcf.zig");
 const rmj = @import("robot_mjcf.zig");
 const zimrphysics = @import("zimrphysics.zig");
 const rphys = @import("robot_physics.zig");
-const profiler = @import("profiler.zig");
+const profiler = @import("profiler");
 const eql = std.mem.eql;
 
 const go1_xml = @embedFile("tests/fixtures/robot/go1/go1.xml");

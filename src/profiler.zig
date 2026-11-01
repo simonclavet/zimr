@@ -12,6 +12,10 @@
 //! view defaults to the LONGEST frame in a rolling ~2 second window - the
 //! hitch, not the average.
 //!
+//! A GPU build compiles the profiler to nothing as well: a kernel (robot.zig compiled for robotgpu) has no clock, no
+//! zone store and no `build_options` module, so the profiler is disabled there whatever the mode, and a zone's
+//! `@src()` never becomes a run-time value - the SPIR-V backend crashes on a `SourceLocation` passed at run time.
+//!
 //! Identity is the comptime `@src()` call site, so statistics aggregate by
 //! location; optional per-call `.text()`/`.value()`/`.setColor()` annotate a
 //! single zone for the detail view without changing its identity.
@@ -24,7 +28,10 @@
 const std = @import("std");
 const zm = @import("zm");
 const float64 = zm.float64;
-const build_options = @import("build_options");
+/// The build's options. A GPU build - robot.zig compiled into a kernel, which opens zones - has no `build_options`
+/// module and no use for a profiler, so it gets an empty stand-in: `enabled` is then false, and every zone folds to
+/// nothing (the module's head).
+const build_options = if (zm.is_gpu) struct {} else @import("build_options");
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 

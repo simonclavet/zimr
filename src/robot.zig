@@ -118,7 +118,7 @@ const float = zm.float;
 const isFinite = zm.isFinite;
 const turnsFromRad = zm.turnsFromRad;
 const radFromTurns = zm.radFromTurns;
-const profiler = @import("profiler.zig");
+const profiler = @import("profiler");
 
 // zm keywords must be bound at file scope (the linter enforces it), and binding them here
 // also keeps the maths below readable as maths.
@@ -1367,6 +1367,10 @@ pub const Model = struct {
     body_mass: []f32,
     /// Mass of this body plus everything below it - needed by the subtree-COM frames.
     body_subtree_mass: []f32,
+    /// Each body's SUBTREE SIZE: the body and every body below it (`countSubtrees`). Bodies are in depth-first order,
+    /// so a body's subtree is the contiguous run `[body, body + body_subtree_count[body])` - what lets a sum over a
+    /// subtree run over a range (robotgpu's tree sums).
+    body_subtree_count: []u32,
     body_jnt_adr: []u32,
     body_jnt_num: []u32,
     body_dof_adr: []u32,
@@ -1493,6 +1497,9 @@ pub const BuildError = error{
     /// A name referenced by a joint, tendon, actuator or sensor that no such thing has.
     UnknownName,
     OutOfMemory,
+    /// The bodies are not in depth-first order: a body lies outside its parent's run of descendants
+    /// (`countSubtrees`). Every loader in the tree produces depth-first order; one that does not must renumber.
+    BodiesNotDepthFirst,
 };
 
 /// Joints are numbered in declaration order across all bodies, which is the same order
@@ -1613,6 +1620,35 @@ pub fn refreshSubtreeMass(m: *Model) void {
     while (bi > 1) {
         bi -= 1;
         m.body_subtree_mass[m.body_parent[bi]] += m.body_subtree_mass[bi];
+    }
+}
+
+/// Each body's subtree size (`Model.body_subtree_count`), and the guarantee that the bodies are in DEPTH-FIRST ORDER:
+/// every body comes after its parent and inside its parent's run of descendants, so every subtree is one contiguous
+/// run of bodies:
+///
+///     0 world   1 pelvis   2 thigh   3 shin   4 other thigh   5 other shin
+///     pelvis's subtree: [1, 6) - the first leg [2, 4), then the second [4, 6), each contiguous
+///
+/// The sizes add up from the leaves (each body after its parent, so a reverse sweep sees every child before its
+/// parent); a body outside its parent's run - a breadth-first or interleaved order - is refused by name, since the
+/// GPU's tree sums would silently mix subtrees (`error.BodiesNotDepthFirst`).
+fn countSubtrees(m: *Model) BuildError!void {
+    @memset(m.body_subtree_count, 1);
+    var reverse_body: u32 = m.nbody;
+    while (reverse_body > 1) {
+        reverse_body -= 1;
+        const parent: u32 = m.body_parent[reverse_body];
+        m.body_subtree_count[parent] += m.body_subtree_count[reverse_body];
+    }
+    var body: u32 = 1;
+    while (body < m.nbody) : (body += 1) {
+        const parent: u32 = m.body_parent[body];
+        const parent_run_end: u32 = parent + m.body_subtree_count[parent];
+        const inside_parent_run: bool = parent < body and body < parent_run_end;
+        if (!inside_parent_run) {
+            return error.BodiesNotDepthFirst;
+        }
     }
 }
 
@@ -1964,6 +2000,7 @@ fn buildFromSpec(gpa: Allocator, spec: ModelSpec) !Model {
         .body_inertia = try a.alloc(Inertia, nbody),
         .body_mass = try a.alloc(f32, nbody),
         .body_subtree_mass = try a.alloc(f32, nbody),
+        .body_subtree_count = try a.alloc(u32, nbody),
         .body_jnt_adr = try a.alloc(u32, nbody),
         .body_jnt_num = try a.alloc(u32, nbody),
         .body_dof_adr = try a.alloc(u32, nbody),
@@ -2284,6 +2321,7 @@ fn buildFromSpec(gpa: Allocator, spec: ModelSpec) !Model {
     // mutating mass at runtime has to redo exactly this, so having one copy is what keeps
     // the two from drifting.
     refreshSubtreeMass(&m);
+    try countSubtrees(&m);
 
     // ---- mass-matrix sparsity ----
     // Row i holds one entry per DOF on i's path to the root, i included. Storing the
@@ -3532,15 +3570,82 @@ pub const Data = struct {
 // world poses. This is the first stage of the pipeline and everything else depends on it.
 // =============================================================================
 
+/// WHERE ONE JOINT LEAVES A BODY (`moveByJoint`): the body's pose after the joint's motion, and the joint's anchor and
+/// axis in the world - what `kinematics` records for each joint.
+pub const JointMotion = struct {
+    pose: Pose,
+    anchor: Vec,
+    axis: Vec,
+};
+
+/// A JOINT'S POSITION COORDINATES as `moveByJoint` takes them, four floats whatever the joint: a ball's quaternion
+/// (x y z w), or a hinge's angle or a slide's distance in the first lane, the other three unused - so one function
+/// serves every joint, with no lane count that varies (which a GPU kernel could not index).
+pub const JointCoordinates = Vec;
+
+/// A FREE joint's body pose: its seven coordinates ARE the body's world position and orientation, the quaternion
+/// normalised - nothing to compose. Shared with robotgpu's kinematics kernel, as `moveByJoint` is.
+pub fn freeJointPose(position: Vec, orientation: Quat) Pose {
+    const pose: Pose = .{ .pos = position, .rot = normalizeQuat(orientation) };
+    return pose;
+}
+
+/// ONE JOINT'S MOTION OF A BODY BEING POSED - `kinematics`' inner step, and the function robotgpu's kinematics kernel
+/// calls too, so both engines pose a body with the same arithmetic. `pose` is the body's pose built so far (its rest
+/// pose relative to its parent, then each earlier joint's motion), and the joint acts in that frame, so several joints
+/// on one body compose in their declared order:
+///
+///     axis   = the joint's axis, turned into the world by the pose so far
+///     anchor = the joint's anchor, carried into the world by the pose so far
+///     slide    the body moves along the axis by (q - q0); its orientation stays
+///     hinge    the body turns about the axis by (q - q0)            then the OFF-CENTRE CORRECTION: the origin
+///     ball     the body turns by the quaternion q                   moves back so the anchor stays where it was
+///
+/// `coordinates` holds the joint's position coordinates (`JointCoordinates`), and `rest_coordinate` a hinge's or
+/// slide's value in the reference pose (`qpos0`), which its angle or distance is measured from. Never a free joint
+/// (`freeJointPose`).
+pub fn moveByJoint(
+    pose: Pose,
+    joint_type: JointType,
+    local_axis: Vec,
+    local_anchor: Vec,
+    coordinates: JointCoordinates,
+    rest_coordinate: f32,
+) JointMotion {
+    var pos: Vec = pose.pos;
+    var rot: Quat = pose.rot;
+    const axis: Vec = rotate(rot, local_axis);
+    const anchor: Vec = pos + rotate(rot, local_anchor);
+    switch (joint_type) {
+        .slide => {
+            // Sliding moves the body and leaves its orientation alone, so no off-centre correction applies.
+            pos += axis * splat(coordinates[0] - rest_coordinate);
+        },
+        .hinge, .ball => {
+            const local: Quat = if (joint_type == .ball)
+                normalizeQuat(coordinates)
+            else
+                zm.quatFromNormAxisAngle(local_axis, coordinates[0] - rest_coordinate);
+            rot = qmul(rot, local);
+            // Off-centre correction: put the origin back where it must be for the anchor not to have moved.
+            pos = anchor - rotate(rot, local_anchor);
+        },
+        .free => unreachable, // `freeJointPose`; a free joint is never beside others
+    }
+    const motion: JointMotion = .{ .pose = .{ .pos = pos, .rot = rot }, .anchor = anchor, .axis = axis };
+    return motion;
+}
+
 /// Forward kinematics: world pose of every body, joint anchor, joint axis and site.
 ///
 /// Bodies are visited in index order, which IS parent-before-child because `Spec()`
 /// rejects any spec where a parent is declared after its child. That single validation
 /// rule is what lets this be a flat loop instead of a recursive walk.
 ///
-/// The subtle step is the off-centre correction. A hinge does not rotate the body about
-/// the body's own origin - it rotates it about the ANCHOR. So after composing the
-/// rotation we recompute where the origin must be for the anchor to have stayed put:
+/// The subtle step is the off-centre correction (`moveByJoint`). A hinge does not rotate
+/// the body about the body's own origin - it rotates it about the ANCHOR. So after
+/// composing the rotation we recompute where the origin must be for the anchor to have
+/// stayed put:
 ///
 ///     xpos = xanchor - R_new * jnt_pos
 ///
@@ -3559,62 +3664,47 @@ pub fn kinematics(m: *const Model, d: *Data) void {
         const parent: u32 = m.body_parent[bi];
         const jnt_adr: u32 = m.body_jnt_adr[bi];
         const jnt_num: u32 = m.body_jnt_num[bi];
+        const is_free_body: bool = jnt_num == 1 and m.jnt_type[jnt_adr] == .free;
 
-        var pos: Vec = undefined;
-        var rot: Quat = undefined;
-
-        if (jnt_num == 1 and m.jnt_type[jnt_adr] == .free) {
+        const body_pose: Pose = if (is_free_body) free: {
             // A free joint IS the body's world pose; there is nothing to compose.
             const qadr: u32 = m.jnt_qpos_adr[jnt_adr];
-            pos = vec(d.pos[qadr], d.pos[qadr + 1], d.pos[qadr + 2]);
-            rot = normalizeQuat(.{ d.pos[qadr + 3], d.pos[qadr + 4], d.pos[qadr + 5], d.pos[qadr + 6] });
-            d.jnt_xanchor[jnt_adr] = pos;
+            const position: Vec = vec(d.pos[qadr], d.pos[qadr + 1], d.pos[qadr + 2]);
+            const orientation: Quat = .{ d.pos[qadr + 3], d.pos[qadr + 4], d.pos[qadr + 5], d.pos[qadr + 6] };
+            const free_pose: Pose = freeJointPose(position, orientation);
+            d.jnt_xanchor[jnt_adr] = free_pose.pos;
             d.jnt_xaxis[jnt_adr] = m.jnt_axis[jnt_adr];
-        } else {
-            // Start at the body's rest pose relative to its parent, then let each joint
-            // move it away from there.
+            break :free free_pose;
+        } else jointed: {
+            // Start at the body's rest pose relative to its parent, then let each joint move the pose built so far
+            // (`moveByJoint`), in its declared order.
             const parent_pose: Pose = .{ .pos = d.body_xpos[parent], .rot = d.body_xrot[parent] };
             const rest: Pose = parent_pose.compose(.{ .pos = m.body_pos[bi], .rot = m.body_rot[bi] });
-            pos = rest.pos;
-            rot = rest.rot;
-
+            var pose: Pose = rest;
             for (jnt_adr..jnt_adr + jnt_num) |ji| {
                 const qadr: u32 = m.jnt_qpos_adr[ji];
-
-                // Axis and anchor, in the frame the joint acts in - which is the pose as
-                // built SO FAR, so several joints on one body compose in declared order.
-                const axis: Vec = rotate(rot, m.jnt_axis[ji]);
-                const anchor: Vec = pos + rotate(rot, m.jnt_pos[ji]);
-
-                switch (m.jnt_type[ji]) {
-                    .slide => {
-                        // Sliding moves the body and leaves its orientation alone, so no
-                        // off-centre correction applies.
-                        pos += axis * splat(d.pos[qadr] - m.qpos0[qadr]);
-                    },
-                    .hinge, .ball => {
-                        const local: Quat = if (m.jnt_type[ji] == .ball)
-                            normalizeQuat(.{ d.pos[qadr], d.pos[qadr + 1], d.pos[qadr + 2], d.pos[qadr + 3] })
-                        else
-                            zm.quatFromNormAxisAngle(m.jnt_axis[ji], d.pos[qadr] - m.qpos0[qadr]);
-
-                        rot = qmul(rot, local);
-                        // Off-centre correction: put the origin back where it must be for
-                        // the anchor not to have moved.
-                        pos = anchor - rotate(rot, m.jnt_pos[ji]);
-                    },
-                    .free => unreachable, // handled above; a free joint is never beside others
-                }
-
-                d.jnt_xanchor[ji] = anchor;
-                d.jnt_xaxis[ji] = axis;
+                const joint_type: JointType = m.jnt_type[ji];
+                // A ball's four coordinates; a hinge's or slide's one - never reading past it, past `qpos`'s end.
+                const coordinates: JointCoordinates = if (joint_type == .ball)
+                    .{ d.pos[qadr], d.pos[qadr + 1], d.pos[qadr + 2], d.pos[qadr + 3] }
+                else
+                    .{ d.pos[qadr], 0, 0, 0 };
+                const local_axis: Vec = m.jnt_axis[ji];
+                const local_anchor: Vec = m.jnt_pos[ji];
+                const rest_coordinate: f32 = m.qpos0[qadr];
+                const motion: JointMotion =
+                    moveByJoint(pose, joint_type, local_axis, local_anchor, coordinates, rest_coordinate);
+                pose = motion.pose;
+                d.jnt_xanchor[ji] = motion.anchor;
+                d.jnt_xaxis[ji] = motion.axis;
             }
-        }
+            break :jointed pose;
+        };
 
-        d.body_xrot[bi] = normalizeQuat(rot);
-        d.body_xpos[bi] = pos;
+        d.body_xrot[bi] = normalizeQuat(body_pose.rot);
+        d.body_xpos[bi] = body_pose.pos;
         // The centre of mass, which is what the dynamics actually care about.
-        d.body_xipos[bi] = pos + rotate(d.body_xrot[bi], m.body_ipos[bi]);
+        d.body_xipos[bi] = body_pose.pos + rotate(d.body_xrot[bi], m.body_ipos[bi]);
     }
 
     // Sites ride along on their bodies. They are massless frames, so this is the only
@@ -3632,8 +3722,9 @@ pub fn kinematics(m: *const Model, d: *Data) void {
 
 /// The spatial motion a unit rotation about `axis` produces, when the frame's origin sits
 /// `offset` from the axis. Rotating about a line that does not pass through the origin
-/// moves the origin too, and `axis x offset` is exactly how much.
-fn dofAboutAxis(axis: Vec, offset: Vec) Motion {
+/// moves the origin too, and `axis x offset` is exactly how much. Shared with robotgpu's kernels, which compute each
+/// dof's motion with this very function.
+pub fn dofAboutAxis(axis: Vec, offset: Vec) Motion {
     return .{ .ang = axis, .lin = cross(axis, offset) };
 }
 
@@ -5334,8 +5425,9 @@ const min_constraint_diag: f32 = 1.0e-10;
 // --------------------------------------------------------------------------
 // =============================================================================
 
-/// In-place Cholesky, `A = L*L^T`, lower triangle. False if `A` is not positive definite.
-fn choleskyFactor(a: []f32, n: usize) bool {
+/// In-place Cholesky, `A = L*L^T`, lower triangle. False if `A` is not positive definite. Public so robotgpu's
+/// CPU twin factors with this very function: its workgroup Cholesky subtracts the same products in the same order.
+pub fn choleskyFactor(a: []f32, n: usize) bool {
     for (0..n) |i| {
         for (0..i + 1) |j| {
             var sum: f32 = a[i * n + j];
@@ -5729,7 +5821,7 @@ pub fn solveConstraints(m: *const Model, d: *Data) void {
         return;
     }
 
-    // * WARM STARTING (section 4g S3). Start each row from the force that same constraint carried
+    // * WARM STARTING. Start each row from the force that same constraint carried
     // last step, instead of from zero.
     //
     // The benchmark is what made this the top priority rather than a nice-to-have: on a KUKA
@@ -6193,7 +6285,8 @@ pub fn bodyAccelerations(m: *const Model, d: *Data) void {
 
 /// Rotate `q` by an angular velocity applied for `dt`. Exact for a constant `w`: build the
 /// rotation the velocity describes over the interval, then compose.
-fn rotateQuatByAngularVel(q: Quat, w: Vec, dt: f32) Quat {
+/// Shared with robotgpu's integrator kernel.
+pub fn rotateQuatByAngularVel(q: Quat, w: Vec, dt: f32) Quat {
     const speed: f32 = length3(w);
     if (speed < 1.0e-12) {
         return q;

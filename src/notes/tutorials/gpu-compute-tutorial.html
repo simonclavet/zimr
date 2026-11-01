@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GPU compute — kernels in Zig with kompute</title>
+<title>GPU programming in Zig — a course, with kompute</title>
 <!--docfmt:style-->
 <!--
   Editing this page? Its CODE is generated, so never paste code into it.
@@ -16,11 +16,14 @@
 -->
 </head>
 <body>
-<h1>GPU compute</h1>
-<p class="sub">How zimr computes on the GPU: kernels written once in Zig with the kompute library, run on the GPU
-as compute shaders and, from the same source, on the CPU as plain loops. The document follows a fluid of 20,000
-particles from its first kernel to its performance. How the build and each platform turn a kernel into a GPU's code
-is the subject of the <a href="backends-tutorial.html#compute">backends tutorial</a>.</p>
+<h1>GPU programming in Zig</h1>
+<p class="sub">A course in programming the GPU from Zig, as zimr does it: kernels written once with the kompute library,
+run on the GPU as compute shaders and, from the same source, on the CPU as plain loops. It starts from how a GPU
+executes and what memory it has; collects the practices that make a kernel correct, portable and fast, each with its
+reason; shows how invocations cooperate inside a workgroup; follows a kernel from Zig to the device and back; explains
+why the GPU's answers differ from the CPU's and how to measure it; and ends with a fluid of 20,000 particles as a
+worked example, from its first kernel to its performance. How the build and each platform turn a kernel into a GPU's
+code is the subject of the <a href="backends-tutorial.html#compute">backends tutorial</a>.</p>
 
 <p>Code is shown in folds, generated from the source files on every build, so it is always the code that ships. A
 closed fold opens with a click; the prose reads straight through without opening any.</p>
@@ -28,20 +31,53 @@ closed fold opens with a click; the prose reads straight through without opening
 <nav>
 <strong>Contents</strong>
 <ol>
-  <li><a href="#gpu">Compute on the GPU</a></li>
+  <li><a href="#gpu">Compute on the GPU</a>
+    <ol>
+        <li><a href="#model">The execution model</a></li>
+        <li><a href="#memory">Memory</a></li></ol></li>
   <li><a href="#builds">The CPU and GPU builds</a></li>
   <li><a href="#kernelfiles">Kernel files</a>
-    <ol><li><a href="#buffers">Buffers and parameters</a></li>
+    <ol>
+        <li><a href="#buffers">Buffers and parameters</a></li>
         <li><a href="#context">The context</a></li>
         <li><a href="#entries">Entry points</a></li></ol></li>
-  <li><a href="#toshader">From kernel to shader</a></li>
+  <li><a href="#practices">Writing kernels well</a>
+    <ol>
+        <li><a href="#guards">One invocation per element, and its guard</a></li>
+        <li><a href="#uniformflow">Uniform control flow</a></li>
+        <li><a href="#pointers">Helpers and storage pointers</a></li>
+        <li><a href="#asserts">Assertions on the GPU</a></li>
+        <li><a href="#libraries">Libraries in kernels</a></li>
+        <li><a href="#layout">Data layout</a></li></ol></li>
+  <li><a href="#cooperation">Cooperation inside a workgroup</a>
+    <ol>
+        <li><a href="#sharedmemory">Shared memory and barriers</a></li>
+        <li><a href="#subgroups">Subgroups</a></li>
+        <li><a href="#cooptwin">The twin of a cooperative kernel</a></li>
+        <li><a href="#factorisation">A matrix factorisation in a workgroup</a></li></ol></li>
+  <li><a href="#toshader">From kernel to shader</a>
+    <ol>
+        <li><a href="#legaliser">The legaliser and native-only kernels</a></li></ol></li>
   <li><a href="#running">Running kernels</a>
-    <ol><li><a href="#dispatch">Dispatch</a></li>
+    <ol>
+        <li><a href="#dispatch">Dispatch</a></li>
         <li><a href="#batching">Batching</a></li>
         <li><a href="#ongpu">Data on the GPU</a></li>
-        <li><a href="#results">Reading results</a></li></ol></li>
+        <li><a href="#results">Reading results</a></li>
+        <li><a href="#large">Large dispatches</a></li>
+        <li><a href="#ranges">Reading ranges</a></li>
+        <li><a href="#capabilities">Device capabilities</a></li>
+        <li><a href="#pushconstants">Push constants</a></li>
+        <li><a href="#timings">Timing kernels</a></li>
+        <li><a href="#lending">Sharing buffers between pipes</a></li></ol></li>
+  <li><a href="#precision">Precision and determinism</a>
+    <ol>
+        <li><a href="#whydiffer">Why the device and the twin differ</a></li>
+        <li><a href="#epsilons">Measuring in epsilons</a></li>
+        <li><a href="#repeatability">Determinism</a></li></ol></li>
   <li><a href="#fluid">The SPH fluid</a>
-    <ol><li><a href="#state">The simulation state</a></li>
+    <ol>
+        <li><a href="#state">The simulation state</a></li>
         <li><a href="#grid">The neighbour grid</a></li>
         <li><a href="#density">Density</a></li>
         <li><a href="#pressure">Pressure</a></li>
@@ -49,7 +85,8 @@ closed fold opens with a click; the prose reads straight through without opening
         <li><a href="#walls">Gravity, prediction and walls</a></li>
         <li><a href="#substep">The sub-step</a></li></ol></li>
   <li><a href="#performance">Performance</a>
-    <ol><li><a href="#measured">Measured effects</a></li>
+    <ol>
+        <li><a href="#measured">Measured effects</a></li>
         <li><a href="#coalesced">Coalesced memory</a></li>
         <li><a href="#techniques">Other techniques</a></li>
         <li><a href="#tiling">Tiling and sorting</a></li></ol></li>
@@ -77,6 +114,55 @@ where a renderer can then draw from them. Each function a compute shader starts 
 is 20,000 particles that push on their neighbours. Every frame, each particle measures how crowded its neighbourhood
 is and moves to relieve the pressure. On the CPU that is 20,000 particles, each against dozens of neighbours, several
 times a frame; on the GPU the particles are handled together.</p>
+
+
+<h3 id="model">1.1 The execution model</h3>
+
+<p>A GPU runs one function, the <em>kernel</em>, many times over. Each run is an <em>invocation</em>, and each
+invocation knows its own index. Invocations are not scheduled one by one: the hardware groups them at two levels, and
+those two groupings decide what a kernel may share and how it must be written.</p>
+
+<pre class="sketch"><code>   a DISPATCH: n invocations, asked for at once by the host
+   +-----------------------------------------------------------------------------+
+   | workgroup 0                  | workgroup 1                  | workgroup 2 ...
+   | +---------+---------+-----+  | +---------+---------+-----+  |
+   | |subgroup0|subgroup1| ... |  | |subgroup0|subgroup1| ... |  |
+   | | 8 to 64 | lanes   |     |  | |         |         |     |  |
+   | +---------+---------+-----+  | +---------+---------+-----+  |
+   |  64 invocations, one shared  |  ...                         |
+   |  memory, one barrier         |                              |
+   +-----------------------------------------------------------------------------+
+
+   SUBGROUP    the invocations one SIMD unit runs in lockstep - 32 on NVIDIA, 32 or 64 on AMD, the CPU
+               vector width on a software driver (8 on lavapipe). They execute the same instruction together.
+   WORKGROUP   a fixed number of invocations (64 in kompute unless a file says otherwise) placed on one
+               compute unit together: they share a small, fast memory and can wait for one another (a barrier).
+   DISPATCH    as many workgroups as the work needs; they run in any order, on any compute unit, and
+               cannot wait for one another.</code></pre>
+
+<p>Three rules follow, and most of this course is about living with them. Invocations of one workgroup can cooperate,
+through shared memory and barriers. Invocations of different workgroups cannot, within one dispatch: the only order
+between them is the end of the dispatch. And the invocations of one subgroup run in lockstep, so a branch that sends
+some of them one way and the rest another makes the subgroup run both paths, one after the other, with half its lanes
+idle each time.</p>
+
+<h3 id="memory">1.2 Memory</h3>
+
+<p>A kernel sees four kinds of memory, and they differ by orders of magnitude in size and in speed:</p>
+
+<pre class="sketch"><code>   kind              who sees it              size                 in kompute
+   ----------------  -----------------------  -------------------  ----------------------------------------
+   private           one invocation           a few hundred bytes  the kernel's local variables
+   workgroup         one workgroup            32 to 64 KB          k.shared(T, n, "name"), module scope
+   uniform           every invocation, read   a few hundred bytes  Params, read through g.uniform()
+   storage           every invocation         up to gigabytes      Buffers, one storage buffer per field</code></pre>
+
+<p>Private memory is registers: as fast as memory gets, and spent by every local a kernel declares, so a kernel with
+large local arrays fits fewer invocations on a compute unit at once. Workgroup memory is a fast scratchpad shared by one
+workgroup and gone when it finishes. Uniform memory holds the few values every invocation reads alike - counts, sizes,
+a time step. Storage buffers hold the data itself, and every read of them is a trip to the GPU's main memory: the cost
+a kernel is designed around. A read is cheapest when neighbouring invocations read neighbouring addresses, so the
+hardware can serve a whole subgroup in one transaction (section <a href="#coalesced">Coalesced memory</a>).</p>
 
 <h2 id="builds">2. The CPU and GPU builds</h2>
 
@@ -227,7 +313,7 @@ pub fn installKernel(comptime Module: type, comptime name: []const u8) void {
             }
 
             const c: Ctx(Module) = .{
-                .id = gpu.global_invocation_id[0],
+                .id = linearInvocationId(Module.config.workgroup, Module.config.large_dispatch),
                 .params = params,
             };
             @field(Module, name)(c);
@@ -236,7 +322,363 @@ pub fn installKernel(comptime Module: type, comptime name: []const u8) void {
     @export(&amp;Entry.run, .{ .name = name });
 }</code></pre></details>
 
-<h2 id="toshader">4. From kernel to shader</h2>
+
+<h2 id="practices">4. Writing kernels well</h2>
+
+<p>A kernel is ordinary Zig, compiled twice - once for the CPU, once to SPIR-V for the GPU. Most Zig compiles for the GPU
+unchanged; the exceptions are a short list, each a consequence of what the GPU is. This chapter collects them as
+practices, each with its reason.</p>
+
+<h3 id="guards">4.1 One invocation per element, and its guard</h3>
+
+<p>The basic shape is one invocation per element of the data: invocation <code>i</code> reads element <code>i</code>,
+computes, and writes element <code>i</code>. The host asks for <code>n</code> invocations, but the GPU launches whole
+workgroups, so the last workgroup usually runs past the end of the data. Every kernel therefore begins by asking
+whether its index is inside the data, and an invocation past the end does nothing:</p>
+
+<pre class="sketch"><code>   n = 150 elements, workgroups of 64:
+
+   workgroup 0          workgroup 1          workgroup 2
+   [ 0 ............ 63] [64 ........... 127] [128 .. 149 | 150 ....... 191]
+                                                          \____ past the end: the guard returns ___/</code></pre>
+
+<p>The guard compares against a count from <code>Params</code>, never against the buffer's capacity: the buffers are
+sized for the most the module will ever hold, and the count says how much of that is live in this dispatch.</p>
+
+<h3 id="uniformflow">4.2 Uniform control flow</h3>
+
+<p>Two kinds of operation need every invocation of a group to arrive together: a <em>barrier</em>, which makes the
+invocations of a workgroup wait for one another, and a <em>subgroup operation</em>, which combines a value from every
+lane of a subgroup. If an invocation returns early, or skips the call inside a branch, the others wait for an
+invocation that never comes - on some drivers a hang, on others a barrier that silently does not synchronise. The rule
+is called UNIFORM CONTROL FLOW: every invocation of the group reaches the call, and it is the WORK around the call that
+is guarded, never the call itself.</p>
+
+<pre class="sketch"><code>   wrong: an early return before the barrier          right: every lane reaches it; the work is guarded
+
+   if (id >= count) return;     &lt;- lanes leave         const holds: bool = id &lt; count;
+   tile[lane] = data[id];                              tile[lane] = if (holds) data[id] else 0;
+   k.workgroupBarrier();        &lt;- the rest wait       k.workgroupBarrier();
+                                   for ever            if (holds) out[id] = ...;</code></pre>
+
+<p>Loop bounds around a barrier must be uniform too - the same in every invocation - which is why a cooperative kernel
+reads them from <code>Params</code> or from compile-time constants, never from data that differs from lane to lane.</p>
+
+<h3 id="pointers">4.3 Helpers and storage pointers</h3>
+
+<p>A kernel's helper functions should read and write the module's bindings directly, and never take a pointer to a
+storage buffer as a parameter. In SPIR-V, a function parameter that points into a storage buffer needs a capability
+(VariablePointers) that the hosts do not enable, so such a helper is rejected when the shader is loaded. The helper
+reads the binding it needs by name instead, and takes only offsets and values. When several buffers want the same
+helper, the buffer becomes a COMPILE-TIME parameter: the compiler makes one copy of the helper per buffer, and each
+copy reaches its binding as a compile-time constant - exactly as a binding bound at module scope - so no pointer ever
+crosses the call at run time:</p>
+
+<details class="src-fold" data-src="src/gpu/robotgpu_probe.zig" data-decl="fn loadVector("><summary><code>loadVector</code></summary><pre><code class="zig">/// Four floats of the buffer `field` as a vector, from `at`. The buffer is a COMPILE-TIME parameter: the helper is made
+/// once per buffer, and each copy reaches its binding as a compile-time constant (`comptime g.bind(field)`, as a
+/// binding bound at module scope is) - never as a pointer passed at run time, since a SPIR-V function parameter
+/// pointing into a storage buffer needs a capability (VariablePointers) the Vulkan host does not enable.
+fn loadVector(comptime field: Field, at: u32) Vec {
+    const loaded: Vec = .{
+        (comptime g.bind(field))[at],
+        (comptime g.bind(field))[at + 1],
+        (comptime g.bind(field))[at + 2],
+        (comptime g.bind(field))[at + 3],
+    };
+    return loaded;
+}</code></pre></details>
+
+<p>kompute's own helpers that do take a binding, such as <code>k.atomicAdd</code>, are <code>inline</code>: an inlined
+call leaves no function boundary for the pointer to cross.</p>
+
+<p>The same rule covers the pointers kompute hands out for the uniform and the push constants: they are bound ONCE, at
+module scope - <code>const params = g.uniform();</code>, <code>const pushed = g.push();</code> - where they are
+compile-time constants. Called inside a kernel instead, the returned pointer would be kept in a function variable, and
+SPIR-V's logical addressing forbids a variable that holds a pointer.</p>
+
+<h3 id="asserts">4.4 Assertions on the GPU</h3>
+
+<p>zimrmath's assertions - <code>assert</code>, <code>assertf</code>, <code>assertUnreachable</code>,
+<code>panicf</code> - work in kernels. On the GPU a failed assertion is <code>unreachable</code>: an assumption the
+compiler may build on, with no message, since a shader has nowhere to print. Each assertion takes the caller's
+<code>@src()</code>, and on the GPU it must take it at COMPILE time: a <code>std.builtin.SourceLocation</code> holds
+pointers to the file's and the function's names, and Zig's SPIR-V backend cannot compile one passed as a run-time
+argument. So each assertion has two forms, and the public name picks the one that fits the build:</p>
+
+<details class="src-fold" data-src="src/zimrmath.zig" data-decl="fn assertfOnGpu("><summary><code>assertfOnGpu</code></summary><pre><code class="zig">/// `assertf` on the GPU: a failed check is `unreachable`, nothing else - the location, message and arguments are
+/// never read. The location is a COMPILE-TIME parameter here: a `SourceLocation` holds pointers to the file's and the
+/// function's names, and the SPIR-V backend crashes on one passed as a run-time argument (a compile-time one, and
+/// `@src()` itself, it compiles). `@src()` is known at compile time at every call site, so a call reads the same on
+/// either side.
+fn assertfOnGpu(
+    ok: bool,
+    comptime src: std.builtin.SourceLocation,
+    comptime fmt: []const u8,
+    args: anytype,
+) void {
+    _ = src;
+    _ = fmt;
+    _ = args;
+    if (!ok) {
+        unreachable;
+    }
+}</code></pre></details>
+
+<p>A call reads the same either way, because <code>@src()</code> is known at compile time at every call site. The same
+reasoning applies to any function written for kernels: a parameter that carries pointers to constant data - a source
+location, a string - is a compile-time parameter, or is not passed at all.</p>
+
+<h3 id="libraries">4.5 Libraries in kernels</h3>
+
+<p>A kernel file imports <code>kompute</code> and <code>zm</code> (zimrmath) always, and opts into more by declaring it in
+the build: <code>zn</code> (zimrnum), <code>zrl</code> (zimrrl) and <code>robot</code> (robot.zig). A kernel that calls
+a library calls the library's own function - the same code the CPU runs - rather than a copy written for the GPU, so the
+two can never drift apart.</p>
+
+<p>Three things make a library usable from a kernel. Where the GPU needs a different formula, the library branches on
+<code>is_gpu</code> at compile time: zimrmath's sine and cosine, for instance, are polynomials on the GPU and the
+standard library's on the CPU (chapter <a href="#precision">Precision and determinism</a> measures the difference).
+Facilities that make no sense in a shader compile to nothing there: the profiler, which robot.zig uses, reports itself
+disabled in a GPU build, so every profiling zone folds away:</p>
+
+<details class="src-fold" data-src="src/profiler.zig" data-decl="const build_options = if (zm.is_gpu)"><summary><code>build_options</code></summary><pre><code class="zig">/// The build's options. A GPU build - robot.zig compiled into a kernel, which opens zones - has no `build_options`
+/// module and no use for a profiler, so it gets an empty stand-in: `enabled` is then false, and every zone folds to
+/// nothing (the module's head).
+const build_options = if (zm.is_gpu) struct {} else @import("build_options");</code></pre></details>
+
+<p>And a file belongs to exactly one module. A program that holds both the engine and a kernel's CPU twin reaches a
+shared file such as robot.zig through one module that both import by name - <code>robot</code>, with
+<code>profiler</code> beside it - never through two different paths, which Zig refuses as a file in two modules.</p>
+
+<h3 id="layout">4.6 Data layout</h3>
+
+<p>Each field of a kernel file's <code>Buffers</code> becomes its own storage buffer, and a field holds a flat array -
+<code>[n]f32</code>, <code>[n]u32</code>. Richer data is laid out in rows inside such an array, and the clearest way to
+describe a row is as a TYPE: an <code>extern struct</code> of arrays, whose layout the compiler fixes, so every place
+in the row is computed rather than counted by hand:</p>
+
+<details class="src-fold" data-src="src/gpu/robotgpu_probe.zig" data-decl="pub const MathsInputs = extern struct {"><summary><code>MathsInputs</code></summary><pre><code class="zig">/// The maths table's inputs, one row (this file's head draws it). The vector and the second quaternion are never
+/// zero: `normalize3` asserts it, and the table is built so.
+pub const MathsInputs = extern struct {
+    /// A unit quaternion (x y z w).
+    rotation: [4]f32,
+    /// Any quaternion.
+    other: [4]f32,
+    /// x y z, w = 0.
+    vector: [4]f32,
+    /// In radians.
+    angle: f32,
+    _padding: [3]f32,
+};</code></pre></details>
+
+<p>Three small functions turn such a type into the numbers a kernel indexes with - a field's offset and width in floats,
+and a row's width - with the field named by a checked enum literal:</p>
+
+<details class="src-fold" data-src="src/gpu/robotgpu_probe.zig" data-decl="pub fn floatOffset("><summary><code>floatOffset</code></summary><pre><code class="zig">/// A ROW OF A PROBE TABLE IS A TYPE: an extern struct of f32 arrays, laid out exactly as its floats lie in the table's
+/// buffer - row after row, field after field. The kernel reads and writes each field at its offset from the row's
+/// start, and the device check fills and compares through the same declarations: nothing about a row is counted by
+/// hand twice. These three give a field's place and size, and a row's, in floats.
+pub fn floatOffset(comptime Row: type, comptime field: FieldEnum(Row)) u32 {
+    return @offsetOf(Row, @tagName(field)) / @sizeOf(f32);
+}</code></pre></details>
+
+<p>A kernel then reads <code>maths_inputs[row_start + floatOffset(MathsInputs, .vector)]</code>, and the host that fills
+the table and the code that checks its results use the same declarations. <code>Params</code> follows a rule of its own:
+it is an <code>extern struct</code> whose size is a multiple of 16 bytes, the alignment a uniform buffer requires,
+padded with unused scalars when its fields fall short.</p>
+
+<h2 id="cooperation">5. Cooperation inside a workgroup</h2>
+
+<p>Many computations are not element by element: a sum, a dot product, a maximum, a matrix factorisation. Each needs
+values that live in different invocations to meet. Within one workgroup they can, in two ways.</p>
+
+<h3 id="sharedmemory">5.1 Shared memory and barriers</h3>
+
+<p>Workgroup memory is declared at module scope with <code>k.shared</code> and written by each invocation in its own
+slot. A barrier then makes every write visible to every invocation of the workgroup. A sum of the workgroup's 64
+values is the classic example: each round, the lower half of the active invocations adds the upper half's values to
+its own, and a barrier separates the rounds. After six rounds, slot 0 holds the sum.</p>
+
+<pre class="sketch"><code>   64 values in workgroup memory, partial[0..63]
+
+   width 32   partial[i] += partial[i + 32]   for i &lt; 32      barrier
+   width 16   partial[i] += partial[i + 16]   for i &lt; 16      barrier
+   width  8   partial[i] += partial[i +  8]   for i &lt;  8      barrier
+   width  4   partial[i] += partial[i +  4]   for i &lt;  4      barrier
+   width  2   partial[i] += partial[i +  2]   for i &lt;  2      barrier
+   width  1   partial[0] += partial[1]                         barrier
+
+   each round halves the values still to add; log2(64) = 6 rounds instead of 63 additions in a row</code></pre>
+
+<p>Every invocation runs every round and reaches every barrier - only the addition is guarded by <code>lane &lt;
+width</code>, as uniform control flow requires:</p>
+
+<details class="src-fold" data-src="src/gpu/robotgpu_probe.zig" data-decl="pub fn workgroup_sum(invocation: u32) void {"><summary><code>workgroup_sum</code></summary><pre><code class="zig">/// WORKGROUP SUM, ONE INVOCATION PER VALUE: sums[w] = the sum of workgroup w's 64 values, values past `value_count`
+/// counting as 0, written by its first invocation. On the device the values are halved toward their total through
+/// shared memory (this file's head); every invocation reaches every barrier, and only the adds are guarded.
+pub fn workgroup_sum(invocation: u32) void {
+    const workgroup_size: u32 = config.workgroup;
+    const lane: u32 = invocation % workgroup_size;
+    const workgroup: u32 = invocation / workgroup_size;
+    const holds_a_value: bool = invocation &lt; params.value_count;
+    var workgroup_total: f32 = 0.0;
+    if (k.is_gpu) {
+        partial_sums[lane] = if (holds_a_value) values[invocation] else 0.0;
+        k.workgroupBarrier();
+        var width: u32 = workgroup_size / 2;
+        while (width &gt; 0) : (width /= 2) {
+            const adds_this_round: bool = lane &lt; width;
+            if (adds_this_round) {
+                partial_sums[lane] += partial_sums[lane + width];
+            }
+            k.workgroupBarrier();
+        }
+        workgroup_total = partial_sums[0];
+    } else if (lane == 0) {
+        // The twin: the first invocation adds its workgroup's values in order.
+        var member: u32 = 0;
+        while (member &lt; workgroup_size) : (member += 1) {
+            const member_invocation: u32 = invocation + member;
+            const member_holds_a_value: bool = member_invocation &lt; params.value_count;
+            if (member_holds_a_value) {
+                workgroup_total += values[member_invocation];
+            }
+        }
+    }
+    const first_value_of_workgroup: u32 = workgroup * workgroup_size;
+    const workgroup_holds_a_value: bool = first_value_of_workgroup &lt; params.value_count;
+    if (lane == 0 and workgroup_holds_a_value) {
+        sums[workgroup] = workgroup_total;
+    }
+}</code></pre></details>
+
+<h3 id="subgroups">5.2 Subgroups</h3>
+
+<p>Inside a subgroup, values meet without memory at all: one instruction combines a value from every lane and hands
+the result back to every lane. <code>k.subgroupAdd(x)</code> is the subgroup's sum of <code>x</code>; with subgroups
+of 8, invocations 0 to 7 each receive <code>x0 + ... + x7</code>, invocations 8 to 15 the sum of theirs, and so on.</p>
+
+<pre class="sketch"><code>   invocation       0    1    2    3    4    5    6    7  |  8    9   ...  15  |  16 ...
+   value            v0   v1   v2   v3   v4   v5   v6   v7 |  v8   v9  ...  v15 |
+   subgroupAdd(v)   v0 + v1 + ... + v7, in all eight       |  v8 + ... + v15    |</code></pre>
+
+<details class="src-fold" data-src="src/kompute.zig" data-decl="pub inline fn subgroupAdd(value: f32) f32 {"><summary><code>subgroupAdd</code></summary><pre><code class="zig">/// The sum of `value` over this invocation's subgroup, in every invocation of it (`OpGroupNonUniformFAdd`, Reduce).
+pub inline fn subgroupAdd(value: f32) f32 {
+    return asm volatile (
+        \\%ret = OpGroupNonUniformFAdd %f32 %scope Reduce %value
+        : [ret] "" (-&gt; f32),
+        : [f32] "t" (f32),
+          [scope] "" (subgroup_scope),
+          [value] "" (value),
+    );
+}</code></pre></details>
+
+<p>Subgroup operations are a native feature: the Vulkan host runs them, and a kernel that uses them is built for the
+native host only, since WebGPU's subgroups are an optional extension the web build does not translate. Their size is
+the device's, from 8 to 64, so a kernel that relies on it reads it from the device's capabilities (section
+<a href="#capabilities">Device capabilities</a>) rather than assuming one. Like a barrier, a subgroup operation needs
+uniform control flow.</p>
+
+<h3 id="cooptwin">5.3 The twin of a cooperative kernel</h3>
+
+<p>The CPU twin runs a kernel as a loop, one invocation after another; it has no workgroup running at once, no shared
+memory in use and no subgroup. A cooperative kernel therefore splits at compile time on <code>k.is_gpu</code>: the GPU
+path cooperates through shared memory or subgroup operations, and the CPU path computes the same result directly from
+the storage buffers - the first invocation of the workgroup adds its 64 values in order, say, and the others do
+nothing. Both paths compute the same quantity, by different routes, and chapter
+<a href="#precision">Precision and determinism</a> covers how closely their answers agree.</p>
+
+
+<h3 id="factorisation">5.4 A matrix factorisation in a workgroup</h3>
+
+<p>The same cooperation scales from a sum to a whole matrix algorithm. A Cholesky factorisation writes a symmetric
+positive-definite matrix A as L L<sup>T</sup>, L lower triangular - the core of a physics solver, which factors one
+matrix per simulated world every step. A workgroup takes one matrix, loads it into workgroup memory, and factors it
+column by column, the work of each column spread over its invocations, a barrier between the three steps:</p>
+
+<pre class="sketch"><code>   for each column c:
+     1. the pivot     L[c][c] = sqrt(a[c][c])                     one invocation           barrier
+     2. the column    L[i][c] = a[i][c] / L[c][c],   i > c         rows spread over lanes   barrier
+     3. the update    a[i][j] -= L[i][c] * L[j][c],  c &lt; j &lt;= i    rows spread over lanes   barrier
+
+   a 76 x 76 matrix: 23 KB of workgroup memory, 76 columns, 228 barriers</code></pre>
+
+<p>Two properties make it dependable. The loop over columns is bounded by a uniform value, and the loops whose length
+depends on the invocation contain no barrier, so every invocation reaches every barrier. And each entry loses its
+products one column at a time, in ascending order - the order in which a serial factorisation that goes row by row
+subtracts them - so the CPU twin, running that serial factorisation, does the same arithmetic: the two agree to the
+last bit, apart from any multiply the GPU's compiler fuses into its subtraction.</p>
+
+<details class="src-fold" data-src="src/gpu/robotgpu_probe.zig" data-decl="pub fn cholesky(invocation: u32) void {"><summary><code>cholesky</code></summary><pre><code class="zig">/// CHOLESKY, ONE WORKGROUP PER MATRIX: the symmetric positive-definite matrix `values[m]` (row-major, `matrix_order`
+/// rows) factored into `L L^T`, L written over the lower triangle of `sums[m]`, the upper triangle left as it was -
+/// as robot.zig's `choleskyFactor` leaves it. The shape of robotgpu's solver: one world's Hessian in shared memory,
+/// the workgroup's 64 invocations factoring it together, column by column:
+///
+///     for each column c:
+///       1. the pivot      L[c][c] = sqrt(a[c][c])                    one invocation          barrier
+///       2. the column     L[i][c] = a[i][c] / L[c][c],  i &gt; c         rows spread over lanes  barrier
+///       3. the update     a[i][j] -= L[i][c] * L[j][c], c &lt; j &lt;= i    rows spread over lanes  barrier
+///
+/// Each a[i][j] loses its products L[i][c] L[j][c] one column at a time, in ascending c - the very order
+/// `choleskyFactor` subtracts them in, row by row - so the device and the twin do the same arithmetic, apart from a
+/// multiply the GPU's compiler may fuse into the subtraction. The loop bounds are uniform (the order comes from
+/// `Params`) and no barrier sits inside a lane-dependent loop, so every invocation reaches every barrier. The twin:
+/// the workgroup's first invocation copies the matrix and factors it with robot.zig's own function.
+pub fn cholesky(invocation: u32) void {
+    const workgroup_size: u32 = config.workgroup;
+    const lane: u32 = invocation % workgroup_size;
+    const matrix_index: u32 = invocation / workgroup_size;
+    // The same for the whole workgroup, so a workgroup past the matrices leaves together - uniform control flow.
+    if (matrix_index &gt;= params.matrix_count) {
+        return;
+    }
+    const order: u32 = params.matrix_order;
+    const element_count: u32 = order * order;
+    const matrix_start: u32 = matrix_index * element_count;
+    if (k.is_gpu) {
+        var element: u32 = lane;
+        while (element &lt; element_count) : (element += workgroup_size) {
+            shared_matrix[element] = values[matrix_start + element];
+        }
+        k.workgroupBarrier();
+        var column: u32 = 0;
+        while (column &lt; order) : (column += 1) {
+            const pivot_at: u32 = column * order + column;
+            if (lane == 0) {
+                shared_matrix[pivot_at] = @sqrt(shared_matrix[pivot_at]);
+            }
+            k.workgroupBarrier();
+            const pivot: f32 = shared_matrix[pivot_at];
+            var column_row: u32 = column + 1 + lane;
+            while (column_row &lt; order) : (column_row += workgroup_size) {
+                const below_pivot_at: u32 = column_row * order + column;
+                shared_matrix[below_pivot_at] = shared_matrix[below_pivot_at] / pivot;
+            }
+            k.workgroupBarrier();
+            var update_row: u32 = column + 1 + lane;
+            while (update_row &lt; order) : (update_row += workgroup_size) {
+                const row_factor: f32 = shared_matrix[update_row * order + column];
+                var update_column: u32 = column + 1;
+                while (update_column &lt;= update_row) : (update_column += 1) {
+                    const column_factor: f32 = shared_matrix[update_column * order + column];
+                    const updated_at: u32 = update_row * order + update_column;
+                    shared_matrix[updated_at] = shared_matrix[updated_at] - row_factor * column_factor;
+                }
+            }
+            k.workgroupBarrier();
+        }
+        element = lane;
+        while (element &lt; element_count) : (element += workgroup_size) {
+            sums[matrix_start + element] = shared_matrix[element];
+        }
+    } else if (lane == 0) {
+        const factored: []f32 = sums[matrix_start..][0..element_count];
+        @memcpy(factored, values[matrix_start..][0..element_count]);
+        _ = robot.choleskyFactor(factored, order);
+    }
+}</code></pre></details>
+
+<h2 id="toshader">6. From kernel to shader</h2>
 
 <p>Between the kernel file and the GPU, the build compiles the kernel to SPIR-V, a GPU program format, and for the
 browser translates it to WGSL, the language WebGPU runs. The backends tutorial follows those steps - for every shader
@@ -256,7 +698,47 @@ few rules:</p>
 <p>The WGSL the browser receives for every kernel can be read: <code>zig build kernels-wgsl</code> writes each one to
 <code>zig-out/kernels-wgsl</code>.</p>
 
-<h2 id="running">5. Running kernels</h2>
+
+<h3 id="legaliser">6.1 The legaliser and native-only kernels</h3>
+
+<p>Before the Vulkan host hands a module to the driver, zimr's legaliser (<code>spv_vulkan.zig</code>) makes the few
+adjustments Vulkan's rules need and the compiler's output lacks. One of them concerns subgroups: an instruction such as
+<code>OpGroupNonUniformFAdd</code> requires its capability to be declared at the module's top, and the compiler's
+inline assembler declares none, so the legaliser finds every subgroup instruction and declares what it needs:</p>
+
+<details class="src-fold" data-src="src/spv_vulkan.zig" data-decl="fn findSubgroupCapabilities("><summary><code>findSubgroupCapabilities</code></summary><pre><code class="zig">/// Every capability the subgroup instructions in `words` need (the table at `SubgroupInstructions`), added to
+/// `needed`: `GroupNonUniform` with any of them, the capability of each one's kind, and `GroupNonUniformClustered`
+/// with a clustered reduction.
+fn findSubgroupCapabilities(words: []const u32, needed: *SubgroupCapabilitySet) Error!void {
+    var reader: InstructionReader = try .init(words);
+    while (try reader.next()) |instruction| {
+        const op: u16 = @backingInt(instruction.op);
+        const is_subgroup: bool = op &gt;= SubgroupInstructions.first_op and op &lt;= SubgroupInstructions.last_op;
+        if (!is_subgroup) {
+            continue;
+        }
+        needed.add(.GroupNonUniform);
+        if (SubgroupInstructions.capabilityBesideBase(op)) |capability| {
+            needed.add(capability);
+        }
+        const is_reduction: bool =
+            op &gt;= SubgroupInstructions.first_reduction_op and op &lt;= SubgroupInstructions.last_reduction_op;
+        const has_group_operation: bool = instruction.word_count &gt; SubgroupInstructions.group_operation_word;
+        if (is_reduction and has_group_operation) {
+            const group_operation: u32 = words[instruction.start + SubgroupInstructions.group_operation_word];
+            if (group_operation == SubgroupInstructions.clustered_reduce) {
+                needed.add(.GroupNonUniformClustered);
+            }
+        }
+    }
+}</code></pre></details>
+
+<p>A kernel that uses native-only features is built as a NATIVE-ONLY kernel: its SPIR-V alone, with no WGSL step at all
+(<code>ShaderPipeline.addNativeComputeOutput</code>). The web build translates every other kernel with spv2wgsl in
+strict mode, which refuses any instruction it cannot lower - a subgroup instruction among them, named as such - so a
+kernel can never compute silently wrong numbers in a browser.</p>
+
+<h2 id="running">7. Running kernels</h2>
 
 <p>The <em>host</em> is the program's ordinary code, on the CPU, that loads the kernels, creates their buffers and
 starts them. kompute's host, <code>compute_host.zig</code>, runs a module's kernels in one of three places, chosen
@@ -270,12 +752,12 @@ when the program creates it, behind the same calls:</p>
 <p>The three are interchangeable in the program's code, not in their cost: a device without a GPU can still run the
 fluid, on a worker, without freezing its frames.</p>
 
-<h3 id="dispatch">5.1 Dispatch</h3>
+<h3 id="dispatch">7.1 Dispatch</h3>
 
 <p>Starting a kernel over <code>n</code> elements is a <em>dispatch</em>. On <code>.cpu</code> and
 <code>.worker</code>, <code>run</code> is a loop that calls the kernel once for each element. On <code>.gpu</code> it
 records a dispatch of enough workgroups to cover the elements - the count divided by the workgroup size, rounded up,
-which is why every kernel tests its index (section 3.2):</p>
+which is why every kernel tests its index (<a href="#guards">One invocation per element, and its guard</a>):</p>
 
 <details class="src-fold" data-src="src/compute_host.zig" data-decl="pub fn run(self: *Self, comptime name: []const u8, n: u32) void {"><summary><code>run</code></summary><pre><code class="zig">/// Run kernel `name` over exactly `n` invocations. `n` is the dispatch
 /// width FOR THIS CALL - explicit, because a multi-kernel pipeline mixes
@@ -289,148 +771,11 @@ which is why every kernel tests its index (section 3.2):</p>
 ///        batch pass if one is active, else a fresh single-dispatch submit.
 /// Readback is unaffected by `n`; it slices by `element_count` (set once).
 pub fn run(self: *Self, comptime name: []const u8, n: u32) void {
-    assertf(n &gt; 0, @src(), "run('" ++ name ++ "'): n must be &gt; 0", .{});
-    assertf(
-        n &lt;= M.config.max,
-        @src(),
-        "run('" ++ name ++ "'): n={d} exceeds capacity config.max={d}",
-        .{ n, M.config.max },
-    );
-    switch (self.backend) {
-        .cpu =&gt; {
-            // `M.g.P` is set either way: the LEAN form reads it through `g.uniform()`,
-            // and the stock form's `Ctx` carries a copy.
-            M.g.P = self.params;
-            var id: u32 = 0;
-            while (id &lt; n) : (id += 1) {
-                // ** A LEAN KERNEL TAKES THE RAW INDEX, a stock one takes a `Ctx`. The
-                // signature is the discriminator, so a file can mix both forms and
-                // neither has to declare which it is. Without this the CPU driver only
-                // spoke the `Ctx` dialect, and `installKernelLean` compiled but could
-                // never be run on the host - half a merge.
-                // Compared as a TYPE rather than through `@typeInfo`: on
-                // 0.17.0-dev.1980 `Type.Fn` no longer carries `.params`, and a direct
-                // comparison needs no reflection to survive.
-                const takes_raw_id: bool = @TypeOf(@field(M, name)) == fn (u32) void;
-                if (takes_raw_id) {
-                    @field(M, name)(id);
-                } else {
-                    @field(M, name)(.{ .id = id, .params = self.params });
-                }
-            }
-        },
-        // The same loop, somewhere else. Three things diverge from `.cpu`, and
-        // they are the price of not freezing the frame:
-        //
-        //   1. It is ASYNCHRONOUS. `readLatest` returns null until the job lands
-        //      - as the GPU arm already does, so an app written for `.gpu` needs
-        //      no change.
-        //   2. It runs ONE JOB AT A TIME. A `run` issued while a job is still out
-        //      is DROPPED, because two jobs would both write back into the same
-        //      mirror. `.cpu` and `.gpu` would simply run again; this cannot.
-        //   3. It copies the WHOLE `Buffers` to the worker and back, every
-        //      dispatch. Fine for one-shot work with modest state; a poor trade
-        //      for a megabyte of particles you wanted stepped every frame. That
-        //      is what `.gpu` is for.
-        .worker =&gt; {
-            // Gated on `kernels` so a module that never opts in pays NOTHING for
-            // this arm - an untaken comptime `if` is never analyzed, so none of
-            // the jobs machinery is linked. Selecting `.worker` requires
-            // `initWorker`, which is a compile error without it.
-            if (comptime @hasDecl(M, "kernels")) {
-                const wk: *Worker = &amp;(self.worker orelse {
-                    assertUnreachable(@src(), "run('" ++ name ++ "'): .worker needs initWorker(gpa)", .{});
-                    return;
-                });
-                if (wk.job.inFlight()) {
-                    return; // still working on the last one - see (2) above
-                }
-                wk.job = komputeRegistry(M).submit(
-                    wk.gpa,
-                    komputeKernel(M, name),
-                    .{ .n = n, .params = self.params },
-                    asBytes(wk.mirror), // OUR state, not the module's
-                ) catch |err| blk: {
-                    std.log.err("Compute.run('" ++ name ++ "') on .worker: {s}", .{@errorName(err)});
-                    break :blk .{};
-                };
-            }
-        },
-        .gpu =&gt; {
-            const gp: *Gpu = &amp;self.gpu.?;
-            const workgroups: u32 = @divCeil(n, M.config.workgroup);
-            // Find this kernel's slot so we get BOTH its pipeline and its
-            // own bind group - each kernel binds a different subset of the
-            // buffers now, so the two always travel together.
-            const ki: usize = blk: {
-                for (gp.kernel_names, 0..) |kn, idx| {
-                    if (eql(u8, kn, name)) {
-                        break :blk idx;
-                    }
-                }
-                // A correctly-registered kernel is always found; reaching
-                // here means a name typo or a kernel missing from initGpu's
-                // list. assertf gives a localized message in dev and lowers
-                // to the `unreachable` optimization hint once stripped.
-                assertUnreachable(@src(), "run: kernel '" ++ name ++ "' is not registered with this pipe", .{});
-                unreachable;
-            };
-            const pipeline: wgpu.ComputePipelineHandle = gp.pipelines[ki];
-            const bind_group: wgpu.BindGroupHandle = gp.bind_groups[ki];
-            gp.kernel_last_n[ki] = n; // for describe()
-            if (gp.rec_enc != .invalid) {
-                // Recording: this dispatch's params into the next table slot, a copy of
-                // that slot into the uniform, and the dispatch in its own pass - all in
-                // the ONE open encoder. The copies execute in order on the GPU timeline,
-                // so every dispatch sees exactly its own params.
-                if (gp.rec_base + gp.rec_count == recording_slots) {
-                    // The ring's end: submit what is recorded, carry on from its start.
-                    flushRecording(gp);
-                    gp.rec_base = 0;
-                    gp.rec_enc = wgpu.createCommandEncoder(gp.dev);
-                }
-                const slot: u32 = gp.rec_base + gp.rec_count;
-                gp.rec_slots[slot] = self.params;
-                const size: u32 = @sizeOf(Params);
-                wgpu.copyBufferToBuffer(gp.rec_enc, gp.rec_table, slot * size, gp.uniform, 0, size);
-                const rp: wgpu.ComputePassEncoderHandle = compute_pass.begin(gp.rec_enc);
-                compute_pass.setPipeline(rp, pipeline);
-                compute_pass.setBindGroup(rp, 0, bind_group);
-                compute_pass.dispatchWorkgroups(rp, .{ .x = workgroups });
-                compute_pass.end(rp);
-                gp.rec_count += 1;
-                return;
-            }
-            if (gp.batch_enc != .invalid) {
-                // Open batch: encode into the shared pass. Params were
-                // written once at beginBatch (all batched dispatches share
-                // them). The bind group is set PER DISPATCH now - adjacent
-                // kernels bind different buffer subsets, so it can't be
-                // hoisted to beginBatch the way the old shared one was.
-                compute_pass.setPipeline(gp.batch_pass, pipeline);
-                compute_pass.setBindGroup(gp.batch_pass, 0, bind_group);
-                compute_pass.dispatchWorkgroups(gp.batch_pass, .{ .x = workgroups });
-                return;
-            }
-            self.syncParamsUniform(gp);
-            const enc: wgpu.CommandEncoderHandle = wgpu.createCommandEncoder(gp.dev);
-            const cp: wgpu.ComputePassEncoderHandle = compute_pass.begin(enc);
-            compute_pass.setPipeline(cp, pipeline);
-            compute_pass.setBindGroup(cp, 0, bind_group);
-            compute_pass.dispatchWorkgroups(cp, .{ .x = workgroups });
-            compute_pass.end(cp);
-            const cmd: wgpu.CommandBufferHandle = wgpu.finishCommandEncoder(enc);
-            // Both dispatch paths go through `submitDispatch`, which counts. I
-            // incremented by hand at the batched site only, and every caller using
-            // `run()` outside a batch then saw `submitted == 0` - so the sweep retired
-            // each row before its own dispatch had executed. **7 of 105 on device**,
-            // with `inf` against bars of zero: another row's data.
-            submitDispatch(gp, cmd);
-        },
-    }
+    const no_push_constants: []const u8 = &amp;.{};
+    self.dispatchKernel(name, n, false, no_push_constants);
 }</code></pre></details>
 
-<h3 id="batching">5.2 Batching</h3>
+<h3 id="batching">7.2 Batching</h3>
 
 <p>Each submission of work to the GPU has a fixed cost on the CPU and in the driver. A sub-step of the fluid starts
 eleven kernels; submitted one kernel at a time, the fixed costs would outweigh the work. A <em>batch</em> collects every dispatch of the frame into one recording, submitted once: between
@@ -473,7 +818,7 @@ pub fn endBatch(self: *Self) void {
     gp.batch_pass = .invalid;
 }</code></pre>
 
-<h3 id="ongpu">5.3 Data on the GPU</h3>
+<h3 id="ongpu">7.3 Data on the GPU</h3>
 
 <p>Once the particles are in GPU memory, they stay there. The kernels write positions into a buffer, and the renderer
 draws the particles from that same buffer: the simulation and the drawing share memory, and no position crosses back
@@ -483,12 +828,13 @@ to the CPU during a frame.</p>
         ^   written by the kernels, every sub-step
         |
         +-- read by the renderer, every frame, to draw the particles
-   the CPU: none of it, unless the program asks (section 5.4)</code></pre>
+   the CPU: none of it, unless the program asks (see Reading results)</code></pre>
 
-<h3 id="results">5.4 Reading results</h3>
+<h3 id="results">7.4 Reading results</h3>
 
-<p>A result the CPU needs - a count, an average, a value for the screen - is read back with <code>readLatest</code>.
-On <code>.cpu</code> the values are there at once. On <code>.gpu</code> the read is asynchronous: the GPU runs behind
+<p>A result the CPU needs - a count, an average, a value for the screen - is read back with <code>readLatest</code>,
+the default way, which keeps a mirror of the module's buffers (a module can read ranges instead, waiting for each: see
+<a href="#ranges">Reading ranges</a>). On <code>.cpu</code> the values are there at once. On <code>.gpu</code> the read is asynchronous: the GPU runs behind
 the CPU, so the bytes arrive a frame or two after they are asked for, and the call returns the latest ones that have
 arrived, or nothing yet; it starts the next copy itself when none is in flight (<code>.worker</code> behaves the
 same way). (How a read waits for the GPU, and why, is in the <a href="backends-tutorial.html#readback">backends
@@ -535,6 +881,9 @@ further would return the next field's data.</p>
             return null;
         },
         .gpu =&gt; {
+            const keeps_a_mirror: bool = !reads_ranges;
+            const no_mirror: []const u8 = "readLatest on a `.ranges` module, which has no mirror: readRange";
+            assertf(keeps_a_mirror, @src(), no_mirror, .{});
             const gp: *Gpu = &amp;self.gpu.?;
             const copy_has_landed: bool = gp.read != .invalid and wgpu.bufferReadPoll(gp.read);
             if (copy_has_landed and gp.discard_copy_in_flight) {
@@ -544,7 +893,7 @@ further would return the next field's data.</p>
                 gp.read = .invalid;
                 gp.discard_copy_in_flight = false;
             } else if (copy_has_landed) {
-                const mirror_bytes: []u8 = asBytes(gp.mirror);
+                const mirror_bytes: []u8 = asBytes(gp.mirror.?);
                 wgpu.bufferReadInto(gp.read, mirror_bytes[0..gp.read_bytes]);
                 unpackPrefixes(mirror_bytes, gp.read_count);
                 wgpu.bufferReadRelease(gp.read);
@@ -597,18 +946,464 @@ further would return the next field's data.</p>
             if (!gp.have_read) {
                 return null;
             }
-            return @field(gp.mirror.*, @tagName(field))[0..n];
+            return @field(gp.mirror.?.*, @tagName(field))[0..n];
         },
     }
 }</code></pre></details>
 
-<h2 id="fluid">6. The SPH fluid</h2>
+
+<h3 id="large">7.5 Large dispatches</h3>
+
+<p>A dispatch's grid may hold at most 65,535 workgroups in each dimension. With workgroups of 64, one row of the grid
+covers 4,194,240 invocations; a kernel that needs more - many independent worlds, each with many elements - spreads its
+workgroups over several rows. A kernel file opts in with <code>.large_dispatch = true</code> in its
+<code>Config</code>; the host then lays the workgroups out in rows, and each invocation recovers its linear index from
+the grid's width:</p>
+
+<pre class="sketch"><code>   row 0    workgroups 0 .. 65534    invocations 0 .. 65535 x 64 - 1
+   row 1    workgroups 0 .. 65534    the next 65535 x 64
+   row 2    workgroups 0 .. k        the rest; past the count, the kernel's guard returns
+
+   index = row x (workgroups in a row x 64) + position along the row</code></pre>
+
+<details class="src-fold" data-src="src/kompute.zig" data-decl="inline fn linearInvocationId("><summary><code>linearInvocationId</code></summary><pre><code class="zig">/// This invocation's index in the dispatch. A one-row grid's is its x. A LARGE dispatch (`Config.large_dispatch`) lays
+/// its workgroups out in rows of up to 65,535, and the index counts the whole rows before this one - each row holds
+/// `num_workgroups.x x workgroup` invocations:
+///
+///     row 0    workgroups 0 .. 65534    invocations 0 .. 65535 x 64 - 1
+///     row 1    workgroups 0 .. 65534    the next 65535 x 64
+///     row 2    workgroups 0 .. k        the rest; the last row may run past the count - the kernel's own guard
+///                                       (`if (id &gt;= count) return`) stops those invocations
+///
+/// GPU-only: the CPU twin runs `for id in 0..n` and needs no grid.
+inline fn linearInvocationId(comptime workgroup: u32, comptime large_dispatch: bool) u32 {
+    const along_row: u32 = gpu.global_invocation_id[0];
+    if (!large_dispatch) {
+        return along_row;
+    }
+    const row: u32 = gpu.global_invocation_id[1];
+    const row_width: u32 = gpu.num_workgroups[0] * workgroup;
+    return row * row_width + along_row;
+}</code></pre></details>
+
+<p>A file without the flag keeps a one-row grid, and the host refuses, by name, a dispatch that would need more.</p>
+
+<h3 id="ranges">7.6 Reading ranges</h3>
+
+<p>A module chooses how its buffers come back to the CPU. The default keeps a heap MIRROR of all its buffers and
+refreshes it after each dispatch, about a frame later - the browser's way, since a page cannot wait for the GPU. A
+module whose buffers run to hundreds of megabytes reads RANGES instead: one field, from a given element, when asked,
+through a staging buffer of a size the module chooses, copied chunk by chunk and waited for. A range read this way holds
+everything the dispatches before it wrote.</p>
+
+<details class="src-fold" data-src="src/kompute.zig" data-decl="pub const Readback = enum { mirror, ranges };"><summary><code>Readback</code></summary><pre><code class="zig">/// HOW A MODULE'S BUFFERS COME BACK TO THE CPU (`Config.readback`):
+///
+///     .mirror   `readLatest`: after each dispatch, every field's first `element_count` elements are copied into
+///               one staging buffer and land - about a frame later, polled - in a heap mirror the size of all of
+///               `Buffers`. The browser's way, and the default.
+///     .ranges   `readRange`: a range of one field, copied when asked through a staging buffer of
+///               `Config.staging_bytes` - in chunks when the range is longer - and waited for. No mirror, and no
+///               staging buffer the size of `Buffers`: for modules whose buffers run to hundreds of megabytes
+///               (robotgpu). Native only, since a browser cannot wait for the GPU.
+pub const Readback = enum { mirror, ranges };</code></pre></details>
+
+<pre class="sketch"><code>   field     [ ......... first [ chunk 0 | chunk 1 | chunk 2 ] ......... ]
+                                   |         |         |
+   staging                      [ one chunk at a time ]  -> destination, in order</code></pre>
+
+<details class="src-fold" data-src="src/compute_host.zig" data-decl="pub fn readRange("><summary><code>readRange</code></summary><pre><code class="zig">/// A RANGE OF ONE FIELD, read back now: `destination.len` elements of `field` from element `first`, into
+/// `destination`. CPU: copied from the module's globals. GPU - a `.ranges` module (`kompute.Readback`): each
+/// chunk of up to `staging_bytes` is copied into the staging buffer by a command submitted after every dispatch
+/// so far, and waited for, so the range holds what every earlier dispatch wrote:
+///
+///     field   [ .......... first [ chunk 0 | chunk 1 | chunk 2 ] .......... ]
+///                                    |          |          |
+///     staging                     [ one chunk at a time ] -&gt; destination, in order
+///
+/// Not inside an open batch or recording, whose dispatches are not yet submitted. Native only: the wait is a
+/// poll of the device's timeline, which a browser cannot do.
+pub fn readRange(
+    self: *Self,
+    comptime field: Field,
+    first: u32,
+    destination: []ElemOf(field),
+) void {
+    const Element: type = ElemOf(field);
+    const field_length: usize = @field(M.g.B, @tagName(field)).len;
+    const end: usize = @as(usize, first) + destination.len;
+    assertf(end &lt;= field_length, @src(), "readRange: elements {d}..{d} of a field of {d}", .{
+        first,
+        end,
+        field_length,
+    });
+    switch (self.backend) {
+        .cpu =&gt; {
+            const source: []const Element = @field(M.g.B, @tagName(field))[first..end];
+            @memcpy(destination, source);
+        },
+        .worker =&gt; {
+            assertUnreachable(@src(), "readRange: a worker pipe reads through readLatest", .{});
+        },
+        .gpu =&gt; {
+            if (comptime host.is_browser) {
+                @compileError("readRange waits for the GPU, which a browser cannot: `.ranges` is native only");
+            }
+            if (comptime @sizeOf(Element) % 4 != 0) {
+                @compileError("readRange: the GPU copies whole 4-byte words, and `" ++ @tagName(field) ++
+                    "` holds " ++ @typeName(Element));
+            }
+            assertf(reads_ranges, @src(), "readRange on a `.mirror` module: use readLatest", .{});
+            const gp: *Gpu = &amp;self.gpu.?;
+            const outside_batch: bool = gp.batch_enc == .invalid and gp.rec_enc == .invalid;
+            assertf(outside_batch, @src(), "readRange inside an open batch or recording", .{});
+            const field_buffer: wgpu.BufferHandle = gp.field_bufs[fieldIndex(@tagName(field))];
+            const destination_bytes: []u8 = sliceAsBytes(destination);
+            // The copy's offsets are 32-bit: the range must end within the field's first 4 GB.
+            const first_byte_wide: u64 = @as(u64, first) * @sizeOf(Element);
+            const end_byte_wide: u64 = first_byte_wide + destination_bytes.len;
+            const within_32_bits: bool = end_byte_wide &lt;= zm.maxInt(u32);
+            assertf(within_32_bits, @src(), "readRange: bytes up to {d}, past a copy's 32-bit offsets", .{
+                end_byte_wide,
+            });
+            const first_byte: u32 = @intCast(first_byte_wide);
+            var copied: u32 = 0;
+            const total: u32 = @intCast(destination_bytes.len);
+            while (copied &lt; total) {
+                const chunk: u32 = @min(staging_bytes, total - copied);
+                const encoder: wgpu.CommandEncoderHandle = wgpu.createCommandEncoder(gp.dev);
+                wgpu.copyBufferToBuffer(encoder, field_buffer, first_byte + copied, gp.staging, 0, chunk);
+                const commands: wgpu.CommandBufferHandle = wgpu.finishCommandEncoder(encoder);
+                wgpu.queueSubmit(gp.queue, commands);
+                const read: wgpu.BufferRead = wgpu.bufferReadStart(gp.staging, chunk);
+                while (!wgpu.bufferReadPoll(read)) {
+                    std.atomic.spinLoopHint();
+                }
+                wgpu.bufferReadInto(read, destination_bytes[copied..][0..chunk]);
+                wgpu.bufferReadRelease(read);
+                copied += chunk;
+            }
+        },
+    }
+}</code></pre></details>
+
+<p>Reading ranges is native only: the wait is a poll of the device's timeline, and a browser build that calls
+<code>readRange</code> fails to compile, saying why.</p>
+
+<h3 id="capabilities">7.7 Device capabilities</h3>
+
+<p>What a kernel may count on differs by device: how much workgroup memory, how wide a subgroup, which subgroup
+operations. The Vulkan host reads them when it chooses the GPU and reports them in one line at start-up; a program
+reads them through <code>wgpu.computeCapabilities()</code> (on the web, and without a GPU, it reports none):</p>
+
+<details class="src-fold" data-src="src/wgpu_vulkan.zig" data-decl="pub const ComputeCapabilities = struct {"><summary><code>ComputeCapabilities</code></summary><pre><code class="zig">/// A device's compute capabilities as the host records them (`Gpu.compute`).
+/// Its defaults describe a device with none - no shared memory, no subgroups: what `wgpu.computeCapabilities`
+/// reports off the native host.
+pub const ComputeCapabilities = struct {
+    max_shared_memory_bytes: u32 = 0,
+    max_push_constant_bytes: u32 = 0,
+    max_workgroup_count: [3]u32 = @splat(0),
+    max_workgroup_invocations: u32 = 0,
+    subgroup_size: u32 = 0,
+    subgroups_in_compute: bool = false,
+    subgroup_operations: vk.SubgroupFeatureFlags = .{},
+    float32_atomic_add: bool = false,
+    /// Whether compute queues write timestamps (`VkPhysicalDeviceLimits::timestampComputeAndGraphics`), and how many
+    /// nanoseconds one tick of the timestamp clock lasts (`timestampPeriod`) - what turns two timestamps into a time.
+    timestamps_in_compute: bool = false,
+    timestamp_period_ns: f32 = 0,
+    /// THE MEMORY ENVELOPE: the most bytes one storage-buffer binding may span (`maxStorageBufferRange`) - what one
+    /// arena of a simulation may hold - and the largest heap of device-local memory, the GPU's own, which the arenas
+    /// together must fit.
+    max_storage_binding_bytes: u64 = 0,
+    device_local_bytes: u64 = 0,
+
+    /// Whether compute shaders may use every subgroup operation in `operations`.
+    pub fn hasSubgroupOperations(capabilities: ComputeCapabilities, operations: vk.SubgroupFeatureFlags) bool {
+        const wanted: vk.Flags = @bitCast(operations);
+        const offered: vk.Flags = @bitCast(capabilities.subgroup_operations);
+        const all_offered: bool = offered &amp; wanted == wanted;
+        return capabilities.subgroups_in_compute and all_offered;
+    }
+
+    /// Whether compute shaders may use the subgroup reductions - sums, minima, maxima (`kompute.subgroupAdd`).
+    pub fn hasSubgroupArithmetic(capabilities: ComputeCapabilities) bool {
+        return capabilities.hasSubgroupOperations(.{ .arithmetic = true });
+    }
+};</code></pre></details>
+
+<p>A kernel that keeps a matrix in workgroup memory sizes it against <code>max_shared_memory_bytes</code> - 32 KB on
+lavapipe, typically 48 to 64 KB on a desktop GPU - and a kernel that uses subgroup operations checks
+<code>hasSubgroupOperations</code> and reads the subgroup's size from here.</p>
+
+
+<h3 id="pushconstants">7.8 Push constants</h3>
+
+<p>Every dispatch of a batch shares one <code>Params</code>: the uniform is written once, when the batch begins. Some
+kernels need a value that changes from one dispatch to the next within the batch - the level of a tree processed one
+level per dispatch, the index of a pass. PUSH CONSTANTS carry such values: a few bytes the host writes into the command
+stream just before a dispatch, with no buffer and no binding.</p>
+
+<pre class="sketch"><code>   one batch, one Params:
+
+   [ push (0, 11) | dispatch ]   [ push (1000, 22) | dispatch ]   [ push (2000, 33) | dispatch ]
+          |                               |                                 |
+   words  [ 11 11 ... 11 ]                [ 22 22 ... 22 ]                  [ 33 33 ... 33 ]</code></pre>
+
+<p>A kernel file declares them as <code>PushConstants</code>, an extern struct of at most 128 bytes - the least every
+Vulkan device holds - binds them once at module scope with <code>g.push()</code>, and reads their fields:</p>
+
+<details class="src-fold" data-src="src/gpu/robotgpu_probe.zig" data-decl="pub fn write_pushed(invocation: u32) void {"><summary><code>write_pushed</code></summary><pre><code class="zig">/// PUSHED WRITE, ONE INVOCATION PER WORD OF A REGION: the pushed `value` into the `pushed_region_size` words from the
+/// pushed `region_start`. Dispatched several times in one batch - one `Params` for all of them - each with its own
+/// push, it fills each region with its own value: the per-dispatch parameter push constants carry.
+pub fn write_pushed(invocation: u32) void {
+    if (invocation &gt;= params.pushed_region_size) {
+        return;
+    }
+    const region_start: u32 = pushed.region_start;
+    const value: u32 = pushed.value;
+    const at: u32 = region_start + invocation;
+    pushed_words[at] = value;
+}</code></pre></details>
+
+<details class="src-fold" data-src="src/kompute.zig" data-decl="fn requirePushConstants(comptime Module: type) void {"><summary><code>requirePushConstants</code></summary><pre><code class="zig">/// What a kernel file's `PushConstants` must be, checked when a kernel reads them (`push`): an extern struct - its
+/// layout fixed, as the GPU reads it - of a whole number of 4-byte words, at most 128 bytes, the least every Vulkan
+/// device holds.
+fn requirePushConstants(comptime Module: type) void {
+    if (!@hasDecl(Module, "PushConstants")) {
+        @compileError("g.push(): the kernel file declares no `PushConstants`");
+    }
+    const Push: type = Module.PushConstants;
+    const info = @typeInfo(Push);
+    const is_extern_struct: bool = info == .@"struct" and info.@"struct".layout == .@"extern";
+    if (!is_extern_struct) {
+        @compileError("`PushConstants` must be an extern struct, its layout fixed as the GPU reads it");
+    }
+    if (@sizeOf(Push) % 4 != 0) {
+        @compileError("`PushConstants` must be a whole number of 4-byte words");
+    }
+    if (@sizeOf(Push) &gt; 128) {
+        @compileError("`PushConstants` holds more than the 128 bytes every Vulkan device guarantees");
+    }
+}</code></pre></details>
+
+<p>The host passes each dispatch's values to <code>runPushed</code>, which writes them into the pass before the
+dispatch; on the CPU twin they go into the module's variable the kernel loop reads. The Vulkan host notices the block
+when it loads the shader and gives the pipeline a layout with room for it, so nothing else changes for the caller.
+Push constants are a native feature - WebGPU has none - and a browser build that calls <code>runPushed</code> does not
+compile.</p>
+
+<details class="src-fold" data-src="src/compute_host.zig" data-decl="pub fn runPushed("><summary><code>runPushed</code></summary><pre><code class="zig">/// `run`, with PUSH CONSTANTS for this dispatch (`kompute`'s `PushConstants`): `values` are written into the
+/// command stream just before the dispatch, so each dispatch of a batch carries its own - what a kernel run
+/// once for each level of a tree needs, the level pushed every time:
+///
+///     one batch:   [ push level 0 | dispatch ]  [ push level 1 | dispatch ]  [ push level 2 | dispatch ]
+///
+/// On the CPU twin the values go into the module's variable the kernel loop reads (`g.push()`). Native only:
+/// WebGPU has no push constants, so a browser build that calls this does not compile.
+pub fn runPushed(
+    self: *Self,
+    comptime name: []const u8,
+    n: u32,
+    values: M.PushConstants,
+) void {
+    if (comptime host.is_browser) {
+        @compileError("runPushed: push constants are native only, and WebGPU has none");
+    }
+    M.g.pushed_values = values;
+    const values_bytes: []const u8 = asBytes(&amp;values);
+    self.dispatchKernel(name, n, true, values_bytes);
+}</code></pre></details>
+
+
+<h3 id="timings">7.9 Timing kernels</h3>
+
+<p>A kernel's speed is best measured where it runs. The GPU keeps a clock of its own, and a command in the stream can
+write its value into a slot of a timestamp pool: at the top of the pipeline before a dispatch, and at its bottom after
+it. The difference of the two, in ticks, times the length of a tick the device reports, is the time the dispatch
+took on the GPU - free of the CPU's scheduling and of the time spent waiting in the queue.</p>
+
+<pre class="sketch"><code>   kernel k's two slots: 2k (start) and 2k + 1 (end)
+
+   [ reset 2k, 2k + 1 ] [ write 2k at the top ] [ dispatch ] [ write 2k + 1 at the bottom ]
+
+   duration = (ticks[2k + 1] - ticks[2k]) x tick length</code></pre>
+
+<p>A pipe asks once, with <code>enableTimings</code>; from then on every dispatch is bracketed this way, and
+<code>kernelTimings</code> reads each kernel's last duration in microseconds, waiting until the dispatches have run.
+Timings are a native feature: WebGPU's timestamps cover render passes only.</p>
+
+<details class="src-fold" data-src="src/compute_host.zig" data-decl="pub fn enableTimings("><summary><code>enableTimings</code></summary><pre><code class="zig">/// TIME THIS PIPE'S KERNELS ON THE GPU. From now on every dispatch is bracketed by two timestamps - the GPU's
+/// clock at the top of the pipeline before it and at the bottom after it, in the kernel's two slots of a pool -
+/// and `kernelTimings` reads each kernel's last duration:
+///
+///     kernel k's slots:   2k = start, 2k + 1 = end
+///     a dispatch:         [ reset 2k, 2k + 1 ] [ write 2k at the top ] [ dispatch ]
+///                         [ write 2k + 1 at the bottom ]
+///
+/// Native only - Vulkan's timestamps; WebGPU's cover render passes alone - and a pipe on the CPU has nothing to
+/// time. The device must write timestamps in compute (`ComputeCapabilities.timestamps_in_compute`).
+pub fn enableTimings(self: *Self) Allocator.Error!void {
+    if (comptime host.is_browser) {
+        @compileError("enableTimings: GPU timestamps for compute are native only");
+    }
+    if (self.backend != .gpu) {
+        return;
+    }
+    const gp: *Gpu = &amp;self.gpu.?;
+    if (gp.timestamp_pool != 0) {
+        return;
+    }
+    const capabilities: wgpu.vulkan_host.ComputeCapabilities = wgpu.computeCapabilities();
+    const no_timestamps: []const u8 = "enableTimings: this device writes no compute timestamps";
+    assertf(capabilities.timestamps_in_compute, @src(), no_timestamps, .{});
+    const kernel_count: usize = gp.kernel_names.len;
+    gp.kernel_timed = try gp.gpa.alloc(bool, kernel_count);
+    @memset(gp.kernel_timed, false);
+    const slot_count: u32 = @intCast(2 * kernel_count);
+    gp.timestamp_pool = wgpu.vulkan_host.createTimestampPool(slot_count);
+}</code></pre></details>
+
+<details class="src-fold" data-src="src/compute_host.zig" data-decl="pub fn kernelTimings("><summary><code>kernelTimings</code></summary><pre><code class="zig">/// Each kernel's last duration on the GPU, in microseconds, into `timings` in the pipe's kernel order - zero
+/// for a kernel not dispatched since the last read, and for every kernel of a pipe without timings. A duration
+/// is the difference of the kernel's two timestamps, in ticks, times the device's tick in nanoseconds. It waits
+/// until the dispatches have run, so not inside an open batch or recording, whose commands are not yet
+/// submitted.
+pub fn kernelTimings(self: *Self, timings: *[M.kernels.len]KernelTiming) void {
+    if (comptime host.is_browser) {
+        @compileError("kernelTimings: GPU timestamps for compute are native only");
+    }
+    for (timings) |*timing| {
+        timing.* = .{ .name = "", .microseconds = 0 };
+    }
+    if (self.backend != .gpu) {
+        return;
+    }
+    const gp: *Gpu = &amp;self.gpu.?;
+    if (gp.timestamp_pool == 0) {
+        return;
+    }
+    const outside_batch: bool = gp.batch_enc == .invalid and gp.rec_enc == .invalid;
+    assertf(outside_batch, @src(), "kernelTimings inside an open batch or recording", .{});
+    const tick_nanoseconds: f64 = wgpu.computeCapabilities().timestamp_period_ns;
+    for (gp.kernel_names, gp.kernel_timed, timings, 0..) |name, *was_timed, *timing, kernel_index| {
+        timing.name = name;
+        if (!was_timed.*) {
+            continue;
+        }
+        var ticks: [2]u64 = undefined;
+        const first_slot: u32 = @intCast(2 * kernel_index);
+        const answered: bool = wgpu.vulkan_host.timestampPoolRead(gp.timestamp_pool, first_slot, 2, &amp;ticks);
+        if (answered) {
+            // A clock with fewer than 64 valid bits wraps: the difference wraps with it.
+            const elapsed_ticks: u64 = ticks[1] -% ticks[0];
+            const elapsed_nanoseconds: f64 = float64(elapsed_ticks) * tick_nanoseconds;
+            timing.microseconds = elapsed_nanoseconds / 1000.0;
+        }
+        was_timed.* = false;
+    }
+}</code></pre></details>
+
+
+<h3 id="lending">7.10 Sharing buffers between pipes</h3>
+
+<p>Two kernel modules sometimes work on the same data: one writes it, the other reads it, dispatch after dispatch. A
+copy between their buffers would cost a trip through memory every time. Instead, one pipe LENDS a field's buffer and
+the other BORROWS it, binding the very same GPU buffer for a field of its own - one copy of the data, two modules:</p>
+
+<pre class="sketch"><code>   owner pipe      field `ring`          ----+
+                                             |   the same GPU buffer, bound by both pipes
+   borrower pipe   field `observations`  <---+
+
+   owner.lendField(.ring)                     a loan: the buffer, its size, the owner's count of loans
+   initGpuBorrowing(..., .{ .observations = loan })   binds the loan instead of creating a buffer</code></pre>
+
+<p>The owner keeps the buffer: a borrower never destroys it, and gives its loan back when it is released, so the owner
+must outlive every borrower - its release checks that every loan came back. Writes made through either pipe are seen
+by the other in the order the GPU runs their dispatches, since both submit to the same queue.</p>
+
+<details class="src-fold" data-src="src/compute_host.zig" data-decl="pub fn lendField("><summary><code>lendField</code></summary><pre><code class="zig">/// Lend `field`'s GPU buffer to another pipe, which binds it in place of a buffer of its own
+/// (`initGpuBorrowing`). Counted until the borrower's `deinit` gives it back; this pipe's `deinit` asserts
+/// that every loan came back. A GPU pipe only - a CPU pipe's fields are the module's globals.
+pub fn lendField(self: *Self, comptime field: Field) FieldLoan {
+    assertf(self.backend == .gpu, @src(), "lendField: only a GPU pipe has buffers to lend", .{});
+    const gp: *Gpu = &amp;self.gpu.?;
+    gp.loans_out += 1;
+    const field_bytes: u64 = @sizeOf(@FieldType(Buffers, @tagName(field)));
+    const field_buffer: wgpu.BufferHandle = gp.field_bufs[fieldIndex(@tagName(field))];
+    const loan: FieldLoan = .{ .buffer = field_buffer, .bytes = field_bytes, .owner_loans = &amp;gp.loans_out };
+    return loan;
+}</code></pre></details>
+
+<details class="src-fold" data-src="src/compute_host.zig" data-decl="pub const FieldLoan = struct {"><summary><code>FieldLoan</code></summary><pre><code class="zig">/// A FIELD'S GPU BUFFER, LENT by one pipe to another (`Compute.lendField`, `Compute.initGpuBorrowing`): the buffer, its
+/// bytes, and the owner's count of loans still out, which the borrower decrements when it is done. One copy of the
+/// data serves two kernel modules, with no upload or copy between them:
+///
+///     owner pipe      field `ring`          ----+
+///                                               |   the same GPU buffer, bound by both pipes
+///     borrower pipe   field `observations`  &lt;---+
+///
+/// The owner must outlive every borrower (its `deinit` asserts that every loan came back), and must not move while it
+/// lends: the loan points at its count.
+pub const FieldLoan = struct {
+    buffer: wgpu.BufferHandle,
+    bytes: u64,
+    owner_loans: *u32,
+};</code></pre></details>
+
+<h2 id="precision">8. Precision and determinism</h2>
+
+<p>The CPU twin runs the same Zig source, but the device's answers are not always the twin's to the last bit. Knowing
+why - and measuring how far - is what makes the twin a reliable reference.</p>
+
+<h3 id="whydiffer">8.1 Why the device and the twin differ</h3>
+
+<p>Three things separate them, all well understood:</p>
+
+<pre class="sketch"><code>   source of difference        where it appears                       typical size
+   --------------------------  -------------------------------------  ------------------------------
+   fused multiply-add          a * b + c computed with one rounding    one unit of the last place
+                               instead of two, at the GPU compiler's
+                               discretion
+   another formula             zimrmath's sine, cosine, atan2, acos:   one to a few dozen units
+                               polynomials on the GPU, the standard
+                               library on the CPU
+   another order of addition   a reduction - a tree on the GPU,        grows with the number of terms
+                               a row on the CPU                        and their cancellation</code></pre>
+
+<p>Plain arithmetic - additions, products, square roots - usually agrees exactly or within one unit in the last place.
+A function built on the GPU's own transcendental formulas agrees within a small, fixed number of units. And any sum
+taken in another order rounds differently, by an amount that depends on its terms.</p>
+
+<h3 id="epsilons">8.2 Measuring in epsilons</h3>
+
+<p>The unit for such comparisons is f32's epsilon, 2<sup>-23</sup> - the gap between 1 and the next float - taken at
+the scale of the result: a difference is divided by <code>epsilon * max(1, |result|)</code>. A result near one is then
+judged in units of epsilon itself, and a larger one relative to its size, so one number describes both. A function is
+then given a BAR - the most epsilons it may differ by - chosen from what the arithmetic behind it can explain: a few for
+plain arithmetic, more for a GPU polynomial.</p>
+
+<p>One effect needs care: CANCELLATION. A result much smaller than the terms it is made of - a cross product of nearly
+parallel vectors, a sum of large positive and negative values - carries the rounding of those large terms, and measured
+at its own small scale that rounding looks large. A cross product of a force of size 20 with a velocity of size 3 has
+terms near 60; where they cancel to a result near 1, one unit of rounding in a term of 60 is sixty units of the result.
+The bar for such a function reflects the size of its terms, not of its result.</p>
+
+<h3 id="repeatability">8.3 Determinism</h3>
+
+<p>Agreement with the twin and agreement with ITSELF are different properties. A device runs a reduction in the same
+order every time, so the same inputs give the same bits run after run: a sum over shared memory, or through subgroup
+operations, is repeatable on one device even though it differs from the twin's. Float ATOMICS are the exception: when
+many invocations add into one value, the order of their additions is whatever order they happened to arrive in, and the
+result changes from run to run. A simulation whose state must repeat exactly - so that two runs from the same start
+stay the same run - lets no atomic add feed its state, and sums through a fixed tree instead.</p>
+
+<h2 id="fluid">9. The SPH fluid</h2>
 
 <p>The fluid follows <em>double-density relaxation</em> (Clavet, Beaudoin and Poulin, 2005), a particle method that is
 stable and cheap enough for real time. Each frame advances the fluid by one sub-step: a short sequence of kernels,
 each started over every particle or every grid cell.</p>
 
-<h3 id="state">6.1 The simulation state</h3>
+<h3 id="state">9.1 The simulation state</h3>
 
 <p>The kernels share their data through one <code>Buffers</code>: the particles' positions, velocities and previous
 positions, their position corrections and densities, the grid's counters and starts, and a scratch copy that the sort
@@ -646,7 +1441,7 @@ writes into.</p>
     scratch: [3 * num_particles + 16]Vec2,
 };</code></pre></details>
 
-<h3 id="grid">6.2 The neighbour grid</h3>
+<h3 id="grid">9.2 The neighbour grid</h3>
 
 <p>A particle only interacts with particles closer than an interaction radius. Comparing every particle with every
 other would be 400 million comparisons for 20,000 particles. Instead the domain is divided into square cells the size
@@ -744,7 +1539,7 @@ pub fn scatter(c: k.Ctx(@This())) void {
 the next; nothing is ever unsorted. And with exact ranges, a cell has no fixed capacity to overflow: a dense clump
 keeps every neighbour.</p>
 
-<h3 id="density">6.3 Density</h3>
+<h3 id="density">9.3 Density</h3>
 
 <p><code>density</code> walks the nine cells around each particle and sums how close its neighbours are, into two
 numbers: the <em>density</em>, and a sharper <em>near-density</em> that rises steeply as particles come close to
@@ -808,7 +1603,7 @@ pub fn density(c: k.Ctx(@This())) void {
     b_density[i] = .{ rho, rho_near };
 }</code></pre></details>
 
-<h3 id="pressure">6.4 Pressure</h3>
+<h3 id="pressure">9.4 Pressure</h3>
 
 <p><code>force</code> turns the densities into movement: a crowded particle pushes its neighbours away, harder the
 closer they are. The kernel does not change velocities directly; it accumulates a correction of each particle's
@@ -901,7 +1696,7 @@ pub fn force(c: k.Ctx(@This())) void {
     b_delta[i] = corr;
 }</code></pre></details>
 
-<h3 id="viscosity">6.5 Viscosity</h3>
+<h3 id="viscosity">9.5 Viscosity</h3>
 
 <p><code>viscosity</code> makes the fluid behave like water rather than a gas: a drag between particles moving toward
 each other. It acts only on a pair that is approaching, grows with the square of the approach speed, and is limited so
@@ -969,7 +1764,7 @@ pub fn viscosity(c: k.Ctx(@This())) void {
     b_vel[i] = my_vel;
 }</code></pre></details>
 
-<h3 id="walls">6.6 Gravity, prediction and walls</h3>
+<h3 id="walls">9.6 Gravity, prediction and walls</h3>
 
 <p>Three kernels surround the neighbour work. <code>gravityMouse</code> adds gravity, and any push from the mouse, to
 each velocity. <code>predict</code> records each position as the previous one and moves the particle by its velocity.
@@ -1084,7 +1879,7 @@ pub fn applyAndFinalize(c: k.Ctx(@This())) void {
     b_vel[i] = v;
 }</code></pre></details>
 
-<h3 id="substep">6.7 The sub-step</h3>
+<h3 id="substep">9.7 The sub-step</h3>
 
 <p>Together, one sub-step is eleven dispatches, recorded into the frame's batch:</p>
 
@@ -1105,12 +1900,12 @@ disturbed by a grid a few particle movements old. Density and force run after th
 sequence runs once a frame for 20,000 particles, in one submission, and the renderer draws the result straight from
 GPU memory.</p>
 
-<h2 id="performance">7. Performance</h2>
+<h2 id="performance">10. Performance</h2>
 
 <p>A simulation can be correct and still too slow. The measure used here is the time of one sub-step: frames per
 second stop at the display's refresh rate, while the sub-step's time keeps showing every change.</p>
 
-<h3 id="measured">7.1 Measured effects</h3>
+<h3 id="measured">10.1 Measured effects</h3>
 
 <p>Measured on one phone's GPU (an Adreno), each technique's effect on the time of one sub-step:</p>
 
@@ -1124,7 +1919,7 @@ second stop at the display's refresh rate, while the sub-step's time keeps showi
 <p>A frame at 60 frames per second has 16.7 ms for the simulation and the drawing together; the measure is per
 sub-step so that a frame can hold several when the simulation needs a smaller time step.</p>
 
-<h3 id="coalesced">7.2 Coalesced memory</h3>
+<h3 id="coalesced">10.2 Coalesced memory</h3>
 
 <p>A GPU runs threads in lockstep groups of 32 or 64. When the threads of a group read memory together, the hardware
 serves them with one wide transaction if their addresses are adjacent - a <em>coalesced</em> read - and with one
@@ -1143,7 +1938,7 @@ every neighbour read is a scattered jump. After the sort, a cell's particles are
 coalesce, for the positions and for the densities and velocities the pressure kernel reads too. The sort costs four
 small kernels, each of them cheap and coalesced, and the two neighbour walks repay them many times over.</p>
 
-<h3 id="techniques">7.3 Other techniques</h3>
+<h3 id="techniques">10.3 Other techniques</h3>
 
 <p>Three other techniques contribute:</p>
 
@@ -1154,7 +1949,7 @@ small kernels, each of them cheap and coalesced, and the two neighbour walks rep
    squared distances    a neighbour's range is tested on the squared distance, so the candidates
                         out of range - the corners of the 3 x 3 cells, always - cost no square root</code></pre>
 
-<h3 id="tiling">7.4 Tiling and sorting</h3>
+<h3 id="tiling">10.4 Tiling and sorting</h3>
 
 <p><em>Tiling</em> is the usual way to make repeated neighbour reads cheap: one workgroup takes one cell, copies the
 cell's neighbourhood once into the GPU's small, fast on-chip memory (<code>k.shared</code>), and every thread reads

@@ -13,8 +13,8 @@
 //! choice is made at compile time: the other platform's branch is never analyzed, so a Linux build references no
 //! Win32 function and a Windows build no C-library one.
 //!
-//! The window is not here. It is Windows-only for now (`win32.zig`); a host without one runs headless, drawing into
-//! textures - which is how the host's tests run on Linux, on Mesa's software Vulkan driver.
+//! The window is not here: it is Win32's on Windows and X11's on Linux (`native_window.zig`). A host without one runs
+//! headless, drawing into textures - which is how the host's tests run on Linux, on Mesa's software Vulkan driver.
 
 const builtin = @import("builtin");
 const std = @import("std");
@@ -137,20 +137,21 @@ pub fn monotonicMilliseconds() f64 {
 var program_threaded: ?Io.Threaded = null;
 
 /// This program's own environment, as an `std.Io.Threaded` hands it to the programs it starts (`ChildProgram`): on
-/// Windows the live environment itself, elsewhere the C library's - so a child inherits it, as one started from a
-/// shell does. `Io.Threaded`'s default is an EMPTY environment, and a program started with none fails in ways that
-/// name no cause: on Windows, NVIDIA's Vulkan driver refuses to make an instance (`vkCreateInstance` returns -3), the
-/// loader skips it, and the child runs on another GPU - while `ZIMR_VK_VALIDATE` and every other setting is lost. A
-/// build without the C library outside Windows has no environment to hand on: its children start with none.
+/// Windows the live environment itself; elsewhere the block the program started with, which Zig's start code reads
+/// before `main` - from the C library's `main` arguments, or from the stack without one - and keeps in std's own
+/// debug `Io` (`std.Options.debug_threaded_io`). So a child inherits it, as one started from a shell does.
+/// `Io.Threaded`'s default is an EMPTY environment, and a program started with none fails in ways that name no cause:
+/// on Windows, NVIDIA's Vulkan driver refuses to make an instance (`vkCreateInstance` returns -3), the loader skips it,
+/// and the child runs on another GPU - while `ZIMR_VK_VALIDATE` and every other setting is lost.
+///
+/// Not the C library's `environ` variable: in the first Linux program run in WSL (Nov 1) it read as null, and the
+/// first `servicesIo` - the X11 window asking for the program's name - crashed on it.
 fn programEnvironment() std.process.Environ {
     if (comptime is_windows) {
         return .{ .block = .global };
     }
-    if (comptime builtin.link_libc) {
-        const variables: [:null]const ?[*:0]const u8 = std.mem.sliceTo(std.c.environ, null);
-        return .{ .block = .{ .slice = variables } };
-    }
-    return .empty;
+    const debug_threaded: *Io.Threaded = std.Options.debug_threaded_io orelse return .empty;
+    return debug_threaded.environ.process_environ;
 }
 
 /// An `std.Io` for callers that have none to pass: the platform contract's saved values (`loadValue`), whose
@@ -199,8 +200,9 @@ fn dataFolder(buffer: []u8) ?[]const u8 {
 /// The path separator of this system's paths.
 const separator: u8 = if (is_windows) '\\' else '/';
 
-/// The program's name, as its folder of values is named: its executable's file name, without `.exe`.
-fn programName(io: Io, buffer: []u8) ?[]const u8 {
+/// The program's name, as its folder of values is named - and as X11's window class names it (`x11.zig`): its
+/// executable's file name, without `.exe`.
+pub fn programName(io: Io, buffer: []u8) ?[]const u8 {
     const path_length: usize = std.process.executablePath(io, buffer) catch return null;
     const path: []const u8 = buffer[0..path_length];
     const name_start: usize = if (std.mem.lastIndexOfScalar(u8, path, separator)) |last| last + 1 else 0;

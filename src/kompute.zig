@@ -142,6 +142,52 @@ pub inline fn atomicStore(arr: anytype, idx: u32, val: u32) void {
     @atomicStore(u32, &arr[idx], val, .monotonic);
 }
 
+// ---- Subgroups (native Vulkan only) ----
+// A SUBGROUP is the set of invocations a device runs in lockstep, side by side in one SIMD unit - 32 on NVIDIA, 32 or
+// 64 on AMD, the vector width on a CPU driver (8 on lavapipe). A subgroup operation combines one value from each of
+// them in ONE instruction, with no shared memory and no barrier, and hands the result back to every one of them:
+//
+//     invocation        0     1     2     3     4     5     6     7   |   8    9  ...
+//     value             v0    v1    v2    v3    v4    v5    v6    v7  |   v8   v9 ...
+//     subgroupAdd(v)    v0 + v1 + ... + v7, in each of the eight      |   v8 + ... + v15
+//
+// The GPU build writes the SPIR-V instruction itself with inline assembly, as the atomics are written:
+// `OpGroupNonUniformFAdd` with the `Reduce` group operation at Subgroup scope. The compiler declares no capability
+// for it; zimr's legaliser declares the ones a module's subgroup instructions need when the host loads it
+// (`spv_vulkan.legalize`).
+//
+// GPU-ONLY, like `localId`: call these inside an `if (k.is_gpu)` branch, the CPU path computing the same reduction
+// from global memory - the twin runs one invocation after another and has no subgroup. NATIVE ONLY: WebGPU's
+// subgroups are an optional extension that spv2wgsl does not translate, and the kernels that use these run on the
+// Vulkan host alone (robotgpu's plan, D18). UNIFORM CONTROL FLOW, as for a barrier: every invocation of the subgroup
+// must reach the call - guard the reads and writes around it, never the call itself. The order a device adds in is
+// its own, so a subgroup sum may differ from a sequential one in its last bits, and is the same run after run.
+
+/// SPIR-V's Subgroup scope: the invocations a subgroup operation combines.
+const subgroup_scope: u32 = @backingInt(gpu.Scope.subgroup);
+
+/// The sum of `value` over this invocation's subgroup, in every invocation of it (`OpGroupNonUniformFAdd`, Reduce).
+pub inline fn subgroupAdd(value: f32) f32 {
+    return asm volatile (
+        \\%ret = OpGroupNonUniformFAdd %f32 %scope Reduce %value
+        : [ret] "" (-> f32),
+        : [f32] "t" (f32),
+          [scope] "" (subgroup_scope),
+          [value] "" (value),
+    );
+}
+
+/// The largest `value` over this invocation's subgroup, in every invocation of it (`OpGroupNonUniformFMax`, Reduce).
+pub inline fn subgroupMax(value: f32) f32 {
+    return asm volatile (
+        \\%ret = OpGroupNonUniformFMax %f32 %scope Reduce %value
+        : [ret] "" (-> f32),
+        : [f32] "t" (f32),
+          [scope] "" (subgroup_scope),
+          [value] "" (value),
+    );
+}
+
 // ---- Workgroup shared memory + barriers (the tiling primitive) ----
 // A workgroup barrier waits until every invocation of the workgroup has reached it, and makes their writes to
 // workgroup memory visible to one another. The GPU build writes `OpControlBarrier` at workgroup scope, acquire-release
@@ -202,12 +248,51 @@ pub inline fn shared(
     return &Holder.buf;
 }
 
+/// HOW A MODULE'S BUFFERS COME BACK TO THE CPU (`Config.readback`):
+///
+///     .mirror   `readLatest`: after each dispatch, every field's first `element_count` elements are copied into
+///               one staging buffer and land - about a frame later, polled - in a heap mirror the size of all of
+///               `Buffers`. The browser's way, and the default.
+///     .ranges   `readRange`: a range of one field, copied when asked through a staging buffer of
+///               `Config.staging_bytes` - in chunks when the range is longer - and waited for. No mirror, and no
+///               staging buffer the size of `Buffers`: for modules whose buffers run to hundreds of megabytes
+///               (robotgpu). Native only, since a browser cannot wait for the GPU.
+pub const Readback = enum { mirror, ranges };
+
 /// Per-kernel-file configuration. `workgroup` is the threads-per-workgroup the
 /// dispatch uses (v1 is 1D scalar; 2D/3D arrays come with the dimensional Ctx).
 pub const Config = struct {
     max: u32,
     workgroup: u32 = 64,
+    /// A LARGE DISPATCH: more than 65,535 workgroups at once, which no single dimension of a grid may hold. The host
+    /// spreads them over rows (`compute_host.dispatchGrid`) and the kernel recovers its index from the grid's width
+    /// (`linearInvocationId`). Off, a module's index is its x alone, and a dispatch past one row is refused.
+    large_dispatch: bool = false,
+    /// How the buffers come back to the CPU (`Readback`): a mirror of every field, or a range of one field at a time.
+    readback: Readback = .mirror,
+    /// For `.ranges`: the staging buffer's bytes - a longer range is read in chunks of this many.
+    staging_bytes: u32 = 1 << 20,
 };
+
+/// This invocation's index in the dispatch. A one-row grid's is its x. A LARGE dispatch (`Config.large_dispatch`) lays
+/// its workgroups out in rows of up to 65,535, and the index counts the whole rows before this one - each row holds
+/// `num_workgroups.x x workgroup` invocations:
+///
+///     row 0    workgroups 0 .. 65534    invocations 0 .. 65535 x 64 - 1
+///     row 1    workgroups 0 .. 65534    the next 65535 x 64
+///     row 2    workgroups 0 .. k        the rest; the last row may run past the count - the kernel's own guard
+///                                       (`if (id >= count) return`) stops those invocations
+///
+/// GPU-only: the CPU twin runs `for id in 0..n` and needs no grid.
+inline fn linearInvocationId(comptime workgroup: u32, comptime large_dispatch: bool) u32 {
+    const along_row: u32 = gpu.global_invocation_id[0];
+    if (!large_dispatch) {
+        return along_row;
+    }
+    const row: u32 = gpu.global_invocation_id[1];
+    const row_width: u32 = gpu.num_workgroups[0] * workgroup;
+    return row * row_width + along_row;
+}
 
 /// The compute context handed to a kernel: `c.id` is this invocation's global
 /// index, `c.params` is the kernel's `Params` by value. Buffers are NOT in here -
@@ -310,6 +395,27 @@ pub fn bufferBinding(comptime Buffers: type, comptime field: meta.FieldEnum(Buff
     return params_binding + 1 + @backingInt(field);
 }
 
+/// What a kernel file's `PushConstants` must be, checked when a kernel reads them (`push`): an extern struct - its
+/// layout fixed, as the GPU reads it - of a whole number of 4-byte words, at most 128 bytes, the least every Vulkan
+/// device holds.
+fn requirePushConstants(comptime Module: type) void {
+    if (!@hasDecl(Module, "PushConstants")) {
+        @compileError("g.push(): the kernel file declares no `PushConstants`");
+    }
+    const Push: type = Module.PushConstants;
+    const info = @typeInfo(Push);
+    const is_extern_struct: bool = info == .@"struct" and info.@"struct".layout == .@"extern";
+    if (!is_extern_struct) {
+        @compileError("`PushConstants` must be an extern struct, its layout fixed as the GPU reads it");
+    }
+    if (@sizeOf(Push) % 4 != 0) {
+        @compileError("`PushConstants` must be a whole number of 4-byte words");
+    }
+    if (@sizeOf(Push) > 128) {
+        @compileError("`PushConstants` holds more than the 128 bytes every Vulkan device guarantees");
+    }
+}
+
 /// The module-level globals namespace. On GPU the buffers are `extern` storage
 /// bindings and the params an `extern` uniform; on CPU both are plain `var`s the
 /// host points at heap storage. A kernel file does
@@ -376,6 +482,22 @@ pub fn Globals(comptime Module: type) type {
         pub fn uniform() Uniform(Module) {
             return P;
         }
+
+        /// The kernel's PUSH CONSTANTS (`Module.PushConstants`), in the push-constant address space: values the host
+        /// writes into the command stream for each dispatch (`compute_host.runPushed`), with no buffer and no binding.
+        /// Declared only when a kernel reads them; the Vulkan host then gives the pipeline a layout with a range for
+        /// them.
+        pub const pushed_values: *addrspace(.push_constant) Module.PushConstants =
+            @extern(*addrspace(.push_constant) Module.PushConstants, .{ .name = "push_constants" });
+
+        /// The push constants, read through the pointer as `g.uniform()`'s fields are. BIND IT ONCE AT MODULE SCOPE,
+        /// as `params` is - `const pushed = g.push();`, then `pushed.level` in a kernel: there it is a compile-time
+        /// constant. Called inside a kernel, the returned pointer would live in a function variable, and SPIR-V's
+        /// logical addressing forbids a variable holding a pointer.
+        pub fn push() *addrspace(.push_constant) Module.PushConstants {
+            comptime requirePushConstants(Module);
+            return pushed_values;
+        }
     } else struct {
         pub var B: Module.Buffers = undefined;
         pub var P: Module.Params = undefined;
@@ -410,6 +532,15 @@ pub fn Globals(comptime Module: type) type {
         // source, both backends - the same trick `bind` plays for the buffers.
         pub fn uniform() Uniform(Module) {
             return &P;
+        }
+
+        /// The CPU twin of the push constants: the host writes a dispatch's values here before the kernel loop runs
+        /// (`compute_host.runPushed`), and the kernel reads them through `push` - one source, both backends.
+        pub var pushed_values: Module.PushConstants = undefined;
+
+        pub fn push() *const Module.PushConstants {
+            comptime requirePushConstants(Module);
+            return &pushed_values;
         }
     };
 }
@@ -456,7 +587,7 @@ pub fn installKernelLean(comptime Module: type, comptime name: []const u8) void 
             // own index (`if (id >= P.count) return;`).
             @setRuntimeSafety(false);
 
-            const thread_id: u32 = gpu.global_invocation_id[0];
+            const thread_id: u32 = linearInvocationId(Module.config.workgroup, Module.config.large_dispatch);
             @field(Module, name)(thread_id);
         }
     };
@@ -510,7 +641,7 @@ pub fn installKernel(comptime Module: type, comptime name: []const u8) void {
             }
 
             const c: Ctx(Module) = .{
-                .id = gpu.global_invocation_id[0],
+                .id = linearInvocationId(Module.config.workgroup, Module.config.large_dispatch),
                 .params = params,
             };
             @field(Module, name)(c);

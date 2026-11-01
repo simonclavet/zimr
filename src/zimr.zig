@@ -445,7 +445,7 @@ pub const zimrphysics = @import("zimrphysics.zig");
 pub const zimrphysics2d = @import("zimrphysics2d.zig");
 /// Reduced-coordinate articulated-body dynamics, in the style of MuJoCo. Complements
 /// zimrphysics: that one is for many loose bodies, this one is for machines with joints.
-pub const robot = @import("robot.zig");
+pub const robot = @import("robot");
 /// The seam between `robot` and `zimrphysics`: kinematic proxies out, contacts back.
 /// A separate module from `robot` on purpose - robot.zig depends only on zimrmath, so a
 /// headless rollout or a batched GPU job does not drag a collision engine along with it.
@@ -545,7 +545,7 @@ pub const utils = @import("utils.zig");
 
 /// The integrated, in-process profiler (Tracy-inspired). Comptime-gated by
 /// `-Dmode` - live for debug/release, stripped in ship. See src/profiler.zig.
-pub const profiler = @import("profiler.zig");
+pub const profiler = @import("profiler");
 
 /// App-callable profiler views (flamegraph, etc.) built on ui.zig. The app
 /// owns its own button/pause and calls these inside its UI. See profiler_ui.zig.

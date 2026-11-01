@@ -1,4 +1,4 @@
-//! VK_HELLO - a window that clears, through Vulkan, with no engine (vulkan_port_plan_v2.md stage S1).
+//! VK_HELLO - a window that clears, through Vulkan, with no engine.
 //!
 //! The smallest program that exercises every platform piece the Vulkan host stands on: the Win32 window and its
 //! messages (`win32.zig`), the Vulkan loader and the hand-declared API (`vk.zig`), choosing a GPU, a surface and a
@@ -774,8 +774,11 @@ fn initHello(
         .rebuilds = 0,
     };
     try createInstance(hello, get_instance_proc_address, options);
+    // The surface's one creation command is Win32's own, in a table of its own, loaded for this call alone.
+    const surface_creation: vk.Win32SurfaceDispatch =
+        try vk.loadWin32SurfaceDispatch(get_instance_proc_address, hello.instance);
     var surface_info: vk.Win32SurfaceCreateInfoKHR = .{ .hinstance = window.module, .hwnd = window.handle };
-    try vk.check(hello.surface_dispatch.createWin32SurfaceKHR(hello.instance, &surface_info, null, &hello.surface));
+    try vk.check(surface_creation.createWin32SurfaceKHR(hello.instance, &surface_info, null, &hello.surface));
     hello.chosen = try chooseGpu(hello, options.gpu_choice);
     try createDevice(hello);
     try createFrameObjects(hello);

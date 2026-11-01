@@ -82,7 +82,12 @@
                 draw through WebGPU in a browser. The same source also builds
                 native Windows programs (<code>-Dplatform=windows</code>), their
                 shaders embedded as SPIR-V and drawn through Vulkan &mdash; see
-                <a href="backends-tutorial.html">graphics backends</a>.
+                <a href="backends-tutorial.html">graphics backends</a> &mdash; and
+                native Linux programs (<code>-Dplatform=linux</code>,
+                <code>zig-out/linux/&lt;app&gt;</code>), their window X11's, built
+                from any machine: they link glibc alone and open X11 and Vulkan
+                at run time. From Windows, <code>zig build run-&lt;app&gt;
+                -Dplatform=linux</code> starts the program in WSL.
                 With <code>-Dplatform=android</code> an app's single-file page
                 becomes an Android app: <code>zig build &lt;app&gt;</code> makes
                 <code>zig-out/android/&lt;app&gt;.apk</code>, one full-screen

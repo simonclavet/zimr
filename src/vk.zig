@@ -9,6 +9,8 @@
 //!     GlobalDispatch      the commands that exist before an instance (vkCreateInstance, the layer and extension lists)
 //!     InstanceDispatch    per instance: physical devices, the debug messenger, vkCreateDevice
 //!     SurfaceDispatch     per instance, with a window: the surface and what it supports
+//!     Win32SurfaceDispatch, XlibSurfaceDispatch
+//!                         per instance, with a window on Windows or X11: the one command creating the surface
 //!     DeviceDispatch      per device: queues, images, semaphores, command buffers and the commands in them
 //!     SwapchainDispatch   per device, with a window: the swapchain, acquiring and presenting
 //!
@@ -50,10 +52,11 @@
 //! A hand-declared structure that is wrong does not fail: the driver reads plausible garbage. So the declarations
 //! between the hand-written parts of this file are generated from the Vulkan registry (`vk.xml`, the file the C
 //! headers are generated from), for the subset zimr uses, by `tools/vk_gen.zig` (`zig build vk-gen
-//! -Dvulkan-registry=<path to vk.xml>`); and `zig build vk-abi-check`
-//! compares them with the official headers through `translate-c`, at compile time and for the Windows target: every
-//! structure's size, alignment and field offsets, every enumeration value and constant, every command's parameter
-//! count and sizes. Both take a checkout of Vulkan-Headers, a development-time source only; the build never needs it.
+//! -Dvulkan-registry=<path to vk.xml>`); and `zig build vk-abi-check` compares them with the official headers
+//! through `translate-c`, at compile time, for the Windows target and the Linux one (X11's `Window` is C's `unsigned
+//! long`, 4 bytes on one and 8 on the other): every structure's size, alignment and field offsets, every enumeration
+//! value and constant, every command's parameter count and sizes. Both take a checkout of Vulkan-Headers, a
+//! development-time source only; the build never needs it.
 //! To declare one more command: add it to the generator's lists, regenerate, run the check.
 //!
 //! ---- HANDLES ----
@@ -161,6 +164,7 @@ pub const DescriptorSet = enum(u64) { null_handle = 0, _ };
 pub const PipelineLayout = enum(u64) { null_handle = 0, _ };
 pub const PipelineCache = enum(u64) { null_handle = 0, _ };
 pub const Pipeline = enum(u64) { null_handle = 0, _ };
+pub const QueryPool = enum(u64) { null_handle = 0, _ };
 pub const RenderPass = enum(u64) { null_handle = 0, _ };
 
 /// A Vulkan version number: variant (3 bits), major (7), minor (10), patch (12), packed as `VK_MAKE_API_VERSION`.
@@ -182,8 +186,11 @@ pub const api_version_1_3: u32 = makeApiVersion(0, 1, 3, 0);
 pub const khronos_validation_layer_name: [*:0]const u8 = "VK_LAYER_KHRONOS_validation";
 pub const khr_surface_extension_name: [*:0]const u8 = "VK_KHR_surface";
 pub const khr_win32_surface_extension_name: [*:0]const u8 = "VK_KHR_win32_surface";
+pub const khr_xlib_surface_extension_name: [*:0]const u8 = "VK_KHR_xlib_surface";
 pub const khr_swapchain_extension_name: [*:0]const u8 = "VK_KHR_swapchain";
 pub const khr_maintenance5_extension_name: [*:0]const u8 = "VK_KHR_maintenance5";
+/// Float atomics on storage and shared memory - queried by the host and recorded, never enabled (robotgpu's D7).
+pub const ext_shader_atomic_float_extension_name: [*:0]const u8 = "VK_EXT_shader_atomic_float";
 pub const ext_debug_utils_extension_name: [*:0]const u8 = "VK_EXT_debug_utils";
 
 // ---- Enumerations: the values zimr uses, non-exhaustive so a driver's other values stay representable ----
@@ -490,6 +497,9 @@ pub const StructureType = enum(i32) {
     memory_barrier_2 = 1000314000,
     physical_device_features_2 = 1000059000,
     physical_device_maintenance_5_features = 1000470000,
+    physical_device_properties_2 = 1000059001,
+    physical_device_shader_atomic_float_features_ext = 1000260000,
+    physical_device_vulkan_1_1_properties = 50,
     physical_device_vulkan_1_2_features = 51,
     physical_device_vulkan_1_3_features = 53,
     pipeline_color_blend_state_create_info = 26,
@@ -504,6 +514,7 @@ pub const StructureType = enum(i32) {
     pipeline_vertex_input_state_create_info = 19,
     pipeline_viewport_state_create_info = 22,
     present_info_khr = 1000001001,
+    query_pool_create_info = 11,
     rendering_attachment_info = 1000044001,
     rendering_info = 1000044000,
     sampler_create_info = 31,
@@ -516,6 +527,18 @@ pub const StructureType = enum(i32) {
     swapchain_create_info_khr = 1000001000,
     win32_surface_create_info_khr = 1000009000,
     write_descriptor_set = 35,
+    xlib_surface_create_info_khr = 1000004000,
+    _,
+};
+
+pub const PointClippingBehavior = enum(i32) {
+    all_clip_planes = 0,
+    user_clip_planes_only = 1,
+    _,
+};
+
+pub const QueryType = enum(i32) {
+    timestamp = 2,
     _,
 };
 
@@ -1533,6 +1556,41 @@ pub const PipelineShaderStageCreateFlags = packed struct(Flags) {
     _reserved_bit_31: bool = false,
 };
 
+pub const PipelineStageFlags = packed struct(Flags) {
+    top_of_pipe: bool = false,
+    draw_indirect: bool = false,
+    vertex_input: bool = false,
+    vertex_shader: bool = false,
+    tessellation_control_shader: bool = false,
+    tessellation_evaluation_shader: bool = false,
+    geometry_shader: bool = false,
+    fragment_shader: bool = false,
+    early_fragment_tests: bool = false,
+    late_fragment_tests: bool = false,
+    color_attachment_output: bool = false,
+    compute_shader: bool = false,
+    transfer: bool = false,
+    bottom_of_pipe: bool = false,
+    host: bool = false,
+    all_graphics: bool = false,
+    all_commands: bool = false,
+    command_preprocess_ext: bool = false,
+    conditional_rendering_ext: bool = false,
+    task_shader_ext: bool = false,
+    mesh_shader_ext: bool = false,
+    ray_tracing_shader_khr: bool = false,
+    fragment_shading_rate_attachment_khr: bool = false,
+    fragment_density_process_ext: bool = false,
+    transform_feedback_ext: bool = false,
+    acceleration_structure_build_khr: bool = false,
+    _reserved_bit_26: bool = false,
+    _reserved_bit_27: bool = false,
+    _reserved_bit_28: bool = false,
+    _reserved_bit_29: bool = false,
+    _reserved_bit_30: bool = false,
+    _reserved_bit_31: bool = false,
+};
+
 pub const PipelineStageFlags2 = packed struct(Flags64) {
     top_of_pipe: bool = false,
     draw_indirect: bool = false,
@@ -1598,6 +1656,111 @@ pub const PipelineStageFlags2 = packed struct(Flags64) {
     _reserved_bit_61: bool = false,
     _reserved_bit_62: bool = false,
     _reserved_bit_63: bool = false,
+};
+
+pub const QueryPipelineStatisticFlags = packed struct(Flags) {
+    input_assembly_vertices: bool = false,
+    input_assembly_primitives: bool = false,
+    vertex_shader_invocations: bool = false,
+    geometry_shader_invocations: bool = false,
+    geometry_shader_primitives: bool = false,
+    clipping_invocations: bool = false,
+    clipping_primitives: bool = false,
+    fragment_shader_invocations: bool = false,
+    tessellation_control_shader_patches: bool = false,
+    tessellation_evaluation_shader_invocations: bool = false,
+    compute_shader_invocations: bool = false,
+    task_shader_invocations_ext: bool = false,
+    mesh_shader_invocations_ext: bool = false,
+    cluster_culling_shader_invocations_huawei: bool = false,
+    _reserved_bit_14: bool = false,
+    _reserved_bit_15: bool = false,
+    _reserved_bit_16: bool = false,
+    _reserved_bit_17: bool = false,
+    _reserved_bit_18: bool = false,
+    _reserved_bit_19: bool = false,
+    _reserved_bit_20: bool = false,
+    _reserved_bit_21: bool = false,
+    _reserved_bit_22: bool = false,
+    _reserved_bit_23: bool = false,
+    _reserved_bit_24: bool = false,
+    _reserved_bit_25: bool = false,
+    _reserved_bit_26: bool = false,
+    _reserved_bit_27: bool = false,
+    _reserved_bit_28: bool = false,
+    _reserved_bit_29: bool = false,
+    _reserved_bit_30: bool = false,
+    _reserved_bit_31: bool = false,
+};
+
+pub const QueryPoolCreateFlags = packed struct(Flags) {
+    reset_khr: bool = false,
+    _reserved_bit_1: bool = false,
+    _reserved_bit_2: bool = false,
+    _reserved_bit_3: bool = false,
+    _reserved_bit_4: bool = false,
+    _reserved_bit_5: bool = false,
+    _reserved_bit_6: bool = false,
+    _reserved_bit_7: bool = false,
+    _reserved_bit_8: bool = false,
+    _reserved_bit_9: bool = false,
+    _reserved_bit_10: bool = false,
+    _reserved_bit_11: bool = false,
+    _reserved_bit_12: bool = false,
+    _reserved_bit_13: bool = false,
+    _reserved_bit_14: bool = false,
+    _reserved_bit_15: bool = false,
+    _reserved_bit_16: bool = false,
+    _reserved_bit_17: bool = false,
+    _reserved_bit_18: bool = false,
+    _reserved_bit_19: bool = false,
+    _reserved_bit_20: bool = false,
+    _reserved_bit_21: bool = false,
+    _reserved_bit_22: bool = false,
+    _reserved_bit_23: bool = false,
+    _reserved_bit_24: bool = false,
+    _reserved_bit_25: bool = false,
+    _reserved_bit_26: bool = false,
+    _reserved_bit_27: bool = false,
+    _reserved_bit_28: bool = false,
+    _reserved_bit_29: bool = false,
+    _reserved_bit_30: bool = false,
+    _reserved_bit_31: bool = false,
+};
+
+pub const QueryResultFlags = packed struct(Flags) {
+    @"64": bool = false,
+    wait: bool = false,
+    with_availability: bool = false,
+    partial: bool = false,
+    with_status_khr: bool = false,
+    _reserved_bit_5: bool = false,
+    _reserved_bit_6: bool = false,
+    _reserved_bit_7: bool = false,
+    _reserved_bit_8: bool = false,
+    _reserved_bit_9: bool = false,
+    _reserved_bit_10: bool = false,
+    _reserved_bit_11: bool = false,
+    _reserved_bit_12: bool = false,
+    _reserved_bit_13: bool = false,
+    _reserved_bit_14: bool = false,
+    _reserved_bit_15: bool = false,
+    _reserved_bit_16: bool = false,
+    _reserved_bit_17: bool = false,
+    _reserved_bit_18: bool = false,
+    _reserved_bit_19: bool = false,
+    _reserved_bit_20: bool = false,
+    _reserved_bit_21: bool = false,
+    _reserved_bit_22: bool = false,
+    _reserved_bit_23: bool = false,
+    _reserved_bit_24: bool = false,
+    _reserved_bit_25: bool = false,
+    _reserved_bit_26: bool = false,
+    _reserved_bit_27: bool = false,
+    _reserved_bit_28: bool = false,
+    _reserved_bit_29: bool = false,
+    _reserved_bit_30: bool = false,
+    _reserved_bit_31: bool = false,
 };
 
 pub const QueueFlags = packed struct(Flags) {
@@ -1831,6 +1994,41 @@ pub const ShaderStageFlags = packed struct(Flags) {
     _reserved_bit_17: bool = false,
     _reserved_bit_18: bool = false,
     cluster_culling_huawei: bool = false,
+    _reserved_bit_20: bool = false,
+    _reserved_bit_21: bool = false,
+    _reserved_bit_22: bool = false,
+    _reserved_bit_23: bool = false,
+    _reserved_bit_24: bool = false,
+    _reserved_bit_25: bool = false,
+    _reserved_bit_26: bool = false,
+    _reserved_bit_27: bool = false,
+    _reserved_bit_28: bool = false,
+    _reserved_bit_29: bool = false,
+    _reserved_bit_30: bool = false,
+    _reserved_bit_31: bool = false,
+};
+
+pub const SubgroupFeatureFlags = packed struct(Flags) {
+    basic: bool = false,
+    vote: bool = false,
+    arithmetic: bool = false,
+    ballot: bool = false,
+    shuffle: bool = false,
+    shuffle_relative: bool = false,
+    clustered: bool = false,
+    quad: bool = false,
+    partitioned_ext: bool = false,
+    rotate: bool = false,
+    rotate_clustered: bool = false,
+    _reserved_bit_11: bool = false,
+    _reserved_bit_12: bool = false,
+    _reserved_bit_13: bool = false,
+    _reserved_bit_14: bool = false,
+    _reserved_bit_15: bool = false,
+    _reserved_bit_16: bool = false,
+    _reserved_bit_17: bool = false,
+    _reserved_bit_18: bool = false,
+    _reserved_bit_19: bool = false,
     _reserved_bit_20: bool = false,
     _reserved_bit_21: bool = false,
     _reserved_bit_22: bool = false,
@@ -2146,9 +2344,9 @@ pub const PhysicalDeviceLimits = extern struct {
 };
 
 pub const PhysicalDeviceSparseProperties = extern struct {
-    residency_standard_2dblock_shape: Bool32 = 0,
-    residency_standard_2dmultisample_block_shape: Bool32 = 0,
-    residency_standard_3dblock_shape: Bool32 = 0,
+    residency_standard_2d_block_shape: Bool32 = 0,
+    residency_standard_2d_multisample_block_shape: Bool32 = 0,
+    residency_standard_3d_block_shape: Bool32 = 0,
     residency_aligned_mip_size: Bool32 = 0,
     residency_non_resident_strict: Bool32 = 0,
 };
@@ -2221,10 +2419,10 @@ pub const PhysicalDeviceFeatures = extern struct {
     sparse_residency_buffer: Bool32 = 0,
     sparse_residency_image_2d: Bool32 = 0,
     sparse_residency_image_3d: Bool32 = 0,
-    sparse_residency_2samples: Bool32 = 0,
-    sparse_residency_4samples: Bool32 = 0,
-    sparse_residency_8samples: Bool32 = 0,
-    sparse_residency_16samples: Bool32 = 0,
+    sparse_residency_2_samples: Bool32 = 0,
+    sparse_residency_4_samples: Bool32 = 0,
+    sparse_residency_8_samples: Bool32 = 0,
+    sparse_residency_16_samples: Bool32 = 0,
     sparse_residency_aliased: Bool32 = 0,
     variable_multisample_rate: Bool32 = 0,
     inherited_queries: Bool32 = 0,
@@ -2241,11 +2439,11 @@ pub const PhysicalDeviceVulkan12Features = extern struct {
     p_next: ?*anyopaque = null,
     sampler_mirror_clamp_to_edge: Bool32 = 0,
     draw_indirect_count: Bool32 = 0,
-    storage_buffer_8bit_access: Bool32 = 0,
-    uniform_and_storage_buffer_8bit_access: Bool32 = 0,
+    storage_buffer_8_bit_access: Bool32 = 0,
+    uniform_and_storage_buffer_8_bit_access: Bool32 = 0,
     storage_push_constant_8: Bool32 = 0,
-    shader_buffer_int_64atomics: Bool32 = 0,
-    shader_shared_int_64atomics: Bool32 = 0,
+    shader_buffer_int_64_atomics: Bool32 = 0,
+    shader_shared_int_64_atomics: Bool32 = 0,
     shader_float_16: Bool32 = 0,
     shader_int_8: Bool32 = 0,
     descriptor_indexing: Bool32 = 0,
@@ -2312,6 +2510,58 @@ pub const PhysicalDeviceMaintenance5Features = extern struct {
     s_type: StructureType = .physical_device_maintenance_5_features,
     p_next: ?*anyopaque = null,
     maintenance_5: Bool32 = 0,
+};
+
+pub const PhysicalDeviceProperties2 = extern struct {
+    s_type: StructureType = .physical_device_properties_2,
+    p_next: ?*anyopaque = null,
+    properties: PhysicalDeviceProperties = .{},
+};
+
+pub const PhysicalDeviceVulkan11Properties = extern struct {
+    s_type: StructureType = .physical_device_vulkan_1_1_properties,
+    p_next: ?*anyopaque = null,
+    device_uuid: [16]u8 = @splat(0),
+    driver_uuid: [16]u8 = @splat(0),
+    device_luid: [8]u8 = @splat(0),
+    device_node_mask: u32 = 0,
+    device_luid_valid: Bool32 = 0,
+    subgroup_size: u32 = 0,
+    subgroup_supported_stages: ShaderStageFlags = .{},
+    subgroup_supported_operations: SubgroupFeatureFlags = .{},
+    subgroup_quad_operations_in_all_stages: Bool32 = 0,
+    point_clipping_behavior: PointClippingBehavior = @fromBackingInt(@intCast(0)),
+    max_multiview_view_count: u32 = 0,
+    max_multiview_instance_index: u32 = 0,
+    protected_no_fault: Bool32 = 0,
+    max_per_set_descriptors: u32 = 0,
+    max_memory_allocation_size: DeviceSize = 0,
+};
+
+pub const PhysicalDeviceShaderAtomicFloatFeaturesEXT = extern struct {
+    s_type: StructureType = .physical_device_shader_atomic_float_features_ext,
+    p_next: ?*anyopaque = null,
+    shader_buffer_float_32_atomics: Bool32 = 0,
+    shader_buffer_float_32_atomic_add: Bool32 = 0,
+    shader_buffer_float_64_atomics: Bool32 = 0,
+    shader_buffer_float_64_atomic_add: Bool32 = 0,
+    shader_shared_float_32_atomics: Bool32 = 0,
+    shader_shared_float_32_atomic_add: Bool32 = 0,
+    shader_shared_float_64_atomics: Bool32 = 0,
+    shader_shared_float_64_atomic_add: Bool32 = 0,
+    shader_image_float_32_atomics: Bool32 = 0,
+    shader_image_float_32_atomic_add: Bool32 = 0,
+    sparse_image_float_32_atomics: Bool32 = 0,
+    sparse_image_float_32_atomic_add: Bool32 = 0,
+};
+
+pub const QueryPoolCreateInfo = extern struct {
+    s_type: StructureType = .query_pool_create_info,
+    p_next: ?*const anyopaque = null,
+    flags: QueryPoolCreateFlags = .{},
+    query_type: QueryType = @fromBackingInt(@intCast(0)),
+    query_count: u32 = 0,
+    pipeline_statistics: QueryPipelineStatisticFlags = .{},
 };
 
 pub const DeviceQueueCreateInfo = extern struct {
@@ -2392,6 +2642,14 @@ pub const Win32SurfaceCreateInfoKHR = extern struct {
     flags: Flags = 0,
     hinstance: ?*anyopaque = null,
     hwnd: ?*anyopaque = null,
+};
+
+pub const XlibSurfaceCreateInfoKHR = extern struct {
+    s_type: StructureType = .xlib_surface_create_info_khr,
+    p_next: ?*const anyopaque = null,
+    flags: Flags = 0,
+    dpy: ?*anyopaque = null,
+    window: c_ulong = 0,
 };
 
 pub const ComponentMapping = extern struct {
@@ -3069,6 +3327,11 @@ pub const PfnGetPhysicalDeviceFeatures2 = *const fn (
     p_features: *PhysicalDeviceFeatures2,
 ) callconv(call_conv) void;
 
+pub const PfnGetPhysicalDeviceProperties2 = *const fn (
+    physical_device: PhysicalDevice,
+    p_properties: *PhysicalDeviceProperties2,
+) callconv(call_conv) void;
+
 pub const PfnEnumerateDeviceExtensionProperties = *const fn (
     physical_device: PhysicalDevice,
     p_layer_name: ?[*:0]const u8,
@@ -3106,13 +3369,6 @@ pub const PfnDestroyDebugUtilsMessengerEXT = *const fn (
     p_allocator: ?*const AllocationCallbacks,
 ) callconv(call_conv) void;
 
-pub const PfnCreateWin32SurfaceKHR = *const fn (
-    instance: Instance,
-    p_create_info: *const Win32SurfaceCreateInfoKHR,
-    p_allocator: ?*const AllocationCallbacks,
-    p_surface: *SurfaceKHR,
-) callconv(call_conv) Result;
-
 pub const PfnDestroySurfaceKHR = *const fn (
     instance: Instance,
     surface: SurfaceKHR,
@@ -3144,6 +3400,20 @@ pub const PfnGetPhysicalDeviceSurfacePresentModesKHR = *const fn (
     surface: SurfaceKHR,
     p_present_mode_count: *u32,
     p_present_modes: ?[*]PresentModeKHR,
+) callconv(call_conv) Result;
+
+pub const PfnCreateWin32SurfaceKHR = *const fn (
+    instance: Instance,
+    p_create_info: *const Win32SurfaceCreateInfoKHR,
+    p_allocator: ?*const AllocationCallbacks,
+    p_surface: *SurfaceKHR,
+) callconv(call_conv) Result;
+
+pub const PfnCreateXlibSurfaceKHR = *const fn (
+    instance: Instance,
+    p_create_info: *const XlibSurfaceCreateInfoKHR,
+    p_allocator: ?*const AllocationCallbacks,
+    p_surface: *SurfaceKHR,
 ) callconv(call_conv) Result;
 
 pub const PfnDestroyDevice = *const fn (
@@ -3565,6 +3835,53 @@ pub const PfnCmdDispatch = *const fn (
     group_count_z: u32,
 ) callconv(call_conv) void;
 
+pub const PfnCmdPushConstants = *const fn (
+    command_buffer: CommandBuffer,
+    layout: PipelineLayout,
+    stage_flags: ShaderStageFlags,
+    offset: u32,
+    size: u32,
+    p_values: ?*const anyopaque,
+) callconv(call_conv) void;
+
+pub const PfnCreateQueryPool = *const fn (
+    device: Device,
+    p_create_info: *const QueryPoolCreateInfo,
+    p_allocator: ?*const AllocationCallbacks,
+    p_query_pool: *QueryPool,
+) callconv(call_conv) Result;
+
+pub const PfnDestroyQueryPool = *const fn (
+    device: Device,
+    query_pool: QueryPool,
+    p_allocator: ?*const AllocationCallbacks,
+) callconv(call_conv) void;
+
+pub const PfnCmdResetQueryPool = *const fn (
+    command_buffer: CommandBuffer,
+    query_pool: QueryPool,
+    first_query: u32,
+    query_count: u32,
+) callconv(call_conv) void;
+
+pub const PfnCmdWriteTimestamp = *const fn (
+    command_buffer: CommandBuffer,
+    pipeline_stage: PipelineStageFlags,
+    query_pool: QueryPool,
+    query: u32,
+) callconv(call_conv) void;
+
+pub const PfnGetQueryPoolResults = *const fn (
+    device: Device,
+    query_pool: QueryPool,
+    first_query: u32,
+    query_count: u32,
+    data_size: usize,
+    p_data: ?*anyopaque,
+    stride: DeviceSize,
+    flags: QueryResultFlags,
+) callconv(call_conv) Result;
+
 pub const PfnCreateSwapchainKHR = *const fn (
     device: Device,
     p_create_info: *const SwapchainCreateInfoKHR,
@@ -3614,6 +3931,7 @@ pub const InstanceDispatch = struct {
     getPhysicalDeviceProperties: PfnGetPhysicalDeviceProperties,
     getPhysicalDeviceQueueFamilyProperties: PfnGetPhysicalDeviceQueueFamilyProperties,
     getPhysicalDeviceFeatures2: PfnGetPhysicalDeviceFeatures2,
+    getPhysicalDeviceProperties2: PfnGetPhysicalDeviceProperties2,
     enumerateDeviceExtensionProperties: PfnEnumerateDeviceExtensionProperties,
     createDevice: PfnCreateDevice,
     getDeviceProcAddr: PfnGetDeviceProcAddr,
@@ -3622,15 +3940,24 @@ pub const InstanceDispatch = struct {
     destroyDebugUtilsMessengerEXT: ?PfnDestroyDebugUtilsMessengerEXT,
 };
 
-/// An instance's window-system commands (VK_KHR_surface, VK_KHR_win32_surface): loaded only by a
+/// An instance's surface commands, the ones every window system shares (VK_KHR_surface): loaded only by a
 /// host with a window.
 pub const SurfaceDispatch = struct {
-    createWin32SurfaceKHR: PfnCreateWin32SurfaceKHR,
     destroySurfaceKHR: PfnDestroySurfaceKHR,
     getPhysicalDeviceSurfaceSupportKHR: PfnGetPhysicalDeviceSurfaceSupportKHR,
     getPhysicalDeviceSurfaceCapabilitiesKHR: PfnGetPhysicalDeviceSurfaceCapabilitiesKHR,
     getPhysicalDeviceSurfaceFormatsKHR: PfnGetPhysicalDeviceSurfaceFormatsKHR,
     getPhysicalDeviceSurfacePresentModesKHR: PfnGetPhysicalDeviceSurfacePresentModesKHR,
+};
+
+/// An instance's Win32 surface command (VK_KHR_win32_surface): loaded only on Windows, by a host with a window.
+pub const Win32SurfaceDispatch = struct {
+    createWin32SurfaceKHR: PfnCreateWin32SurfaceKHR,
+};
+
+/// An instance's X11 surface command (VK_KHR_xlib_surface): loaded only on Linux, by a host with a window.
+pub const XlibSurfaceDispatch = struct {
+    createXlibSurfaceKHR: PfnCreateXlibSurfaceKHR,
 };
 
 /// One device's commands.
@@ -3697,6 +4024,12 @@ pub const DeviceDispatch = struct {
     cmdSetViewport: PfnCmdSetViewport,
     cmdSetScissor: PfnCmdSetScissor,
     cmdDispatch: PfnCmdDispatch,
+    cmdPushConstants: PfnCmdPushConstants,
+    createQueryPool: PfnCreateQueryPool,
+    destroyQueryPool: PfnDestroyQueryPool,
+    cmdResetQueryPool: PfnCmdResetQueryPool,
+    cmdWriteTimestamp: PfnCmdWriteTimestamp,
+    getQueryPoolResults: PfnGetQueryPoolResults,
 };
 
 /// A device's swapchain commands (VK_KHR_swapchain): loaded only by a host with a window.
@@ -3779,6 +4112,22 @@ pub fn loadSurfaceDispatch(
     instance: Instance,
 ) LoadError!SurfaceDispatch {
     return loadDispatch(SurfaceDispatch, Instance, get_instance_proc_address, instance);
+}
+
+/// The Win32 surface command of one instance; loaded only on Windows, for the one call that creates the surface.
+pub fn loadWin32SurfaceDispatch(
+    get_instance_proc_address: PfnGetInstanceProcAddr,
+    instance: Instance,
+) LoadError!Win32SurfaceDispatch {
+    return loadDispatch(Win32SurfaceDispatch, Instance, get_instance_proc_address, instance);
+}
+
+/// The X11 surface command of one instance; loaded only on Linux, for the one call that creates the surface.
+pub fn loadXlibSurfaceDispatch(
+    get_instance_proc_address: PfnGetInstanceProcAddr,
+    instance: Instance,
+) LoadError!XlibSurfaceDispatch {
+    return loadDispatch(XlibSurfaceDispatch, Instance, get_instance_proc_address, instance);
 }
 
 /// The commands of one device, fetched through `vkGetDeviceProcAddr` - the device's own entry points, without the

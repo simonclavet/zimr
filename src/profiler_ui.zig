@@ -19,7 +19,7 @@
 //! Collection lives in profiler.zig; this file only reads those buffers and
 //! draws with ui.zig's DrawList. Folds to nothing when the profiler is stripped.
 
-const profiler = @import("profiler.zig");
+const profiler = @import("profiler");
 const std = @import("std");
 const sortSlice = std.mem.sort;
 const ui = @import("ui.zig");

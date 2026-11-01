@@ -14,7 +14,7 @@
 const std = @import("std");
 const refAllDecls = std.testing.refAllDecls;
 
-pub const robot = @import("robot.zig");
+pub const robot = @import("robot");
 pub const robot_scene = @import("robot_scene.zig");
 pub const robot_physics = @import("robot_physics.zig");
 pub const robot_control = @import("robot_control.zig");

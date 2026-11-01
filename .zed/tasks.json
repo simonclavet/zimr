@@ -2817,6 +2817,29 @@
         "use_new_terminal": false
     },
     {
+        "label": "zig: build magic-isomorphic-keyboard",
+        "command": "zig",
+        "args": [
+            "build",
+            "magic-isomorphic-keyboard",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release magic-isomorphic-keyboard",
+        "command": "zig",
+        "args": [
+            "build",
+            "magic-isomorphic-keyboard",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
         "label": "zig: build mandel-julia",
         "command": "zig",
         "args": [
@@ -8845,6 +8868,17 @@
         "args": [
             "build",
             "logo-raylib-anim",
+            "-Dplatform=windows"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build magic-isomorphic-keyboard (windows)",
+        "command": "zig",
+        "args": [
+            "build",
+            "magic-isomorphic-keyboard",
             "-Dplatform=windows"
         ],
         "reveal": "no_focus",

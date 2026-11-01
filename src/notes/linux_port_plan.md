@@ -1,9 +1,10 @@
 # Linux port plan - zimr on Linux through X11 and Vulkan, built and checked from Windows
 
-Version 2, Oct 31 2026. **Status: all thirteen decisions agreed (section 5); implementation NOT started** - Simon:
-"I agree with the plan. But I don't want to start implementing now. First make it more precise, then review it
-carefully. Try to guess where it will break." Version 2 is that: every change named by file, line and shape
-(section 6), two probes run (section 7), and a review predicting the breakages (section 8), which changed the
+Version 2, Oct 31 2026. **Status (Nov 1): being implemented - stages L1, L2 and L3 written, not yet compiled (no
+compiling on this machine but Simon's: the journal lists his checks); L4 next.** Simon, Nov 1: "Implement carefully".
+Before that, Oct 31: "I agree with the plan. But I don't want to start implementing now. First make it more precise,
+then review it carefully. Try to guess where it will break." Version 2 is that: every change named by file, line and
+shape (section 6), two probes run (section 7), and a review predicting the breakages (section 8), which changed the
 design in eight places (marked **[review]**).
 
 This is `platforms_plan.md`'s Phase D ("Linux on X11") planned in detail. It starts from `vulkan_port_plan_v2.md`
@@ -1058,3 +1059,59 @@ The report goes into the journal; each finding a fix.
   changed the design: projects in L1 (R1), WSL runs through `wsl.exe` always, with `WSLENV` (R2), `ZIMR_SCALE` (R3),
   the Debug backend watched (R4), `vk_hello.zig` in L2, the asserts gated to LP64 Linux, the window waits to be
   mapped, ALSA non-blocking with its start threshold handled. Audit of `examples/` for OS facts: two, both portable.
+- **Nov 1 - L1, L2 and L3 written** (Simon: "Implement carefully"). Nothing compiled here; `zig fmt --check`, `zig
+  ast-check` and zimrlint with every rule pass on every file touched. The refinements R1-R4 were implemented as section
+  5 recommends them.
+  - **L1, the build.** `Platform.linux`; `hostPlatform` answers it on Linux; `windows_pending` became `native_pending`
+    (`nativePendingReason`); `appBuildFor` and `appRunFor` take `linux_builds`; `installLinuxProgram`,
+    `installLinuxApp`, `addLinuxApp`, `linuxRun` (on Windows `wsl.exe --exec ./<name>` from zig-out/linux/, `WSLENV` =
+    the caller's own - Simon's `GALLIUM_DRIVER:MESA_D3D12_DEFAULT_ADAPTER_NAME` stay - then zimr's nine settings).
+    `linux_glibc_floor` ("2.31") is the one definition of the floor: the triple `x86_64-linux-gnu.2.31` is built from
+    it, and so is the check's argument. `build_opts_windows` became `build_opts_native`; the Linux engine is the Windows
+    one's twin with libc linked; `linux_app_ctx` is made before the phase split and published (R1), so `Project` builds
+    Linux programs (`AppRunner.linux_program`), and the template's header says so. Examples and gallery under
+    `-Dplatform=linux` only; the launcher always; the Linux trainer with the lab's Linux build. `platforms-check` links
+    the Linux launcher and runs `tools/elf_needs.zig` on it (Linux left `platform_check_targets`). `elf_needs` goes one
+    step past B4: it also fails on a library linked by name that glibc does not ship - principle 2 as a check, so an
+    accidental `linkSystemLibrary("X11")` cannot slip in. Its tests (a hand-written ELF) are in `tools-test`.
+  - **L2, the surface seam.** As 6.2-6.3, with two findings in `vk_gen.zig`: (a) it still wrote `@enumFromInt(0)` as an
+    enumeration's default, which Zig 0.18 no longer has - `vk.zig` says `@fromBackingInt(@intCast(0))`, so a
+    regeneration would not have compiled; the generator now writes that. (b) A `c_ulong` member (X11's `Window`) would
+    have defaulted to `.{}`; `c_ulong` joined the types that default to 0. `src/vk.zig` was edited by hand to exactly
+    what the generator should now write (the surface command types moved after the surface's, `Win32SurfaceDispatch` and
+    `XlibSurfaceDispatch` split off, `XlibSurfaceCreateInfoKHR`, `StructureType.xlib_surface_create_info_khr =
+    1000004000` - extension 5's block - and the two loaders). `vk-abi-check` compiles for Windows and for Linux, the
+    reference header gaining the three X11 typedefs and `vulkan_xlib.h`.
+  - **L3.** `src/x11.zig` (about 1600 lines: the event structures with their LP64 asserts, the constants, the Xlib
+    table, the pure parts with tests, the window); `native_input`'s evdev table (106 rows, checked against the shipped
+    header by a script: every code matches), `translateX11`, `InputQueue.pushUtf8`, six tests; the loop on
+    `native_window` (one `sleepUntilInputOrDue`, Windows' due times unchanged: the frame's step is -10 000 units as
+    before, the beat's the same `@ceil` of the same product); `platform/linux.zig`; `platform.current` picks it.
+  - **Where L3 departs from section 6, and why.** (1) `translateX11` queues the pointer's entering before the move to
+    where it entered - Windows' order (`message_pointer_entered`, then `WM_MOUSEMOVE`) and a script's; 6.6 had the move
+    first. (2) Four of L4's window requests are written now - fullscreen (EWMH), `bringToFront`, the size hints and
+    `applySizeLimits` - because the shared loop calls them and each is a few lines; pointer lock is refused at once by
+    the window (`pointer_lock_changed` false) and `requestPaste` does nothing, until L4 and L5. (3) Text comes from
+    `XLookupString` alone until XIM (L4); GLFW's duplicate filter belongs to XIM, as in GLFW, so it waits too. (4) The
+    root's `PropertyChangeMask` (scale changes) is L5's, not selected yet. (5) `WM_CLASS`'s name is
+    `native_os.programName`, now public. (6) A failed X request is logged as a warning, not an error: a `BadWindow` at
+    teardown must not make a clean run unclean. (7) The clipboard's seven atoms come with L5; the rest of 6.4.8's list
+    is interned now. (8) Monitors: one, the X screen, until XRandR (L5). (9) The tutorial's prose (the platform table,
+    the dispatch sketch, the unwritten platform, `platforms-check`'s sketch) is rewritten; its code folds refresh with
+    `zig build lint-fix`; chapter 11's "X11 through Xlib" comes with L4. (10) WSL's distro is `Ubuntu` (26.04), not
+    `Ubuntu-24.04`: section 10's commands and `-Dlinux-headers` path take that name at L9.
+  - **Simon's checks, cheapest first**: `src/vk.zig` copied aside, `zig build vk-gen
+    -Dvulkan-registry=C:/VulkanSDK/1.4.363.0/share/vulkan/registry/vk.xml`, then `git diff --no-index` of the copy and
+    the regenerated file - empty when the hand edit is what the generator writes; any line there is read before it
+    stays. `zig build vk-gen-test native-input-test platform-contract-test tools-test`; `zig build vk-abi-check`
+    (VULKAN_SDK set: both targets); `zig build vk-hello-windows`; `zig build platforms-check` (the Linux launcher
+    linked, `elf_needs` on it); `zig build hello-world -Dplatform=linux`; then in WSL (WSLg), `zig build run-hello-world
+    -Dplatform=linux` - lavapipe, the window, resize, close.
+- **Nov 1 - the first WSL run.** `zig build run-hello-world -Dplatform=linux` built (211 of 213 steps) and started the
+  program in WSL, which crashed opening its window: "Segmentation fault at address 0x0" in
+  `native_os.programEnvironment`, reached from `x11.zig`'s `WM_CLASS` (the program's name, through `servicesIo`). It
+  read the C library's `environ` variable, which was null in this Debug-built binary - most likely Zig's own linker
+  giving the copy of `environ` no alias for glibc's `__environ`, which is what glibc sets (not verified; R4's risk). The
+  fix needs no C global: the environment is the block Zig's start code reads before `main` - from `main`'s `envp` with
+  libc, from the stack without - and keeps in `std.Options.debug_threaded_io`, in every 0.18 build here (dev.349,
+  dev.753). No other code read `environ`.

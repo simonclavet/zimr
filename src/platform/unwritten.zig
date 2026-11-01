@@ -1,4 +1,4 @@
-//! src/platform/unwritten.zig - a native platform not yet written: Linux, macOS and Android, until each has its own.
+//! src/platform/unwritten.zig - a native platform not yet written: macOS and Android, until each has its own.
 //!
 //! Every request of the contract (`contract.zig`) is here, each refused by name at run time: it says once that it is
 //! not written (`refuse`) and answers as a platform with nothing yet would - nothing, zero, false, null, an empty text,
@@ -8,8 +8,8 @@
 //! where the engine calls it, for a platform being written request by request; this file refuses at run time because
 //! its purpose is the build. Nothing runs on it: the window and its loop are refused too (`native_loop.zig`).
 //!
-//! A port starts by copying this file into its own (`linux.zig`, say), pointing `platform.current` at it, and
-//! replacing each refusal with the system's own calls, as the contract documents each request.
+//! A port starts by copying this file into its own (`macos.zig`, say), pointing `platform.current` at it, and
+//! replacing each refusal with the system's own calls, as the contract documents each request - as `linux.zig` began.
 
 const std = @import("std");
 const builtin = @import("builtin");

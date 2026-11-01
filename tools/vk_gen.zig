@@ -47,8 +47,9 @@ const Enumeration = struct {
     values: []const []const u8,
 };
 
-/// Which dispatch table loads a command: the levels of `vk.zig`'s tables.
-const Level = enum { global, instance, surface, device, swapchain };
+/// Which dispatch table loads a command: the levels of `vk.zig`'s tables. Each window system's one surface-creation
+/// command has a table of its own (`win32_surface`, `xlib_surface`), since only its own system has the command.
+const Level = enum { global, instance, surface, win32_surface, xlib_surface, device, swapchain };
 
 const CommandLevel = struct {
     level: Level,
@@ -83,6 +84,10 @@ const structures = [_][]const u8{
     "PhysicalDeviceVulkan12Features",
     "PhysicalDeviceVulkan13Features",
     "PhysicalDeviceMaintenance5Features",
+    "PhysicalDeviceProperties2",
+    "PhysicalDeviceVulkan11Properties",
+    "PhysicalDeviceShaderAtomicFloatFeaturesEXT",
+    "QueryPoolCreateInfo",
     "DeviceQueueCreateInfo",
     "DeviceCreateInfo",
     "SurfaceCapabilitiesKHR",
@@ -90,6 +95,7 @@ const structures = [_][]const u8{
     "SwapchainCreateInfoKHR",
     "PresentInfoKHR",
     "Win32SurfaceCreateInfoKHR",
+    "XlibSurfaceCreateInfoKHR",
     "ComponentMapping",
     "ImageSubresourceRange",
     "ImageViewCreateInfo",
@@ -376,6 +382,13 @@ const enumerations = [_]Enumeration{
         "VK_INDEX_TYPE_UINT32",
     } },
     .{ .name = "StructureType", .values = &.{} },
+    .{ .name = "PointClippingBehavior", .values = &.{
+        "VK_POINT_CLIPPING_BEHAVIOR_ALL_CLIP_PLANES",
+        "VK_POINT_CLIPPING_BEHAVIOR_USER_CLIP_PLANES_ONLY",
+    } },
+    .{ .name = "QueryType", .values = &.{
+        "VK_QUERY_TYPE_TIMESTAMP",
+    } },
 };
 
 /// The constants: limits and special values, each a 32-bit value. Flag bits are fields of the flags structures.
@@ -421,6 +434,7 @@ const command_levels = [_]CommandLevel{
         "vkGetPhysicalDeviceProperties",
         "vkGetPhysicalDeviceQueueFamilyProperties",
         "vkGetPhysicalDeviceFeatures2",
+        "vkGetPhysicalDeviceProperties2",
         "vkEnumerateDeviceExtensionProperties",
         "vkCreateDevice",
         "vkGetDeviceProcAddr",
@@ -429,13 +443,14 @@ const command_levels = [_]CommandLevel{
         "vkDestroyDebugUtilsMessengerEXT",
     } },
     .{ .level = .surface, .commands = &.{
-        "vkCreateWin32SurfaceKHR",
         "vkDestroySurfaceKHR",
         "vkGetPhysicalDeviceSurfaceSupportKHR",
         "vkGetPhysicalDeviceSurfaceCapabilitiesKHR",
         "vkGetPhysicalDeviceSurfaceFormatsKHR",
         "vkGetPhysicalDeviceSurfacePresentModesKHR",
     } },
+    .{ .level = .win32_surface, .commands = &.{"vkCreateWin32SurfaceKHR"} },
+    .{ .level = .xlib_surface, .commands = &.{"vkCreateXlibSurfaceKHR"} },
     .{ .level = .device, .commands = &.{
         "vkDestroyDevice",
         "vkGetDeviceQueue",
@@ -499,6 +514,12 @@ const command_levels = [_]CommandLevel{
         "vkCmdSetViewport",
         "vkCmdSetScissor",
         "vkCmdDispatch",
+        "vkCmdPushConstants",
+        "vkCreateQueryPool",
+        "vkDestroyQueryPool",
+        "vkCmdResetQueryPool",
+        "vkCmdWriteTimestamp",
+        "vkGetQueryPoolResults",
     } },
     .{ .level = .swapchain, .commands = &.{
         "vkCreateSwapchainKHR",
@@ -898,14 +919,27 @@ fn quotedIfNeeded(arena: Allocator, text: []const u8) Allocator.Error![]const u8
     return allocPrint(arena, "@\"{s}\"", .{text});
 }
 
-/// A registry name in camelCase (`pEnabledLayerNames`) as a Zig name in snake_case (`p_enabled_layer_names`): an
-/// underscore before each capital that follows a lower-case letter, and before each digit that follows a letter.
+/// A registry name in camelCase (`pEnabledLayerNames`) as a Zig name in snake_case (`p_enabled_layer_names`). A WORD
+/// begins at a capital that follows a lower-case letter, and at a capital followed by a lower-case letter that comes
+/// after a capital or a digit - the end of an acronym, or a word after a number; a NUMBER begins at a digit that
+/// follows a letter, and is a word of its own:
+///
+///     pEnabledLayerNames             p_enabled_layer_names
+///     deviceLUIDValid                device_luid_valid               (the acronym ends where "Valid" begins)
+///     shaderBufferFloat32AtomicAdd   shader_buffer_float_32_atomic_add
+///     storageBuffer8BitAccess        storage_buffer_8_bit_access
+///     maxImageDimension2D            max_image_dimension_2d          ("2D": no lower-case letter follows the D)
 fn snakeCase(arena: Allocator, name: []const u8) Allocator.Error![]const u8 {
     var out: ArrayList(u8) = .empty;
     for (name, 0..) |character, index| {
         if (index > 0) {
             const previous: u8 = name[index - 1];
-            const starts_word: bool = std.ascii.isUpper(character) and std.ascii.isLower(previous);
+            const has_next: bool = index + 1 < name.len;
+            const next_is_lower: bool = has_next and std.ascii.isLower(name[index + 1]);
+            const is_capital: bool = std.ascii.isUpper(character);
+            const after_lower: bool = std.ascii.isLower(previous);
+            const after_capital_or_digit: bool = std.ascii.isUpper(previous) or std.ascii.isDigit(previous);
+            const starts_word: bool = is_capital and (after_lower or (after_capital_or_digit and next_is_lower));
             const starts_number: bool = std.ascii.isDigit(character) and std.ascii.isAlphabetic(previous);
             if (starts_word or starts_number) {
                 try out.append(arena, '_');
@@ -914,6 +948,26 @@ fn snakeCase(arena: Allocator, name: []const u8) Allocator.Error![]const u8 {
         try out.append(arena, std.ascii.toLower(character));
     }
     return quotedIfNeeded(arena, out.items);
+}
+
+test "vk_gen: registry names in snake case - acronyms end, numbers stand alone" {
+    var arena_state: ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    const Case = struct { registry: []const u8, zig: []const u8 };
+    const cases = [_]Case{
+        .{ .registry = "pEnabledLayerNames", .zig = "p_enabled_layer_names" },
+        .{ .registry = "deviceLUIDValid", .zig = "device_luid_valid" },
+        .{ .registry = "shaderBufferFloat32AtomicAdd", .zig = "shader_buffer_float_32_atomic_add" },
+        .{ .registry = "storageBuffer8BitAccess", .zig = "storage_buffer_8_bit_access" },
+        .{ .registry = "maxImageDimension2D", .zig = "max_image_dimension_2d" },
+        .{ .registry = "shaderFloat16", .zig = "shader_float_16" },
+        .{ .registry = "maintenance5", .zig = "maintenance_5" },
+    };
+    for (cases) |case| {
+        const converted: []const u8 = try snakeCase(arena, case.registry);
+        try std.testing.expectEqualStrings(case.zig, converted);
+    }
 }
 
 /// A C type the registry does not define as a Vulkan type, and its Zig spelling.
@@ -935,6 +989,10 @@ const builtin_types = [_]BuiltinType{
     .{ .c = "HINSTANCE", .zig = "?*anyopaque" },         .{ .c = "HWND", .zig = "?*anyopaque" },
     .{ .c = "HMONITOR", .zig = "?*anyopaque" },          .{ .c = "HANDLE", .zig = "?*anyopaque" },
     .{ .c = "DWORD", .zig = "u32" },                     .{ .c = "LPCWSTR", .zig = "?[*:0]const u16" },
+    // X11's (`vulkan_xlib.h`): the connection is pointed to (`Display*`), and a window or visual is an `XID`, C's
+    // `unsigned long` - 8 bytes on Linux, 4 on Windows, which never calls the Xlib surface command.
+    .{ .c = "Display", .zig = "anyopaque" },             .{ .c = "Window", .zig = "c_ulong" },
+    .{ .c = "VisualID", .zig = "c_ulong" },
 };
 
 const GenerateError = error{
@@ -1114,6 +1172,7 @@ fn defaultFor(
         "f64",
         "usize",
         "c_int",
+        "c_ulong",
         "Bool32",
         "DeviceSize",
         "DeviceAddress",
@@ -1131,7 +1190,8 @@ fn defaultFor(
         return ".null_handle";
     }
     if (eql(u8, category, "enum")) {
-        return "@enumFromInt(0)";
+        // The enumeration's value 0, as Zig 0.18 spells it: `@fromBackingInt` takes the backing type itself (`i32`).
+        return "@fromBackingInt(@intCast(0))";
     }
     if (eql(u8, category, "union")) {
         return null;
@@ -1358,6 +1418,8 @@ fn tableTitle(level: Level) []const u8 {
         .global => "GlobalDispatch",
         .instance => "InstanceDispatch",
         .surface => "SurfaceDispatch",
+        .win32_surface => "Win32SurfaceDispatch",
+        .xlib_surface => "XlibSurfaceDispatch",
         .device => "DeviceDispatch",
         .swapchain => "SwapchainDispatch",
     };
@@ -1367,8 +1429,12 @@ fn tableDoc(level: Level) []const u8 {
     return switch (level) {
         .global => "The commands that exist before an instance.",
         .instance => "One instance's commands.",
-        .surface => "An instance's window-system commands (VK_KHR_surface, VK_KHR_win32_surface): loaded only by " ++
-            "a\n/// host with a window.",
+        .surface => "An instance's surface commands, the ones every window system shares (VK_KHR_surface): loaded " ++
+            "only by a\n/// host with a window.",
+        .win32_surface => "An instance's Win32 surface command (VK_KHR_win32_surface): loaded only on Windows, by a " ++
+            "host with a window.",
+        .xlib_surface => "An instance's X11 surface command (VK_KHR_xlib_surface): loaded only on Linux, by a host " ++
+            "with a window.",
         .device => "One device's commands.",
         .swapchain => "A device's swapchain commands (VK_KHR_swapchain): loaded only by a host with a window.",
     };

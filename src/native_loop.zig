@@ -20,7 +20,10 @@
 //! same calls the browser's bridge makes (`wgpu_app.zig`'s `inputPush*`, which the bridge reaches by their exported
 //! names, `input_push_*`). With `ZIMR_LOG_INPUT=1`, each event is also printed as the engine receives it.
 //!
-//! Windows only, for now: a second platform replaces `win32.zig`, and this file's window type with it.
+//! One loop for Windows and Linux: the window is the system's own (`native_window.zig` - Win32's or X11's), with the
+//! same members, so scripts, the frame's wait, the beat, input delivery and the file queue are one definition for both.
+//! Where the systems differ - the wait's sleep, what translates input, Win32's file dialogs and drops, Windows' monitor
+//! list - each part says which is which; the requests only X11's window has go to it directly (`theWindow`).
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -37,6 +40,7 @@ const FramePacer = @import("FramePacer.zig");
 const headless_platform = @import("platform/headless.zig");
 const script_log = std.log.scoped(.script);
 const win32 = @import("win32.zig");
+const native_window = @import("native_window.zig");
 const Allocator = std.mem.Allocator;
 
 const bufPrint = std.fmt.bufPrint;
@@ -51,7 +55,7 @@ const trim = std.mem.trim;
 // One window per process, and the operating system keeps a pointer to it, so it lives at a fixed address for the
 // program's whole life; the browser's canvas is the same kind of singleton.
 // lint:off module-var: the process's one window, which must not move
-var window: win32.Window = undefined;
+var window: native_window.Window = undefined;
 
 // The input waiting for the next frame, filled by the window's messages - as the browser keeps one event queue.
 // lint:off module-var: the window's input, which its handler fills between frames
@@ -111,9 +115,13 @@ fn logEvent(event: contract.Event) void {
     console.log(.info, line);
 }
 
-/// The window's input handler: each input message, translated and queued for the next frame.
-fn queueInput(message: win32.InputMessage) void {
-    native_input.translate(message, &input);
+/// The window's input handler: each input message, translated - by its system's rules - and queued for the next frame.
+fn queueInput(message: native_window.InputMessage) void {
+    if (comptime native_window.is_x11) {
+        native_input.translateX11(message, &input);
+    } else {
+        native_input.translate(message, &input);
+    }
 }
 
 /// Hands the engine one event about the window itself - hidden, shown, resized - printing it first when asked, as
@@ -457,6 +465,22 @@ fn queueDroppedFiles() void {
     }
 }
 
+// lint:off module-var: whether the missing file dialogs were said, once for the run
+var has_said_no_file_dialogs: bool = false;
+
+/// A press on the app's Load or Save button asked for a file dialog, which Linux does not have yet (linux_port_plan.md,
+/// stage L8: zenity or kdialog): the request is said once, and dropped.
+fn dropDialogRequest() void {
+    if (files.dialog == .none) {
+        return;
+    }
+    files.dialog = .none;
+    if (!has_said_no_file_dialogs) {
+        has_said_no_file_dialogs = true;
+        console.log(.warn, "file dialogs are not written for Linux yet: the Load and Save buttons do nothing");
+    }
+}
+
 /// Hands the queued input to the engine, in order, each converted into the contract's event - printing each first
 /// when asked.
 fn deliverInput(receive_event: EventFunction) void {
@@ -471,17 +495,23 @@ fn deliverInput(receive_event: EventFunction) void {
         receive_event(event);
     }
     input.clear();
-    // A dialog a press asked for opens once the frame's input is delivered; dropped files join the queue.
-    runFileDialog();
-    queueDroppedFiles();
+    // A dialog a press asked for opens once the frame's input is delivered; dropped files join the queue. Both are
+    // Win32's: on X11 the request is said and dropped until they are written.
+    if (comptime native_window.is_x11) {
+        dropDialogRequest();
+    } else {
+        runFileDialog();
+        queueDroppedFiles();
+    }
 }
 
-pub const OpenError = win32.WindowError || error{ OutOfMemory, WindowUnwritten };
+pub const OpenError = native_window.WindowError || error{ OutOfMemory, WindowUnwritten };
 
-/// Whether this system's window and its loop are written: Windows' only, so far. Elsewhere - the systems the unwritten
-/// platform stands for (`platform/unwritten.zig`) - `openWindow`, `run` and `finish` refuse, and the Win32 code they
-/// would call is never compiled; the headless loop (`headless`) and the scripts (`script`) are every system's.
-const has_window_loop: bool = builtin.target.os.tag == .windows;
+/// Whether this system's window and its loop are written: Windows' and Linux's (X11). Elsewhere - the systems the
+/// unwritten platform stands for (`platform/unwritten.zig`) - `openWindow`, `run` and `finish` refuse, and the window
+/// code they would call is never compiled; the headless loop (`headless`) and the scripts (`script`) are every
+/// system's.
+const has_window_loop: bool = builtin.target.os.tag == .windows or native_window.is_x11;
 
 /// What the Vulkan host's validation layer counted.
 pub const Counts = vulkan_host.MessageCounts;
@@ -556,8 +586,14 @@ pub fn size() contract.Size {
     };
 }
 
+/// The window itself, for the requests only one system's window has: X11's (`platform/linux.zig`). Windows' platform
+/// goes through the wrappers above.
+pub fn theWindow() *native_window.Window {
+    return &window;
+}
+
 /// Opens the program's window and gives it to the Vulkan host.
-pub fn openWindow(options: win32.WindowOptions) OpenError!void {
+pub fn openWindow(options: native_window.WindowOptions) OpenError!void {
     if (comptime !has_window_loop) {
         console.log(.err, "the window and its loop are not written for this system: the program stops here");
         return error.WindowUnwritten;
@@ -1296,8 +1332,8 @@ fn serviceWindow(receive_event: EventFunction) WindowPass {
     return .draw;
 }
 
-/// How long the frame's wait sleeps between its askings, in units of 100 ns: a millisecond.
-const frame_wait_step_100ns: i64 = 10_000;
+/// How long the frame's wait sleeps between its askings: a millisecond.
+const frame_wait_step_milliseconds: f64 = 1.0;
 
 /// The high-resolution waitable timer the loop's waits sleep on (`waitForFrame`, `waitForBeat`): asked for at the
 /// first wait and kept for the program's life; null where the system has none.
@@ -1329,23 +1365,68 @@ fn sleepUntilMessageOrDue(timer: win32.HANDLE, relative_due_100ns: i64) void {
     );
 }
 
+/// Whether the loop can sleep precisely until input arrives or a due time passes (`sleepUntilInputOrDue`): X11 always,
+/// on its connection to the server; Windows with a high-resolution waitable timer only (`frameWaitTimer`).
+fn canSleepPrecisely() bool {
+    if (comptime native_window.is_x11) {
+        return true;
+    }
+    return frameWaitTimer() != null;
+}
+
+/// Sleeps until input arrives or `milliseconds` pass. Windows: the message queue and the timer, due `milliseconds` from
+/// now rounded up to the timer's unit of 100 ns - a negative due time, which is relative (`sleepUntilMessageOrDue`).
+/// X11: the connection to the server (`x11.Window.waitForInput`).
+fn sleepUntilInputOrDue(milliseconds: f64) void {
+    if (comptime native_window.is_x11) {
+        window.waitForInput(milliseconds);
+        return;
+    }
+    const timer: win32.HANDLE = frameWaitTimer() orelse return;
+    const due_100ns: i64 = @ceil(milliseconds * 10_000);
+    sleepUntilMessageOrDue(timer, -due_100ns);
+}
+
+/// The loop's pause while the window is hidden, before it looks again: about a frame. Windows sleeps; X11 sleeps on the
+/// connection, waking at once for the event that shows the window again.
+fn sleepWhileHidden() void {
+    if (comptime native_window.is_x11) {
+        window.waitForInput(16);
+    } else {
+        win32.Sleep(16);
+    }
+}
+
+/// A brief pause, between a followed script's askings for its next line (`waitInWindow`): 10 ms, or less on X11 when
+/// an event arrives.
+fn sleepBriefly() void {
+    if (comptime native_window.is_x11) {
+        window.waitForInput(10);
+    } else {
+        win32.Sleep(10);
+    }
+}
+
 /// The frame's wait, before the frame: until the next frame can begin without waiting inside it - the frame slot free
 /// and a swapchain image in hand (`vulkan_host.tryAcquireAhead`) - the window's messages are handled as they arrive
 /// (`serviceWindow`), so that input reaches the engine, and an app's `on_input`, the moment it comes rather than at
 /// the next frame; the frame then draws at the display's pace, as before.
 ///
-/// Between askings the thread sleeps on the message queue and a high-resolution waitable timer together
-/// (`MsgWaitForMultipleObjectsEx`), waking for a message at once and otherwise after a millisecond. The timer must be
-/// a high-resolution one (Windows 10 version 1803 and later): an ordinary timer, or a timeout, waits for the system's
-/// tick - 15.6 ms unless a program asks for less - and the frame could start a refresh late. Where the system has
-/// none, there is no wait here: the frame waits inside its own acquire, as before this wait existed, and its input is
-/// read at its start. A window minimized or closed during the wait ends it, with what the loop does for it.
+/// Between askings the thread sleeps until input arrives or a millisecond passes (`sleepUntilInputOrDue`). On Windows
+/// it sleeps on the message queue and a high-resolution waitable timer together (`MsgWaitForMultipleObjectsEx`). The
+/// timer must be a high-resolution one (Windows 10 version 1803 and later): an ordinary timer, or a timeout, waits for
+/// the system's tick - 15.6 ms unless a program asks for less - and the frame could start a refresh late. Where the
+/// system has none, there is no wait here: the frame waits inside its own acquire, as before this wait existed, and its
+/// input is read at its start. On X11 it sleeps on the connection to the server, whose `poll` keeps time to the
+/// millisecond. A window minimized or closed during the wait ends it, with what the loop does for it.
 fn waitForFrame(receive_event: EventFunction) WindowPass {
-    const timer: win32.HANDLE = frameWaitTimer() orelse return .draw;
+    if (!canSleepPrecisely()) {
+        return .draw;
+    }
     while (!vulkan_host.tryAcquireAhead()) {
-        // Due one step from now: the wait ends at the step, or at a message.
-        sleepUntilMessageOrDue(timer, -frame_wait_step_100ns);
-        // Whichever woke it - a message, or the step - the window's messages are handled and its input handed over.
+        // Due one step from now: the wait ends at the step, or at input.
+        sleepUntilInputOrDue(frame_wait_step_milliseconds);
+        // Whichever woke it - input, or the step - the window's messages are handled and its input handed over.
         const pass: WindowPass = serviceWindow(receive_event);
         if (pass != .draw) {
             return pass;
@@ -1355,25 +1436,27 @@ fn waitForFrame(receive_event: EventFunction) WindowPass {
 }
 
 /// The frame's beat, before the frame's wait, for an app that asks for at most `frames_per_second`
-/// (`Config.max_frames_per_second`): the beat a browser's frames are drawn on (`FramePacer`), slept for on the
-/// window's messages and the timer together, as the frame's wait sleeps - so that input arriving meanwhile reaches the
-/// engine, and an app's `on_input`, the moment it comes. Where the system has no high-resolution timer there is no
-/// sleeping here, and the frames keep the display's pace. A window minimized or closed during the wait ends it, with
-/// what the loop does for it.
+/// (`Config.max_frames_per_second`): the beat a browser's frames are drawn on (`FramePacer`), slept for until input or
+/// the beat (`sleepUntilInputOrDue`), as the frame's wait sleeps - so that input arriving meanwhile reaches the engine,
+/// and an app's `on_input`, the moment it comes. Where the system cannot sleep precisely (Windows without a
+/// high-resolution timer) there is no sleeping here, and the frames keep the display's pace. A window minimized or
+/// closed during the wait ends it, with what the loop does for it.
 fn waitForBeat(
     receive_event: EventFunction,
     pacer: *FramePacer,
     frames_per_second: f32,
 ) WindowPass {
-    const timer: win32.HANDLE = frameWaitTimer() orelse return .draw;
+    if (!canSleepPrecisely()) {
+        return .draw;
+    }
     while (true) {
         const now_ms: f64 = native_os.monotonicMilliseconds();
         if (pacer.shouldRun(now_ms, frames_per_second)) {
             return .draw;
         }
-        // Due when the beat takes a frame, rounded up to the timer's unit, so that it does not wake a hair early.
-        const until_due_100ns: i64 = @ceil(pacer.millisecondsUntilDue(now_ms) * 10_000);
-        sleepUntilMessageOrDue(timer, -until_due_100ns);
+        // Due when the beat takes a frame; the sleep rounds it up to its own unit, so that it does not wake a hair
+        // early.
+        sleepUntilInputOrDue(pacer.millisecondsUntilDue(now_ms));
         // Whichever woke it - a message, or the beat - the window's messages are handled and its input handed over.
         const pass: WindowPass = serviceWindow(receive_event);
         if (pass != .draw) {
@@ -1396,7 +1479,7 @@ fn drawScriptedWindowFrame(
                 update(frame_ms);
                 return true;
             },
-            .hidden => win32.Sleep(16),
+            .hidden => sleepWhileHidden(),
             .closed => return false,
         }
     }
@@ -1451,7 +1534,7 @@ fn waitInWindow(io: Io, receive_event: EventFunction) bool {
     if (serviceWindow(receive_event) == .closed) {
         return false;
     }
-    win32.Sleep(10);
+    sleepBriefly();
     return true;
 }
 
@@ -1541,7 +1624,7 @@ pub fn run(
         }
         switch (pass) {
             .draw => update(native_os.monotonicMilliseconds()),
-            .hidden => win32.Sleep(16),
+            .hidden => sleepWhileHidden(),
             .closed => return null,
         }
     }

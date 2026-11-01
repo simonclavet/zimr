@@ -32,7 +32,7 @@
 const std = @import("std");
 const report = @import("test_report.zig");
 const zm = @import("zm");
-const rbt = @import("robot.zig");
+const rbt = @import("robot");
 const dance = @import("robot_dance.zig");
 const track = @import("robot_track.zig");
 

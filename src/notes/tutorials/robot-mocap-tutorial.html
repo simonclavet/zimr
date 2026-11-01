@@ -1052,9 +1052,10 @@ pub fn differentiatePos(
 <strong>joint's own frame</strong> — the child body's — and the increment multiplies the quaternion on
 the right, <em>q</em> ← <em>q</em> ⊗ δ. The free root's <em>linear</em> velocity is in world coordinates.
 Both functions follow MuJoCo's <code>mj_integratePos</code> and <code>mj_differentiatePos</code>.</p>
-<details class="src-fold" data-src="src/robot.zig" data-decl="fn rotateQuatByAngularVel("><summary><code>rotateQuatByAngularVel</code></summary><pre><code class="zig">/// Rotate `q` by an angular velocity applied for `dt`. Exact for a constant `w`: build the
+<details class="src-fold" data-src="src/robot.zig" data-decl="pub fn rotateQuatByAngularVel("><summary><code>rotateQuatByAngularVel</code></summary><pre><code class="zig">/// Rotate `q` by an angular velocity applied for `dt`. Exact for a constant `w`: build the
 /// rotation the velocity describes over the interval, then compose.
-fn rotateQuatByAngularVel(q: Quat, w: Vec, dt: f32) Quat {
+/// Shared with robotgpu's integrator kernel.
+pub fn rotateQuatByAngularVel(q: Quat, w: Vec, dt: f32) Quat {
     const speed: f32 = length3(w);
     if (speed &lt; 1.0e-12) {
         return q;
@@ -12657,145 +12658,8 @@ pub fn submitRecording(self: *Self) void {
 ///        batch pass if one is active, else a fresh single-dispatch submit.
 /// Readback is unaffected by `n`; it slices by `element_count` (set once).
 pub fn run(self: *Self, comptime name: []const u8, n: u32) void {
-    assertf(n &gt; 0, @src(), "run('" ++ name ++ "'): n must be &gt; 0", .{});
-    assertf(
-        n &lt;= M.config.max,
-        @src(),
-        "run('" ++ name ++ "'): n={d} exceeds capacity config.max={d}",
-        .{ n, M.config.max },
-    );
-    switch (self.backend) {
-        .cpu =&gt; {
-            // `M.g.P` is set either way: the LEAN form reads it through `g.uniform()`,
-            // and the stock form's `Ctx` carries a copy.
-            M.g.P = self.params;
-            var id: u32 = 0;
-            while (id &lt; n) : (id += 1) {
-                // ** A LEAN KERNEL TAKES THE RAW INDEX, a stock one takes a `Ctx`. The
-                // signature is the discriminator, so a file can mix both forms and
-                // neither has to declare which it is. Without this the CPU driver only
-                // spoke the `Ctx` dialect, and `installKernelLean` compiled but could
-                // never be run on the host - half a merge.
-                // Compared as a TYPE rather than through `@typeInfo`: on
-                // 0.17.0-dev.1980 `Type.Fn` no longer carries `.params`, and a direct
-                // comparison needs no reflection to survive.
-                const takes_raw_id: bool = @TypeOf(@field(M, name)) == fn (u32) void;
-                if (takes_raw_id) {
-                    @field(M, name)(id);
-                } else {
-                    @field(M, name)(.{ .id = id, .params = self.params });
-                }
-            }
-        },
-        // The same loop, somewhere else. Three things diverge from `.cpu`, and
-        // they are the price of not freezing the frame:
-        //
-        //   1. It is ASYNCHRONOUS. `readLatest` returns null until the job lands
-        //      - as the GPU arm already does, so an app written for `.gpu` needs
-        //      no change.
-        //   2. It runs ONE JOB AT A TIME. A `run` issued while a job is still out
-        //      is DROPPED, because two jobs would both write back into the same
-        //      mirror. `.cpu` and `.gpu` would simply run again; this cannot.
-        //   3. It copies the WHOLE `Buffers` to the worker and back, every
-        //      dispatch. Fine for one-shot work with modest state; a poor trade
-        //      for a megabyte of particles you wanted stepped every frame. That
-        //      is what `.gpu` is for.
-        .worker =&gt; {
-            // Gated on `kernels` so a module that never opts in pays NOTHING for
-            // this arm - an untaken comptime `if` is never analyzed, so none of
-            // the jobs machinery is linked. Selecting `.worker` requires
-            // `initWorker`, which is a compile error without it.
-            if (comptime @hasDecl(M, "kernels")) {
-                const wk: *Worker = &amp;(self.worker orelse {
-                    assertUnreachable(@src(), "run('" ++ name ++ "'): .worker needs initWorker(gpa)", .{});
-                    return;
-                });
-                if (wk.job.inFlight()) {
-                    return; // still working on the last one - see (2) above
-                }
-                wk.job = komputeRegistry(M).submit(
-                    wk.gpa,
-                    komputeKernel(M, name),
-                    .{ .n = n, .params = self.params },
-                    asBytes(wk.mirror), // OUR state, not the module's
-                ) catch |err| blk: {
-                    std.log.err("Compute.run('" ++ name ++ "') on .worker: {s}", .{@errorName(err)});
-                    break :blk .{};
-                };
-            }
-        },
-        .gpu =&gt; {
-            const gp: *Gpu = &amp;self.gpu.?;
-            const workgroups: u32 = @divCeil(n, M.config.workgroup);
-            // Find this kernel's slot so we get BOTH its pipeline and its
-            // own bind group - each kernel binds a different subset of the
-            // buffers now, so the two always travel together.
-            const ki: usize = blk: {
-                for (gp.kernel_names, 0..) |kn, idx| {
-                    if (eql(u8, kn, name)) {
-                        break :blk idx;
-                    }
-                }
-                // A correctly-registered kernel is always found; reaching
-                // here means a name typo or a kernel missing from initGpu's
-                // list. assertf gives a localized message in dev and lowers
-                // to the `unreachable` optimization hint once stripped.
-                assertUnreachable(@src(), "run: kernel '" ++ name ++ "' is not registered with this pipe", .{});
-                unreachable;
-            };
-            const pipeline: wgpu.ComputePipelineHandle = gp.pipelines[ki];
-            const bind_group: wgpu.BindGroupHandle = gp.bind_groups[ki];
-            gp.kernel_last_n[ki] = n; // for describe()
-            if (gp.rec_enc != .invalid) {
-                // Recording: this dispatch's params into the next table slot, a copy of
-                // that slot into the uniform, and the dispatch in its own pass - all in
-                // the ONE open encoder. The copies execute in order on the GPU timeline,
-                // so every dispatch sees exactly its own params.
-                if (gp.rec_base + gp.rec_count == recording_slots) {
-                    // The ring's end: submit what is recorded, carry on from its start.
-                    flushRecording(gp);
-                    gp.rec_base = 0;
-                    gp.rec_enc = wgpu.createCommandEncoder(gp.dev);
-                }
-                const slot: u32 = gp.rec_base + gp.rec_count;
-                gp.rec_slots[slot] = self.params;
-                const size: u32 = @sizeOf(Params);
-                wgpu.copyBufferToBuffer(gp.rec_enc, gp.rec_table, slot * size, gp.uniform, 0, size);
-                const rp: wgpu.ComputePassEncoderHandle = compute_pass.begin(gp.rec_enc);
-                compute_pass.setPipeline(rp, pipeline);
-                compute_pass.setBindGroup(rp, 0, bind_group);
-                compute_pass.dispatchWorkgroups(rp, .{ .x = workgroups });
-                compute_pass.end(rp);
-                gp.rec_count += 1;
-                return;
-            }
-            if (gp.batch_enc != .invalid) {
-                // Open batch: encode into the shared pass. Params were
-                // written once at beginBatch (all batched dispatches share
-                // them). The bind group is set PER DISPATCH now - adjacent
-                // kernels bind different buffer subsets, so it can't be
-                // hoisted to beginBatch the way the old shared one was.
-                compute_pass.setPipeline(gp.batch_pass, pipeline);
-                compute_pass.setBindGroup(gp.batch_pass, 0, bind_group);
-                compute_pass.dispatchWorkgroups(gp.batch_pass, .{ .x = workgroups });
-                return;
-            }
-            self.syncParamsUniform(gp);
-            const enc: wgpu.CommandEncoderHandle = wgpu.createCommandEncoder(gp.dev);
-            const cp: wgpu.ComputePassEncoderHandle = compute_pass.begin(enc);
-            compute_pass.setPipeline(cp, pipeline);
-            compute_pass.setBindGroup(cp, 0, bind_group);
-            compute_pass.dispatchWorkgroups(cp, .{ .x = workgroups });
-            compute_pass.end(cp);
-            const cmd: wgpu.CommandBufferHandle = wgpu.finishCommandEncoder(enc);
-            // Both dispatch paths go through `submitDispatch`, which counts. I
-            // incremented by hand at the batched site only, and every caller using
-            // `run()` outside a batch then saw `submitted == 0` - so the sweep retired
-            // each row before its own dispatch had executed. **7 of 105 on device**,
-            // with `inf` against bars of zero: another row's data.
-            submitDispatch(gp, cmd);
-        },
-    }
+    const no_push_constants: []const u8 = &amp;.{};
+    self.dispatchKernel(name, n, false, no_push_constants);
 }</code></pre></details>
 <details class="src-fold" data-src="src/compute_host.zig" data-decl="pub fn readGeneration("><summary><code>Compute.readGeneration</code></summary><pre><code class="zig">/// How many dispatches the mirror's contents reflect, and how many have been submitted.
 ///
@@ -12864,6 +12728,9 @@ pub fn readGeneration(self: *Self) Generation {
             return null;
         },
         .gpu =&gt; {
+            const keeps_a_mirror: bool = !reads_ranges;
+            const no_mirror: []const u8 = "readLatest on a `.ranges` module, which has no mirror: readRange";
+            assertf(keeps_a_mirror, @src(), no_mirror, .{});
             const gp: *Gpu = &amp;self.gpu.?;
             const copy_has_landed: bool = gp.read != .invalid and wgpu.bufferReadPoll(gp.read);
             if (copy_has_landed and gp.discard_copy_in_flight) {
@@ -12873,7 +12740,7 @@ pub fn readGeneration(self: *Self) Generation {
                 gp.read = .invalid;
                 gp.discard_copy_in_flight = false;
             } else if (copy_has_landed) {
-                const mirror_bytes: []u8 = asBytes(gp.mirror);
+                const mirror_bytes: []u8 = asBytes(gp.mirror.?);
                 wgpu.bufferReadInto(gp.read, mirror_bytes[0..gp.read_bytes]);
                 unpackPrefixes(mirror_bytes, gp.read_count);
                 wgpu.bufferReadRelease(gp.read);
@@ -12926,7 +12793,7 @@ pub fn readGeneration(self: *Self) Generation {
             if (!gp.have_read) {
                 return null;
             }
-            return @field(gp.mirror.*, @tagName(field))[0..n];
+            return @field(gp.mirror.?.*, @tagName(field))[0..n];
         },
     }
 }</code></pre></details>

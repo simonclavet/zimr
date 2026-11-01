@@ -1,0 +1,17 @@
+# magic_isomorphic_keyboard, checked headless (`zig build magic-isomorphic-keyboard-check`), in C major with the tonic C
+# on the F key and fifths along the rows: for each window of the run, in seconds, the pitch classes that must sound -
+# every other must be silent - and the loudness, as RMS, the left channel. A Shepard note at velocity 0.5, centred, is
+# 0.3755 x 0.5 x 0.7071 = 0.1328; three of them, whose partials all differ, 0.1328 x sqrt 3 = 0.2300. Each window
+# starts 0.1 s into a hold and ends 0.05 s before its release. The keys: F, G, V, H, D alone, then the triangles
+# F G V (C major), F T G (C minor), J I K (A minor), G H B (G major).
+#
+# start  end    notes      rms
+0.20   0.45   C          0.1328
+1.20   1.45   G          0.1328
+2.20   2.45   E          0.1328
+3.20   3.45   D          0.1328
+4.20   4.45   F          0.1328
+5.20   5.45   C E G      0.2300
+6.20   6.45   C D# G     0.2300
+7.20   7.45   A C E      0.2300
+8.20   8.45   G B D      0.2300

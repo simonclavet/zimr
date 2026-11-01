@@ -1344,6 +1344,17 @@
             "smartStep": true
         },
         {
+            "name": "Debug: magic-isomorphic-keyboard",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/magic_isomorphic_keyboard/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build magic-isomorphic-keyboard",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
             "name": "Debug: mandel-julia",
             "type": "chrome",
             "request": "launch",
@@ -4928,6 +4939,17 @@
                 "settings set target.use-fast-stepping false"
             ],
             "preLaunchTask": "zig: build logo-raylib-anim (windows)"
+        },
+        {
+            "name": "Debug: magic-isomorphic-keyboard (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/magic_isomorphic_keyboard.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build magic-isomorphic-keyboard (windows)"
         },
         {
             "name": "Debug: mandel-julia (windows)",
