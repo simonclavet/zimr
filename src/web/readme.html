@@ -24,12 +24,12 @@
                 a giant monorepo, so there is no dependency management, and it all
                 fits together without having to deal with version mismatch or anything annoying like that.
                 Compiling everything at the same time also allows some optimizations, since there is no boundaries between libraries.
-
+            </p>
                 I spend most my free time on this,
                 so even if AI writes most the code (following my directions), I feel like it reflects what
                 I think good code could look like. You are welcome to call it slop, but still, I have fun architecting that
                 and I think it can be interesting to know that this type of project can now exist.
-
+            </p>
                 Porting code I almost understand into
                 my favorite language (and asking the AI to write a tutorial for me about it, with lots of nice diagrams)
                 makes me understand it a bit more. I have 26 years of experience and
@@ -37,54 +37,54 @@
                 so I know a bit about these subjects, but I always felt that I did not really understand deeply enough.
                 When I port something, I ask the AI to explain the code in detail, we make plans, and we port it to zig together
                 one step at a time. I don't let the AI go for hours alone. The loop is like 5 minutes, and I stay involved at all time...
-
+            </p>
                 I do most of that on my phone
                 during my commute to work, and while watching TV. This is a bit crazy. I spend 150$ per month on AI, which
                 is a number I am comfortable defending when my wife asks about it. I
                 think it is reasonable for the time I spend playing with it. Hopefully it makes sense somehow,
                 and I am not just too deep into AI psychosis.
-
+            </p>
                 Anyways,
-
+            </p>
                 Zimr includes zig-idiomatic equivalents of:
-
+            </p>
                 Raylib, Dear ImGui, ImPlot, ImPlot3D,
                 Box2D, Jolt (efficient 3D physics), MuJoCo (reduced coordinates sim), MuJoCo Warp (robot sim on gpu).
-
+            </p>
                 We can read and write tens of file formats including fbx.
                 We have a complete sound library, a single file opinonated math library that works unchanged
                 on cpu and gpu, and a complete numerics libraries in the style of numpy, pandas, pytorch, jax.
-
+            </p>
                 We have a reinforcement
                 learning library that includes diffusion, transformers, etc, and
                 for training robots to follow motion capture, following recent papers, all resident on gpu.
-
+            </p>
                 The same code runs in the browser on WebGPU and
                 natively on Vulkan, (Windows and Linux), and on Android using WebView. I will support ios and consoles eventually.
-
+            </p>
                 Everything is Zig, down to the shaders. We have a spv2wgsl
                 transpiler for webgpu (because the browser wants wgsl and not the spirv shader bytecode that the zig compiler emits),
                 and a zig port of spirv-opt to optimize them.
-
+            </p>
                 I also don't want to read or write javascript, so
                 we made a transpiler from zig into javascript. Most of the system is compiled to wasm and put in the webpage,
                 but some javascript glue is still needed to call browser functions from wasm. (More precisely, there is a c2js
                 transpiler using the compiler's c target). So, the compiler is the only dependency, and all code
                 including web and shader is in the same style.
-
+            </p>
                 I think this is the coolest idea, and to my knowledge it is only possible in zig, which is why I like this language.
-
+            </p>
                 To reiterate: A shader written in Zig runs unchanged on the GPU, on the CPU in a software renderer,
                 and even at compile time.
-
+            </p>
                 The demos include ray
                 tracing, physically based rendering and fractals.
                 Neural networks work the same way: debug
                 the training on the CPU, then run the same code on the GPU.
-
+            </p>
                 I wrote this part of the readme myself, but the rest is claude's words.... There is definitely some
                 AI mistakes and weird phrasings everywhere...
-
+            </p>
                 (By the way Zimr stands for zig imgui raylib, because I started with these two libraries, which I love particularly)
 
             </p>
