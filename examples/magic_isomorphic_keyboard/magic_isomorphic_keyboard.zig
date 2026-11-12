@@ -1,6 +1,6 @@
 //! examples/magic_isomorphic_keyboard - the computer keyboard as an instrument, its keys laid out so that every
 //! interval has one shape: the key to the right is a fifth up, the key below on the right a major third up, the key
-//! above on the right a minor third up (Simon's drawing, Nov 1). Each row is the circle of fifths - F C G D A E B,
+//! above on the right a minor third up (the drawn layout). Each row is the circle of fifths - F C G D A E B,
 //! then the sharps - so a major scale is seven keys in a row; a major chord is a downward triangle, its root, the key
 //! to its right and the key below between them, and a minor chord an upward one, its root, the key above on the right
 //! and the key to the right - in every key. It is the Tonnetz, the lattice of fifths and thirds, on a laptop's keys.
@@ -14,7 +14,7 @@
 //! The tonic sits on F, the home row's key under the left index finger, the one with the bump: in C major the home row
 //! from D to L is F C G D A E B, the tonic under the index finger and its fifth under the next.
 //!
-//! The first layout, the stickers' in Simon's photo - a minor third down to the right, a major third up to the upper
+//! The first layout, the stickers' in the photo - a minor third down to the right, a major third up to the upper
 //! right - is kept as `thirds_layout`, for the layouts the options will offer.
 //!
 //! A key is named by its place, not by what it types (`z.KeyboardKey` is the physical key), so the layout is the same
@@ -285,7 +285,7 @@ const Isomorphic = struct {
     }
 };
 
-/// Simon's drawing (Nov 1), the layout played: a fifth up to the right, a minor third up to the upper right - so a
+/// The drawn layout, the one played: a fifth up to the right, a minor third up to the upper right - so a
 /// major third up to the lower right. The Tonnetz, with the circle of fifths along the rows.
 const fifths_layout: Isomorphic = .{ .step_right = 7, .step_up_right = 3 };
 
@@ -308,13 +308,13 @@ const Anchoring = union(enum) {
     fixed: FixedAnchor,
 };
 
-/// The tonic on the F key, under the left index finger (Simon's second picture).
+/// The tonic on the F key, under the left index finger (the second picture).
 const tonic_on_f: Anchoring = .{ .tonic_on_key = keyIndexNamed("f").? };
 
 /// The photo's stickers' anchoring, under `thirds_layout`: C6 on 1, and so C on 5, 9 and X as well.
 const stickers_anchoring: Anchoring = .{ .fixed = .{ .key_index = keyIndexNamed("one").?, .midi_key = 84 } };
 
-/// Simon's drawing's anchoring, under `fifths_layout`: F1 on 1, each row's naturals F C G D A E B. Low enough that
+/// The drawn layout's anchoring, under `fifths_layout`: F1 on 1, each row's naturals F C G D A E B. Low enough that
 /// every key's note, up to the backslash's more than seven octaves higher, stays within MIDI's range.
 const drawing_anchoring: Anchoring = .{ .fixed = .{ .key_index = keyIndexNamed("one").?, .midi_key = 29 } };
 
@@ -395,7 +395,7 @@ const State = struct {
     key_holds: [playing_keys.len]?u8,
     /// What each pointer holds, while it is down: a slot each, free when null.
     pointer_holds: [params.limits.most_pointers]?PointerHold,
-    /// The layout played: Simon's drawing, fifths along the rows, until the options can choose another.
+    /// The layout played: the drawn one, fifths along the rows, until the options can choose another.
     layout: Isomorphic,
     /// The scale, whose tonic the F key plays: C major until the options can choose another.
     scale: Scale,
@@ -918,7 +918,7 @@ pub const app: z.AppSpec(State) = .{
 // ---- Tests ----
 //
 // `zig build test-magic-isomorphic-keyboard`: the layouts' arithmetic, which needs no engine. Each expectation is
-// written out by hand - from Simon's drawing, the photo's stickers and his second picture - not from what the code
+// written out by hand - from the drawn layout, the photo's stickers and the second picture - not from what the code
 // computes.
 
 /// A key and the note it plays, as a picture shows it: the key's US letter, and the note's name as the stickers write
@@ -999,7 +999,7 @@ fn expectAllTriads(layout: Isomorphic, major: TriangleShape, minor: TriangleShap
     }
 }
 
-test "Simon's drawing: every natural note it shows, under its anchoring" {
+test "the drawn layout: every natural note it shows, under its anchoring" {
     // Transcribed from the drawing, row by row, left to right: it writes the naturals only.
     const naturals: [29]KeyNote = .{
         .{ .us_label = "1", .note = "F" }, .{ .us_label = "2", .note = "C" }, .{ .us_label = "3", .note = "G" },
@@ -1069,7 +1069,7 @@ test "the photo: all 41 stickers, under the stickers' own anchoring" {
     try expectKeyNotes(&stickers, thirds_layout, stickers_anchoring, 0);
 }
 
-test "the photo's layout with the tonic on F: C major and G major as Simon's second picture lays them out" {
+test "the photo's layout with the tonic on F: C major and G major as the second picture lays them out" {
     const c_major_keys: [9]KeyNote = .{
         .{ .us_label = "F", .note = "C" }, .{ .us_label = "4", .note = "D" }, .{ .us_label = "B", .note = "D" },
         .{ .us_label = "T", .note = "E" }, .{ .us_label = "V", .note = "F" }, .{ .us_label = "R", .note = "G" },

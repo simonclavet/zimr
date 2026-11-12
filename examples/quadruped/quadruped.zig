@@ -59,6 +59,7 @@ const scaling = zm.scaling;
 const quatToMat = zm.quatToMat;
 const identity = zm.identity;
 const Quat = zm.Quat;
+const assertUnreachable = zm.assertUnreachable;
 
 /// The Go1 runs at 500 Hz in Menagerie, and its contacts want it.
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -148,7 +149,7 @@ fn mjcfWithArm(gpa: Allocator) ![]u8 {
     // * THIS IS THE EXACT BUG `examples/humanoid` DOCUMENTS - "the keyframe was 28 numbers, the
     // model 70 once the projectiles joined the tree, and `applyKeyframe` refused. The label
     // still said holding: squat." Written down there, repeated here, because the splice changed
-    // `nq` and nothing connected the two facts.
+    // `coordinate_count` and nothing connected the two facts.
     //
     // *** THE ARM RESTS HALF BENT, not folded and not straight. An arm at a joint limit cannot
     // counter-animate in both directions, and the gimbal needs it to. Measured with these
@@ -443,11 +444,11 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     });
 
     // * THE RESULT IS CHECKED. Discarding it is how the pose silently stopped being applied the
-    // moment the arm changed `nq` - the humanoid's comment says exactly this and it happened
+    // moment the arm changed `coordinate_count` - the humanoid's comment says exactly this and it happened
     // again anyway.
     if (!rmj.applyKeyframe(&s.imported.model, &s.data, s.robot.keyframes[0])) {
         std.log.err("quadruped: home keyframe refused — {d} numbers for nq {d}", .{
-            s.robot.keyframes[0].qpos.len, s.imported.model.nq,
+            s.robot.keyframes[0].qpos.len, s.imported.model.coordinate_count,
         });
     }
     rbt.forward(&s.imported.model, &s.data);
@@ -483,18 +484,18 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // * THE FULL `qpos`, NOT THE KEYFRAME. `home` is indexed by the model's qpos addresses, and
     // a keyframe covers only the robot's prefix - the balls come after it. Sized from the
     // keyframe, a short one let `control` index past the end, and `resetEverything`'s
-    // `@memcpy(s.home, s.data.pos)` trapped on the length mismatch (23 against 65).
-    s.home = try gpa.dupe(f32, s.data.pos);
+    // `@memcpy(s.home, s.data.joint_positions)` trapped on the length mismatch (23 against 65).
+    s.home = try gpa.dupe(f32, s.data.joint_positions);
 
     // * WHICH DOFs HAVE A MOTOR, decided once. The trunk's free joint does not, and
     // forgetting that makes the robot FLY - gravity compensation on an unactuated DOF cancels
     // the machine's own weight. Third time this rule has come up; computing it here instead
-    // of testing `jnt_type` inline is how it stops coming up.
-    s.actuated = try gpa.alloc(bool, s.imported.model.nv);
+    // of testing `joint_type` inline is how it stops coming up.
+    s.actuated = try gpa.alloc(bool, s.imported.model.dof_count);
     @memset(s.actuated, false);
-    for (0..s.imported.model.njnt) |j| {
-        if (s.imported.model.jnt_type[j] == .hinge) {
-            s.actuated[s.imported.model.jnt_dof_adr[j]] = true;
+    for (0..s.imported.model.joint_count) |j| {
+        if (s.imported.model.joint_type[j] == .hinge) {
+            s.actuated[s.imported.model.joint_first_dof[j]] = true;
         }
     }
 
@@ -522,14 +523,14 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         s.foot_body[i] = body;
         s.legs[i] = try ctl.limbActuation(gpa, &s.imported.model, body);
         var offset: Vec = zm.vec_zero;
-        for (0..s.imported.model.ngeom) |g| {
+        for (0..s.imported.model.geom_count) |g| {
             if (s.imported.model.geom_body[g] != body) {
                 continue;
             }
             switch (s.imported.model.geom_shape[g]) {
                 // The foot is the sphere at the end of the calf; its offset in the body's
                 // frame is what makes the planted point the FOOT rather than the calf's origin.
-                .sphere => offset = s.imported.model.geom_pos[g],
+                .sphere => offset = s.imported.model.geom_local_position[g],
                 else => {},
             }
         }
@@ -545,7 +546,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // allocated once per calf geom and only the last pair was ever freed.
     s.gripper = s.imported.bodyIndex("gripper") orelse 0;
     s.arm_act = try ctl.limbActuation(gpa, &s.imported.model, s.gripper);
-    s.arm_target = try gpa.dupe(f32, s.data.pos);
+    s.arm_target = try gpa.dupe(f32, s.data.joint_positions);
     s.ik_scratch = try gpa.alloc(Vec, ctl.Ik.scratchSize(&s.imported.model));
     s.body_roll = 0;
     s.body_pitch = 0;
@@ -640,10 +641,10 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // * THE PHASING AND THE TIMINGS MUST MATCH. Crawl offsets at trot rate and duty fall over;
     // that mismatch is exactly what earned this pattern a "(falls)" label it did not deserve.
     s.gait_offset = .{ 0.0, 0.5, 0.25, 0.75 };
-    s.pose_scratch = try gpa.alloc(f32, s.imported.model.nq);
-    s.rest_height = s.data.pos[s.imported.model.jnt_qpos_adr[0] + 2];
+    s.pose_scratch = try gpa.alloc(f32, s.imported.model.coordinate_count);
+    s.rest_height = s.data.joint_positions[s.imported.model.joint_first_coordinate[0] + 2];
     s.rest_rot = zm.quat_identity;
-    s.stance = try gpa.alloc(f32, s.imported.model.nq);
+    s.stance = try gpa.alloc(f32, s.imported.model.coordinate_count);
     s.last_cmd = .{ 0, 0, 0, 0 };
     s.trim_roll = 0;
     s.trim_pitch = 0;
@@ -785,16 +786,16 @@ fn captureStance(s: *State) void {
     rbt.forward(m, &s.data);
     for (0..4) |i| {
         const body: u32 = s.foot_body[i];
-        s.planted[i] = s.data.body_xpos[body] + zm.rotate(s.data.body_xrot[body], s.foot_offset[i]);
+        s.planted[i] = s.data.body_positions[body] + zm.rotate(s.data.body_orientations[body], s.foot_offset[i]);
         // * AND THE SAME POINT IN THE TORSO'S FRAME, which is what a gait cycles around.
         s.foot_rest[i] = zm.rotate(
-            zm.conjugate(s.data.body_xrot[1]),
-            s.planted[i] - s.data.body_xpos[1],
+            zm.conjugate(s.data.body_orientations[1]),
+            s.planted[i] - s.data.body_positions[1],
         );
     }
-    s.rest_height = s.data.pos[m.jnt_qpos_adr[0] + 2];
-    s.rest_rot = s.data.body_xrot[1];
-    @memcpy(s.stance, s.data.pos);
+    s.rest_height = s.data.joint_positions[m.joint_first_coordinate[0] + 2];
+    s.rest_rot = s.data.body_orientations[1];
+    @memcpy(s.stance, s.data.joint_positions);
     s.last_cmd = .{ 1e9, 0, 0, 0 }; // force one solve
     // * THE TRIM RESETS WITH THE STANCE. It is an integrator, and an integrator carried across
     // a teleport is the same class of stale state as a warm start nobody cleared.
@@ -890,7 +891,7 @@ fn footOffsetInCycle(phase: f32, stride: f32, lift: f32, duty: f32) Vec {
 /// had got to. Written out, because the list is longer than it looks and every omission
 /// produced a different confusing symptom:
 ///
-///   * **`home`** - what the PD controller tracks. Teleporting `data.pos` alone puts the robot
+///   * **`home`** - what the PD controller tracks. Teleporting `data.joint_positions` alone puts the robot
 ///     at the keyframe for exactly one frame before the controller drags it back, which reads
 ///     as the button doing nothing.
 ///   * **Velocities** - a robot reset mid-fall keeps its downward speed and falls again from
@@ -907,7 +908,7 @@ fn footOffsetInCycle(phase: f32, stride: f32, lift: f32, duty: f32) Vec {
 ///
 /// * AND THE ROBOT GOES BACK TO THE ORIGIN. An earlier version kept its position and heading,
 /// on the theory that "reset" means "stand up here". It does not: it means put it back.
-/// Put the arm back to its half-bent rest, in `s.data.pos` and in the commanded `s.home`.
+/// Put the arm back to its half-bent rest, in `s.data.joint_positions` and in the commanded `s.home`.
 ///
 /// * HALF BENT IS A CHOICE WITH A REASON: it leaves 2.4 rad of travel each way, so the arm can
 /// swing in either direction. Folded or extended, it can only help one way - and the gait's
@@ -940,16 +941,16 @@ const arm_rest_shoulder: f32 = arm_rest[1];
 fn armJointQ(s: *const State, n: usize) ?u32 {
     const m: *const rbt.Model = &s.imported.model;
     var seen: usize = 0;
-    for (0..m.njnt) |j| {
-        if (m.jnt_type[j] != .hinge) {
+    for (0..m.joint_count) |j| {
+        if (m.joint_type[j] != .hinge) {
             continue;
         }
-        const v: u32 = m.jnt_dof_adr[j];
-        if (v >= m.nv or !s.arm_act.powered[v]) {
+        const v: u32 = m.joint_first_dof[j];
+        if (v >= m.dof_count or !s.arm_act.powered[v]) {
             continue;
         }
         if (seen == n) {
-            return m.jnt_qpos_adr[j];
+            return m.joint_first_coordinate[j];
         }
         seen += 1;
     }
@@ -964,7 +965,7 @@ fn armShoulderQ(s: *const State) ?u32 {
 fn setArmRest(s: *State) void {
     for (arm_rest, 0..) |angle, n| {
         const q: u32 = armJointQ(s, n) orelse continue;
-        s.data.pos[q] = angle;
+        s.data.joint_positions[q] = angle;
         s.home[q] = angle;
     }
     s.data.stage = .stale;
@@ -983,31 +984,31 @@ fn resetEverything(s: *State) void {
     // bodies are put back here, one free joint at a time.
     for (0..ball_count) |i| {
         const body: u32 = s.imported.bodyIndex(ball_names[i]) orelse continue;
-        const j: u32 = m.body_jnt_adr[body];
-        const q: u32 = m.jnt_qpos_adr[j];
+        const j: u32 = m.body_first_joint[body];
+        const q: u32 = m.joint_first_coordinate[j];
         const parked: Vec = parkedBall(i);
-        s.data.pos[q + 0] = parked[0];
-        s.data.pos[q + 1] = parked[1];
-        s.data.pos[q + 2] = parked[2];
-        s.data.pos[q + 3] = 0;
-        s.data.pos[q + 4] = 0;
-        s.data.pos[q + 5] = 0;
-        s.data.pos[q + 6] = 1;
+        s.data.joint_positions[q + 0] = parked[0];
+        s.data.joint_positions[q + 1] = parked[1];
+        s.data.joint_positions[q + 2] = parked[2];
+        s.data.joint_positions[q + 3] = 0;
+        s.data.joint_positions[q + 4] = 0;
+        s.data.joint_positions[q + 5] = 0;
+        s.data.joint_positions[q + 6] = 1;
     }
     s.next_ball = 0;
     s.want_throw = false;
 
     // Nothing is moving, nothing is touching, and the solver remembers nothing.
-    @memset(s.data.vel, 0);
-    @memset(s.data.acc, 0);
-    @memset(s.data.applied_force, 0);
+    @memset(s.data.joint_velocities, 0);
+    @memset(s.data.joint_accelerations, 0);
+    @memset(s.data.applied_joint_forces, 0);
     s.data.clearContacts();
     s.data.forgetWarmStart();
     s.data.stage = .stale;
     rbt.forward(m, &s.data);
 
     // What the controller tracks, and the modes that would immediately overwrite it.
-    @memcpy(s.home, s.data.pos);
+    @memcpy(s.home, s.data.joint_positions);
     s.gait_on = false;
     s.posing = false;
     s.gait_phase = 0;
@@ -1062,12 +1063,12 @@ fn resetEverything(s: *State) void {
 /// -- *** THE ONE SHAPE BOTH SOLVERS HAD --
 ///
 /// `solveGait` and `solveBodyPose` were written independently and converged on exactly the same
-/// six steps: save `data.pos`, seed a pose, plant the torso, IK four legs, harvest the hinges
+/// six steps: save `data.joint_positions`, seed a pose, plant the torso, IK four legs, harvest the hinges
 /// into `home`, restore. **They differed only in the seed and the foot goals** - everything else
 /// was duplicated, including two subtle invariants that are easy to get wrong in one copy and
 /// not the other.
 ///
-/// * THE FIRST INVARIANT: `data.pos` IS SCRATCH HERE, NOT STATE. Both solvers use the live pose
+/// * THE FIRST INVARIANT: `data.joint_positions` IS SCRATCH HERE, NOT STATE. Both solvers use the live pose
 /// array as an IK workspace and must put it back - a solve that leaks into the simulated state
 /// teleports the robot. The save/restore is the reason this is a function rather than inline
 /// code in two places.
@@ -1085,7 +1086,7 @@ fn solveLegsInto(
 ) f32 {
     const m: *const rbt.Model = &s.imported.model;
     const saved: []f32 = s.pose_scratch;
-    @memcpy(saved, s.data.pos);
+    @memcpy(saved, s.data.joint_positions);
 
     // -- *** ONLY THE HINGES COME FROM THE SEED; THE ROOT'S GROUND POSITION IS A PARAMETER --
     //
@@ -1098,21 +1099,21 @@ fn solveLegsInto(
     // convention: the gait wants the LIVE ground position (the body is moving and the goals
     // follow it), and posing wants the STANCE one (the body returns to where it was captured).
     // Collapsing that difference is exactly what broke it.
-    for (0..m.njnt) |j| {
-        if (m.jnt_type[j] != .hinge) {
+    for (0..m.joint_count) |j| {
+        if (m.joint_type[j] != .hinge) {
             continue;
         }
-        const q: u32 = m.jnt_qpos_adr[j];
-        s.data.pos[q] = seed[q];
+        const q: u32 = m.joint_first_coordinate[j];
+        s.data.joint_positions[q] = seed[q];
     }
-    const root: u32 = m.jnt_qpos_adr[0];
-    s.data.pos[root + 0] = ground[0];
-    s.data.pos[root + 1] = ground[1];
-    s.data.pos[root + 2] = height;
-    s.data.pos[root + 3] = attitude[0];
-    s.data.pos[root + 4] = attitude[1];
-    s.data.pos[root + 5] = attitude[2];
-    s.data.pos[root + 6] = attitude[3];
+    const root: u32 = m.joint_first_coordinate[0];
+    s.data.joint_positions[root + 0] = ground[0];
+    s.data.joint_positions[root + 1] = ground[1];
+    s.data.joint_positions[root + 2] = height;
+    s.data.joint_positions[root + 3] = attitude[0];
+    s.data.joint_positions[root + 4] = attitude[1];
+    s.data.joint_positions[root + 5] = attitude[2];
+    s.data.joint_positions[root + 6] = attitude[3];
     s.data.stage = .stale;
 
     var worst: f32 = 0;
@@ -1136,14 +1137,14 @@ fn solveLegsInto(
 /// ordering bug that once made the arm's motion silently disappear.
 fn harvestPose(s: *State) void {
     const m: *const rbt.Model = &s.imported.model;
-    for (0..m.njnt) |j| {
-        if (m.jnt_type[j] != .hinge) {
+    for (0..m.joint_count) |j| {
+        if (m.joint_type[j] != .hinge) {
             continue;
         }
-        const q: u32 = m.jnt_qpos_adr[j];
-        s.home[q] = s.data.pos[q];
+        const q: u32 = m.joint_first_coordinate[j];
+        s.home[q] = s.data.joint_positions[q];
     }
-    @memcpy(s.data.pos, s.pose_scratch);
+    @memcpy(s.data.joint_positions, s.pose_scratch);
     s.data.stage = .stale;
     rbt.forward(m, &s.data);
 }
@@ -1170,8 +1171,8 @@ fn solveGait(s: *State, dt: f32) void {
     // world without anyone pinning it there. **Pinning it in world coordinates fights that**:
     // the first version did, and the robot walked 1.1 m and arrived on its belly, legs stretched
     // out behind toward targets that never moved.
-    const torso_pos: Vec = s.data.body_xpos[1];
-    const torso_rot: Quat = s.data.body_xrot[1];
+    const torso_pos: Vec = s.data.body_positions[1];
+    const torso_rot: Quat = s.data.body_orientations[1];
     var goals: [4]Vec = undefined;
     for (0..4) |i| {
         const cycle: Vec = footOffsetInCycle(
@@ -1207,7 +1208,7 @@ fn solveGait(s: *State, dt: f32) void {
         if (s.routine and s.arm_lift_amp != 0) {
             shoulder += s.arm_lift_amp * sinTurns(s.routine_clock * s.arm_lift_rate);
         }
-        s.data.pos[q] = shoulder;
+        s.data.joint_positions[q] = shoulder;
     }
     harvestPose(s);
 }
@@ -1217,7 +1218,7 @@ fn solveBodyPose(s: *State) void {
     // and correct for the opposite reason: a posing robot's body moves while its feet do not.
     // * THE STANCE GROUND POSITION: a posing robot returns to where it was captured, and its
     // planted feet are in world coordinates around that point.
-    const root: u32 = s.imported.model.jnt_qpos_adr[0];
+    const root: u32 = s.imported.model.joint_first_coordinate[0];
     s.pose_error = solveLegsInto(
         s,
         s.stance,
@@ -1231,17 +1232,17 @@ fn solveBodyPose(s: *State) void {
 
 fn control(s: *State) void {
     const m: *const rbt.Model = &s.imported.model;
-    @memset(s.data.applied_force, 0);
-    for (0..m.njnt) |j| {
-        if (m.jnt_type[j] != .hinge) {
+    @memset(s.data.applied_joint_forces, 0);
+    for (0..m.joint_count) |j| {
+        if (m.joint_type[j] != .hinge) {
             continue;
         }
-        const q: u32 = m.jnt_qpos_adr[j];
-        const v: u32 = m.jnt_dof_adr[j];
-        const wanted: f32 = s.kp * (s.home[q] - s.data.pos[q]) - s.kv * s.data.vel[v];
+        const q: u32 = m.joint_first_coordinate[j];
+        const v: u32 = m.joint_first_dof[j];
+        const wanted: f32 = s.kp * (s.home[q] - s.data.joint_positions[q]) - s.kv * s.data.joint_velocities[v];
         // * The clamp is the motor's rating, and it is what makes the kp slider mean
         // something: without it, any gain eventually wins and the robot is infinitely strong.
-        s.data.applied_force[v] = clamp(wanted, -35.55, 35.55) + s.data.bias_force[v];
+        s.data.applied_joint_forces[v] = clamp(wanted, -35.55, 35.55) + s.data.bias_joint_forces[v];
     }
 }
 
@@ -1280,21 +1281,21 @@ fn throwBall(s: *State, cam: Camera3D) void {
     // nothing until the ball is already halfway to the robot.
     const from: Vec = eye + aim * splat(ball_radius);
 
-    const j: u32 = m.body_jnt_adr[body];
-    const q: u32 = m.jnt_qpos_adr[j];
-    const v: u32 = m.jnt_dof_adr[j];
-    s.data.pos[q + 0] = from[0];
-    s.data.pos[q + 1] = from[1];
-    s.data.pos[q + 2] = from[2];
-    s.data.pos[q + 3] = 0;
-    s.data.pos[q + 4] = 0;
-    s.data.pos[q + 5] = 0;
-    s.data.pos[q + 6] = 1;
-    @memset(s.data.vel[v..][0..6], 0);
+    const j: u32 = m.body_first_joint[body];
+    const q: u32 = m.joint_first_coordinate[j];
+    const v: u32 = m.joint_first_dof[j];
+    s.data.joint_positions[q + 0] = from[0];
+    s.data.joint_positions[q + 1] = from[1];
+    s.data.joint_positions[q + 2] = from[2];
+    s.data.joint_positions[q + 3] = 0;
+    s.data.joint_positions[q + 4] = 0;
+    s.data.joint_positions[q + 5] = 0;
+    s.data.joint_positions[q + 6] = 1;
+    @memset(s.data.joint_velocities[v..][0..6], 0);
     const speed: f32 = 4.5;
-    s.data.vel[v + 0] = aim[0] * speed;
-    s.data.vel[v + 1] = aim[1] * speed;
-    s.data.vel[v + 2] = aim[2] * speed;
+    s.data.joint_velocities[v + 0] = aim[0] * speed;
+    s.data.joint_velocities[v + 1] = aim[1] * speed;
+    s.data.joint_velocities[v + 2] = aim[2] * speed;
     s.data.stage = .stale;
     // * The warm start describes contacts that no longer exist for this body - see
     // `Data.forgetWarmStart`. Cheap, and the alternative is an impulse from a different scene.
@@ -1304,12 +1305,12 @@ fn throwBall(s: *State, cam: Camera3D) void {
 /// Shove the trunk sideways, to see whether the legs catch it.
 fn shove(s: *State) void {
     const m: *const rbt.Model = &s.imported.model;
-    for (0..m.njnt) |j| {
-        if (m.jnt_type[j] == .free) {
+    for (0..m.joint_count) |j| {
+        if (m.joint_type[j] == .free) {
             // The free joint's velocity DOFs are linear first, then angular.
-            const v: u32 = m.jnt_dof_adr[j];
-            s.data.vel[v + 0] += 1.2;
-            s.data.vel[v + 1] += 0.4;
+            const v: u32 = m.joint_first_dof[j];
+            s.data.joint_velocities[v + 0] += 1.2;
+            s.data.joint_velocities[v + 1] += 0.4;
             s.data.stage = .stale;
         }
     }
@@ -1323,9 +1324,9 @@ fn drawPanel(u: ui.Ui, s: *State) bool {
         .initial_size = .{ 360, 300 },
     })) |window| {
         defer window.close();
-        u.text("{d} bodies   {d} DOF   {d} collision geoms", .{ m.nbody - 1, m.nv, m.ngeom });
+        u.text("{d} bodies   {d} DOF   {d} collision geoms", .{ m.body_count - 1, m.dof_count, m.geom_count });
         const trunk: u32 = s.imported.bodyIndex("trunk") orelse 1;
-        u.text("trunk height {d:.4} m   (home 0.2700)", .{s.data.body_xpos[trunk][2]});
+        u.text("trunk height {d:.4} m   (home 0.2700)", .{s.data.body_positions[trunk][2]});
         u.text("contacts {d}   rows {d}   iters {d}   load {d:.0} N", .{
             s.data.contact_count,
             s.data.constraint_count,
@@ -1532,8 +1533,8 @@ fn drawPanel(u: ui.Ui, s: *State) bool {
             });
             if (u.button("clear slip", .{})) {
                 for (0..4) |i| {
-                    s.planted[i] = s.data.body_xpos[s.foot_body[i]] +
-                        zm.rotate(s.data.body_xrot[s.foot_body[i]], s.foot_offset[i]);
+                    s.planted[i] = s.data.body_positions[s.foot_body[i]] +
+                        zm.rotate(s.data.body_orientations[s.foot_body[i]], s.foot_offset[i]);
                 }
                 s.cone_worst = 0;
                 s.cone_over = 0;
@@ -1588,7 +1589,7 @@ fn drawRobot(s: *State, gl: *z.WgpuGl) void {
             scaling(0.045, 0.045, 0.045),
         );
         z.drawMeshInstanced(gl, &s.cube, &s.transform, .{ .r = 237, .g = 184, .b = 89, .a = 255 });
-        const tip: Vec = zm.zUpToYUpPoint(s.data.body_xpos[s.gripper]);
+        const tip: Vec = zm.zUpToYUpPoint(s.data.body_positions[s.gripper]);
         z.drawLine3D(gl, tip, at, .{ .r = 226, .g = 106, .b = 154, .a = 255 });
         // * AND A CROSSHAIR, so the point reads as a fixed place in the world rather than as a
         // small object that might itself be drifting.
@@ -1596,15 +1597,15 @@ fn drawRobot(s: *State, gl: *z.WgpuGl) void {
             z.drawLine3D(gl, at - axis, at + axis, .{ .r = 120, .g = 100, .b = 60, .a = 255 });
         }
     }
-    for (0..m.ngeom) |g| {
+    for (0..m.geom_count) |g| {
         const body: u32 = m.geom_body[g];
         // * A GEOM'S WORLD POSE IS ITS BODY'S, COMPOSED WITH ITS OWN OFFSET. The engine
-        // stores the offset (`geom_pos`/`geom_rot`) and the body's world pose separately -
+        // stores the offset (`geom_local_position`/`geom_local_rotation`) and the body's world pose separately -
         // it never needs the product except when something is drawn or collided, so it does
         // not keep one.
-        const body_rot: Quat = s.data.body_xrot[body];
-        const world_pos: Vec = s.data.body_xpos[body] + zm.rotate(body_rot, m.geom_pos[g]);
-        const world_rot: Mat = quatToMat(zm.qmul(body_rot, m.geom_rot[g]));
+        const body_rot: Quat = s.data.body_orientations[body];
+        const world_pos: Vec = s.data.body_positions[body] + zm.rotate(body_rot, m.geom_local_position[g]);
+        const world_rot: Mat = quatToMat(zm.qmul(body_rot, m.geom_local_rotation[g]));
         const place: Mat = mulMat(mulMat(to_y_up, translation(world_pos[0], world_pos[1], world_pos[2])), world_rot);
         // Feet are the interesting part, so they get a brighter colour.
         const tint: Color = if (body == 0) trunk_col else link_col;
@@ -1667,7 +1668,7 @@ fn drawRobot(s: *State, gl: *z.WgpuGl) void {
     // The projectiles, drawn from the tree like everything else.
     for (0..ball_count) |i| {
         const body: u32 = s.imported.bodyIndex(ball_names[i]) orelse continue;
-        const p: Vec = s.data.body_xpos[body];
+        const p: Vec = s.data.body_positions[body];
         s.transform[0] = mulMat(
             mulMat(to_y_up, translation(p[0], p[1], p[2])),
             scaling(ball_radius, ball_radius, ball_radius),
@@ -1717,7 +1718,7 @@ fn update(f: *z.Frame, s: *State) void {
         // the shortfall into a trim. Comparing against world level instead would fold in whatever
         // tilt the settled stance already had, which is not the slider's fault and not its job.
         const seen: Vec = zm.quatToEulerXYZ(
-            zm.qmul(s.data.body_xrot[1], zm.conjugate(s.rest_rot)),
+            zm.qmul(s.data.body_orientations[1], zm.conjugate(s.rest_rot)),
         );
         s.seen_roll = seen[0];
         s.seen_pitch = seen[1];
@@ -1733,7 +1734,7 @@ fn update(f: *z.Frame, s: *State) void {
         //     trim off   **0.957 m**, standing, pitch flat at -0.026
         //     trim on      0.123 m, **FELL at 1.80 s**, pitch +0.229 in the first second
         //
-        // * THAT IS SIMON'S OSCILLATION AND FALL, REPRODUCED AND ISOLATED. The probe walked
+        // * THAT IS THE OBSERVED OSCILLATION AND FALL, REPRODUCED AND ISOLATED. The probe walked
         // forward for many turns while the demo toppled, and this loop is the entire difference
         // between them - the fourth bug in this file caused by two controllers writing one
         // array, and the one that had gone longest unfound.
@@ -1777,8 +1778,8 @@ fn update(f: *z.Frame, s: *State) void {
         {
             var slip: f32 = 0;
             for (0..4) |i| {
-                const at: Vec = s.data.body_xpos[s.foot_body[i]] +
-                    zm.rotate(s.data.body_xrot[s.foot_body[i]], s.foot_offset[i]);
+                const at: Vec = s.data.body_positions[s.foot_body[i]] +
+                    zm.rotate(s.data.body_orientations[s.foot_body[i]], s.foot_offset[i]);
                 slip += length3(at - s.planted[i]);
             }
             s.foot_slip = slip;
@@ -1849,12 +1850,12 @@ fn update(f: *z.Frame, s: *State) void {
             // * THE FEET ARE WHERE THE ROBOT ACTUALLY IS. Anchoring to their average means the
             // point travels with any drift the legs accumulate, so the arm counters the TORSO's
             // motion - which is the thing it is for - instead of also fighting the base's slow
-            // walk. Simon's correction, and the same principle as anchoring the torso reference
+            // walk. The correction, and the same principle as anchoring the torso reference
             // to current feet rather than to a stored stance.
             var foot_mean: Vec = vec(0, 0, 0);
             for (0..4) |i| {
-                foot_mean += s.data.body_xpos[s.foot_body[i]] +
-                    zm.rotate(s.data.body_xrot[s.foot_body[i]], s.foot_offset[i]);
+                foot_mean += s.data.body_positions[s.foot_body[i]] +
+                    zm.rotate(s.data.body_orientations[s.foot_body[i]], s.foot_offset[i]);
             }
             foot_mean /= splat(4.0);
             const goal: Vec = vec(
@@ -1867,7 +1868,7 @@ fn update(f: *z.Frame, s: *State) void {
             // * IK FROM THE ARM'S CURRENT POSE, restored afterwards - the solve must not leave
             // the simulated state anywhere, only produce a target for the servo.
             const keep_arm: []f32 = s.arm_target;
-            @memcpy(keep_arm, s.data.pos[0..s.imported.model.nq]);
+            @memcpy(keep_arm, s.data.joint_positions[0..s.imported.model.coordinate_count]);
             _ = (ctl.Ik{ .max_iterations = 8, .max_step = 0.3 }).solve(
                 &s.imported.model,
                 &s.data,
@@ -1876,21 +1877,21 @@ fn update(f: *z.Frame, s: *State) void {
                 s.ik_scratch,
             );
             // Copy only the ARM joints into `home`; the legs belong to the torso controller.
-            for (0..s.imported.model.njnt) |j| {
-                const v: u32 = s.imported.model.jnt_dof_adr[j];
-                if (v >= s.imported.model.nv or !s.arm_act.powered[v]) {
+            for (0..s.imported.model.joint_count) |j| {
+                const v: u32 = s.imported.model.joint_first_dof[j];
+                if (v >= s.imported.model.dof_count or !s.arm_act.powered[v]) {
                     continue;
                 }
-                const q: u32 = s.imported.model.jnt_qpos_adr[j];
-                s.home[q] = s.data.pos[q];
+                const q: u32 = s.imported.model.joint_first_coordinate[j];
+                s.home[q] = s.data.joint_positions[q];
             }
-            @memcpy(s.data.pos[0..s.imported.model.nq], keep_arm);
+            @memcpy(s.data.joint_positions[0..s.imported.model.coordinate_count], keep_arm);
             s.data.stage = .stale;
             rbt.forward(&s.imported.model, &s.data);
             // * THE DRIFT IS THE SCORE. A gimbal that visibly wobbles is a gimbal that failed,
             // and the number says by how much - which is the quantity a planner with preview
             // would have to beat.
-            s.arm_error = length3(s.data.body_xpos[s.gripper] - goal);
+            s.arm_error = length3(s.data.body_positions[s.gripper] - goal);
             s.hold_error = s.arm_error;
             if (s.routine_clock > 1.5) {
                 s.hold_worst = @max(s.hold_worst, s.arm_error);
@@ -1911,10 +1912,10 @@ fn update(f: *z.Frame, s: *State) void {
         rbt.forward(&s.imported.model, &s.data);
         if (s.physics_on) {
             s.bridge.sync(&s.world, &s.imported.model, &s.data) catch |err| {
-                zm.assertUnreachable(@src(), "proxy sync failed: {t}", .{err});
+                assertUnreachable(@src(), "proxy sync failed: {t}", .{err});
             };
             zp.step(&s.world, timestep) catch |err| {
-                zm.assertUnreachable(@src(), "world step failed: {t}", .{err});
+                assertUnreachable(@src(), "world step failed: {t}", .{err});
             };
             s.bridge.harvest(&s.data);
         }

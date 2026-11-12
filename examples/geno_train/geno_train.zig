@@ -340,11 +340,11 @@ fn drawPanel(s: *State, f: *z.Frame) bool {
 fn drawRobot(s: *State, gl: *z.WgpuGl, d: *const rbt.Data, tint: Color) void {
     const m: *const rbt.Model = &s.imported.model;
     const to_y_up: Mat = zm.zUpToYUp();
-    for (0..m.ngeom) |g| {
+    for (0..m.geom_count) |g| {
         const body: u32 = m.geom_body[g];
-        const body_rot: Quat = d.body_xrot[body];
-        const world_pos: Vec = d.body_xpos[body] + zm.rotate(body_rot, m.geom_pos[g]);
-        const world_rot: Mat = quatToMat(qmul(body_rot, m.geom_rot[g]));
+        const body_rot: Quat = d.body_orientations[body];
+        const world_pos: Vec = d.body_positions[body] + zm.rotate(body_rot, m.geom_local_position[g]);
+        const world_rot: Mat = quatToMat(qmul(body_rot, m.geom_local_rotation[g]));
         const place: Mat = mulMat(
             mulMat(to_y_up, translation(world_pos[0], world_pos[1], world_pos[2])),
             world_rot,
@@ -364,7 +364,7 @@ fn drawRobot(s: *State, gl: *z.WgpuGl, d: *const rbt.Data, tint: Color) void {
                 // caps (`Spine3`: radius 0.13, a cylinder part 0.09 long), so the cylinder alone draws a flat disk.
                 // zimr's capsule runs along its geom's LOCAL Y (`GeomShape`); its two segment ends, in the world
                 // where z is up, then in the drawing where y is up - (x, y, z) to (x, z, -y), as `zUpToYUp` turns.
-                const geom_quaternion: Quat = qmul(body_rot, m.geom_rot[g]);
+                const geom_quaternion: Quat = qmul(body_rot, m.geom_local_rotation[g]);
                 const half_axis_local: Vec = vec(0, cap.half_height, 0);
                 const half_axis_z_up: Vec = zm.rotate(geom_quaternion, half_axis_local);
                 const half_axis_drawn: Vec = vec(half_axis_z_up[0], half_axis_z_up[2], -half_axis_z_up[1]);
@@ -396,7 +396,7 @@ fn drawScene(s: *State, f: *z.Frame) void {
     const m: *const rbt.Model = &s.imported.model;
     const fleet: *track.Fleet = s.learner.fleet;
     const frame: usize = @min(@as(usize, fleet.frame[0]), s.clip.frame_count - 1);
-    @memcpy(s.ghost.pos, s.clip.pose(frame));
+    @memcpy(s.ghost.joint_positions, s.clip.pose(frame));
     s.ghost.stage = .stale;
     rbt.kinematics(m, &s.ghost);
     drawRobot(s, gl, &s.ghost, ref_col);

@@ -33,6 +33,7 @@ const zimrphysics = @import("zimrphysics.zig");
 const robot_physics = @import("robot_physics.zig");
 
 const Allocator = std.mem.Allocator;
+const assertf = zm.assertf;
 const clamp = zm.clamp;
 const float = zm.float;
 const Vec = zm.Vec;
@@ -128,12 +129,12 @@ pub fn WorldModel(comptime M: type) type {
                 .targets = try owned.alloc(f32, options.rows * out_dim),
                 .row_in = try owned.alloc(f32, in_dim),
                 .row_out = try owned.alloc(f32, out_dim),
-                .before = try track.State.init(owned, m.nbody),
-                .after = try track.State.init(owned, m.nbody),
-                .linear = try owned.alloc(Vec, m.nbody),
-                .angular = try owned.alloc(Vec, m.nbody),
-                .servo_targets = try owned.alloc(f32, m.nq),
-                .scratch = try owned.alloc(f32, m.nv),
+                .before = try track.State.init(owned, m.body_count),
+                .after = try track.State.init(owned, m.body_count),
+                .linear = try owned.alloc(Vec, m.body_count),
+                .angular = try owned.alloc(Vec, m.body_count),
+                .servo_targets = try owned.alloc(f32, m.coordinate_count),
+                .scratch = try owned.alloc(f32, m.dof_count),
                 .data = try rbt.Data.init(owned, m),
             };
             return self;
@@ -438,6 +439,11 @@ pub fn Planner(comptime M: type) type {
         outputs: []f32,
         linear: []Vec,
         angular: []Vec,
+        /// Each sample's filter state through its rollout (`Fleet.Options.action_filter`), the character's to begin
+        /// with.
+        sample_applied: []f32,
+        /// One sample's filter state for `planTrue`, the character's to begin with.
+        applied: []f32,
         servo_targets: []f32,
         scratch: []f32,
         data: rbt.Data,
@@ -499,10 +505,12 @@ pub fn Planner(comptime M: type) type {
                 .reference = try owned.alloc(track.State, options.horizon + 1),
                 .inputs = try owned.alloc(f32, options.samples * in_dim),
                 .outputs = try owned.alloc(f32, options.samples * out_dim),
-                .linear = try owned.alloc(Vec, m.nbody),
-                .angular = try owned.alloc(Vec, m.nbody),
-                .servo_targets = try owned.alloc(f32, m.nq),
-                .scratch = try owned.alloc(f32, m.nv),
+                .linear = try owned.alloc(Vec, m.body_count),
+                .angular = try owned.alloc(Vec, m.body_count),
+                .sample_applied = try owned.alloc(f32, options.samples * action_size),
+                .applied = try owned.alloc(f32, action_size),
+                .servo_targets = try owned.alloc(f32, m.coordinate_count),
+                .scratch = try owned.alloc(f32, m.dof_count),
                 .data = try rbt.Data.init(owned, m),
                 .world = undefined,
                 .bridge = undefined,
@@ -512,10 +520,10 @@ pub fn Planner(comptime M: type) type {
             self.bridge = try robot_physics.Bridge.init(owned, &self.world, m, &self.data, 256);
             self.bridge.listen(&self.world);
             for (self.states) |*state| {
-                state.* = try track.State.init(owned, m.nbody);
+                state.* = try track.State.init(owned, m.body_count);
             }
             for (self.reference) |*state| {
-                state.* = try track.State.init(owned, m.nbody);
+                state.* = try track.State.init(owned, m.body_count);
             }
             @memset(self.nominal, 0.0);
             return self;
@@ -531,6 +539,10 @@ pub fn Planner(comptime M: type) type {
 
         /// Choose an action for one environment of `fleet`, and write it into `out`.
         pub fn plan(self: *Self, fleet: *track.Fleet, env: usize, out: []f32) !void {
+            // The planner samples the joints' offsets alone: a fleet whose action carries each limb's stiffness is
+            // refused, not planned for in part.
+            const refusal: []const u8 = "plan: the planner plans offsets, not a limb's stiffness";
+            assertf(!fleet.options.limb_stiffness, @src(), "{s}", .{refusal});
             const m: *rbt.Model = self.m;
             const action_size: usize = track.actionSize(m);
             const in_dim: usize = track.worldInputSize(m);
@@ -556,6 +568,11 @@ pub fn Planner(comptime M: type) type {
             // Last step's answer is this step's guess, which is most of why MPPI is affordable.
             self.shiftAndSample(random, action_size);
 
+            // Every sample's filter where the character's is.
+            const character_applied: []const f32 = fleet.applied_actions[env * action_size ..][0..action_size];
+            for (0..samples) |s| {
+                @memcpy(self.sample_applied[s * action_size ..][0..action_size], character_applied);
+            }
             // Roll every sample through the model together, one horizon step at a time.
             for (0..horizon) |h| {
                 // During horizon step h the servo drives toward frame + h + 1, as `driveOnce` does.
@@ -563,7 +580,10 @@ pub fn Planner(comptime M: type) type {
                 for (0..samples) |s| {
                     const action: []const f32 = self.sequences[(s * horizon + h) * action_size ..][0..action_size];
                     const scale: f32 = fleet.options.action_scale;
-                    track.applyAction(m, reference_pose, action, scale, self.scratch, self.servo_targets);
+                    // The filter, as `driveOnce` runs it before the servo.
+                    const applied: []f32 = self.sample_applied[s * action_size ..][0..action_size];
+                    track.filterAction(fleet.options.action_filter, action, applied);
+                    track.applyAction(m, reference_pose, applied, scale, self.scratch, self.servo_targets);
                     track.clampHinges(m, self.servo_targets);
                     track.encodeWorldInput(
                         m,
@@ -599,6 +619,9 @@ pub fn Planner(comptime M: type) type {
         /// wrong, or is the model? With true dynamics in its place, whatever is left is the
         /// planner's fault.
         pub fn planTrue(self: *Self, fleet: *track.Fleet, env: usize, out: []f32) !void {
+            // As `plan`: the joints' offsets alone.
+            const refusal: []const u8 = "planTrue: the planner plans offsets, not a limb's stiffness";
+            assertf(!fleet.options.limb_stiffness, @src(), "{s}", .{refusal});
             const m: *rbt.Model = self.m;
             const action_size: usize = track.actionSize(m);
             const horizon: usize = self.options.horizon;
@@ -615,15 +638,17 @@ pub fn Planner(comptime M: type) type {
             for (0..samples) |s| {
                 // Put the scratch simulator exactly where the real one is, then live out this
                 // sample's plan in it.
-                @memcpy(self.data.pos, fleet.data[env].pos);
-                @memcpy(self.data.vel, fleet.data[env].vel);
+                @memcpy(self.data.joint_positions, fleet.data[env].pos);
+                @memcpy(self.data.joint_velocities, fleet.data[env].vel);
                 self.data.stage = .stale;
                 rbt.forward(m, &self.data);
+                @memcpy(self.applied, fleet.applied_actions[env * action_size ..][0..action_size]);
                 for (0..horizon) |h| {
                     const action: []const f32 = self.sequences[(s * horizon + h) * action_size ..][0..action_size];
                     const drive: *track.DriveScratch = &fleet.drive_scratches[0];
                     const aim_frame: u32 = @intCast(frame + h);
-                    try fleet.driveOnce(&self.data, &self.world, &self.bridge, clip, aim_frame, action, drive);
+                    const applied: []f32 = self.applied;
+                    try fleet.driveOnce(&self.data, &self.world, &self.bridge, clip, aim_frame, action, applied, drive);
                     track.stateOf(m, &self.data, &self.states[0]);
                     self.costs[s] += self.stepCost(self.states[0], self.reference[h + 1], fleet.root) +
                         self.options.action_weight * actionSize2(action);

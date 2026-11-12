@@ -679,7 +679,7 @@ test "gpu learn: SuperTrack per-layer on the kit's CPU twin holds the real cartp
 const xor_page_rate: f32 = 0.2;
 
 test "gpu learn: XOR on zn_train's CPU twin over long runs - does the loss stay finite?" {
-    // Simon's phone: `geno_track`'s XOR confidence test drove the loss to 0 and then NaN inside 2,000-step runs.
+    // Observed on a phone: `geno_track`'s XOR confidence test drove the loss to 0 and then NaN inside 2,000-step runs.
     // The same kernels on their CPU twin, as the page drives them: eight seeds x 2,000 steps, the loss checked
     // at EVERY step. Finite throughout: the NaN is the GPU's (driver, precision), not the algorithm's. Not: the
     // algorithm's, and the first step it happens at says where to look.
@@ -813,7 +813,7 @@ test "gpu learn: a PPO actor's policy file acts as PPO acts, bit for bit - norma
             component.* = clamp(component.*, -action_limit, action_limit);
         }
         var policy_action: [n_act]f32 = undefined;
-        lab.policyMeanAction(&read_back, &observation, scratch, &policy_action);
+        lab.policyMeanAction(&read_back, &observation, &.{}, scratch, &policy_action);
         try expectEqualSlices(f32, &ppo_action, &policy_action);
     }
 }
@@ -4234,6 +4234,121 @@ test "gpu learn: the critic's TD targets are each transition's cost plus the dis
     }
 }
 
+test "gpu learn: the critic's imagined targets are lambda-returns along the imagined states, by hand" {
+    // The targets check's hand-made batch as an IMAGINED rollout: one row, four steps - three transitions, 1 -> 2,
+    // 2 -> 3, 3 -> 4 - of eight features, the normaliser and the barrier as there, the two target heads predicting
+    // known constants (e - 1 and e^2 - 1, so every state's value is their mean). The recorded states stay zero: the
+    // imagined ones are elsewhere, where `reserveImagined` says. `computeImaginedTargets` must place each goal beside
+    // its IMAGINED state, charge each transition the cost where it led, and give it zimrrl's GAE return over the path
+    // after it at lambda 0.8 - the last transition its one-step target, each earlier one leaning on what follows.
+    var arena_state: ArenaAllocator = .init(testing_allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    const Critic: type = latent_kit.LatentCritic(zn_mlp);
+    const features: u32 = 8;
+    const steps: u32 = 4;
+    const head_column: u32 = 2;
+    const up_column: u32 = 5;
+    const barrier: latent_kit.FailureBarrier = .{ .weight = 1.5 };
+    const means = [features]f64{ 0.1, -0.2, 0.9, 0.0, 0.3, 0.0, 0.1, 0.8 };
+    const spreads = [features]f64{ 1.0, 0.5, 0.2, 2.0, 1.0, 0.4, 0.5, 0.3 };
+    const block_floats: u32 = steps * features;
+    const source: Critic.Source = .{
+        .features = features,
+        .rows = 1,
+        .steps = steps,
+        .states_at = 0,
+        .goals_at = block_floats,
+        .norm_at = 2 * block_floats,
+        .barrier = barrier,
+        .barrier_head_column = head_column,
+        .barrier_up_column = up_column,
+    };
+    const imagined_states_at: u32 = 2 * block_floats + 2 * features;
+    var layout: kit_mlp.KitLayout = .{ .acts_floats = imagined_states_at + block_floats };
+    const discount: f32 = 0.9;
+    const lambda: f32 = 0.8;
+    const options: latent_kit.CriticOptions = .{
+        .heads = 2,
+        .hidden = 4,
+        .discount = discount,
+        .imagined_share = 1.0,
+        .imagined_lambda = lambda,
+    };
+    var critic: Critic = try .init(arena, &layout, source, options);
+    critic.reserveImagined(&layout, imagined_states_at);
+    // The target heads: their last layer's weights are zero, so their logits are its bias - 30 on one bin, 0 on the
+    // rest. Bins sit 0.2 apart on [-10, 10]: bin 55 at 1, bin 60 at 2.
+    const chosen_bins = [2]usize{ 55, 60 };
+    for (critic.target_mlps, chosen_bins) |target_mlp, chosen_bin| {
+        const tensors: []const zn.Tensor(f32) = (try target_mlp.params(arena)).tensors;
+        const output_bias: []f32 = tensors[tensors.len - 1].data;
+        @memset(output_bias, 0);
+        output_bias[chosen_bin] = 30;
+    }
+    const params: []f32 = try arena.alloc(f32, layout.params_floats);
+    critic.writeParams(params);
+    // The imagined states and the goals after steps 1 to 4, and the normaliser; the recorded states left at zero.
+    var host_acts: []f32 = try arena.alloc(f32, layout.acts_floats);
+    @memset(host_acts, 0);
+    var states: [steps * features]f64 = undefined;
+    var goals: [steps * features]f64 = undefined;
+    for (0..steps * features) |index| {
+        states[index] = 0.4 * @sin(0.7 * float64(index) + 0.3);
+        goals[index] = 0.3 * @cos(0.5 * float64(index));
+        host_acts[imagined_states_at + index] = @floatCast(states[index]);
+        host_acts[source.goals_at + index] = @floatCast(goals[index]);
+    }
+    for (means, spreads, 0..) |mean, spread, column| {
+        host_acts[source.norm_at + column] = @floatCast(mean);
+        host_acts[source.norm_at + features + column] = @floatCast(spread);
+    }
+    var pipe: compute_host.Compute(zn_mlp) = .initCpu();
+    defer pipe.deinit();
+    pipe.element_count = layout.largestBuffer();
+    pipe.upload(.params, params);
+    pipe.upload(.acts, host_acts);
+    critic.computeImaginedTargets(&pipe);
+    const device_acts: []const f32 = pipe.readLatest(.acts) orelse return error.NoReadback;
+    // By hand: every value the heads' mean; each transition's cost where it led; the returns by zimrrl's GAE.
+    const first_head_value: f64 = @exp(@as(f64, 1.0)) - 1;
+    const second_head_value: f64 = @exp(@as(f64, 2.0)) - 1;
+    const value: f64 = (first_head_value + second_head_value) / 2;
+    const transitions: usize = steps - 1;
+    var rollout: [transitions]zrl.RolloutStep = undefined;
+    for (&rollout, 0..) |*rollout_step, transition| {
+        const next_state: []const f64 = states[(transition + 1) * features ..][0..features];
+        const next_goal: []const f64 = goals[(transition + 1) * features ..][0..features];
+        var square_sum: f64 = 0;
+        for (next_state, next_goal) |state_value, goal_value| {
+            square_sum += (state_value - goal_value) * (state_value - goal_value);
+        }
+        const hinges: f64 =
+            failureBarrierValue(next_state, next_goal, &means, &spreads, head_column, up_column, barrier);
+        const cost: f64 = square_sum / float64(features) + barrier.weight * hinges;
+        try expectApproxEqAbs(cost, device_acts[critic.costs_at + transition], 1e-5);
+        rollout_step.* = .{
+            .reward = cost,
+            .value = value,
+            .next_value = value,
+            .terminal = false,
+            .episode_end = false,
+        };
+        // The input row: this step's goal, then its imagined state.
+        const input_row: []const f32 = device_acts[critic.inputs_at + transition * 2 * features ..][0 .. 2 * features];
+        for (0..features) |column| {
+            try expectApproxEqAbs(goals[transition * features + column], input_row[column], 1e-6);
+            try expectApproxEqAbs(states[transition * features + column], input_row[features + column], 1e-6);
+        }
+    }
+    var advantages: [transitions]f64 = undefined;
+    var returns: [transitions]f64 = undefined;
+    try zrl.gae(&rollout, discount, lambda, &advantages, &returns);
+    for (returns, 0..) |expected, transition| {
+        try expectApproxEqAbs(expected, device_acts[critic.targets_at + transition], 1e-4);
+    }
+}
+
 test "gpu learn: one update of the critic moves every head's prediction toward its target" {
     // The targets check's hand-made batch - one row, three steps, two transitions, the target heads predicting known
     // values (e - 1 and e^2 - 1) - and the online heads as they start, predicting about nothing. One update, at a
@@ -5497,5 +5612,93 @@ test "gpu learn: the change in units of the typical change, and a gradient block
         const expected: f32 = gradient * acts[18 + index % 3];
         try expectEqual(expected, scaled[8 + index]);
         try expectEqual(expected, scaled[index]);
+    }
+}
+
+/// The mean of `heads` values of state `state` for row `row`, from acts laid out [state][head][rows] at `offset` - the
+/// values in f64 as gae takes them.
+fn meanOfHeads(
+    acts: []const f32,
+    offset: usize,
+    state: usize,
+    heads: usize,
+    rows: usize,
+    row: usize,
+) f64 {
+    var sum: f64 = 0;
+    for (0..heads) |head| {
+        sum += acts[offset + (state * heads + head) * rows + row];
+    }
+    return sum / float64(heads);
+}
+
+test "gpu learn: the critic's lambda-returns are zimrrl's GAE returns" {
+    // Three rows, an imagined trajectory of four steps, two target heads: the kit's `value_lambda_combine`, walked from
+    // the last step to the first on its CPU twin, against `zimrrl.gae` on each row's steps - its rewards the costs,
+    // its values the heads' means. gae runs in f64 and the kit in f32, so they agree to f32's rounding.
+    const gpa: Allocator = testing_allocator;
+    var arena_state: ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    const rows: usize = 3;
+    const steps: usize = 4;
+    const heads: usize = 2;
+    const gamma: f32 = 0.97777778;
+    const lambda: f32 = 0.92;
+    // acts: the costs [step][rows] (c_1 .. c_H), the target values [state][head][rows] (V_0 .. V_H), the running
+    // advantage [rows], the returns [step][rows] (G_0 .. G_(H-1)).
+    const costs_offset: usize = 0;
+    const values_offset: usize = costs_offset + steps * rows;
+    const running_offset: usize = values_offset + (steps + 1) * heads * rows;
+    const returns_offset: usize = running_offset + rows;
+    const acts: []f32 = try arena.alloc(f32, returns_offset + steps * rows);
+    @memset(acts, 0);
+    for (0..steps * rows) |index| {
+        acts[costs_offset + index] = 0.3 + 0.2 * @sin(0.7 * float(index));
+    }
+    for (0..(steps + 1) * heads * rows) |index| {
+        acts[values_offset + index] = 4.0 + 1.5 * @cos(0.31 * float(index));
+    }
+    var pipe: compute_host.Compute(zn_mlp) = .initCpu();
+    defer pipe.deinit();
+    pipe.element_count = @intCast(acts.len);
+    pipe.upload(.acts, acts);
+    var step: usize = steps;
+    while (step > 0) {
+        step -= 1;
+        pipe.params = .{
+            .rows = @intCast(rows),
+            .x_off = @intCast(costs_offset + step * rows),
+            .v_off = @intCast(values_offset + (step + 1) * heads * rows),
+            .u_off = @intCast(values_offset + step * heads * rows),
+            .t_off = @intCast(running_offset),
+            .y_off = @intCast(returns_offset + step * rows),
+            .gamma = gamma,
+            .target_lambda = lambda,
+            .target_value_heads = @intCast(heads),
+        };
+        pipe.run("value_lambda_combine", @intCast(rows));
+    }
+    const kit_acts: []const f32 = pipe.readLatest(.acts) orelse return error.NoReadback;
+    for (0..rows) |row| {
+        var rollout: [steps]zrl.RolloutStep = undefined;
+        for (&rollout, 0..) |*rollout_step, k| {
+            const value_now: f64 = meanOfHeads(acts, values_offset, k, heads, rows, row);
+            const value_next: f64 = meanOfHeads(acts, values_offset, k + 1, heads, rows, row);
+            rollout_step.* = .{
+                .reward = acts[costs_offset + k * rows + row],
+                .value = value_now,
+                .next_value = value_next,
+                .terminal = false,
+                .episode_end = false,
+            };
+        }
+        var advantages: [steps]f64 = undefined;
+        var returns: [steps]f64 = undefined;
+        try zrl.gae(&rollout, gamma, lambda, &advantages, &returns);
+        for (returns, 0..) |expected, k| {
+            const kit_return: f64 = kit_acts[returns_offset + k * rows + row];
+            try expect(@abs(kit_return - expected) <= 1.0e-5 * @abs(expected));
+        }
     }
 }

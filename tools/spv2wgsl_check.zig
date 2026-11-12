@@ -43,6 +43,7 @@ const cli = @import("cli");
 const ArrayList = std.ArrayList;
 const allocPrint = std.fmt.allocPrint;
 const expect = std.testing.expect;
+const concat = std.mem.concat;
 const endsWith = std.mem.endsWith;
 const eql = std.mem.eql;
 const startsWith = std.mem.startsWith;
@@ -55,6 +56,7 @@ const indexOfPos = std.mem.indexOfPos;
 const sliceAsBytes = std.mem.sliceAsBytes;
 const splitScalar = std.mem.splitScalar;
 const sortSlice = std.mem.sort;
+const expectEqual = std.testing.expectEqual;
 const spv2wgsl = @import("spv2wgsl");
 
 const cache_dir = ".zig-cache/o";
@@ -365,6 +367,128 @@ fn scanKnownBugs(arena: Allocator, wgsl: []const u8) ![]Diag {
 // Other lexical scans
 // ============================================================================
 
+/// UNREACHABLE CODE, as Tint warns of it: a statement after a `return`, `break` or `continue` in the same block, or
+/// after a `switch` with a `default` whose every arm ends in one. A stack of blocks, each knowing how its last
+/// statement ended control; `if`, loops and other blocks are taken never to (conservative: no false alarm).
+///
+/// WHY IT FAILS THE BUILD, AND THE FIX: `spv2wgsl` keeps a zero-value `return` after a tail whose every arm returns
+/// (`emitUnreachReturn`), because naga - Firefox's WGSL compiler - rejects a value-returning function that does not end
+/// in one; Tint accepts it and warns that it is unreachable. So a Zig function that reaches the GPU returns ONCE: its
+/// final `switch` or `if` chooses a value, and one `return` follows (see `robot.jointLimitExcess`).
+fn scanUnreachable(arena: Allocator, wgsl: []const u8) ![]Diag {
+    const BlockKind = enum { switch_block, case_block, other };
+    // How a block's last statement ended control. In WGSL a `break` inside a switch's case leaves only the switch, so
+    // only an arm ending in `return` or `continue` (to an enclosing loop) ends control for what follows the switch.
+    const Ending = enum { none, returned, broke, continued };
+    const Block = struct {
+        kind: BlockKind,
+        ending: Ending = .none,
+        every_arm_ends: bool = true,
+        has_default: bool = false,
+    };
+    var out: ArrayList(Diag) = .empty;
+    var blocks: ArrayList(Block) = .empty;
+    defer blocks.deinit(arena);
+    try blocks.append(arena, .{ .kind = .other });
+    var line_number: u32 = 0;
+    var line_it = splitScalar(u8, wgsl, '\n');
+    while (line_it.next()) |raw| {
+        line_number += 1;
+        const line: []const u8 = trim(raw);
+        if (line.len == 0) {
+            continue;
+        }
+        if (line[0] == '}') {
+            if (blocks.items.len > 1) {
+                const closed: Block = blocks.pop().?;
+                const parent: *Block = &blocks.items[blocks.items.len - 1];
+                switch (closed.kind) {
+                    .case_block => {
+                        const arm_ends: bool = closed.ending == .returned or closed.ending == .continued;
+                        parent.every_arm_ends = parent.every_arm_ends and arm_ends;
+                    },
+                    .switch_block => {
+                        const switch_ends: bool = closed.has_default and closed.every_arm_ends;
+                        parent.ending = if (switch_ends) .returned else .none;
+                    },
+                    .other => parent.ending = .none,
+                }
+            }
+            // `} else {` closes one block and opens the next.
+            if (endsWith(u8, line, "{") and line.len > 1) {
+                try blocks.append(arena, .{ .kind = .other });
+            }
+            continue;
+        }
+        const current: *Block = &blocks.items[blocks.items.len - 1];
+        const is_case_label: bool = startsWith(u8, line, "case ") or startsWith(u8, line, "default");
+        if (current.ending != .none and !is_case_label) {
+            const text: []const u8 = try arena.dupe(u8, line);
+            try out.append(arena, .{ .line = line_number, .text = text });
+            current.ending = .none;
+        }
+        if (endsWith(u8, line, "{")) {
+            const opens_switch: bool = startsWith(u8, line, "switch ");
+            const kind: BlockKind = if (opens_switch) .switch_block else if (is_case_label) .case_block else .other;
+            if (kind == .case_block and startsWith(u8, line, "default")) {
+                current.has_default = true;
+            }
+            try blocks.append(arena, .{ .kind = kind });
+            continue;
+        }
+        current.ending = if (startsWith(u8, line, "return"))
+            .returned
+        else if (eql(u8, line, "break;"))
+            .broke
+        else if (eql(u8, line, "continue;"))
+            .continued
+        else
+            .none;
+    }
+    return out.toOwnedSlice(arena);
+}
+
+test "scanUnreachable: a statement after a switch whose every arm returns is caught" {
+    var arena_state: ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    const bad: []const u8 =
+        \\fn f(x: u32) -> f32 {
+        \\  switch (x) {
+        \\    case 1, 0: {
+        \\      return 0.0;
+        \\    }
+        \\    default: {
+        \\      return f32();
+        \\    }
+        \\  }
+        \\  let _a: u32 = u32();
+        \\  return f32();
+        \\}
+    ;
+    const found: []Diag = try scanUnreachable(arena, bad);
+    try expectEqual(@as(usize, 1), found.len);
+    try expectEqual(@as(u32, 10), found[0].line);
+    const clean: []const u8 =
+        \\fn g(x: u32) -> f32 {
+        \\  var y: f32 = 0.0;
+        \\  if (x == 0u) {
+        \\    return 1.0;
+        \\  } else {
+        \\    y = 2.0;
+        \\  }
+        \\  loop {
+        \\    if (y > 1.0) {
+        \\      break;
+        \\    }
+        \\    y = y + 1.0;
+        \\  }
+        \\  return y;
+        \\}
+    ;
+    try expectEqual(@as(usize, 0), (try scanUnreachable(arena, clean)).len);
+}
+
 fn countUnresolved(wgsl: []const u8) u32 {
     var n: u32 = 0;
     var i: usize = 0;
@@ -603,7 +727,10 @@ fn checkOne(
     r.err_marker_count = @intCast(err_diags.len);
     r.err_markers = err_diags;
 
-    const bug_diags: []Diag = try scanKnownBugs(arena, wgsl);
+    const known_bug_diags: []Diag = try scanKnownBugs(arena, wgsl);
+    // Unreachable code, which Tint warns of (`scanUnreachable`), beside the known bugs.
+    const unreachable_diags: []Diag = try scanUnreachable(arena, wgsl);
+    const bug_diags: []Diag = try concat(arena, Diag, &.{ known_bug_diags, unreachable_diags });
     r.known_bug_count = @intCast(bug_diags.len);
     r.known_bugs = bug_diags;
 

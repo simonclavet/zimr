@@ -10719,10 +10719,28 @@ pub fn main(init: std.process.Init) !void {
             //
             // * 64 KB per chunk: comfortably under any plausible line limit, and few enough
             // concatenations that no parser is troubled by the expression depth.
+            //
+            // -- THE DECODE, WITHOUT A FUNCTION CALL PER BYTE --
+            //
+            // `Uint8Array.from(atob(text), mapping)` calls the mapping once for every character: for an
+            // 8 MB module, eight million calls on the main thread before the page can draw, measured at
+            // 736 ms of a 1.5 s load on a desktop, and several times that on a phone - where the page
+            // sat unresponsive while it loaded. The decoder below uses the browser's own
+            // `Uint8Array.fromBase64` where it exists; elsewhere one `atob` and a plain loop into a
+            // preallocated array, which engines compile to a tight loop with no call per byte.
             const chunk: usize = 64 * 1024;
             var js: ArrayList(u8) = .empty;
             defer js.deinit(gpa);
-            try js.appendSlice(gpa, "<script>window.WASM_BYTES = Uint8Array.from(atob(\n");
+            try js.appendSlice(gpa,
+                \\<script>window.WASM_BYTES = (function (text) {
+                \\  if (typeof Uint8Array.fromBase64 === "function") return Uint8Array.fromBase64(text);
+                \\  const binary = atob(text);
+                \\  const bytes = new Uint8Array(binary.length);
+                \\  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+                \\  return bytes;
+                \\})(
+                \\
+            );
             var at: usize = 0;
             while (at < b64.len) : (at += chunk) {
                 const end: usize = @min(at + chunk, b64.len);
@@ -10733,10 +10751,7 @@ pub fn main(init: std.process.Init) !void {
                 try js.appendSlice(gpa, b64[at..end]);
                 try js.append(gpa, '"');
             }
-            try js.appendSlice(
-                gpa,
-                "\n), function (c) { return c.charCodeAt(0); });</script>\n",
-            );
+            try js.appendSlice(gpa, "\n);</script>\n");
             break :blk try js.toOwnedSlice(gpa);
         } else if (wasm_url_opt) |url|
             try allocPrint(gpa, "<script>window.WASM_URL = \"{s}\";</script>\n", .{url})

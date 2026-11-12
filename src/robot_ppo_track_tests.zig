@@ -1449,7 +1449,8 @@ test "probePolicy: a policy probed where some starts have no room - it acts on t
     const starts: []usize = try track.evenStarts(arena, &setup.clip, 30);
     const settings: lab.PolicyJudgeSettings = .{ .starts = starts, .task = options.task, .bodies = bodies };
     const probe: track.RecoveryProbe = .{};
-    const probe_frames: usize = probe.settle_steps + probe.watch_steps;
+    const probe_steps: track.ProbeSteps = probe.stepsAt(setup.clip.frame_time);
+    const probe_frames: usize = probe_steps.settle + probe_steps.watch;
     var with_room: usize = 0;
     for (starts) |start| {
         with_room += @intFromBool(start + probe_frames + 1 < setup.clip.frame_count);

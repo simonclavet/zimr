@@ -27,7 +27,7 @@ compare, barFor, its tests), `src/compute_host.zig` (initGpu, upload, run, recor
 `src/gpu_learn_tests.zig` (its normed-layer and two-hot known answers, its test list), `src/shader_codegen.zig`
 (addComputeOutput), `build.zig` (wireComputeKernels, zn_mlp_entries, the kit pages, zimrnum_field, addVulkanHostTest,
 the headless runs, the fast roots), `webtests/runner.mjs` and `webtests/wgpu_smoke.zig` (what the smoke runner can see),
-claude.md's rules this plan leans on, `src/notes/robotgpu_plan.md` (its vk-host-test design, 6.14), `zimrnum_plan.md`
+claude.md's rules this plan leans on, `src/notes/archive/robotgpu_plan_v1.md` (its vk-host-test design, 6.14), `zimrnum_plan.md`
 (the sweep's timing), and the sibling session's hand-over note on the spv2wgsl fix.
 
 
@@ -222,7 +222,7 @@ settle frames costs those frames per row."
      device's readback is judged against the twin. Every row measures its own kernel from identical inputs ("MEASURE
      THE LINK YOU CHANGED", claude.md:30), so its bar is about its own arithmetic, and the first red row IS the
      culprit. One readback per step (~56 here, 3.9). Exactly what robotgpu's plan specifies for vk-host-test: "every
-     kernel on the device against its twin, one step from identical inputs, with ULP bars" (robotgpu_plan.md:1234).
+     kernel on the device against its twin, one step from identical inputs, with ULP bars" (archive/robotgpu_plan_v1.md:1234).
   C3 BOTH: C2's rows plus one chain row per sequence, recorded into one submission as the learners record theirs, at
      vk's 1e-5. Adds the recording path and inter-dispatch ordering on the web - a host/queue class, not the
      transpiler's - for ~10 more readbacks, and a second kind of row.

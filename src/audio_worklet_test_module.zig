@@ -32,6 +32,7 @@ const contract = @import("platform/contract.zig");
 const zm = @import("zm");
 const sinTurns = zm.sinTurns;
 const float = zm.float;
+const assertUnreachable = zm.assertUnreachable;
 const asBytes = std.mem.asBytes;
 const wasm_allocator = std.heap.wasm_allocator;
 
@@ -257,7 +258,7 @@ const stand_in_output = struct {
             .byte_count = @intCast(samples.len * @sizeOf(f32)),
         });
         main_side_state.local_host.acceptSamples(samples_id, samples) catch {
-            zm.assertUnreachable(@src(), "the local host had no room for samples {d}", .{samples_id});
+            assertUnreachable(@src(), "the local host had no room for samples {d}", .{samples_id});
         };
     }
 

@@ -1415,8 +1415,13 @@ fn sin32xN(v: anytype) @TypeOf(v) {
 
 pub fn sinRad(v: anytype) @TypeOf(v) {
     const T = @TypeOf(v);
-    // Scalar on CPU: exact (== std.math.sin == @sin).  Vectors (CPU SIMD
-    // path + GPU): zmath's vectorized polynomial for maximum throughput.
+    // Scalar on CPU: exact (== std.math.sin == @sin). Vectors on the CPU, and everything on a GPU: zmath's
+    // polynomial (an 11th-degree minimax fit after reduction to [-pi/2, pi/2]), within about one unit in the last
+    // place of the exact sine. On a GPU this is chosen for ACCURACY, not speed: the hardware's own sine (`@sin`,
+    // which compiles to SPIR-V and WGSL) is faster, but its precision is the implementation's - WGSL allows an
+    // absolute error of 2^-11 - and graphics accepts that where a simulation cannot: a ball joint's rotation each step
+    // would carry it, and every device would differ. The polynomial costs about twenty multiply-adds, and gives the
+    // same answer on every GPU. A caller that wants the fast, rough sine for graphics calls `@sin` itself.
     if (comptime !is_gpu and @typeInfo(T) != .vector) {
         return @sin(v);
     }
@@ -1474,6 +1479,7 @@ fn cos32xN(v: anytype) @TypeOf(v) {
 }
 
 pub fn cosRad(v: anytype) @TypeOf(v) {
+    // As `sinRad`: exact on the CPU for a scalar, zmath's accurate polynomial otherwise - on a GPU, for accuracy.
     const T = @TypeOf(v);
     // Scalar on CPU: exact (== std.math.cos == @cos).  Vectors (CPU SIMD
     // path + GPU): zmath's vectorized polynomial for maximum throughput.
@@ -5356,6 +5362,7 @@ fn sincos32xN(v: anytype) [2]@TypeOf(v) {
 }
 
 pub fn sincosRad(v: anytype) [2]@TypeOf(v) {
+    // As `sinRad`: exact on the CPU for a scalar, zmath's accurate polynomial otherwise - on a GPU, for accuracy.
     const T = @TypeOf(v);
     if (comptime !is_gpu and @typeInfo(T) != .vector) {
         return .{ @sin(v), @cos(v) };

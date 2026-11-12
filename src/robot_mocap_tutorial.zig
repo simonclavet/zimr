@@ -153,7 +153,7 @@ test "tutorial 2: a dance, retargeted onto a humanoid and servoed along" {
     const m: *rbt.Model = welded.model();
     dance.limpKeepArmature(m);
     // A floating pose is the root's 7 numbers, then the joints: the welded robot takes the joints.
-    const root_len: usize = clip.nq - m.nq;
+    const root_len: usize = clip.nq - m.coordinate_count;
     const dt: f32 = clip.frame_time;
     try expect(root_len == 7 and @abs(dt - m.opt.timestep) < 1.0e-6);
 
@@ -161,16 +161,16 @@ test "tutorial 2: a dance, retargeted onto a humanoid and servoed along" {
     defer d.deinit();
     var target: rbt.Data = try .init(gpa, m);
     defer target.deinit();
-    var tracker: dance.Tracker = try .init(gpa, m.nv);
+    var tracker: dance.Tracker = try .init(gpa, m.dof_count);
     defer tracker.deinit();
-    const a: []f32 = try gpa.alloc(f32, m.nv);
+    const a: []f32 = try gpa.alloc(f32, m.dof_count);
     defer gpa.free(a);
-    const torque: []f32 = try gpa.alloc(f32, m.nv);
+    const torque: []f32 = try gpa.alloc(f32, m.dof_count);
     defer gpa.free(torque);
 
     // Start on the clip's second frame, moving as the clip moves into it.
-    @memcpy(d.pos, clip.pose(1)[root_len..]);
-    rbt.differentiatePos(m, d.vel, clip.pose(0)[root_len..], clip.pose(1)[root_len..], dt);
+    @memcpy(d.joint_positions, clip.pose(1)[root_len..]);
+    rbt.differentiatePos(m, d.joint_velocities, clip.pose(0)[root_len..], clip.pose(1)[root_len..], dt);
     d.stage = .stale;
 
     var worst: f32 = 0.0;
@@ -183,14 +183,14 @@ test "tutorial 2: a dance, retargeted onto a humanoid and servoed along" {
         tracker.accelerations(m, &d, .{ before, now, next }, 20.0, dt, a);
         rbt.biasForce(m, &d);
         rbt.inverseDynamics(m, &d, a, torque);
-        @memcpy(d.applied_force, torque);
+        @memcpy(d.applied_joint_forces, torque);
         rbt.step(m, &d);
         // How far every body is from where the clip's next frame puts it.
         rbt.forward(m, &d);
-        @memcpy(target.pos, next);
+        @memcpy(target.joint_positions, next);
         target.stage = .stale;
         rbt.kinematics(m, &target);
-        worst = @max(worst, dance.worstBodyErrorDeg(m, d.body_xrot, target.body_xrot));
+        worst = @max(worst, dance.worstBodyErrorDeg(m, d.body_orientations, target.body_orientations));
     }
     try expect(worst < 0.5);
 }
@@ -305,16 +305,16 @@ test "tutorial 5: the robot's coordinates - joints, poses and velocities" {
 
     // Each joint owns a run of `pos` and a run of `vel`: the free root 7 and 6, a ball 4 and 3 (a
     // quaternion, and an angular velocity), a hinge 1 and 1.
-    for (0..m.njnt) |j| {
-        const sizes: [2]u32 = switch (m.jnt_type[j]) {
+    for (0..m.joint_count) |j| {
+        const sizes: [2]u32 = switch (m.joint_type[j]) {
             .free => .{ 7, 6 },
             .ball => .{ 4, 3 },
             .hinge, .slide => .{ 1, 1 },
         };
-        const pos_end: u32 = if (j + 1 < m.njnt) m.jnt_qpos_adr[j + 1] else m.nq;
-        const vel_end: u32 = if (j + 1 < m.njnt) m.jnt_dof_adr[j + 1] else m.nv;
-        try expect(pos_end - m.jnt_qpos_adr[j] == sizes[0]);
-        try expect(vel_end - m.jnt_dof_adr[j] == sizes[1]);
+        const pos_end: u32 = if (j + 1 < m.joint_count) m.joint_first_coordinate[j + 1] else m.coordinate_count;
+        const vel_end: u32 = if (j + 1 < m.joint_count) m.joint_first_dof[j + 1] else m.dof_count;
+        try expect(pos_end - m.joint_first_coordinate[j] == sizes[0]);
+        try expect(vel_end - m.joint_first_dof[j] == sizes[1]);
     }
 
     // A pose moved along a velocity for a time, and the velocity recovered from the two poses:
@@ -322,16 +322,16 @@ test "tutorial 5: the robot's coordinates - joints, poses and velocities" {
     var d: rbt.Data = try .init(gpa, m);
     defer d.deinit();
     d.reset(m);
-    for (d.vel, 0..) |*v, k| {
+    for (d.joint_velocities, 0..) |*v, k| {
         v.* = 0.3 * (float(k % 5) - 2.0);
     }
-    const moved: []f32 = try gpa.dupe(f32, d.pos);
+    const moved: []f32 = try gpa.dupe(f32, d.joint_positions);
     defer gpa.free(moved);
-    rbt.integratePos(m, moved, d.vel, 0.1);
-    const recovered: []f32 = try gpa.alloc(f32, m.nv);
+    rbt.integratePos(m, moved, d.joint_velocities, 0.1);
+    const recovered: []f32 = try gpa.alloc(f32, m.dof_count);
     defer gpa.free(recovered);
-    rbt.differentiatePos(m, recovered, d.pos, moved, 0.1);
-    for (recovered, d.vel) |got, want| {
+    rbt.differentiatePos(m, recovered, d.joint_positions, moved, 0.1);
+    for (recovered, d.joint_velocities) |got, want| {
         try expect(@abs(got - want) < 1.0e-3);
     }
 
@@ -346,11 +346,11 @@ test "tutorial 5: the robot's coordinates - joints, poses and velocities" {
     const velocity: rbt.Motion = dance.bodyVelocity(m, &d, hand);
     var later: rbt.Data = try .init(gpa, m);
     defer later.deinit();
-    @memcpy(later.pos, d.pos);
-    rbt.integratePos(m, later.pos, d.vel, 1.0e-3);
+    @memcpy(later.joint_positions, d.joint_positions);
+    rbt.integratePos(m, later.joint_positions, d.joint_velocities, 1.0e-3);
     later.stage = .stale;
     rbt.kinematics(m, &later);
-    const moved_by: Vec = (later.body_xipos[hand] - d.body_xipos[hand]) * splat(1.0 / 1.0e-3);
+    const moved_by: Vec = (later.body_centres_of_mass[hand] - d.body_centres_of_mass[hand]) * splat(1.0 / 1.0e-3);
     try expect(length3(moved_by - velocity.lin) < 0.01 * length3(velocity.lin) + 1.0e-3);
 }
 
@@ -367,9 +367,9 @@ fn bodyNamed(names: []const []const u8, name: []const u8) ?usize {
 /// The biggest acceleration any DOF of the clip asks for, from second differences of its poses.
 /// A blunt instrument, but it's exactly where mocap jitter shows up.
 fn peakAcceleration(gpa: Allocator, m: *const rbt.Model, clip: *const dance.Clip) !f32 {
-    const v0: []f32 = try gpa.alloc(f32, m.nv);
+    const v0: []f32 = try gpa.alloc(f32, m.dof_count);
     defer gpa.free(v0);
-    const v1: []f32 = try gpa.alloc(f32, m.nv);
+    const v1: []f32 = try gpa.alloc(f32, m.dof_count);
     defer gpa.free(v1);
     var peak: f32 = 0.0;
     for (1..clip.frame_count - 1) |f| {
@@ -424,14 +424,14 @@ test "tutorial 6: retargeting - one second of the dance, and what the IK achieve
     for (0..clip.frame_count) |f| {
         try expect(clip.residual[f] < 0.15);
         const pose: []const f32 = clip.pose(f);
-        for (0..m.njnt) |j| {
-            const range: [2]f32 = m.jnt_range[j] orelse continue;
-            if (m.jnt_type[j] == .hinge) {
-                const angle: f32 = pose[m.jnt_qpos_adr[j]];
+        for (0..m.joint_count) |j| {
+            const range: [2]f32 = m.joint_range[j] orelse continue;
+            if (m.joint_type[j] == .hinge) {
+                const angle: f32 = pose[m.joint_first_coordinate[j]];
                 try expect(angle >= range[0] - 1.0e-3 and angle <= range[1] + 1.0e-3);
             }
         }
-        @memcpy(d.pos, pose);
+        @memcpy(d.joint_positions, pose);
         d.stage = .stale;
         rbt.forward(m, &d);
         lowest[f] = dance.lowestFootPoint(m, &d, names);
@@ -466,11 +466,11 @@ test "tutorial 7a: a held target - the spring alone" {
     const m: *rbt.Model = r.model();
     var d: rbt.Data = try .init(gpa, m);
     defer d.deinit();
-    var tracker: dance.Tracker = try .init(gpa, m.nv);
+    var tracker: dance.Tracker = try .init(gpa, m.dof_count);
     defer tracker.deinit();
-    const a: []f32 = try gpa.alloc(f32, m.nv);
+    const a: []f32 = try gpa.alloc(f32, m.dof_count);
     defer gpa.free(a);
-    const torque: []f32 = try gpa.alloc(f32, m.nv);
+    const torque: []f32 = try gpa.alloc(f32, m.dof_count);
     defer gpa.free(torque);
 
     // The same pose three times: no motion to follow, so the reference's velocity and acceleration
@@ -483,12 +483,12 @@ test "tutorial 7a: a held target - the spring alone" {
         tracker.accelerations(m, &d, .{ &goal, &goal, &goal }, 2.0, m.opt.timestep, a);
         rbt.biasForce(m, &d);
         rbt.inverseDynamics(m, &d, a, torque);
-        @memcpy(d.applied_force, torque);
+        @memcpy(d.applied_joint_forces, torque);
         rbt.step(m, &d);
-        overshoot = @max(overshoot, d.pos[0] - 1.0);
+        overshoot = @max(overshoot, d.joint_positions[0] - 1.0);
     }
     // One second later: there, without ever going past.
-    try expect(@abs(d.pos[0] - 1.0) < 0.01);
+    try expect(@abs(d.joint_positions[0] - 1.0) < 0.01);
     try expect(overshoot < 1.0e-4);
 }
 
@@ -498,7 +498,7 @@ test "tutorial 7b: a moving target followed exactly - and what passive forces do
     try r.load(gpa, flex2_xml, true);
     defer r.deinit(gpa);
     const m: *rbt.Model = r.model();
-    const shoulder: usize = for (0..m.njnt) |j| {
+    const shoulder: usize = for (0..m.joint_count) |j| {
         if (eql(u8, r.robot.joints[j].name, "shoulder1_right")) {
             break j;
         }
@@ -507,17 +507,17 @@ test "tutorial 7b: a moving target followed exactly - and what passive forces do
     defer d.deinit();
     var target: rbt.Data = try .init(gpa, m);
     defer target.deinit();
-    var tracker: dance.Tracker = try .init(gpa, m.nv);
+    var tracker: dance.Tracker = try .init(gpa, m.dof_count);
     defer tracker.deinit();
-    const a: []f32 = try gpa.alloc(f32, m.nv);
+    const a: []f32 = try gpa.alloc(f32, m.dof_count);
     defer gpa.free(a);
-    const torque: []f32 = try gpa.alloc(f32, m.nv);
+    const torque: []f32 = try gpa.alloc(f32, m.dof_count);
     defer gpa.free(torque);
     const dt: f32 = m.opt.timestep;
     // Three consecutive reference poses: the rest pose, with the shoulder swinging at 1 Hz.
     var poses: [3][]f32 = undefined;
     for (&poses) |*p| {
-        p.* = try gpa.dupe(f32, m.qpos0);
+        p.* = try gpa.dupe(f32, m.reference_joint_positions);
     }
     defer for (poses) |p| gpa.free(p);
     const angleAt = struct {
@@ -533,24 +533,24 @@ test "tutorial 7b: a moving target followed exactly - and what passive forces do
             dance.limpKeepArmature(m);
         }
         d.reset(m);
-        d.pos[m.jnt_qpos_adr[shoulder]] = angleAt(dt);
-        d.vel[m.jnt_dof_adr[shoulder]] = (angleAt(dt) - angleAt(0.0)) / dt;
+        d.joint_positions[m.joint_first_coordinate[shoulder]] = angleAt(dt);
+        d.joint_velocities[m.joint_first_dof[shoulder]] = (angleAt(dt) - angleAt(0.0)) / dt;
         for (1..120) |k| {
             for (&poses, 0..) |p, i| {
-                p[m.jnt_qpos_adr[shoulder]] = angleAt(float(k + i - 1) * dt);
+                p[m.joint_first_coordinate[shoulder]] = angleAt(float(k + i - 1) * dt);
             }
             d.stage = .stale;
             rbt.forward(m, &d);
             tracker.accelerations(m, &d, .{ poses[0], poses[1], poses[2] }, 20.0, dt, a);
             rbt.biasForce(m, &d);
             rbt.inverseDynamics(m, &d, a, torque);
-            @memcpy(d.applied_force, torque);
+            @memcpy(d.applied_joint_forces, torque);
             rbt.step(m, &d);
             rbt.forward(m, &d);
-            @memcpy(target.pos, poses[2]);
+            @memcpy(target.joint_positions, poses[2]);
             target.stage = .stale;
             rbt.kinematics(m, &target);
-            worst[pass] = @max(worst[pass], dance.worstBodyErrorDeg(m, d.body_xrot, target.body_xrot));
+            worst[pass] = @max(worst[pass], dance.worstBodyErrorDeg(m, d.body_orientations, target.body_orientations));
         }
     }
     // Limp, the arm follows within a tenth of a degree; as written, the model's own joint springs
@@ -581,11 +581,11 @@ test "tutorial 8: what the floor must supply to perform a clip" {
 
     var d: rbt.Data = try .init(gpa, m);
     defer d.deinit();
-    const v_next: []f32 = try gpa.alloc(f32, m.nv);
+    const v_next: []f32 = try gpa.alloc(f32, m.dof_count);
     defer gpa.free(v_next);
-    const a: []f32 = try gpa.alloc(f32, m.nv);
+    const a: []f32 = try gpa.alloc(f32, m.dof_count);
     defer gpa.free(a);
-    const force: []f32 = try gpa.alloc(f32, m.nv);
+    const force: []f32 = try gpa.alloc(f32, m.dof_count);
     defer gpa.free(force);
     var mass: f32 = 0.0;
     for (m.body_mass) |body_mass| {
@@ -602,10 +602,10 @@ test "tutorial 8: what the floor must supply to perform a clip" {
     var pulling: usize = 0;
     var slipping: usize = 0;
     for (1..clip.frame_count - 1) |f| {
-        @memcpy(d.pos, clip.pose(f));
-        rbt.differentiatePos(m, d.vel, clip.pose(f - 1), clip.pose(f), dt);
+        @memcpy(d.joint_positions, clip.pose(f));
+        rbt.differentiatePos(m, d.joint_velocities, clip.pose(f - 1), clip.pose(f), dt);
         rbt.differentiatePos(m, v_next, clip.pose(f), clip.pose(f + 1), dt);
-        for (a, d.vel, v_next) |*acc, v0, v1| {
+        for (a, d.joint_velocities, v_next) |*acc, v0, v1| {
             acc.* = (v1 - v0) / dt;
         }
         d.stage = .stale;
@@ -653,12 +653,12 @@ test "tutorial 9: a ragdoll - the same humanoid as rigid bodies, joints and moto
     var target: rbt.Data = try .init(gpa, m);
     defer target.deinit();
     target.reset(m);
-    const elbow: usize = for (0..m.njnt) |j| {
+    const elbow: usize = for (0..m.joint_count) |j| {
         if (eql(u8, r.robot.joints[j].name, "elbow_right")) {
             break j;
         }
     } else return error.NoElbow;
-    target.pos[m.jnt_qpos_adr[elbow]] = -0.8;
+    target.joint_positions[m.joint_first_coordinate[elbow]] = -0.8;
     rbt.forward(m, &target);
     for (0..240) |_| {
         ragdoll.driveToPose(&world, m, &target, .{ .frequency = 4.0 });
@@ -667,13 +667,13 @@ test "tutorial 9: a ragdoll - the same humanoid as rigid bodies, joints and moto
 
     // Four seconds later every body is where the target pose puts it. (A chain of soft motors
     // settles more slowly than one spring would: at two seconds the arm is still a degree off.)
-    const rotations: []Quat = try gpa.alloc(Quat, m.nbody);
+    const rotations: []Quat = try gpa.alloc(Quat, m.body_count);
     defer gpa.free(rotations);
-    rotations[0] = target.body_xrot[0];
-    for (1..m.nbody) |b| {
+    rotations[0] = target.body_orientations[0];
+    for (1..m.body_count) |b| {
         rotations[b] = ragdoll.robotBodyFrame(&world, b).rot;
     }
-    try expect(dance.worstBodyErrorDeg(m, rotations, target.body_xrot) < 0.5);
+    try expect(dance.worstBodyErrorDeg(m, rotations, target.body_orientations) < 0.5);
 
     // humanoid_flex2 has ball joints, which the ragdoll does not build.
     var ball: Robot = undefined;

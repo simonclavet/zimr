@@ -163,11 +163,12 @@ pub const Params = extern struct {
     _p8: u32 = 0,
     /// The policy's action, as `lat_act` writes it: `lat_scale * (raw + lat_sigma * noise)`, the
     /// noise a hash of (`lat_seed`, row, column) - declared together so the noise needs no second
-    /// change to this block. 16 bytes.
+    /// change to this block - and THE ACTION FILTER's share of it in the action written (`lat_filter`; 1 is no
+    /// filter). 16 bytes.
     lat_scale: f32 = 1.0,
     lat_sigma: f32 = 0.0,
     lat_seed: u32 = 0,
-    _p9: u32 = 0,
+    lat_filter: f32 = 1.0,
     /// The action price's gradient coefficient for `lat_act_bwd` (2 w_action / (rows x actions)), and
     /// the SMOOTHNESS term's (CAPS: 2 w_smooth / (rows x actions)) with where the previous and next window
     /// steps' raw actions start. A step with no such neighbour points at ITSELF (its own `x_off`), so
@@ -177,9 +178,13 @@ pub const Params = extern struct {
     lat_smooth: f32 = 0.0,
     lat_prev: u32 = 0,
     lat_next: u32 = 0,
-    _p4: u32 = 0,
-    _p5: u32 = 0,
-    _p6: u32 = 0,
+    /// The action filter's other two places (`lat_act`, `lat_act_bwd`): where the action the row held at the previous
+    /// step starts, and its rows' stride - the previous step's action columns in its wide row, or the window's
+    /// starting actions - and where the backward's CARRY lives, the action columns' whole gradient so far, one per
+    /// (row, action).
+    lat_prev_action: u32 = 0,
+    lat_prev_action_stride: u32 = 0,
+    lat_carry: u32 = 0,
     // -- The two-hot loss (the twohot_ kernels): the bins' range on their axis, the axis (`TwoHotAxis`), and what
     // each logit's gradient is divided by - the rows, for a mean over them. 16 bytes.
     twohot_low: f32 = -10.0,
@@ -190,9 +195,15 @@ pub const Params = extern struct {
     // EfficientTDMPC's consistency, rho^t / H per step and 20 overall, its reward and value terms 0.1 - scales each
     // term's gradient where it is made. 1 leaves the gradient as it always was, bit for bit. 16 bytes.
     loss_weight: f32 = 1.0,
-    _p10: u32 = 0,
-    _p11: u32 = 0,
-    _p12: u32 = 0,
+    // -- the action filter for the limbs' stiffness (`latFilterShare`): an action's last `lat_stiffness_count` numbers
+    // - each limb's stiffness, after the joints' offsets - take this share instead of `lat_filter`. 0 numbers (every
+    // one an offset) and 1 (no filter) leave the action as it always was. In this row's padding, 16 bytes still.
+    lat_stiffness_filter: f32 = 1.0,
+    lat_stiffness_count: u32 = 0,
+    /// Where the gradient a policy's reading of an action sends back to it is held (`lat_act_bwd`): the next
+    /// decision's policy read this action as the one applied before it. 0: none - the region is never at the start of
+    /// the gradients.
+    lat_applied_gradient: u32 = 0,
     // -- The policy's distillation (`policy_distill_bwd`): the bounds its log spread is held between
     // (`zimrrl.TanhMeanGaussian`: BMPC's [-3, 1]) and the entropy bonus's coefficient (BMPC's 1e-4). 16 bytes.
     distill_log_std_low: f32 = -3.0,
@@ -200,11 +211,12 @@ pub const Params = extern struct {
     distill_entropy_coefficient: f32 = 1.0e-4,
     _p13: u32 = 0,
     // -- A value target's shape (`value_target_combine`): how many dynamics heads it looks ahead through, and how
-    // many target value heads it averages at each. The discount is `gamma`. 16 bytes.
+    // many target value heads it averages at each - and a lambda-return's lambda and its values' head stride
+    // (`value_lambda_combine`; 0: the rows). The discount is `gamma`. 16 bytes.
     target_dynamics_heads: u32 = 1,
     target_value_heads: u32 = 1,
-    _p14: u32 = 0,
-    _p15: u32 = 0,
+    target_lambda: f32 = 0.95,
+    target_head_stride: u32 = 0,
     // -- Which rows a loss counts (`RowMask`; `mse_bwd`, `twohot_fwd`, `twohot_bwd`): the mask's kind, where its
     // column is in acts, and - for `mse_bwd` - where the step's mean factor is (acts): batch / rows still counting, so
     // the whole batch's mean becomes the mean over the rows that count. 16 bytes.
@@ -284,7 +296,9 @@ pub const Params = extern struct {
     // where the statistics are in acts - `count` means, then `count` spreads. 16 bytes.
     lat_increments_on: u32 = 0,
     lat_increments_at: u32 = 0,
-    _p23: u32 = 0,
+    /// Row stride of a dense layer's output (`dense_fwd`); 0 means rows of `out_dim`. A stride wider than the layer
+    /// writes into rows laid out for someone else - a simulator's padded action rows - leaving the gaps untouched.
+    y_stride: u32 = 0,
     _p24: u32 = 0,
 };
 
@@ -324,7 +338,7 @@ const b_v = g.bind(.adam_v);
 const b_loss = g.bind(.loss);
 const params = g.uniform();
 
-inline fn activate(x: f32, act: u32) f32 {
+pub inline fn activate(x: f32, act: u32) f32 {
     if (act == @backingInt(Act.tanh)) {
         return tanh(x);
     }
@@ -350,6 +364,10 @@ inline fn inputStride() u32 {
     return if (params.stride != 0) params.stride else params.in_dim;
 }
 
+inline fn outputStride() u32 {
+    return if (params.y_stride != 0) params.y_stride else params.out_dim;
+}
+
 /// y[r, o] = act(b[o] + sum_i x[r, i] W[i, o]); one thread per (r, o).
 pub fn dense_fwd(id: u32) void {
     if (id >= params.rows * params.out_dim) {
@@ -362,7 +380,29 @@ pub fn dense_fwd(id: u32) void {
     while (i < params.in_dim) : (i += 1) {
         acc += b_acts[params.x_off + r * inputStride() + i] * b_params[params.w_off + i * params.out_dim + o];
     }
-    b_acts[params.y_off + id] = activate(acc, params.act);
+    b_acts[params.y_off + r * outputStride() + o] = activate(acc, params.act);
+}
+
+/// THE APPLIED ACTION's TERMS, ADDED TO A FIRST LAYER's SUM, THEN ITS ACTIVATION - one thread per (row, output). The
+/// policy that sees the action applied before its decision reads it through a block of its own, its terms summed after
+/// the goal's and the state's (the CPU learner's `policyWith` with `applied`): `y_off` holds the layer's linear sum
+/// (bias, goal and state terms, from `dense_fwd`), and each applied number - `in_dim` of them, at `x_off`, rows
+/// `stride` apart - adds itself times its weight, in order, before `act` is applied in place.
+pub fn applied_add_activate(id: u32) void {
+    if (id >= params.rows * params.out_dim) {
+        return;
+    }
+    const r: u32 = id / params.out_dim;
+    const o: u32 = id % params.out_dim;
+    const y_at: u32 = params.y_off + r * params.out_dim + o;
+    var sum: f32 = b_acts[y_at];
+    var i: u32 = 0;
+    while (i < params.in_dim) : (i += 1) {
+        const applied_number: f32 = b_acts[params.x_off + r * inputStride() + i];
+        const weight: f32 = b_params[params.w_off + i * params.out_dim + o];
+        sum += applied_number * weight;
+    }
+    b_acts[y_at] = activate(sum, params.act);
 }
 
 /// dy[r, o] *= act'(y[r, o]), in place: the gradient at the pre-activation.
@@ -1456,6 +1496,70 @@ pub fn value_target_combine(id: u32) void {
     b_acts[params.y_off + id] = target;
 }
 
+/// The mean of `target_value_heads` target values for row `row`, each head's block `target_head_stride` apart from
+/// `offset` (0: the rows, [value head][rows]): summed in head order, then divided once.
+fn meanTargetValue(offset: u32, row: u32) f32 {
+    const head_stride: u32 = if (params.target_head_stride == 0) params.rows else params.target_head_stride;
+    const value_heads: u32 = params.target_value_heads;
+    var value_sum: f32 = 0;
+    var value_head: u32 = 0;
+    while (value_head < value_heads) : (value_head += 1) {
+        value_sum += b_acts[offset + value_head * head_stride + row];
+    }
+    return value_sum / float(value_heads);
+}
+
+/// One step of the critic's LAMBDA-RETURNS along an imagined trajectory, walked BACKWARD from its last step - the
+/// recurrence of `zimrrl.gae`, generalised advantage estimation, in f32, ONE THREAD PER ROW:
+///
+///     delta_k   = c_(k+1) + gamma x V_(k+1) - V_k                     the step's temporal difference
+///     running_k = delta_k + gamma x lambda x running_(k+1)            the advantage, 0 after the last step
+///     G_k       = running_k + V_k                                     the return the critic is fitted to at state k
+///
+/// with c the cost of the step that leaves state k, V the target heads' mean value (`meanTargetValue`), gamma `gamma`
+/// and lambda `target_lambda`. At lambda 0 the return is the one-step target, cost + gamma x V_(k+1); at 1 it is
+/// the whole discounted cost of the trajectory, its last state's value after it. A fall is no terminal, so no trace is
+/// cut. Called once per step, the steps last to first, so `running_(k+1)` is the previous call's.
+///   reads   acts `x_off`  each row's c_(k+1) [rows]
+///           acts `v_off`  the target values at state k+1, [value head][rows]
+///           acts `u_off`  the target values at state k, [value head][rows]
+///           acts `t_off`  each row's running advantage running_(k+1) [rows] - zero before the last step
+///   writes  acts `t_off`  running_k, for the step before
+///           acts `y_off`  G_k [rows]
+pub fn value_lambda_combine(id: u32) void {
+    if (id >= params.rows) {
+        return;
+    }
+    const cost: f32 = b_acts[params.x_off + id];
+    const next_value: f32 = meanTargetValue(params.v_off, id);
+    const value: f32 = meanTargetValue(params.u_off, id);
+    const following_advantage: f32 = b_acts[params.t_off + id];
+    const delta: f32 = cost + params.gamma * next_value - value;
+    const trace: f32 = params.gamma * params.target_lambda;
+    const advantage: f32 = delta + trace * following_advantage;
+    b_acts[params.t_off + id] = advantage;
+    b_acts[params.y_off + id] = advantage + value;
+}
+
+/// Zeros `rows` numbers of acts from `y_off`: a region a recurrence starts from, such as `value_lambda_combine`'s
+/// running advantage. A product with zero would not do - 0 x NaN is NaN, and a region holds anything before its first
+/// use.
+pub fn zero_rows(id: u32) void {
+    if (id >= params.rows) {
+        return;
+    }
+    b_acts[params.y_off + id] = 0;
+}
+
+/// Zeros `rows` numbers of dacts from `y_off`: a gradient a recurrence carries back from its start, such as the action
+/// filter's carry (`lat_act_bwd`), zero before the window's last step.
+pub fn zero_gradient_rows(id: u32) void {
+    if (id >= params.rows) {
+        return;
+    }
+    b_dacts[params.y_off + id] = 0;
+}
+
 // -- SCORING A PLAN (`zimrrl.LatentPlanScorer`: the world model's imagination, for the planner) --
 //
 // The planner proposes many candidate plans per state - `plan_candidates` of them, `plan_horizon` actions each - and
@@ -2425,6 +2529,40 @@ inline fn normalisedFeature(raw: f32, column: u32, f: u32) f32 {
     return (raw - mean) / spread;
 }
 
+/// THE WINDOWS' STARTING ACTIONS, gathered from the ring beside `lat_gather`: for each window's row, the action given
+/// at the decision before its first record - what the action filter blends the window's first decision into and the
+/// policy reads as applied before it - or rest, zero, when the window opens its segment (an episode's first record,
+/// or one whose predecessor the ring no longer holds). One thread per (row, action number) over `rows x lat_actions`.
+/// The rows' flags at `x_off` (1: the record before is the same segment's and held), written to `y_off` packed
+/// `lat_actions` wide; the starts and the ring as `lat_gather` reads them.
+pub fn lat_gather_start_actions(id: u32) void {
+    const f: u32 = params.lat_features;
+    const a: u32 = params.lat_actions;
+    if (id >= params.rows * a) {
+        return;
+    }
+    const row: u32 = id / a;
+    const number: u32 = id % a;
+    const written_at: u32 = params.y_off + row * a + number;
+    const continues: bool = b_acts[params.x_off + row] != 0.0;
+    if (!continues) {
+        b_acts[written_at] = 0.0;
+        return;
+    }
+    // The row's start: its world and the ring slot of its window's first record, two numbers per start.
+    const start_at: u32 = params.starts_off + row * 2;
+    const env: u32 = @trunc(b_acts[start_at]);
+    const first_slot: u32 = @trunc(b_acts[start_at + 1]);
+    // The record before the window's first, a ring step back (the ring wraps); records are slot-major, a world's
+    // record after another's within a slot.
+    const steps_back: u32 = params.lat_capacity - 1;
+    const previous_slot: u32 = (first_slot + steps_back) % params.lat_capacity;
+    const record_index: u32 = previous_slot * params.lat_envs + env;
+    const record: u32 = params.ring_off + record_index * latRecordWidth(f, a);
+    const action_at: u32 = record + latRecordAction(f) + number;
+    b_acts[written_at] = b_acts[action_at];
+}
+
 /// A batch of training windows, assembled on the GPU from what is resident there: the feature ring
 /// (a record per character per step: raw features, action, table row), the reference tables (a row
 /// per clip frame: raw goal features, encoded targets) and the normaliser (means, then spreads).
@@ -2541,26 +2679,60 @@ pub fn latStepSeed(seed: u32, step: u32) u32 {
     return latHash(seed +% step *% 0x27d4eb2f);
 }
 
+/// A NUMBER's SHARE OF THE ACTION FILTER (`lat_act`, `lat_act_bwd`): an action holds the joints' offsets first, then
+/// each limb's stiffness - its last `lat_stiffness_count` numbers - and each kind is smoothed at its own share,
+/// `lat_filter` for the offsets, `lat_stiffness_filter` for the stiffnesses (as the device's `filter_actions` chooses).
+fn latFilterShare(number: u32) f32 {
+    const offset_count: u32 = params.count - params.lat_stiffness_count;
+    return if (number < offset_count) params.lat_filter else params.lat_stiffness_filter;
+}
+
 /// The policy's action into its row: `lat_scale * raw` into the wide row's action columns, so the
 /// world model's next step reads the action the policy just chose. `raw` is the policy's output,
 /// contiguous at `x_off` (`count` per row); the action columns start at `y_off`, rows `stride` apart.
 /// One thread per (row, action). With `lat_sigma` > 0 the action carries exploration noise,
 /// `lat_scale * (raw + lat_sigma * latNoise(lat_seed, row, action))` - the policy learns corrections
 /// that still work when it cannot act exactly as it meant to.
+///
+/// THE ACTION FILTER, with `lat_filter` below 1: the physics is given a blend of what the policy chose and what it was
+/// given at the previous decision, so imagination writes the same blend -
+///
+///     action = lat_filter x lat_scale x (raw + noise)  +  (1 - lat_filter) x the previous action
+///
+/// the previous action read at `lat_prev_action`, rows `lat_prev_action_stride` apart: the previous step's action
+/// columns in its wide row, or, at a window's first step, the action given before the window began. The world model
+/// then reads the action the physics would be given. At 1 the action is written as it always was, exactly.
 pub fn lat_act(id: u32) void {
     if (id >= params.rows * params.count) {
         return;
     }
     const r: u32 = id / params.count;
     const j: u32 = id % params.count;
-    const raw: f32 = b_acts[params.x_off + r * params.count + j];
-    const noisy: f32 = raw + params.lat_sigma * latNoise(params.lat_seed, r, j);
-    b_acts[params.y_off + r * params.stride + j] = params.lat_scale * noisy;
+    const raw_at: u32 = params.x_off + r * params.count + j;
+    const raw: f32 = b_acts[raw_at];
+    const noise: f32 = latNoise(params.lat_seed, r, j);
+    const scaled_noise: f32 = params.lat_sigma * noise;
+    const noisy: f32 = raw + scaled_noise;
+    const chosen: f32 = params.lat_scale * noisy;
+    const written_at: u32 = params.y_off + r * params.stride + j;
+    const share: f32 = latFilterShare(j);
+    if (share == 1.0) {
+        b_acts[written_at] = chosen;
+        return;
+    }
+    // The action filter: this number's share of the new action, the rest of the action applied before it.
+    const previous_at: u32 = params.lat_prev_action + r * params.lat_prev_action_stride + j;
+    const previous: f32 = b_acts[previous_at];
+    const kept_share: f32 = 1.0 - share;
+    const new_part: f32 = share * chosen;
+    const kept_part: f32 = kept_share * previous;
+    b_acts[written_at] = new_part + kept_part;
 }
 
 /// The action's gradient back to the policy's raw output: `d raw = lat_scale * d action +
-/// lat_penalty * raw`. The first term undoes `lat_act`'s scale; the second is the action price's
-/// gradient (mean raw^2, times its weight). The noise was ADDED, so it contributes nothing here.
+/// lat_penalty * raw` (with the action filter, the action's carried gradient - below). The first term undoes
+/// `lat_act`'s scale; the second is the action price's gradient (mean raw^2, times its weight). The noise was ADDED,
+/// so it contributes nothing here.
 /// `d action` is the world model's input gradient in its action columns (from `dx_off`, rows `stride`
 /// apart - the input-gradient block's width, not the wide row's); `raw` the policy's output
 /// (contiguous at `x_off`); `d raw` written contiguous at `dy_off`. One thread per (row, action).
@@ -2570,15 +2742,50 @@ pub fn lat_act_bwd(id: u32) void {
     }
     const r: u32 = id / params.count;
     const j: u32 = id % params.count;
-    const d_action: f32 = b_dacts[params.dx_off + r * params.stride + j];
-    const raw: f32 = b_acts[params.x_off + r * params.count + j];
+    const action_gradient_at: u32 = params.dx_off + r * params.stride + j;
+    const d_action: f32 = b_dacts[action_gradient_at];
+    const raw_at: u32 = params.x_off + r * params.count + j;
+    const raw: f32 = b_acts[raw_at];
     // Smoothness: this step's action is pulled toward its neighbours in the window - the gradient of
     // w |a_k - a_(k-1)|^2 summed over the window, from the pair before and the pair after. A missing
     // neighbour's offset is this step's own, contributing exactly zero.
-    const before: f32 = b_acts[params.lat_prev + r * params.count + j];
-    const after: f32 = b_acts[params.lat_next + r * params.count + j];
-    const smooth: f32 = params.lat_smooth * ((raw - before) + (raw - after));
-    b_dacts[params.dy_off + r * params.count + j] = params.lat_scale * d_action + params.lat_penalty * raw + smooth;
+    const before_at: u32 = params.lat_prev + r * params.count + j;
+    const after_at: u32 = params.lat_next + r * params.count + j;
+    const before: f32 = b_acts[before_at];
+    const after: f32 = b_acts[after_at];
+    const pull_from_before: f32 = raw - before;
+    const pull_from_after: f32 = raw - after;
+    const smooth: f32 = params.lat_smooth * (pull_from_before + pull_from_after);
+    // The action price's gradient: the raw output's own size, priced.
+    const price_gradient: f32 = params.lat_penalty * raw;
+    // What the next decision's policy, reading this action as the one applied before it, sends back to it.
+    const reads_applied: bool = params.lat_applied_gradient != 0;
+    const from_policy_at: u32 = params.lat_applied_gradient + r * params.count + j;
+    const from_policy: f32 = if (reads_applied) b_dacts[from_policy_at] else 0.0;
+    const raw_gradient_at: u32 = params.dy_off + r * params.count + j;
+    // This number's share, the same at every step: a number at 1 never reads or leaves a carry.
+    const share: f32 = latFilterShare(j);
+    if (share == 1.0) {
+        const action_gradient: f32 = d_action + from_policy;
+        const through_action: f32 = params.lat_scale * action_gradient;
+        b_dacts[raw_gradient_at] = through_action + price_gradient + smooth;
+        return;
+    }
+    // THE ACTION FILTER (`lat_act`): a step's action feeds the next step's by (1 - lat_filter), so the action's whole
+    // gradient is its own plus (1 - lat_filter) x the next step's whole gradient. The backward runs the steps last to
+    // first, so the CARRY at `lat_carry` holds the next step's whole gradient when this step reads it (zero before the
+    // window's last step), and leaves this step's for the one before. The raw output's share of the action is
+    // lat_filter x lat_scale.
+    const carry_at: u32 = params.lat_carry + r * params.count + j;
+    const kept_share: f32 = 1.0 - share;
+    const later_whole_gradient: f32 = b_dacts[carry_at];
+    const carried: f32 = kept_share * later_whole_gradient;
+    const own_and_carried: f32 = d_action + carried;
+    const whole_gradient: f32 = own_and_carried + from_policy;
+    b_dacts[carry_at] = whole_gradient;
+    const raw_share: f32 = share * params.lat_scale;
+    const through_action: f32 = raw_share * whole_gradient;
+    b_dacts[raw_gradient_at] = through_action + price_gradient + smooth;
 }
 
 // -- SUPERTRACK'S FAILURE BARRIER --
@@ -3857,108 +4064,9 @@ pub fn st_reduce(id: u32) void {
     b_grads[params.w_off + id] = a;
 }
 
-pub const kernels = [_][:0]const u8{
-    "dense_fwd",
-    "act_bwd",
-    "dense_bwd_x",
-    "dense_bwd_w",
-    "mse_bwd",
-    "mse_value",
-    "adam",
-    "ppo_mean_grad",
-    "ppo_logstd_grad",
-    "squash_fwd",
-    "squash_logp",
-    "sac_target",
-    "min_route",
-    "squash_bwd",
-    "squash_logstd_grad",
-    "alpha_grad",
-    "polyak",
-    "cp_wm_input",
-    "cp_wm_input_bwd",
-    "cp_force",
-    "cp_force_bwd",
-    "cp_step",
-    "cp_step_bwd",
-    "cp_track_bwd",
-    "add_block",
-    "lat_advance",
-    "lat_take",
-    "lat_gather",
-    "lat_act",
-    "lat_act_bwd",
-    "st_policy_fwd",
-    "st_policy_bwd",
-    "st_world_fwd",
-    "st_world_bwd",
-    "st_reduce",
-    "norm_fwd",
-    "mish_fwd",
-    "simnorm_fwd",
-    "mish_bwd",
-    "simnorm_bwd",
-    "norm_params_bwd",
-    "norm_bwd",
-    "twohot_fwd",
-    "twohot_bwd",
-    "twohot_decode",
-    "place_columns",
-    "take_columns",
-    "grad_square_partials",
-    "clip_factor",
-    "adam_clipped",
-    "policy_distill_bwd",
-    "policy_divergence",
-    "running_scale_update",
-    "policy_draw",
-    "value_target_combine",
-    "mask_values",
-    "mask_gradients",
-    "broadcast_rows",
-    "plan_score_combine",
-    "copy_row_blocks",
-    "mppi_sample",
-    "mppi_elites",
-    "mppi_refit",
-    "mppi_begin",
-    "mppi_choose",
-    "mppi_explore",
-    "lat_barrier_bwd",
-    "lat_tracking_cost",
-    "twohot_value_bwd",
-    "ensemble_tail_weights",
-    "flow_time_features",
-    "flow_euler_step",
-    "flow_path_points",
-    "flow_dpg_bwd",
-    "hashed_noise",
-    "copy_columns",
-    "hashed_uniforms",
-    "copy_columns_from_gradients",
-    "plan_gather",
-    "plan_mailbox",
-    "synergy_decode_add",
-    "synergy_project_gradient",
-    "flow_draw_losses",
-    "fpo_advantages",
-    "fpo_velocity_gradient",
-    "fpo_normalize_advantages",
-    "stat_root_mean_square",
-    "stat_mean_square_difference",
-    "stat_mean_and_deviation",
-    "fpo_ratio_stats",
-    "stat_copy",
-    "critic_value_stats",
-    "stat_barrier",
-    "share_factor",
-    "add_scaled_gradients",
-    "gradients_from_sum",
-    "plan_gain_stats",
-    "lat_skip_gather",
-    "lat_skip_targets",
-    "lat_scale_columns",
-};
+/// The kit's kernels by their entry names, in order: the one list of them, in `zn_mlp_kernels.zig` - a file of its
+/// own so the build script can read it too.
+pub const kernels = @import("zn_mlp_kernels.zig").kernels;
 
 // *** THE EXPORT HOOK. Without it the SPIR-V compile of this file exports NOTHING: a 68-byte
 // module, an empty compute.wgsl for every entry, and `initGpu` failing on

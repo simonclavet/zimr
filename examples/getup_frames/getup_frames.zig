@@ -157,9 +157,9 @@ fn footAt(s: *State, foot_name: []const u8, toe_name: []const u8) Foot {
     var tilt: f32 = 0.0;
     var at: Vec = vec(0, 0, 0);
     if (bodyNamed(names, foot_name)) |foot| {
-        at = s.data.body_xpos[foot];
+        at = s.data.body_positions[foot];
         if (bodyNamed(names, toe_name)) |toe| {
-            const along: Vec = s.data.body_xpos[toe] - at;
+            const along: Vec = s.data.body_positions[toe] - at;
             const span: f32 = length3(along);
             if (span > 1.0e-6) {
                 tilt = @abs(asinRad(clamp(along[2] / span, -1.0, 1.0))) * deg_per_rad;
@@ -208,7 +208,7 @@ fn captureAt(s: *State, at: usize) void {
 fn poseAt(s: *State, frame: usize) void {
     const m: *const rbt.Model = &s.imported.model;
     const at: usize = @min(frame, s.clip.frame_count - 1);
-    @memcpy(s.data.pos, s.clip.pose(at));
+    @memcpy(s.data.joint_positions, s.clip.pose(at));
     s.data.stage = .stale;
     rbt.kinematics(m, &s.data);
     s.left = footAt(s, "foot_left", "toe_left");
@@ -339,11 +339,11 @@ fn drawPanel(s: *State, f: *z.Frame) bool {
 fn drawRobot(s: *State, gl: *z.WgpuGl, d: *const rbt.Data, tint: Color) void {
     const m: *const rbt.Model = &s.imported.model;
     const to_y_up: Mat = zm.zUpToYUp();
-    for (0..m.ngeom) |g| {
+    for (0..m.geom_count) |g| {
         const body: u32 = m.geom_body[g];
-        const body_rot: Quat = d.body_xrot[body];
-        const world_pos: Vec = d.body_xpos[body] + rotate(body_rot, m.geom_pos[g]);
-        const world_rot: Mat = quatToMat(qmul(body_rot, m.geom_rot[g]));
+        const body_rot: Quat = d.body_orientations[body];
+        const world_pos: Vec = d.body_positions[body] + rotate(body_rot, m.geom_local_position[g]);
+        const world_rot: Mat = quatToMat(qmul(body_rot, m.geom_local_rotation[g]));
         const place: Mat = mulMat(
             mulMat(to_y_up, translation(world_pos[0], world_pos[1], world_pos[2])),
             world_rot,
@@ -363,7 +363,7 @@ fn drawRobot(s: *State, gl: *z.WgpuGl, d: *const rbt.Data, tint: Color) void {
                 // caps (`Spine3`: radius 0.13, a cylinder part 0.09 long), so the cylinder alone draws a flat disk.
                 // zimr's capsule runs along its geom's LOCAL Y (`GeomShape`); its two segment ends, in the world
                 // where z is up, then in the drawing where y is up - (x, y, z) to (x, z, -y), as `zUpToYUp` turns.
-                const geom_quaternion: Quat = qmul(body_rot, m.geom_rot[g]);
+                const geom_quaternion: Quat = qmul(body_rot, m.geom_local_rotation[g]);
                 const half_axis_local: Vec = vec(0, cap.half_height, 0);
                 const half_axis_z_up: Vec = rotate(geom_quaternion, half_axis_local);
                 const half_axis_drawn: Vec = vec(half_axis_z_up[0], half_axis_z_up[2], -half_axis_z_up[1]);

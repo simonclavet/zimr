@@ -77,6 +77,7 @@ const length3 = zm.length3;
 const clamp = zm.clamp;
 const float = zm.float;
 const Mat = zm.Mat;
+const assertUnreachable = zm.assertUnreachable;
 
 const timestep: f32 = 1.0 / 240.0;
 
@@ -244,7 +245,7 @@ const State = struct {
     /// treats the arm as immovable, so an arm moving impossibly fast delivers an impossible
     /// impulse and nothing pushes back.
     commanded: [7]f32,
-    /// Scratch for the controller, sized from `nv` - which now counts the crates too.
+    /// Scratch for the controller, sized from `dof_count` - which now counts the crates too.
     desired_acc: []f32,
     /// Which DOFs have a motor. The crates' free joints do not; see `ctl.Actuation`.
     actuation: ctl.Actuation,
@@ -329,7 +330,7 @@ fn loadObjMesh(gpa: Allocator, source: []const u8) !z.Mesh {
 ///
 /// ** BUT IT MUST HOLD THE ARM UP FIRST. This was 25 N*m, "enough to hold itself up", and it
 /// was not: holding "wind up" costs `lbr_iiwa_joint_2` **46.7 N*m** of gravity alone
-/// (`bias_force`, which agrees with a finite difference of the potential energy). At 25 the
+/// (`bias_joint_forces`, which agrees with a finite difference of the potential energy). At 25 the
 /// shoulder saturated from the first frame and the arm sagged 1.2 rad onto the tower, so every
 /// sweep started from a collapse. At 100 it held "wind up" exactly and tracked the sweep to
 /// 0.003 rad, no joint at the limit in any quarter-second sample. The slider still goes down
@@ -402,7 +403,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .accumulator = 0,
         .pose = 4, // "wind up", so the first thing pressed can be "sweep"
         .commanded = poses[4].angles,
-        .desired_acc = &.{}, // sized from `nv` once the model exists
+        .desired_acc = &.{}, // sized from `dof_count` once the model exists
         .actuation = undefined, // needs the model; built below
         .ik_scratch = &.{},
         .ik_pose = &.{},
@@ -440,13 +441,13 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // looks again. The slice is a file-scope constant, so the model's arena never frees it.
     s.model.exclude_pairs = &base_and_first_link;
     s.data = try rbt.Data.init(gpa, &s.model);
-    s.desired_acc = try gpa.alloc(f32, s.model.nv);
+    s.desired_acc = try gpa.alloc(f32, s.model.dof_count);
     s.actuation = try ctl.Actuation.init(gpa, &s.model);
     s.ik_scratch = try gpa.alloc(Vec, ctl.Ik.scratchSize(&s.model));
-    s.ik_pose = try gpa.alloc(f32, s.model.nq);
+    s.ik_pose = try gpa.alloc(f32, s.model.coordinate_count);
     // Start at the commanded pose so the first frame is not a lunge.
     for (poses[s.pose].angles, 0..) |angle, i| {
-        s.data.pos[i] = angle;
+        s.data.joint_positions[i] = angle;
     }
 
     // -- THE WORLD, BUILT THROUGH `s.world` --
@@ -541,7 +542,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 /// natural frequency omega and damping ratio zeta.
 ///
 /// It costs one `mulM` - a sparse multiply the engine already has because inverse dynamics
-/// needed it - plus `bias_force`, which IS the torque that holds the arm still, so gravity
+/// needed it - plus `bias_joint_forces`, which IS the torque that holds the arm still, so gravity
 /// is cancelled exactly rather than fought.
 /// Slide the commanded pose toward the selected one at a bounded rate.
 ///
@@ -575,7 +576,7 @@ fn advanceTrajectory(s: *State, dt: f32) void {
 fn solveIk(s: *State) void {
     const wrist: u32 = @intCast(kuka.spec.bodies.len); // last link of the arm
     // Save the live pose; the solve is destructive.
-    @memcpy(s.ik_pose, s.data.pos);
+    @memcpy(s.ik_pose, s.data.joint_positions);
 
     const result: ctl.Ik.Result = (ctl.Ik{ .max_iterations = 12 }).solve(
         &s.model,
@@ -590,9 +591,9 @@ fn solveIk(s: *State) void {
     // The solved ARM angles become the commanded pose; everything else - the crates' free
     // joints - is restored, because IK has no business moving them.
     for (0..7) |i| {
-        s.commanded[i] = s.data.pos[i];
+        s.commanded[i] = s.data.joint_positions[i];
     }
-    @memcpy(s.data.pos, s.ik_pose);
+    @memcpy(s.data.joint_positions, s.ik_pose);
     s.data.stage = .stale;
     rbt.forward(&s.model, &s.data);
 }
@@ -600,15 +601,15 @@ fn solveIk(s: *State) void {
 fn control(s: *State) void {
     // ** THE CONTROLLER ACTS ON THE ARM'S DOFs ONLY, and both halves of that matter.
     //
-    // Once the crates joined the tree `nv` went from 7 to 37 - seven arm joints plus six per
+    // Once the crates joined the tree `dof_count` went from 7 to 37 - seven arm joints plus six per
     // crate. Two things broke.
     //
-    // **The buffers.** `mulM` wants `nv`-vectors, and a `[7]f32` written up to `nv` is a
+    // **The buffers.** `mulM` wants `dof_count`-vectors, and a `[7]f32` written up to `dof_count` is a
     // buffer overrun. The engine caught the size mismatch (`mulM wants 37-vectors`) and
     // `factorM` then reported NaN pivots - the corruption surfacing one pass later.
     //
-    // *** AND THE CRATES MUST NOT BE HELD UP.** `bias_force` is the torque needed to keep
-    // every DOF still, INCLUDING gravity on the crates. Adding it across all of `nv` would
+    // *** AND THE CRATES MUST NOT BE HELD UP.** `bias_joint_forces` is the torque needed to keep
+    // every DOF still, INCLUDING gravity on the crates. Adding it across all of `dof_count` would
     // cancel their weight and leave five boxes hanging in the air. Gravity compensation is
     // something a MOTOR does, and crates have no motors.
     //
@@ -618,19 +619,19 @@ fn control(s: *State) void {
     const arm_dofs: usize = 7;
     @memset(s.desired_acc, 0);
     for (0..arm_dofs) |i| {
-        s.desired_acc[i] = s.kp * (s.commanded[i] - s.data.pos[i]) - s.kv * s.data.vel[i];
+        s.desired_acc[i] = s.kp * (s.commanded[i] - s.data.joint_positions[i]) - s.kv * s.data.joint_velocities[i];
     }
-    rbt.mulM(&s.model, &s.data, s.desired_acc, s.data.applied_force);
+    rbt.mulM(&s.model, &s.data, s.desired_acc, s.data.applied_joint_forces);
 
-    for (0..s.model.nv) |i| {
+    for (0..s.model.dof_count) |i| {
         if (i < arm_dofs) {
             // * GRAVITY COMPENSATION FIRST, THEN CLAMP THE TOTAL. A motor's rating bounds
             // everything it does, including holding itself up - clamping only the tracking
             // part would let a weak arm cheat by treating its own weight as free.
-            const wanted: f32 = s.data.applied_force[i] + s.data.bias_force[i];
-            s.data.applied_force[i] = clamp(wanted, -s.motor_limit, s.motor_limit);
+            const wanted: f32 = s.data.applied_joint_forces[i] + s.data.bias_joint_forces[i];
+            s.data.applied_joint_forces[i] = clamp(wanted, -s.motor_limit, s.motor_limit);
         } else {
-            s.data.applied_force[i] = 0;
+            s.data.applied_joint_forces[i] = 0;
         }
     }
 }
@@ -643,7 +644,7 @@ fn crateBody(i: usize) u32 {
 
 fn totalMass(m: *const rbt.Model) f32 {
     var total: f32 = 0;
-    for (1..m.nbody) |bi| {
+    for (1..m.body_count) |bi| {
         total += m.body_mass[bi];
     }
     return total;
@@ -658,19 +659,19 @@ fn totalMass(m: *const rbt.Model) f32 {
 fn resetCrate(s: *State) void {
     for (0..crate_count) |i| {
         const body: u32 = crateBody(i);
-        const joint: u32 = s.model.body_jnt_adr[body];
-        const q: u32 = s.model.jnt_qpos_adr[joint];
-        const v: u32 = s.model.jnt_dof_adr[joint];
+        const joint: u32 = s.model.body_first_joint[body];
+        const q: u32 = s.model.joint_first_coordinate[joint];
+        const v: u32 = s.model.joint_first_dof[joint];
         const at: Vec = cratePosition(i);
-        s.data.pos[q + 0] = at[0];
-        s.data.pos[q + 1] = at[1];
-        s.data.pos[q + 2] = at[2];
+        s.data.joint_positions[q + 0] = at[0];
+        s.data.joint_positions[q + 1] = at[1];
+        s.data.joint_positions[q + 2] = at[2];
         // Identity quaternion, in the engine's (x, y, z, w) order.
-        s.data.pos[q + 3] = 0;
-        s.data.pos[q + 4] = 0;
-        s.data.pos[q + 5] = 0;
-        s.data.pos[q + 6] = 1;
-        @memset(s.data.vel[v..][0..6], 0);
+        s.data.joint_positions[q + 3] = 0;
+        s.data.joint_positions[q + 4] = 0;
+        s.data.joint_positions[q + 5] = 0;
+        s.data.joint_positions[q + 6] = 1;
+        @memset(s.data.joint_velocities[v..][0..6], 0);
     }
     s.data.stage = .stale;
     s.peak_force = 0;
@@ -678,7 +679,7 @@ fn resetCrate(s: *State) void {
 
 /// Push the slider's mass into the model, live.
 ///
-/// * NO REBUILD NEEDED. `body_inertia` is read by `crb` every step to form the mass matrix,
+/// * NO REBUILD NEEDED. `body_local_inertia` is read by `crb` every step to form the mass matrix,
 /// so scaling it here changes the physics from the next step on - the crate genuinely becomes
 /// heavier rather than being re-created heavier. Rotational inertia scales with mass for a
 /// box of fixed size, so the whole tensor takes the same factor.
@@ -690,7 +691,7 @@ fn applyCrateMass(s: *State) void {
         // Scaling by `target / current` is the right operation - it keeps the inertia tensor
         // consistent with the mass without re-deriving it - but a zero or non-finite `current`
         // turns the factor into `inf`, and `0 * inf` is NaN. That NaN then propagates into
-        // `body_inertia`, into `M`, and surfaces as `factorM: pivot N is nan`, which names the
+        // `body_local_inertia`, into `M`, and surfaces as `factorM: pivot N is nan`, which names the
         // place it became VISIBLE rather than where it came from.
         //
         // A device report of exactly that assert could not be reproduced here, so this is a
@@ -707,10 +708,10 @@ fn applyCrateMass(s: *State) void {
             continue;
         }
         s.model.body_mass[body] *= scale;
-        s.model.body_inertia[body].mass *= scale;
-        s.model.body_inertia[body].diag *= splat(scale);
-        s.model.body_inertia[body].off *= splat(scale);
-        s.model.body_inertia[body].h *= splat(scale);
+        s.model.body_local_inertia[body].mass *= scale;
+        s.model.body_local_inertia[body].diag *= splat(scale);
+        s.model.body_local_inertia[body].off *= splat(scale);
+        s.model.body_local_inertia[body].h *= splat(scale);
     }
     // ** AND THE SUBTREE MASSES, which are NOT recomputed each step. Miss this and the
     // model is internally inconsistent - 100 kg bodies inside a subtree that still believes
@@ -771,7 +772,7 @@ fn update(f: *z.Frame, s: *State) void {
         //   6. step
         //
         // * `forward` USED TO COME AFTER `sync`, and that was a full step of positional lag:
-        // the proxies were steered from `body_xpos` computed BEFORE the previous
+        // the proxies were steered from `body_positions` computed BEFORE the previous
         // integration, so the collision detector was always testing where the bodies had
         // been, not where they were.
         //
@@ -789,10 +790,10 @@ fn update(f: *z.Frame, s: *State) void {
         rbt.forward(&s.model, &s.data);
         if (s.physics_on) {
             s.bridge.sync(&s.world, &s.model, &s.data) catch |err| {
-                zm.assertUnreachable(@src(), "proxy sync failed: {t}", .{err});
+                assertUnreachable(@src(), "proxy sync failed: {t}", .{err});
             };
             zp.step(&s.world, timestep) catch |err| {
-                zm.assertUnreachable(@src(), "world step failed: {t}", .{err});
+                assertUnreachable(@src(), "world step failed: {t}", .{err});
             };
             s.bridge.harvest(&s.data);
         } else {
@@ -822,8 +823,12 @@ fn update(f: *z.Frame, s: *State) void {
     s.fastest_crate = 0;
     for (0..crate_count) |i| {
         const body: u32 = crateBody(i);
-        const v: u32 = s.model.jnt_dof_adr[s.model.body_jnt_adr[body]];
-        const speed: f32 = length3(vec(s.data.vel[v], s.data.vel[v + 1], s.data.vel[v + 2]));
+        const v: u32 = s.model.joint_first_dof[s.model.body_first_joint[body]];
+        const speed: f32 = length3(vec(
+            s.data.joint_velocities[v],
+            s.data.joint_velocities[v + 1],
+            s.data.joint_velocities[v + 2],
+        ));
         s.fastest_crate = @max(s.fastest_crate, speed);
     }
     s.fastest_ever = @max(s.fastest_ever, s.fastest_crate);
@@ -870,7 +875,7 @@ fn update(f: *z.Frame, s: *State) void {
     })) |window| {
         defer window.close();
 
-        u.text("{d} bodies   {d} DOF   {d:.1} kg", .{ s.model.nbody - 1, s.model.nv, totalMass(&s.model) });
+        u.text("{d} bodies   {d} DOF   {d:.1} kg", .{ s.model.body_count - 1, s.model.dof_count, totalMass(&s.model) });
 
         // * The mesh readout. Zero here means the geometry did not load, which is a very
         // different problem from the geometry not being drawn - and telling them apart from
@@ -880,7 +885,10 @@ fn update(f: *z.Frame, s: *State) void {
         // The joint name the generated enum makes safe to write. `lbr_iiwa_joint_4` is
         // checked at compile time - the payoff for emitting Zig rather than parsing at
         // runtime.
-        u.text("elbow (joint_4) = {d:.3} rad", .{s.data.pos[@backingInt(kuka.Model.Joint.lbr_iiwa_joint_4)]});
+        u.text(
+            "elbow (joint_4) = {d:.3} rad",
+            .{s.data.joint_positions[@backingInt(kuka.Model.Joint.lbr_iiwa_joint_4)]},
+        );
 
         // * THE PANEL MUST FIT WITHOUT SCROLLING, on a phone, which is where these demos
         // are actually looked at.
@@ -946,7 +954,7 @@ fn update(f: *z.Frame, s: *State) void {
         var used: usize = 0;
         for (0..crate_count) |i| {
             const body: u32 = crateBody(i);
-            const up: Vec = rotate(s.data.body_xrot[body], vec(0, 1, 0));
+            const up: Vec = rotate(s.data.body_orientations[body], vec(0, 1, 0));
             const tilt: f32 = acosRad(clamp(up[1], -1, 1));
             var touching: u32 = 0;
             for (0..s.data.contact_count) |c| {
@@ -1039,13 +1047,13 @@ fn update(f: *z.Frame, s: *State) void {
     // and the shape is a rigid decoration hanging off that frame. Nothing here knows the
     // robot is a KUKA either - it walks whatever tree the model describes.
     var bi: u32 = 1;
-    while (bi < s.model.nbody) : (bi += 1) {
+    while (bi < s.model.body_count) : (bi += 1) {
         const mesh_index: usize = bi - 1;
         if (s.show_meshes and mesh_index < s.meshes.len) {
-            const at: Vec = s.data.body_xpos[bi];
+            const at: Vec = s.data.body_positions[bi];
             s.transform[0] = mulMat(
                 zm.translation(at[0], at[1], at[2]),
-                zm.quatToMat(s.data.body_xrot[bi]),
+                zm.quatToMat(s.data.body_orientations[bi]),
             );
             z.drawMeshInstanced(gl, &s.meshes[mesh_index], &s.transform, link_col);
         }
@@ -1055,19 +1063,19 @@ fn update(f: *z.Frame, s: *State) void {
     // is these eight frames, and the meshes affect nothing.
     if (s.show_frames) {
         bi = 1;
-        while (bi < s.model.nbody) : (bi += 1) {
+        while (bi < s.model.body_count) : (bi += 1) {
             const parent: u32 = s.model.body_parent[bi];
-            z.drawLine3D(gl, s.data.body_xpos[parent], s.data.body_xpos[bi], joint_col);
-            z.drawSphere(gl, s.data.body_xpos[bi], .{
+            z.drawLine3D(gl, s.data.body_positions[parent], s.data.body_positions[bi], joint_col);
+            z.drawSphere(gl, s.data.body_positions[bi], .{
                 .radius = 0.03,
                 .rings = 8,
                 .slices = 12,
                 .color = joint_col,
             });
         }
-        const last: u32 = s.model.nbody - 1;
-        const flange: Vec = s.data.body_xpos[last] +
-            rotate(s.data.body_xrot[last], vec(0, 0, 0.08));
+        const last: u32 = s.model.body_count - 1;
+        const flange: Vec = s.data.body_positions[last] +
+            rotate(s.data.body_orientations[last], vec(0, 0, 0.08));
         z.drawSphere(gl, flange, .{ .radius = 0.025, .rings = 8, .slices = 12, .color = tip_col });
     }
 
@@ -1085,7 +1093,7 @@ fn update(f: *z.Frame, s: *State) void {
             .slices = 12,
             .color = if (s.ik_reached) goal_reached_col else goal_straining_col,
         });
-        z.drawLine3D(gl, s.data.body_xpos[arm_tip], s.ik_goal, goal_straining_col);
+        z.drawLine3D(gl, s.data.body_positions[arm_tip], s.ik_goal, goal_straining_col);
     }
     // -- THE CRATE --
     //
@@ -1101,8 +1109,12 @@ fn update(f: *z.Frame, s: *State) void {
     for (0..crate_count) |i| {
         const body: u32 = crateBody(i);
         s.transform[0] = mulMat(
-            zm.translation(s.data.body_xpos[body][0], s.data.body_xpos[body][1], s.data.body_xpos[body][2]),
-            zm.quatToMat(s.data.body_xrot[body]),
+            zm.translation(
+                s.data.body_positions[body][0],
+                s.data.body_positions[body][1],
+                s.data.body_positions[body][2],
+            ),
+            zm.quatToMat(s.data.body_orientations[body]),
         );
         z.drawMeshInstanced(gl, &s.crate_mesh, &s.transform, tip_col);
     }

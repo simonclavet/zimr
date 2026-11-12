@@ -86,7 +86,7 @@ pub const Imported = struct {
     }
 
     /// Tree index of a body, or null.
-    /// Index of a sensor by name, for reading `data.sensor_data[model.sensor_adr[i]]`.
+    /// Index of a sensor by name, for reading `data.sensor_data[model.sensor_first_value[i]]`.
     pub fn sensorIndex(self: *const Imported, name: []const u8) ?u32 {
         for (self.sensor_names, 0..) |candidate, i| {
             if (name.len > 0 and eql(u8, candidate, name)) {
@@ -516,9 +516,9 @@ pub fn buildMultiScene(
     // `(0, 0, -0.213)`**, so the matcher only ever disambiguated them through parent names it
     // had assigned on previous iterations. It worked, and it was one symmetric model away
     // from silently pairing the wrong leg.
-    const names: [][]const u8 = try gpa.alloc([]const u8, model.nbody);
+    const names: [][]const u8 = try gpa.alloc([]const u8, model.body_count);
     errdefer gpa.free(names);
-    const owned: []bool = try gpa.alloc(bool, model.nbody);
+    const owned: []bool = try gpa.alloc(bool, model.body_count);
     errdefer gpa.free(owned);
     @memset(owned, false);
 
@@ -648,8 +648,8 @@ fn isJointBoundary(model: *const rbt.Model, length: usize) bool {
         return false;
     }
     var total: usize = 0;
-    for (0..model.njnt) |j| {
-        total += switch (model.jnt_type[j]) {
+    for (0..model.joint_count) |j| {
+        total += switch (model.joint_type[j]) {
             .free => 7,
             .ball => 4,
             .hinge, .slide => 1,
@@ -685,7 +685,7 @@ pub fn importSource(gpa: Allocator, source: []const u8, options: rbt.Options) !I
 /// * THE POSE A LEGGED ROBOT HAS TO START FROM. A quadruped at its zero pose is a tangle of
 /// straight legs; every Menagerie model ships a `home` key because standing is where control
 /// begins. Lengths are checked rather than trusted - a key written for a different model is a
-/// plausible thing to load, and silently taking the first `nq` numbers of it would produce a
+/// plausible thing to load, and silently taking the first `coordinate_count` numbers of it would produce a
 /// robot bent into a shape nobody chose.
 pub fn applyKeyframe(model: *const rbt.Model, data: *rbt.Data, key: mjcf.Keyframe) bool {
     // -- ** THE KEYFRAME MAY BE SHORTER THAN THE MODEL, and refusing that was wrong --
@@ -707,10 +707,10 @@ pub fn applyKeyframe(model: *const rbt.Model, data: *rbt.Data, key: mjcf.Keyfram
     // own pose and must not be. The difference is whether the length is the total qpos width
     // of some PREFIX OF JOINTS - a partial robot is a coherent thing to pose, a partial
     // quaternion is not.
-    if (key.qpos.len > model.nq or !isJointBoundary(model, key.qpos.len)) {
+    if (key.qpos.len > model.coordinate_count or !isJointBoundary(model, key.qpos.len)) {
         return false;
     }
-    @memcpy(data.pos[0..key.qpos.len], key.qpos);
+    @memcpy(data.joint_positions[0..key.qpos.len], key.qpos);
     // * A KEYFRAME IS A TELEPORT - see `rbt.Data.teleported`. Set here rather than left to
     // each caller, because there are many callers and one of them will forget.
     data.teleported = true;
@@ -727,25 +727,25 @@ pub fn applyKeyframe(model: *const rbt.Model, data: *rbt.Data, key: mjcf.Keyfram
     //
     // Caught by the FK test only because the Go1 is SYMMETRIC and the test pose was not: a
     // symmetric pose would have agreed to 1e-4 while being wrong.
-    for (0..model.njnt) |j| {
-        const q: u32 = model.jnt_qpos_adr[j];
+    for (0..model.joint_count) |j| {
+        const q: u32 = model.joint_first_coordinate[j];
         // * ONLY THE JOINTS THE KEYFRAME ACTUALLY WROTE. Reordering a free body's quaternion
         // that the copy never touched would spin a crate every time a pose button was pressed.
         if (q + 4 > key.qpos.len) {
             continue;
         }
-        switch (model.jnt_type[j]) {
+        switch (model.joint_type[j]) {
             // (x, y, z, quat) - the quaternion starts three in.
-            .free => reorderQuat(data.pos[q + 3 ..][0..4]),
+            .free => reorderQuat(data.joint_positions[q + 3 ..][0..4]),
             // A ball joint is a bare quaternion.
-            .ball => reorderQuat(data.pos[q..][0..4]),
+            .ball => reorderQuat(data.joint_positions[q..][0..4]),
             else => {},
         }
     }
-    if (key.qvel.len == model.nv) {
-        @memcpy(data.vel, key.qvel);
+    if (key.qvel.len == model.dof_count) {
+        @memcpy(data.joint_velocities, key.qvel);
     } else {
-        @memset(data.vel, 0);
+        @memset(data.joint_velocities, 0);
     }
     data.stage = .stale;
     return true;
@@ -789,9 +789,9 @@ test "mjcf import: forward kinematics agrees with MuJoCo, body for body" {
 
     // Same pose MuJoCo was given: every HINGE set, the free joint left at its reference.
     var hinge_index: usize = 0;
-    for (0..model.njnt) |j| {
-        if (model.jnt_type[j] == .hinge) {
-            data.pos[model.jnt_qpos_adr[j]] = 0.15 + 0.05 * float(j);
+    for (0..model.joint_count) |j| {
+        if (model.joint_type[j] == .hinge) {
+            data.joint_positions[model.joint_first_coordinate[j]] = 0.15 + 0.05 * float(j);
         }
         hinge_index += 1;
     }
@@ -819,7 +819,7 @@ test "mjcf import: forward kinematics agrees with MuJoCo, body for body" {
 
     for (wanted) |want| {
         const body: u32 = imported.bodyIndex(want.name).?;
-        const got: Vec = data.body_xpos[body];
+        const got: Vec = data.body_positions[body];
         inline for (0..3) |k| {
             // 1e-4 is the plan's stated gate. The two engines differ in float ordering, not
             // in what they compute, so agreement is far tighter than this in practice.
@@ -853,10 +853,10 @@ test "mjcf import: a keyframe loads, and one of the wrong length is refused" {
     try expect(applyKeyframe(model, &data, robot.keyframes[0]));
     rbt.forward(model, &data);
     const torso: u32 = imported.bodyIndex("torso").?;
-    try expectApproxEqAbs(@as(f32, 0.596), data.body_xpos[torso][2], 1.0e-4);
+    try expectApproxEqAbs(@as(f32, 0.596), data.body_positions[torso][2], 1.0e-4);
 
     // * A KEY OF THE WRONG LENGTH IS REFUSED, not truncated. Loading a pose written for a
-    // different model is a plausible mistake, and quietly taking its first `nq` numbers
+    // different model is a plausible mistake, and quietly taking its first `coordinate_count` numbers
     // produces a robot bent into a shape nobody chose - with nothing to indicate why.
     const wrong: mjcf.Keyframe = .{ .name = "bogus", .qpos = &.{ 1, 2, 3 } };
     try expect(!applyKeyframe(model, &data, wrong));
@@ -919,9 +919,9 @@ test "mjcf import: a REAL QUADRUPED - Unitree Go1 from Menagerie, FK against MuJ
 
     // Start from `home`, then bend every hinge - the same recipe as the humanoid test.
     try expect(applyKeyframe(model, &data, robot.keyframes[0]));
-    for (0..model.njnt) |j| {
-        if (model.jnt_type[j] == .hinge) {
-            data.pos[model.jnt_qpos_adr[j]] = 0.15 + 0.05 * float(j);
+    for (0..model.joint_count) |j| {
+        if (model.joint_type[j] == .hinge) {
+            data.joint_positions[model.joint_first_coordinate[j]] = 0.15 + 0.05 * float(j);
         }
     }
     rbt.forward(model, &data);
@@ -944,7 +944,7 @@ test "mjcf import: a REAL QUADRUPED - Unitree Go1 from Menagerie, FK against MuJ
     };
     for (wanted) |want| {
         const body: u32 = imported.bodyIndex(want.name).?;
-        const got: Vec = data.body_xpos[body];
+        const got: Vec = data.body_positions[body];
         inline for (0..3) |k| {
             expectApproxEqAbs(want.pos[k], got[k], 1.0e-4) catch |err| {
                 std.log.err("go1 {s} axis {d}: want {d:.6} got {d:.6}", .{
@@ -984,7 +984,7 @@ test "mjcf import: an unnamed body is anonymous, not an error" {
     defer imported.deinit();
 
     // Both bodies are in the tree - the anonymous one is simulated like any other.
-    try expectEqual(@as(u32, 3), imported.model.nbody); // world + 2
+    try expectEqual(@as(u32, 3), imported.model.body_count); // world + 2
     try expect(imported.bodyIndex("named") != null);
 
     // ** AND THE EMPTY NAME FINDS NOTHING - not the world, not the anonymous body.
@@ -1014,7 +1014,7 @@ test "* mass and inertia match MuJoCo, not the collision geoms" {
 
     // MuJoCo reports 12.7434 kg for this model, which is the manufacturer's figure.
     var total: f32 = 0;
-    for (0..model.nbody) |b| {
+    for (0..model.body_count) |b| {
         total += model.body_mass[b];
     }
     try expectApproxEqAbs(@as(f32, 12.7434), total, 1.0e-3);
@@ -1040,7 +1040,7 @@ test "* mass and inertia match MuJoCo, not the collision geoms" {
     for (wanted) |want| {
         const b: u32 = imported.bodyIndex(want.name).?;
         try expectApproxEqAbs(want.mass, model.body_mass[b], 1.0e-4);
-        const diag: Vec = model.body_inertia[b].diag;
+        const diag: Vec = model.body_local_inertia[b].diag;
         const trace: f32 = diag[0] + diag[1] + diag[2];
         expectApproxEqAbs(want.trace, trace, 1.0e-5) catch |err| {
             std.log.err("{s}: inertia trace {d:.6}, want {d:.6}", .{ want.name, trace, want.trace });
@@ -1100,7 +1100,7 @@ test "mjcf import: a mesh geom becomes a collision hull" {
     defer imported.deinit();
 
     // The geom survives conversion as a hull rather than being skipped.
-    try expectEqual(@as(u32, 1), imported.model.ngeom);
+    try expectEqual(@as(u32, 1), imported.model.geom_count);
     const shape: rbt.GeomShape = imported.model.geom_shape[0];
     try expect(shape == .hull);
     try expect(shape.hull.points.len > 0);
@@ -1145,7 +1145,7 @@ test "mjcf import: a mesh that cannot be loaded degrades, it does not fail" {
     var imported: Imported = try build(gpa, &robot, .{ .max_contacts = 4 });
     defer imported.deinit();
     // The sphere still made it; only the unloadable mesh was dropped.
-    try expectEqual(@as(u32, 1), imported.model.ngeom);
+    try expectEqual(@as(u32, 1), imported.model.geom_count);
     try expect(imported.model.geom_shape[0] == .sphere);
 }
 
@@ -1184,9 +1184,9 @@ test "* two robots and a ball in ONE tree" {
     const model: *rbt.Model = &imported.model;
 
     // 13 + 16 + 1 ball, plus the world.
-    try expectEqual(@as(u32, 31), model.nbody);
+    try expectEqual(@as(u32, 31), model.body_count);
     // Both robots' actuators survive: 12 + 21.
-    try expectEqual(@as(u32, 33), model.nu);
+    try expectEqual(@as(u32, 33), model.actuator_count);
 
     // * THE PREFIX REACHES THE NAME LOOKUP, so a caller can still find either robot's parts.
     const trunk: u32 = imported.bodyIndex("dog/trunk").?;
@@ -1200,21 +1200,21 @@ test "* two robots and a ball in ONE tree" {
     // ** AND THEY ARE ACTUALLY IN DIFFERENT PLACES. The offset is applied to each robot's
     // ROOT only - adding it to every body would translate each link independently and take
     // the robot to pieces, which builds and simulates and looks like an exploded diagram.
-    try expectApproxEqAbs(@as(f32, -1.0), data.body_xpos[trunk][0], 1.0e-4);
-    try expectApproxEqAbs(@as(f32, 1.0), data.body_xpos[torso][0], 1.0e-4);
+    try expectApproxEqAbs(@as(f32, -1.0), data.body_positions[trunk][0], 1.0e-4);
+    try expectApproxEqAbs(@as(f32, 1.0), data.body_positions[torso][0], 1.0e-4);
 
     // * AND EACH ROBOT IS STILL ASSEMBLED. A hip 2 m from its own trunk would mean the
     // prefixing broke the parent links and fused or scattered the trees - the failure this
     // test exists to catch, because the build succeeds either way.
     const hip: u32 = imported.bodyIndex("dog/FR_hip").?;
-    try expect(length3(data.body_xpos[hip] - data.body_xpos[trunk]) < 0.3);
+    try expect(length3(data.body_positions[hip] - data.body_positions[trunk]) < 0.3);
 
     // The ball is a free body in the same tree, above them both.
     const ball_body: u32 = imported.bodyIndex("ball").?;
-    try expectApproxEqAbs(@as(f32, 2.0), data.body_xpos[ball_body][2], 1.0e-4);
+    try expectApproxEqAbs(@as(f32, 2.0), data.body_positions[ball_body][2], 1.0e-4);
 
     // One momentum budget: 18 + 27 for the robots, 6 for the ball.
-    try expectEqual(@as(u32, 51), model.nv);
+    try expectEqual(@as(u32, 51), model.dof_count);
 }
 
 test "mjcf: a keyframe applies to a robot inside a larger scene" {
@@ -1251,7 +1251,7 @@ test "mjcf: a keyframe applies to a robot inside a larger scene" {
     defer scene_model.deinit();
     // A free body is 7 numbers of qpos, so this stands in for the size mismatch without
     // needing the whole humanoid rebuilt inside a scene.
-    try expect(scene_model.nq == 7);
+    try expect(scene_model.coordinate_count == 7);
 
     // A keyframe LONGER than the model is still refused - that is a keyframe for a different
     // robot, and applying its prefix would be silent nonsense.
@@ -1308,10 +1308,10 @@ test "* mjcf import: sensors read what MuJoCo reads" {
     defer data.deinit();
 
     // The same state MuJoCo was given.
-    data.pos[0] = 0.3;
-    data.pos[1] = -0.6;
-    data.vel[0] = 1.1;
-    data.vel[1] = -0.7;
+    data.joint_positions[0] = 0.3;
+    data.joint_positions[1] = -0.6;
+    data.joint_velocities[0] = 1.1;
+    data.joint_velocities[1] = -0.7;
     data.stage = .stale;
     rbt.forward(model, &data);
 
@@ -1327,10 +1327,10 @@ test "* mjcf import: sensors read what MuJoCo reads" {
         .{ .name = "elbow_q", .value = -0.6 },
     }) |want| {
         const index: u32 = imported.sensorIndex(want.name).?;
-        expectApproxEqAbs(want.value, data.sensor_data[model.sensor_adr[index]], 1.0e-4) catch |err| {
+        expectApproxEqAbs(want.value, data.sensor_data[model.sensor_first_value[index]], 1.0e-4) catch |err| {
             std.log.err("{s}: got {d:.6}, want {d:.6}", .{
                 want.name,
-                data.sensor_data[model.sensor_adr[index]],
+                data.sensor_data[model.sensor_first_value[index]],
                 want.value,
             });
             return err;
@@ -1342,7 +1342,7 @@ test "* mjcf import: sensors read what MuJoCo reads" {
     // number only comes out right if the site's offset, its body's pose and the chain above
     // it are all correct together.
     const tip: u32 = imported.sensorIndex("tip_pos").?;
-    const at: u32 = model.sensor_adr[tip];
+    const at: u32 = model.sensor_first_value[tip];
     try expectApproxEqAbs(@as(f32, -0.029552), data.sensor_data[at + 0], 1.0e-4);
     try expectApproxEqAbs(@as(f32, 0.331264), data.sensor_data[at + 2], 1.0e-4);
 }
@@ -1365,7 +1365,7 @@ test "* mjcf import: a closed loop, and the derived anchor matches MuJoCo's" {
     var imported: Imported = try build(gpa, &robot, .{ .max_contacts = 4 });
     defer imported.deinit();
     const model: *rbt.Model = &imported.model;
-    try expect(model.neq == 1);
+    try expect(model.equality_count == 1);
 
     // -- * MuJoCo REPORTS `eq_data = [0.4, -0.3, 0, 0, -0.3, 0]` --
     //
@@ -1387,23 +1387,23 @@ test "* mjcf import: a closed loop, and the derived anchor matches MuJoCo's" {
     // which is what makes it a linkage rather than two arms.
     var data: rbt.Data = try .init(gpa, model);
     defer data.deinit();
-    data.pos[0] = 0.35;
+    data.joint_positions[0] = 0.35;
     data.stage = .stale;
     var worst_separation: f32 = 0;
     for (0..2000) |_| {
         rbt.forward(model, &data);
         rbt.step(model, &data);
-        const left: Vec = data.body_xpos[closure.a.body] +
-            zm.rotate(data.body_xrot[closure.a.body], closure.a.point);
-        const right: Vec = data.body_xpos[closure.b.body] +
-            zm.rotate(data.body_xrot[closure.b.body], closure.b.point);
+        const left: Vec = data.body_positions[closure.a.body] +
+            zm.rotate(data.body_orientations[closure.a.body], closure.a.point);
+        const right: Vec = data.body_positions[closure.b.body] +
+            zm.rotate(data.body_orientations[closure.b.body], closure.b.point);
         worst_separation = @max(worst_separation, length3(left - right));
     }
     // It starts 0.17 m apart because the twist opens the loop, and closes from there. What
     // matters is that it never runs away.
     try expect(worst_separation < 0.25);
     rbt.forward(model, &data);
-    try expectApproxEqAbs(@as(f32, 0), data.pos[0], 0.05);
+    try expectApproxEqAbs(@as(f32, 0), data.joint_positions[0], 0.05);
 }
 
 test "* mjcf import: a geared gripper, driven through one motor" {
@@ -1433,15 +1433,15 @@ test "* mjcf import: a geared gripper, driven through one motor" {
     var imported: Imported = try build(gpa, &robot, .{ .max_contacts = 8, .gravity = vec(0, 0, -9.81) });
     defer imported.deinit();
     const model: *rbt.Model = &imported.model;
-    try expect(model.neq == 1);
+    try expect(model.equality_count == 1);
     var data: rbt.Data = try .init(gpa, model);
     defer data.deinit();
 
     // Drive the left finger; the right must follow, mirrored, through the coupling alone.
-    const left_dof: u32 = model.jnt_dof_adr[model.njnt - 2];
+    const left_dof: u32 = model.joint_first_dof[model.joint_count - 2];
     for (0..3000) |_| {
         rbt.forward(model, &data);
-        data.applied_force[left_dof] = 0.4;
+        data.applied_joint_forces[left_dof] = 0.4;
         rbt.step(model, &data);
     }
     rbt.forward(model, &data);
@@ -1451,8 +1451,8 @@ test "* mjcf import: a geared gripper, driven through one motor" {
     // Both fingers travel to their limits and stay mirrored. The exact stop is the joint range
     // and not worth pinning to five figures across two solvers; what matters is that they went
     // opposite ways and stayed matched.
-    const left: f32 = data.pos[model.jnt_qpos_adr[model.njnt - 2]];
-    const right: f32 = data.pos[model.jnt_qpos_adr[model.njnt - 1]];
+    const left: f32 = data.joint_positions[model.joint_first_coordinate[model.joint_count - 2]];
+    const right: f32 = data.joint_positions[model.joint_first_coordinate[model.joint_count - 1]];
     try expect(left > 0.05);
     try expectApproxEqAbs(-left, right, 2.0e-3);
 }
@@ -1498,14 +1498,14 @@ test "* mjcf import: a weld carries orientation" {
     // Swing the arm a quarter turn and check the payload comes with it, heading and all.
     for (0..3000) |_| {
         rbt.forward(model, &data);
-        data.applied_force[model.jnt_dof_adr[0]] =
-            60.0 * (0.8 - data.pos[model.jnt_qpos_adr[0]]) - 6.0 * data.vel[0];
+        data.applied_joint_forces[model.joint_first_dof[0]] =
+            60.0 * (0.8 - data.joint_positions[model.joint_first_coordinate[0]]) - 6.0 * data.joint_velocities[0];
         rbt.step(model, &data);
     }
     rbt.forward(model, &data);
 
-    const arm_heading: Vec = zm.rotate(data.body_xrot[arm], vec(1, 0, 0));
-    const payload_heading: Vec = zm.rotate(data.body_xrot[payload], vec(1, 0, 0));
+    const arm_heading: Vec = zm.rotate(data.body_orientations[arm], vec(1, 0, 0));
+    const payload_heading: Vec = zm.rotate(data.body_orientations[payload], vec(1, 0, 0));
     try expect(length3(arm_heading - payload_heading) < 0.08);
     // And it is still attached, not merely pointing the same way.
     try expect(rbt.equalityError(model, &data, 0) < 0.02);
@@ -1513,7 +1513,7 @@ test "* mjcf import: a weld carries orientation" {
 
 test "* observe: a flat vector, on a robot where nq and nv differ" {
     // ** THE CASE THAT CATCHES THE LAYOUT MISTAKE. On a fixed-base arm `nq == nv` and a caller
-    // who reads `nq` floats of velocity is right by accident. A humanoid has a FREE JOINT: its
+    // who reads `coordinate_count` floats of velocity is right by accident. A humanoid has a FREE JOINT: its
     // position is seven numbers (three of translation, four of quaternion) and its velocity is
     // six. So `nq = 28, nv = 27`, and the same off-by-one that is invisible on an arm shifts
     // every sensor reading by one slot on anything with legs.
@@ -1529,8 +1529,8 @@ test "* observe: a flat vector, on a robot where nq and nv differ" {
     var data: rbt.Data = try .init(gpa, model);
     defer data.deinit();
 
-    try expectEqual(@as(u32, 28), model.nq);
-    try expectEqual(@as(u32, 27), model.nv);
+    try expectEqual(@as(u32, 28), model.coordinate_count);
+    try expectEqual(@as(u32, 27), model.dof_count);
 
     const size: usize = rbt.observationSize(model);
     try expectEqual(@as(usize, 28 + 27), size); // no sensors in this model
@@ -1539,11 +1539,11 @@ test "* observe: a flat vector, on a robot where nq and nv differ" {
 
     // A pose and a motion that are distinguishable from each other, so a block landing in the
     // wrong place is visible rather than a plausible-looking zero.
-    for (0..model.nq) |i| {
-        data.pos[i] = 0.1 * float(i);
+    for (0..model.coordinate_count) |i| {
+        data.joint_positions[i] = 0.1 * float(i);
     }
-    for (0..model.nv) |i| {
-        data.vel[i] = -1.0 - float(i);
+    for (0..model.dof_count) |i| {
+        data.joint_velocities[i] = -1.0 - float(i);
     }
     data.stage = .stale;
     rbt.forward(model, &data);
@@ -1551,7 +1551,7 @@ test "* observe: a flat vector, on a robot where nq and nv differ" {
     try expectEqual(size, rbt.observe(model, &data, observation));
 
     // * POSITIONS FIRST, ALL 28 - including the free joint's quaternion, which is where a
-    // caller sizing by `nv` would stop one short and shift everything after it.
+    // caller sizing by `dof_count` would stop one short and shift everything after it.
     try expectApproxEqAbs(@as(f32, 0.0), observation[0], 1.0e-6);
     try expectApproxEqAbs(@as(f32, 2.7), observation[27], 1.0e-5);
     // * THEN VELOCITIES, ALL 27, beginning immediately after.
@@ -1568,13 +1568,16 @@ test "* observe: a flat vector, on a robot where nq and nv differ" {
 /// geometry.
 fn standingContacts(model: *const rbt.Model, data: *rbt.Data) void {
     data.clearContacts();
-    for (0..model.ngeom) |g| {
+    for (0..model.geom_count) |g| {
         const radius: f32 = switch (model.geom_shape[g]) {
             .sphere => |sphere| sphere.radius,
             else => continue,
         };
         const body: u32 = model.geom_body[g];
-        const at: Vec = data.body_xpos[body] + zm.rotate(data.body_xrot[body], model.geom_pos[g]);
+        const at: Vec = data.body_positions[body] + zm.rotate(
+            data.body_orientations[body],
+            model.geom_local_position[g],
+        );
         const gap: f32 = at[2] - radius;
         if (gap > 0.01) {
             continue; // clear of the floor
@@ -1643,15 +1646,15 @@ test "** a standing Go1: PGS stops short of tolerance, Newton reaches it, both s
         // suite. The stance is unchanged at 20 000.
         for (0..2000) |_| {
             standingContacts(&imported.model, &data);
-            @memset(data.applied_force, 0);
-            for (0..imported.model.njnt) |ji| {
-                if (imported.model.jnt_type[ji] != .hinge) {
+            @memset(data.applied_joint_forces, 0);
+            for (0..imported.model.joint_count) |ji| {
+                if (imported.model.joint_type[ji] != .hinge) {
                     continue;
                 }
-                const qi: u32 = imported.model.jnt_qpos_adr[ji];
-                const vi: u32 = imported.model.jnt_dof_adr[ji];
-                const want: f32 = 300.0 * (home[qi] - data.pos[qi]) - 2.0 * data.vel[vi];
-                data.applied_force[vi] = clamp(want, -35.55, 35.55) + data.bias_force[vi];
+                const qi: u32 = imported.model.joint_first_coordinate[ji];
+                const vi: u32 = imported.model.joint_first_dof[ji];
+                const want: f32 = 300.0 * (home[qi] - data.joint_positions[qi]) - 2.0 * data.joint_velocities[vi];
+                data.applied_joint_forces[vi] = clamp(want, -35.55, 35.55) + data.bias_joint_forces[vi];
             }
             rbt.step(&imported.model, &data);
         }
@@ -1673,16 +1676,16 @@ test "** a standing Go1: PGS stops short of tolerance, Newton reaches it, both s
         }
 
         const trunk: u32 = imported.bodyIndex("trunk") orelse unreachable;
-        trunk_height[slot] = data.body_xpos[trunk][2];
+        trunk_height[slot] = data.body_positions[trunk][2];
         // Standing, and holding the pose the controller is servoing - the premise the
         // residual numbers are only meaningful under.
         var worst: f32 = 0;
-        for (0..imported.model.njnt) |ji| {
-            if (imported.model.jnt_type[ji] != .hinge) {
+        for (0..imported.model.joint_count) |ji| {
+            if (imported.model.joint_type[ji] != .hinge) {
                 continue;
             }
-            const qi: u32 = imported.model.jnt_qpos_adr[ji];
-            worst = @max(worst, @abs(data.pos[qi] - home[qi]));
+            const qi: u32 = imported.model.joint_first_coordinate[ji];
+            worst = @max(worst, @abs(data.joint_positions[qi] - home[qi]));
         }
         try expect(worst < 0.15);
     }
@@ -1721,7 +1724,7 @@ test "retarget: the LAFAN1 match table resolves against humanoid.xml, and the fi
     // A row naming a body the model does not have is a TYPO, and letting it pass would show as
     // a stiff limb that looks exactly like a solver bug. section 13's adversarial review asked for
     // this to be a LOAD error rather than a silent identity pose; here it is.
-    const body_count: usize = imported.model.nbody;
+    const body_count: usize = imported.model.body_count;
     const human_of_body: []i32 = try gpa.alloc(i32, body_count);
     defer gpa.free(human_of_body);
 
@@ -1794,9 +1797,9 @@ test "retarget: humanoid.xml's three-hinge hip fits exactly; its one-hinge knee 
     var data: rbt.Data = try .init(gpa, &imported.model);
     defer data.deinit();
 
-    // * The robot's reference pose comes from its OWN `qpos0` - no extra file, unlike the BVH
+    // * The robot's reference pose comes from its OWN `reference_joint_positions` - no extra file, unlike the BVH
     // side which needed `Geno_stance.bvh`. Three formats, three sources, one meaning.
-    const reference: []rbt.Quat = try gpa.alloc(rbt.Quat, imported.model.nbody);
+    const reference: []rbt.Quat = try gpa.alloc(rbt.Quat, imported.model.body_count);
     defer gpa.free(reference);
     rbt.referenceOrientationsFromRest(&imported.model, &data, reference);
 
@@ -1817,15 +1820,15 @@ test "retarget: humanoid.xml's three-hinge hip fits exactly; its one-hinge knee 
     // The hip is THREE separate hinges on ONE body; the knee is ONE. A per-JOINT fit would hand
     // the same desired rotation to each hip hinge and apply it three times over. `fitBodyRotation`
     // walks the chain, removing what each joint took before the next one fits the remainder.
-    try expectEqual(@as(u32, 3), imported.model.body_jnt_num[thigh_body]);
-    try expectEqual(@as(u32, 1), imported.model.body_jnt_num[shin_body]);
+    try expectEqual(@as(u32, 3), imported.model.body_joint_count[thigh_body]);
+    try expectEqual(@as(u32, 1), imported.model.body_joint_count[shin_body]);
 
     // * THREE ORTHOGONAL HINGES SPAN SO(3), so an arbitrary rotation fits EXACTLY.
     const arbitrary: rbt.Quat = qmul(
         quatFromAxisAngle(vec(1, 0, 0), 0.3),
         quatFromAxisAngle(vec(0, 0, 1), -0.2),
     );
-    @memcpy(data.pos, imported.model.qpos0);
+    @memcpy(data.joint_positions, imported.model.reference_joint_positions);
     const hip_residual: f32 = rbt.fitBodyRotation(&imported.model, &data, thigh_body, arbitrary);
     try expect(hip_residual < 1.0e-3);
 
@@ -1836,8 +1839,8 @@ test "retarget: humanoid.xml's three-hinge hip fits exactly; its one-hinge knee 
     // (0,1,0) and the knee fitted it EXACTLY - because that IS the knee's axis. A test for
     // "cannot represent this" has to construct something genuinely perpendicular, or it
     // measures nothing.
-    const knee_joint: usize = imported.model.body_jnt_adr[shin_body];
-    const knee_axis: rbt.Vec = imported.model.jnt_axis[knee_joint];
+    const knee_joint: usize = imported.model.body_first_joint[shin_body];
+    const knee_axis: rbt.Vec = imported.model.joint_local_axis[knee_joint];
     const helper: rbt.Vec = if (@abs(knee_axis[0]) < 0.9)
         vec(1, 0, 0)
     else
@@ -1848,7 +1851,7 @@ test "retarget: humanoid.xml's three-hinge hip fits exactly; its one-hinge knee 
         knee_axis[0] * helper[1] - knee_axis[1] * helper[0],
     ));
     const across_the_knee: rbt.Quat = quatFromAxisAngle(perpendicular, 0.8);
-    @memcpy(data.pos, imported.model.qpos0);
+    @memcpy(data.joint_positions, imported.model.reference_joint_positions);
     const knee_residual: f32 = rbt.fitBodyRotation(&imported.model, &data, shin_body, across_the_knee);
     // * MEASURED: the knee loses EXACTLY the 0.8 rad it was asked to rotate about an axis it
     // does not have, while the hip's three hinges lose 0.0000. The residual is not a vague
@@ -1961,7 +1964,7 @@ test "retarget: the real dance drives humanoid.xml, and every joint reports what
     defer capture.deinit();
 
     const human_joint_count: usize = capture.joints.len;
-    const body_count: usize = imported.model.nbody;
+    const body_count: usize = imported.model.body_count;
 
     // ---- resolve the match table against the real names on both sides ----
     const human_names: [][]const u8 = try gpa.alloc([]const u8, human_joint_count);
@@ -1985,7 +1988,7 @@ test "retarget: the real dance drives humanoid.xml, and every joint reports what
 
     // -- *** BOTH REFERENCES MUST BE REAL ORIENTATIONS OF THE SAME PHYSICAL POSE --
     //
-    // MEASURED: `humanoid.xml`'s `qpos0` is a **T-POSE** - its hand sits at the same height as
+    // MEASURED: `humanoid.xml`'s `reference_joint_positions` is a **T-POSE** - its hand sits at the same height as
     // its upper arm. So the human side needs a real T-pose too, not a frame INFERRED from bone
     // directions. Pairing a real orientation with an inferred one is what left the first
     // attempt at a mean residual of 1.095 rad (63 degrees).
@@ -2067,7 +2070,7 @@ test "retarget: the real dance drives humanoid.xml, and every joint reports what
     );
 
     // ---- fit onto the robot's actual DOF, and MEASURE ----
-    @memcpy(data.pos, imported.model.qpos0);
+    @memcpy(data.joint_positions, imported.model.reference_joint_positions);
     var worst_residual: f32 = 0;
     var worst_body: usize = 0;
     var total_residual: f32 = 0;
@@ -2102,7 +2105,7 @@ test "retarget: the real dance drives humanoid.xml, and every joint reports what
     // ** AND THE RESULT IS FINITE AND ON THE GROUND-ISH - a pose full of NaNs or a robot
     // scattered to infinity would pass a residual check while being obvious nonsense.
     for (0..body_count) |body| {
-        const position: rbt.Vec = data.body_xpos[body];
+        const position: rbt.Vec = data.body_positions[body];
         inline for (0..3) |axis| {
             try expect(position[axis] == position[axis]); // NaN is the only value unequal to itself
             try expect(@abs(position[axis]) < 100.0);
@@ -2114,7 +2117,7 @@ test "retarget: the real dance drives humanoid.xml, and every joint reports what
     //     inferred human rest  vs  robot qpos0   mean 1.095 rad  (63 degrees)
     //     REAL T-pose both sides                 mean ~0.5 rad   (29 degrees)
     //
-    // ** **HALVED, by making the two references the same KIND of thing.** The robot's `qpos0`
+    // ** **HALVED, by making the two references the same KIND of thing.** The robot's `reference_joint_positions`
     // is a real orientation and - measured - a T-POSE: its hand sits at the same height as its
     // upper arm. Pairing that with a frame INFERRED from bone directions was the
     // character-side bug of section 13f-7 repeated in a new place.
@@ -2154,7 +2157,7 @@ test "humanoid.xml rests its LEGS in a T-pose and its ARMS on a diagonal" {
     defer imported.deinit();
     var data: rbt.Data = try .init(gpa, &imported.model);
     defer data.deinit();
-    @memcpy(data.pos, imported.model.qpos0);
+    @memcpy(data.joint_positions, imported.model.reference_joint_positions);
     rbt.kinematics(&imported.model, &data);
 
     var tf: Io.File = Io.Dir.cwd().openFile(io, "assets/Geno_stance.bvh", .{}) catch return;
@@ -2217,7 +2220,7 @@ test "humanoid.xml rests its LEGS in a T-pose and its ARMS on a diagonal" {
     // looked plausible throughout and why the position conversion was never the problem.
     //
     // ** **THE ARMS REST ON A DIAGONAL**, down-out-and-forward, not straight out.
-    // `humanoid.xml`'s `qpos0` is a T-pose for the LEGS and an A-POSE for the ARMS. An earlier
+    // `humanoid.xml`'s `reference_joint_positions` is a T-pose for the LEGS and an A-POSE for the ARMS. An earlier
     // check compared hand height against shoulder height and called the whole model a T-pose -
     // too coarse to see that the arms differ, and it sent several rounds after a global fix for
     // a per-limb problem.
@@ -2234,14 +2237,14 @@ test "humanoid.xml rests its LEGS in a T-pose and its ARMS on a diagonal" {
             }
         }
         var rc: usize = 0;
-        for (0..imported.model.nbody) |c| {
+        for (0..imported.model.body_count) |c| {
             if (c != 0 and imported.model.body_parent[c] == rb) {
                 rc = c;
                 break;
             }
         }
         const rdir: rbt.Vec = if (rc != 0)
-            normalize3(data.body_xpos[rc] - data.body_xpos[rb])
+            normalize3(data.body_positions[rc] - data.body_positions[rb])
         else
             vec(0, 0, 0);
 
@@ -2405,9 +2408,9 @@ fn armDirectionForFrame(
     // than a compromise** - and `aim_at_child` was already per-body, so the hybrid costs one
     // line rather than a third mechanism.
     var aim_flags: [64]bool = undefined;
-    @memset(aim_flags[0..model.nbody], false);
+    @memset(aim_flags[0..model.body_count], false);
     for (names, 0..) |n, i| {
-        if (i >= model.nbody) {
+        if (i >= model.body_count) {
             continue;
         }
         const is_upper_arm: bool = eql(u8, n, "upper_arm_left") or
@@ -2427,7 +2430,7 @@ fn armDirectionForFrame(
         .human_parents = human_parents,
         .twist = twist,
         .parent_twist = parent_twist,
-        .aim_at_child = aim_flags[0..model.nbody],
+        .aim_at_child = aim_flags[0..model.body_count],
         // -- *** THE TORSO FIXES DO NOT TRANSFER, AND THE NUMBERS SAY SO --
         //
         //                        without   with
@@ -2468,7 +2471,7 @@ fn armDirectionForFrame(
     if (ik) |pass| {
         rbt.comPos(model, data);
         var task_count: usize = 0;
-        for (0..model.nbody) |b| {
+        for (0..model.body_count) |b| {
             if (human_of_body[b] < 0 or pass.weights[b] <= 0) {
                 continue;
             }
@@ -2512,8 +2515,8 @@ fn armDirectionForFrame(
         }
     }
     return .{
-        .upper_arm = normalize3(data.body_xpos[forearm] - data.body_xpos[upper_body]),
-        .forearm = normalize3(data.body_xpos[hand] - data.body_xpos[forearm]),
+        .upper_arm = normalize3(data.body_positions[forearm] - data.body_positions[upper_body]),
+        .forearm = normalize3(data.body_positions[hand] - data.body_positions[forearm]),
     };
 }
 
@@ -2552,7 +2555,7 @@ fn computeTwistOffsets(
     }
     // -- *** THE HARNESS NOW BUILDS THE SAME REST POSE THE EXAMPLE DOES --
     //
-    // It previously passed `null` and measured against `qpos0` - which is NOT a T-pose - so its
+    // It previously passed `null` and measured against `reference_joint_positions` - which is NOT a T-pose - so its
     // numbers described a reference the shipped code no longer uses. **A harness measuring an
     // older reference is the same class of error as one measuring a duplicate implementation**,
     // and it was the last known gap.
@@ -2565,8 +2568,8 @@ fn computeTwistOffsets(
             anchor_body = i;
         }
     }
-    const have_room: bool = model.nq <= tpose_qpos.len and
-        rbt.ikScratchSize(model.nv) <= tpose_scratch.len;
+    const have_room: bool = model.coordinate_count <= tpose_qpos.len and
+        rbt.ikScratchSize(model.dof_count) <= tpose_scratch.len;
     if (have_room and anchor_body != 0) {
         rbt.solveRestPoseFromSource(
             model,
@@ -2576,8 +2579,8 @@ fn computeTwistOffsets(
             human_parents_for_rest,
             anchor_body,
             &tpose_tasks,
-            tpose_scratch[0..rbt.ikScratchSize(model.nv)],
-            tpose_qpos[0..model.nq],
+            tpose_scratch[0..rbt.ikScratchSize(model.dof_count)],
+            tpose_qpos[0..model.coordinate_count],
         );
     }
 
@@ -2593,7 +2596,7 @@ fn computeTwistOffsets(
         // it measures WORSE and that is recorded rather than hidden.
         null,
         // * The SOLVED T-pose, matching the example.
-        if (have_room and anchor_body != 0) tpose_qpos[0..model.nq] else null,
+        if (have_room and anchor_body != 0) tpose_qpos[0..model.coordinate_count] else null,
         out_twist,
         out_parent_twist,
     );
@@ -2741,7 +2744,7 @@ test "the robot's RIGHT FOREARM follows the capture's, across the clip" {
         names[i] = j.name;
         parents[i] = j.parent;
     }
-    const human_of_body: []i32 = try gpa.alloc(i32, imported.model.nbody);
+    const human_of_body: []i32 = try gpa.alloc(i32, imported.model.body_count);
     defer gpa.free(human_of_body);
     try rbt.resolveMatchTable(&rbt.lafan_to_humanoid, imported.names, names, human_of_body);
 
@@ -2753,16 +2756,16 @@ test "the robot's RIGHT FOREARM follows the capture's, across the clip" {
     poseFromBvhFrame(&tpose, 0, rest_pos, rest_rot);
 
     // Per-limb correction, from the two rest poses.
-    const limb: []rbt.Quat = try gpa.alloc(rbt.Quat, imported.model.nbody);
+    const limb: []rbt.Quat = try gpa.alloc(rbt.Quat, imported.model.body_count);
     defer gpa.free(limb);
-    for (0..imported.model.nbody) |body| {
+    for (0..imported.model.body_count) |body| {
         limb[body] = zm.quat_identity;
         const hj: i32 = human_of_body[body];
         if (hj < 0) {
             continue;
         }
         var rc: ?usize = null;
-        for (0..imported.model.nbody) |c| {
+        for (0..imported.model.body_count) |c| {
             if (c != 0 and imported.model.body_parent[c] == body) {
                 rc = c;
                 break;
@@ -2783,12 +2786,12 @@ test "the robot's RIGHT FOREARM follows the capture's, across the clip" {
             continue;
         }
         const u: rbt.Vec = b / splat(l);
-        limb[body] = arcBetween(vec(u[0], -u[2], u[1]), normalize3(imported.model.body_pos[tip]));
+        limb[body] = arcBetween(vec(u[0], -u[2], u[1]), normalize3(imported.model.body_rest_position[tip]));
     }
 
-    const twist: []rbt.Quat = try gpa.alloc(rbt.Quat, imported.model.nbody);
+    const twist: []rbt.Quat = try gpa.alloc(rbt.Quat, imported.model.body_count);
     defer gpa.free(twist);
-    const parent_twist: []rbt.Quat = try gpa.alloc(rbt.Quat, imported.model.nbody);
+    const parent_twist: []rbt.Quat = try gpa.alloc(rbt.Quat, imported.model.body_count);
     defer gpa.free(parent_twist);
     computeTwistOffsets(
         &imported.model,
@@ -3023,10 +3026,10 @@ test "fitBodyRotation PRESERVES a bone's aim on a 2-DOF shoulder - the hypothesi
     // measure what the bone ACTUALLY points at. If they differ, every orientation formula in
     // this arc has been measured through a lossy decomposition, and the formulas were never the
     // thing under test.
-    @memcpy(data.pos, imported.model.qpos0);
+    @memcpy(data.joint_positions, imported.model.reference_joint_positions);
     rbt.kinematics(&imported.model, &data);
 
-    const local_bone: rbt.Vec = normalize3(imported.model.body_pos[forearm]);
+    const local_bone: rbt.Vec = normalize3(imported.model.body_rest_position[forearm]);
     const wanted_dir: rbt.Vec = normalize3(vec(0.3, -0.9, -0.3));
     const aim_world: rbt.Quat = arcBetween(local_bone, wanted_dir);
 
@@ -3038,17 +3041,17 @@ test "fitBodyRotation PRESERVES a bone's aim on a 2-DOF shoulder - the hypothesi
     try expect(construction > 0.999);
 
     // Now fit it onto the shoulder's actual DOF and measure what comes out.
-    const parent_world: rbt.Quat = data.body_xrot[imported.model.body_parent[arm]];
+    const parent_world: rbt.Quat = data.body_orientations[imported.model.body_parent[arm]];
     const local_target: rbt.Quat = qmul(zm.conjugate(parent_world), aim_world);
     const residual: f32 = rbt.fitBodyRotation(&imported.model, &data, arm, local_target);
     rbt.kinematics(&imported.model, &data);
-    const achieved_dir: rbt.Vec = normalize3(data.body_xpos[forearm] - data.body_xpos[arm]);
+    const achieved_dir: rbt.Vec = normalize3(data.body_positions[forearm] - data.body_positions[arm]);
     const delivered: f32 = achieved_dir[0] * wanted_dir[0] + achieved_dir[1] * wanted_dir[1] +
         achieved_dir[2] * wanted_dir[2];
 
     std.log.debug(
         "aim construction {d:.3} -> delivered {d:.3} (rotation residual {d:.3}, dof {d})",
-        .{ construction, delivered, residual, imported.model.body_jnt_num[arm] },
+        .{ construction, delivered, residual, imported.model.body_joint_count[arm] },
     );
 
     // -- *** THE ANSWER: 1.000 -> 1.000. THE FIT PRESERVES THE AIM. --
@@ -3070,7 +3073,7 @@ test "fitBodyRotation PRESERVES a bone's aim on a 2-DOF shoulder - the hypothesi
     try expect(residual >= 0.0);
     // * 2 DOF is the fact this result depends on; pinned so a model change cannot silently
     // invalidate the conclusion.
-    try expectEqual(@as(u32, 2), imported.model.body_jnt_num[arm]);
+    try expectEqual(@as(u32, 2), imported.model.body_joint_count[arm]);
 
     // -- ** AND THE ELBOW, WHICH IS THE NEXT SUSPECT --
     //
@@ -3078,7 +3081,7 @@ test "fitBodyRotation PRESERVES a bone's aim on a 2-DOF shoulder - the hypothesi
     // aim in an arbitrary direction at all - it swings in a single plane - so the forearm's
     // direction is mostly inherited from the SHOULDER, and a bad forearm points back at the
     // shoulder's TARGET rather than at either fit.
-    @memcpy(data.pos, imported.model.qpos0);
+    @memcpy(data.joint_positions, imported.model.reference_joint_positions);
     rbt.kinematics(&imported.model, &data);
     var hand: usize = 0;
     for (imported.names, 0..) |n, i| {
@@ -3087,10 +3090,10 @@ test "fitBodyRotation PRESERVES a bone's aim on a 2-DOF shoulder - the hypothesi
         }
     }
     try expect(hand != 0);
-    const elbow_bone: rbt.Vec = normalize3(imported.model.body_pos[hand]);
+    const elbow_bone: rbt.Vec = normalize3(imported.model.body_rest_position[hand]);
     const elbow_want: rbt.Vec = normalize3(vec(-0.5, 0.5, -0.7));
     const elbow_aim: rbt.Quat = arcBetween(elbow_bone, elbow_want);
-    const elbow_parent: rbt.Quat = data.body_xrot[imported.model.body_parent[forearm]];
+    const elbow_parent: rbt.Quat = data.body_orientations[imported.model.body_parent[forearm]];
     _ = rbt.fitBodyRotation(
         &imported.model,
         &data,
@@ -3098,11 +3101,11 @@ test "fitBodyRotation PRESERVES a bone's aim on a 2-DOF shoulder - the hypothesi
         qmul(zm.conjugate(elbow_parent), elbow_aim),
     );
     rbt.kinematics(&imported.model, &data);
-    const elbow_got: rbt.Vec = normalize3(data.body_xpos[hand] - data.body_xpos[forearm]);
+    const elbow_got: rbt.Vec = normalize3(data.body_positions[hand] - data.body_positions[forearm]);
     const elbow_delivered: f32 = elbow_got[0] * elbow_want[0] + elbow_got[1] * elbow_want[1] +
         elbow_got[2] * elbow_want[2];
     std.log.debug("elbow: dof {d}, aim delivered {d:.3}", .{
-        imported.model.body_jnt_num[forearm],
+        imported.model.body_joint_count[forearm],
         elbow_delivered,
     });
 
@@ -3210,7 +3213,7 @@ test "SCORECARD: torso, then upper arm, then elbow, then twist - in dependency o
         names[i] = j.name;
         parents[i] = j.parent;
     }
-    const human_of_body: []i32 = try gpa.alloc(i32, imported.model.nbody);
+    const human_of_body: []i32 = try gpa.alloc(i32, imported.model.body_count);
     defer gpa.free(human_of_body);
     try rbt.resolveMatchTable(&rbt.lafan_to_humanoid, imported.names, names, human_of_body);
 
@@ -3220,15 +3223,15 @@ test "SCORECARD: torso, then upper arm, then elbow, then twist - in dependency o
     defer gpa.free(rest_pos);
     poseFromBvhFrame(&tpose, 0, rest_pos, rest_rot);
 
-    const limb: []rbt.Quat = try gpa.alloc(rbt.Quat, imported.model.nbody);
+    const limb: []rbt.Quat = try gpa.alloc(rbt.Quat, imported.model.body_count);
     defer gpa.free(limb);
     for (limb) |*c| {
         c.* = zm.quat_identity;
     }
 
-    const twist: []rbt.Quat = try gpa.alloc(rbt.Quat, imported.model.nbody);
+    const twist: []rbt.Quat = try gpa.alloc(rbt.Quat, imported.model.body_count);
     defer gpa.free(twist);
-    const parent_twist: []rbt.Quat = try gpa.alloc(rbt.Quat, imported.model.nbody);
+    const parent_twist: []rbt.Quat = try gpa.alloc(rbt.Quat, imported.model.body_count);
     defer gpa.free(parent_twist);
     computeTwistOffsets(
         &imported.model,
@@ -3319,14 +3322,14 @@ test "SCORECARD: torso, then upper arm, then elbow, then twist - in dependency o
             parents,
             rest_pos,
             rest_rot,
-            twist_probe[0..imported.model.nbody],
-            parent_probe[0..imported.model.nbody],
+            twist_probe[0..imported.model.body_count],
+            parent_probe[0..imported.model.body_count],
         );
         var worst: f32 = 0;
         var worst_body: usize = 0;
         var total: f32 = 0;
         var counted: usize = 0;
-        for (1..imported.model.nbody) |body| {
+        for (1..imported.model.body_count) |body| {
             if (human_of_body[body] < 0) {
                 continue;
             }
@@ -3402,13 +3405,13 @@ test "SCORECARD: torso, then upper arm, then elbow, then twist - in dependency o
     // frame N+1, which this loop is not currently shaped for.
 
     // * Position targets and weights for the IK pass, from the match table.
-    const ik_targets: []rbt.Vec = try gpa.alloc(rbt.Vec, imported.model.nbody);
+    const ik_targets: []rbt.Vec = try gpa.alloc(rbt.Vec, imported.model.body_count);
     defer gpa.free(ik_targets);
-    const ik_weights: []f32 = try gpa.alloc(f32, imported.model.nbody);
+    const ik_weights: []f32 = try gpa.alloc(f32, imported.model.body_count);
     defer gpa.free(ik_weights);
-    const ik_tasks: []rbt.IkTask = try gpa.alloc(rbt.IkTask, imported.model.nbody);
+    const ik_tasks: []rbt.IkTask = try gpa.alloc(rbt.IkTask, imported.model.body_count);
     defer gpa.free(ik_tasks);
-    const ik_scratch: []f32 = try gpa.alloc(f32, rbt.ikScratchSize(imported.model.nv));
+    const ik_scratch: []f32 = try gpa.alloc(f32, rbt.ikScratchSize(imported.model.dof_count));
     defer gpa.free(ik_scratch);
     @memset(ik_weights, 0);
     for (rbt.lafan_to_humanoid) |row| {
@@ -3436,7 +3439,7 @@ test "SCORECARD: torso, then upper arm, then elbow, then twist - in dependency o
             // frame - the same treatment the pipeline gives them.
             {
                 const sc: f32 = 1.315 / @max(@abs(rest_pos[shoulder_ref][1]), 0.01);
-                for (0..imported.model.nbody) |b| {
+                for (0..imported.model.body_count) |b| {
                     const hj: i32 = human_of_body[b];
                     ik_targets[b] = if (hj < 0) vec(0, 0, 0) else blk: {
                         const rel: rbt.Vec =
@@ -3490,13 +3493,13 @@ test "SCORECARD: torso, then upper arm, then elbow, then twist - in dependency o
             }.f;
             const human_torso: rbt.Vec = toZ((pos[spine_h] - root) * splat(scale));
             const human_arm: rbt.Vec = toZ((pos[arm_h] - root) * splat(scale));
-            const robot_root: rbt.Vec = data.body_xpos[torso_b];
+            const robot_root: rbt.Vec = data.body_positions[torso_b];
             _ = robot_root;
 
             // -- ** TORSO POSITION IS NOT MEASURED HERE, AND SAYING SO BEATS A FAKE NUMBER --
             //
             // `armDirectionForFrame` never writes the free joint's TRANSLATION - the real pipeline
-            // does, from the human's scaled root. So this harness leaves the robot at `qpos0`'s
+            // does, from the human's scaled root. So this harness leaves the robot at `reference_joint_positions`'s
             // height while the human moves, and any "torso position error" it reports (0.913 m) is
             // **the harness's omission, not the retarget's.**
             //
@@ -3510,7 +3513,7 @@ test "SCORECARD: torso, then upper arm, then elbow, then twist - in dependency o
 
             // The torso's own bone direction: toward its first child.
             var torso_child: usize = 0;
-            for (1..imported.model.nbody) |c| {
+            for (1..imported.model.body_count) |c| {
                 if (imported.model.body_parent[c] == torso_b) {
                     torso_child = c;
                     break;
@@ -3518,7 +3521,7 @@ test "SCORECARD: torso, then upper arm, then elbow, then twist - in dependency o
             }
             if (torso_child != 0) {
                 const robot_torso_dir: rbt.Vec =
-                    normalize3(data.body_xpos[torso_child] - data.body_xpos[torso_b]);
+                    normalize3(data.body_positions[torso_child] - data.body_positions[torso_b]);
                 // *** LIKE BONE AGAINST LIKE BONE. This compared the robot's `torso -> head`
                 // against the human's `Spine3 -> RightArm` - a spine bone against a shoulder bone,
                 // which can never agree however good the retarget is. **The THIRD ruler mismatch in
@@ -3532,16 +3535,16 @@ test "SCORECARD: torso, then upper arm, then elbow, then twist - in dependency o
 
             // Positions are compared RELATIVE TO THE TORSO, because an absolute offset is the root
             // placement's business and would swamp everything downstream.
-            const robot_arm_rel: rbt.Vec = data.body_xpos[arm_b] - data.body_xpos[torso_b];
+            const robot_arm_rel: rbt.Vec = data.body_positions[arm_b] - data.body_positions[torso_b];
             const human_arm_rel: rbt.Vec = human_arm - human_torso;
             const d: rbt.Vec = robot_arm_rel - human_arm_rel;
             card.upper_arm_position_error_m += @sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
 
-            const robot_upper: rbt.Vec = normalize3(data.body_xpos[fore_b] - data.body_xpos[arm_b]);
+            const robot_upper: rbt.Vec = normalize3(data.body_positions[fore_b] - data.body_positions[arm_b]);
             const human_upper: rbt.Vec = humanBoneDirection(pos, arm_h, fore_h) orelse continue;
             card.upper_arm_direction_error_deg += angleBetweenDegrees(robot_upper, human_upper);
 
-            const robot_fore: rbt.Vec = normalize3(data.body_xpos[hand_b] - data.body_xpos[fore_b]);
+            const robot_fore: rbt.Vec = normalize3(data.body_positions[hand_b] - data.body_positions[fore_b]);
             const human_fore: rbt.Vec = humanBoneDirection(pos, fore_h, hand_h) orelse continue;
             card.elbow_bend_error_deg += @abs(
                 flexionDegrees(robot_upper, robot_fore) - flexionDegrees(human_upper, human_fore),
@@ -3560,9 +3563,9 @@ test "SCORECARD: torso, then upper arm, then elbow, then twist - in dependency o
             // * Thigh DIRECTION and knee BEND, the leg's equivalents of stages 3 and 4.
             if (thigh_b != 0 and shin_b != 0 and foot_b != 0) {
                 const robot_thigh: rbt.Vec =
-                    normalize3(data.body_xpos[shin_b] - data.body_xpos[thigh_b]);
+                    normalize3(data.body_positions[shin_b] - data.body_positions[thigh_b]);
                 const robot_shin: rbt.Vec =
-                    normalize3(data.body_xpos[foot_b] - data.body_xpos[shin_b]);
+                    normalize3(data.body_positions[foot_b] - data.body_positions[shin_b]);
                 if (humanBoneDirection(pos, upleg_h, leg_h)) |human_thigh| {
                     thigh_error += angleBetweenDegrees(robot_thigh, human_thigh);
                     if (humanBoneDirection(pos, leg_h, lfoot_h)) |human_shin| {
@@ -3591,7 +3594,7 @@ test "SCORECARD: torso, then upper arm, then elbow, then twist - in dependency o
             if (frame + 1 < capture.frame_count) {
                 const before_arm: rbt.Vec = robot_upper;
                 const before_thigh: rbt.Vec = if (thigh_b != 0 and shin_b != 0)
-                    normalize3(data.body_xpos[shin_b] - data.body_xpos[thigh_b])
+                    normalize3(data.body_positions[shin_b] - data.body_positions[thigh_b])
                 else
                     vec(0, 0, 1);
                 const human_arm_before: ?rbt.Vec = humanBoneDirection(pos, arm_h, fore_h);
@@ -3612,9 +3615,9 @@ test "SCORECARD: torso, then upper arm, then elbow, then twist - in dependency o
                     mechanism,
                 );
                 const after_arm: rbt.Vec =
-                    normalize3(data.body_xpos[fore_b] - data.body_xpos[arm_b]);
+                    normalize3(data.body_positions[fore_b] - data.body_positions[arm_b]);
                 const after_thigh: rbt.Vec = if (thigh_b != 0 and shin_b != 0)
-                    normalize3(data.body_xpos[shin_b] - data.body_xpos[thigh_b])
+                    normalize3(data.body_positions[shin_b] - data.body_positions[thigh_b])
                 else
                     vec(0, 0, 1);
 
@@ -3697,7 +3700,7 @@ test "which spine joint should drive the torso: measured by SHOULDER OFFSET, not
     defer imported.deinit();
     var data: rbt.Data = try .init(gpa, &imported.model);
     defer data.deinit();
-    @memcpy(data.pos, imported.model.qpos0);
+    @memcpy(data.joint_positions, imported.model.reference_joint_positions);
     rbt.kinematics(&imported.model, &data);
 
     var tf: Io.File = Io.Dir.cwd().openFile(io, "assets/Geno_stance.bvh", .{}) catch return;
@@ -3736,7 +3739,7 @@ test "which spine joint should drive the torso: measured by SHOULDER OFFSET, not
     // ** **Pick the joint by MEASUREMENT, not by name.** `Spine2` was chosen because it sounds
     // like a torso; the robot's torso actually sits high, between the shoulders, and a lower
     // spine joint puts the whole arm 30 cm out.
-    const robot_offset: rbt.Vec = data.body_xpos[arm_b] - data.body_xpos[torso_b];
+    const robot_offset: rbt.Vec = data.body_positions[arm_b] - data.body_positions[torso_b];
 
     var shoulder_h: usize = 0;
     for (tpose.joints, 0..) |j, i| {
@@ -3828,7 +3831,7 @@ test "INVARIANT: world_rot_robot == world_rot_src * R_twist, the reference's own
         names[i] = j.name;
         parents[i] = j.parent;
     }
-    const human_of_body: []i32 = try gpa.alloc(i32, imported.model.nbody);
+    const human_of_body: []i32 = try gpa.alloc(i32, imported.model.body_count);
     defer gpa.free(human_of_body);
     try rbt.resolveMatchTable(&rbt.lafan_to_humanoid, imported.names, names, human_of_body);
 
@@ -3838,9 +3841,9 @@ test "INVARIANT: world_rot_robot == world_rot_src * R_twist, the reference's own
     defer gpa.free(rest_rot);
     poseFromBvhFrame(&tpose, 0, rest_pos, rest_rot);
 
-    const twist: []rbt.Quat = try gpa.alloc(rbt.Quat, imported.model.nbody);
+    const twist: []rbt.Quat = try gpa.alloc(rbt.Quat, imported.model.body_count);
     defer gpa.free(twist);
-    const parent_twist: []rbt.Quat = try gpa.alloc(rbt.Quat, imported.model.nbody);
+    const parent_twist: []rbt.Quat = try gpa.alloc(rbt.Quat, imported.model.body_count);
     defer gpa.free(parent_twist);
     computeTwistOffsets(
         &imported.model,
@@ -3859,7 +3862,7 @@ test "INVARIANT: world_rot_robot == world_rot_src * R_twist, the reference's own
     defer gpa.free(pos);
     const rot: []rbt.Quat = try gpa.alloc(rbt.Quat, hn);
     defer gpa.free(rot);
-    const limb: []rbt.Quat = try gpa.alloc(rbt.Quat, imported.model.nbody);
+    const limb: []rbt.Quat = try gpa.alloc(rbt.Quat, imported.model.body_count);
     defer gpa.free(limb);
     for (limb) |*c| {
         c.* = zm.quat_identity;
@@ -3897,7 +3900,7 @@ test "INVARIANT: world_rot_robot == world_rot_src * R_twist, the reference's own
     var worst_deg: f32 = 0;
     var worst_body: usize = 0;
     var checked: usize = 0;
-    for (1..imported.model.nbody) |body| {
+    for (1..imported.model.body_count) |body| {
         const hj: i32 = human_of_body[body];
         if (hj < 0) {
             continue;
@@ -3905,7 +3908,7 @@ test "INVARIANT: world_rot_robot == world_rot_src * R_twist, the reference's own
         const src_world_robot_frame: rbt.Quat =
             qmul(qmul(yz, rot[@intCast(hj)]), zy);
         const expected: rbt.Quat = qmul(src_world_robot_frame, twist[body]);
-        const got: rbt.Quat = data.body_xrot[body];
+        const got: rbt.Quat = data.body_orientations[body];
         const dot_abs: f32 = @abs(expected[0] * got[0] + expected[1] * got[1] +
             expected[2] * got[2] + expected[3] * got[3]);
         const deg: f32 = 2.0 * acosRad(clamp(dot_abs, -1.0, 1.0)) * 57.29578;
@@ -3922,7 +3925,7 @@ test "INVARIANT: world_rot_robot == world_rot_src * R_twist, the reference's own
             std.log.debug("  {s: <18} {d: >6.1} deg   dof {d}", .{
                 imported.names[body],
                 deg,
-                imported.model.body_jnt_num[body],
+                imported.model.body_joint_count[body],
             });
         }
         checked += 1;
@@ -3960,7 +3963,7 @@ test "INVARIANT: world_rot_robot == world_rot_src * R_twist, the reference's own
 }
 
 fn m_body_offset(m: *const rbt.Model, body: usize) rbt.Vec {
-    return m.body_pos[body];
+    return m.body_rest_position[body];
 }
 
 test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
@@ -4011,7 +4014,7 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
         names[i] = j.name;
         parents[i] = j.parent;
     }
-    const human_of_body: []i32 = try gpa.alloc(i32, imported.model.nbody);
+    const human_of_body: []i32 = try gpa.alloc(i32, imported.model.body_count);
     defer gpa.free(human_of_body);
     try rbt.resolveMatchTable(&rbt.lafan_to_humanoid, imported.names, names, human_of_body);
 
@@ -4021,9 +4024,9 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
     defer gpa.free(rest_rot);
     poseFromBvhFrame(&tpose, 0, rest_pos, rest_rot);
 
-    const twist: []rbt.Quat = try gpa.alloc(rbt.Quat, imported.model.nbody);
+    const twist: []rbt.Quat = try gpa.alloc(rbt.Quat, imported.model.body_count);
     defer gpa.free(twist);
-    const parent_twist: []rbt.Quat = try gpa.alloc(rbt.Quat, imported.model.nbody);
+    const parent_twist: []rbt.Quat = try gpa.alloc(rbt.Quat, imported.model.body_count);
     defer gpa.free(parent_twist);
     computeTwistOffsets(
         &imported.model,
@@ -4038,7 +4041,7 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
         parent_twist,
     );
 
-    const limb: []rbt.Quat = try gpa.alloc(rbt.Quat, imported.model.nbody);
+    const limb: []rbt.Quat = try gpa.alloc(rbt.Quat, imported.model.body_count);
     defer gpa.free(limb);
     for (limb) |*c| {
         c.* = zm.quat_identity;
@@ -4095,13 +4098,13 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
     var positions_robot: [256]rbt.Vec = undefined;
     var rotations_robot: [256]rbt.Quat = undefined;
     var aim_flags: [64]bool = undefined;
-    @memset(aim_flags[0..imported.model.nbody], false);
+    @memset(aim_flags[0..imported.model.body_count], false);
     // * The upper arms AIM at the elbow - the baseline this test measures against. Replacing
     // this with the two-bone flag below dropped it silently and made every number 3x worse,
     // which read as "the revert failed" until the flag was traced.
     aim_flags[arm_b] = true;
     for (imported.names, 0..) |n, i| {
-        if (i < imported.model.nbody and eql(u8, n, "upper_arm_left")) {
+        if (i < imported.model.body_count and eql(u8, n, "upper_arm_left")) {
             aim_flags[i] = true;
         }
     }
@@ -4109,23 +4112,23 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
     // * Both upper arms head a two-bone limb; the closed form replaces aim + bend + twist for
     // them entirely.
     var two_bone_flags: [64]bool = undefined;
-    @memset(two_bone_flags[0..imported.model.nbody], false);
+    @memset(two_bone_flags[0..imported.model.body_count], false);
     for (imported.names, 0..) |n, i| {
-        if (i < imported.model.nbody and (eql(u8, n, "upper_arm_right") or
+        if (i < imported.model.body_count and (eql(u8, n, "upper_arm_right") or
             eql(u8, n, "upper_arm_left")))
         {
             two_bone_flags[i] = true;
         }
     }
 
-    // * Each 1-DOF body's bend at `qpos0` - measured once, because zero is not straight.
+    // * Each 1-DOF body's bend at `reference_joint_positions` - measured once, because zero is not straight.
     var rest_flexion: [64]f32 = undefined;
-    @memset(rest_flexion[0..imported.model.nbody], 0);
+    @memset(rest_flexion[0..imported.model.body_count], 0);
     {
-        @memcpy(data.pos, imported.model.qpos0);
+        @memcpy(data.joint_positions, imported.model.reference_joint_positions);
         rbt.kinematics(&imported.model, &data);
-        for (0..imported.model.nbody) |body| {
-            if (imported.model.body_jnt_num[body] != 1) {
+        for (0..imported.model.body_count) |body| {
+            if (imported.model.body_joint_count[body] != 1) {
                 continue;
             }
             const parent: u32 = imported.model.body_parent[body];
@@ -4133,15 +4136,15 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
                 continue;
             }
             var child: ?usize = null;
-            for (1..imported.model.nbody) |c| {
+            for (1..imported.model.body_count) |c| {
                 if (imported.model.body_parent[c] == body) {
                     child = c;
                     break;
                 }
             }
             const tip: usize = child orelse continue;
-            const upper: rbt.Vec = data.body_xpos[body] - data.body_xpos[parent];
-            const lower: rbt.Vec = data.body_xpos[tip] - data.body_xpos[body];
+            const upper: rbt.Vec = data.body_positions[body] - data.body_positions[parent];
+            const lower: rbt.Vec = data.body_positions[tip] - data.body_positions[body];
             if (vecLen(upper) < 1.0e-6 or vecLen(lower) < 1.0e-6) {
                 continue;
             }
@@ -4200,7 +4203,7 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
             .human_parents = parents,
             .twist = twist,
             .parent_twist = parent_twist,
-            .aim_at_child = aim_flags[0..imported.model.nbody],
+            .aim_at_child = aim_flags[0..imported.model.body_count],
             // * OFF - measured WORSE than aiming even with the hinge write fixed:
             //     aim:      hand 0.10 / 0.21 / 0.15 / 0.09    upper arm  28 / 22 /  6 / 30 deg
             //     two-bone: hand 0.51 / 0.51 / 0.57 / 0.35    upper arm  15 / 11 / 68 /  5 deg
@@ -4209,7 +4212,7 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
             // `solveTwoBoneLimb` itself is unit-tested exact; the fault is in what it is handed
             // or what is done with its answer. Unresolved this turn.
             .two_bone = null,
-            .rest_flexion = rest_flexion[0..imported.model.nbody],
+            .rest_flexion = rest_flexion[0..imported.model.body_count],
         });
 
         // -- *** THE ARM'S COUPLED 3-DOF SOLVE --
@@ -4234,7 +4237,7 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
             // reaching the same point forces the elbow somewhere else. **You cannot have both
             // the hand's position and the bones' directions when the lengths differ.**
             //
-            // * Simon's criterion is that the BONES follow. So rebuild the chain: each target is
+            // * The criterion is that the BONES follow. So rebuild the chain: each target is
             // the previous joint plus the capture's DIRECTION times the ROBOT's own length. Both
             // targets are then exactly reachable AND both directions match exactly - the
             // "copy angles, never lengths" rule applied to the targets themselves.
@@ -4243,10 +4246,10 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
 
             const lower_dir: rbt.Vec =
                 normalize3(positions_robot[hand_h] - positions_robot[fore_h]);
-            const l1: f32 = vecLen(imported.model.body_pos[fore_b]);
-            const l2: f32 = vecLen(imported.model.body_pos[hand_b]);
+            const l1: f32 = vecLen(imported.model.body_rest_position[fore_b]);
+            const l2: f32 = vecLen(imported.model.body_rest_position[hand_b]);
             const elbow_target: rbt.Vec =
-                data.body_xpos[arm_b] + upper_dir * splat(l1);
+                data.body_positions[arm_b] + upper_dir * splat(l1);
             const hand_target: rbt.Vec = elbow_target + lower_dir * splat(l2);
             var arm_tasks: [2]rbt.IkTask = .{
                 .{ .body = fore_b, .target_world = elbow_target, .weight = 1.0 },
@@ -4256,18 +4259,18 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
             // translates the whole robot, which is cheaper than bending an arm and wrecks the
             // torso that was just made exact.
             var arm_mask: [64]bool = undefined;
-            @memset(arm_mask[0..imported.model.nv], false);
+            @memset(arm_mask[0..imported.model.dof_count], false);
             for ([_]usize{ arm_b, fore_b }) |b| {
-                const first: usize = imported.model.body_dof_adr[b];
-                for (0..imported.model.body_dof_num[b]) |k| {
-                    if (first + k < imported.model.nv) {
+                const first: usize = imported.model.body_first_dof[b];
+                for (0..imported.model.body_dof_count[b]) |k| {
+                    if (first + k < imported.model.dof_count) {
                         arm_mask[first + k] = true;
                     }
                 }
             }
 
             var arm_scratch: [4096]f32 = undefined;
-            const need: usize = rbt.ikScratchSize(imported.model.nv);
+            const need: usize = rbt.ikScratchSize(imported.model.dof_count);
             if (need <= arm_scratch.len) {
                 var previous: f32 = 1.0e9;
                 for (0..60) |_| {
@@ -4277,7 +4280,7 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
                         &arm_tasks,
                         .{
                             .damping = 0.05,
-                            .dof_mask = arm_mask[0..imported.model.nv],
+                            .dof_mask = arm_mask[0..imported.model.dof_count],
                             .respect_joint_limits = true,
                         },
                         arm_scratch[0..need],
@@ -4308,33 +4311,33 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
             rbt.comPos(&imported.model, &data);
             const up_dir: rbt.Vec = normalize3(positions_robot[leg_mid_h] - positions_robot[leg_upper_h]);
             const low_dir: rbt.Vec = normalize3(positions_robot[leg_foot_h] - positions_robot[leg_mid_h]);
-            const ll1: f32 = vecLen(imported.model.body_pos[leg_shin_b]);
-            const ll2: f32 = vecLen(imported.model.body_pos[leg_foot_b]);
+            const ll1: f32 = vecLen(imported.model.body_rest_position[leg_shin_b]);
+            const ll2: f32 = vecLen(imported.model.body_rest_position[leg_foot_b]);
             const knee_target: rbt.Vec =
-                data.body_xpos[leg_thigh_b] + up_dir * splat(ll1);
+                data.body_positions[leg_thigh_b] + up_dir * splat(ll1);
             const ankle_target: rbt.Vec = knee_target + low_dir * splat(ll2);
             var leg_tasks: [2]rbt.IkTask = .{
                 .{ .body = leg_shin_b, .target_world = knee_target, .weight = 1.0 },
                 .{ .body = leg_foot_b, .target_world = ankle_target, .weight = 1.0 },
             };
             var leg_mask: [64]bool = undefined;
-            @memset(leg_mask[0..imported.model.nv], false);
+            @memset(leg_mask[0..imported.model.dof_count], false);
             for ([_]usize{ leg_thigh_b, leg_shin_b }) |b| {
-                const first: usize = imported.model.body_dof_adr[b];
-                for (0..imported.model.body_dof_num[b]) |k| {
-                    if (first + k < imported.model.nv) {
+                const first: usize = imported.model.body_first_dof[b];
+                for (0..imported.model.body_dof_count[b]) |k| {
+                    if (first + k < imported.model.dof_count) {
                         leg_mask[first + k] = true;
                     }
                 }
             }
             var leg_scratch: [4096]f32 = undefined;
-            const leg_need: usize = rbt.ikScratchSize(imported.model.nv);
+            const leg_need: usize = rbt.ikScratchSize(imported.model.dof_count);
             if (leg_need <= leg_scratch.len) {
                 var prev: f32 = 1.0e9;
                 for (0..60) |_| {
                     const err: f32 = rbt.ikStep(&imported.model, &data, &leg_tasks, .{
                         .damping = 0.05,
-                        .dof_mask = leg_mask[0..imported.model.nv],
+                        .dof_mask = leg_mask[0..imported.model.dof_count],
                         .respect_joint_limits = true,
                     }, leg_scratch[0..leg_need]);
                     rbt.kinematics(&imported.model, &data);
@@ -4347,17 +4350,17 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
             }
             // * Are the HIP joints at their limits, as three of four shoulder frames are?
             var hip_at_limit: usize = 0;
-            const hip_first: usize = imported.model.body_jnt_adr[leg_thigh_b];
-            for (0..imported.model.body_jnt_num[leg_thigh_b]) |k| {
+            const hip_first: usize = imported.model.body_first_joint[leg_thigh_b];
+            for (0..imported.model.body_joint_count[leg_thigh_b]) |k| {
                 const j: usize = hip_first + k;
-                const q: f32 = data.pos[imported.model.jnt_qpos_adr[j]];
-                const rng: [2]f32 = imported.model.jnt_range[j] orelse .{ -9, 9 };
+                const q: f32 = data.joint_positions[imported.model.joint_first_coordinate[j]];
+                const rng: [2]f32 = imported.model.joint_range[j] orelse .{ -9, 9 };
                 if (q <= rng[0] + 0.02 or q >= rng[1] - 0.02) {
                     hip_at_limit += 1;
                 }
             }
-            const rt: rbt.Vec = normalize3(data.body_xpos[leg_shin_b] - data.body_xpos[leg_thigh_b]);
-            const rs: rbt.Vec = normalize3(data.body_xpos[leg_foot_b] - data.body_xpos[leg_shin_b]);
+            const rt: rbt.Vec = normalize3(data.body_positions[leg_shin_b] - data.body_positions[leg_thigh_b]);
+            const rs: rbt.Vec = normalize3(data.body_positions[leg_foot_b] - data.body_positions[leg_shin_b]);
             std.log.debug("            leg: thigh {d: >5.1} deg   shin {d: >5.1} deg   hip at limit: {d}", .{
                 angleBetweenDegrees(rt, up_dir),
                 angleBetweenDegrees(rs, low_dir),
@@ -4367,8 +4370,8 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
 
         // * Errors are measured RELATIVE TO THE SHOULDER, because the arm's job is its own
         // shape - an absolute error would mostly report the torso's placement again.
-        const robot_elbow: rbt.Vec = data.body_xpos[fore_b] - data.body_xpos[arm_b];
-        const robot_hand: rbt.Vec = data.body_xpos[hand_b] - data.body_xpos[arm_b];
+        const robot_elbow: rbt.Vec = data.body_positions[fore_b] - data.body_positions[arm_b];
+        const robot_hand: rbt.Vec = data.body_positions[hand_b] - data.body_positions[arm_b];
         const human_elbow: rbt.Vec = positions_robot[fore_h] - positions_robot[arm_h];
         const human_hand: rbt.Vec = positions_robot[hand_h] - positions_robot[arm_h];
 
@@ -4385,7 +4388,7 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
         const elbow_angle: f32 = angleBetweenDegrees(normalize3(robot_elbow), normalize3(human_elbow));
         const human_upper_len: f32 = vecLen(human_elbow);
         const robot_upper_len: f32 = vecLen(robot_elbow);
-        const fore_robot: rbt.Vec = data.body_xpos[hand_b] - data.body_xpos[fore_b];
+        const fore_robot: rbt.Vec = data.body_positions[hand_b] - data.body_positions[fore_b];
         const fore_human: rbt.Vec = positions_robot[hand_h] - positions_robot[fore_h];
         const fore_angle: f32 = angleBetweenDegrees(normalize3(fore_robot), normalize3(fore_human));
         // * Are the shoulder DOF AT THEIR LIMITS? That is the difference between "the model
@@ -4394,12 +4397,12 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
         var at_limit: usize = 0;
         var shoulder_report: [2]f32 = .{ 0, 0 };
         {
-            const first: usize = imported.model.body_jnt_adr[arm_b];
-            for (0..@min(imported.model.body_jnt_num[arm_b], 2)) |k| {
+            const first: usize = imported.model.body_first_joint[arm_b];
+            for (0..@min(imported.model.body_joint_count[arm_b], 2)) |k| {
                 const j: usize = first + k;
-                const q: f32 = data.pos[imported.model.jnt_qpos_adr[j]];
+                const q: f32 = data.joint_positions[imported.model.joint_first_coordinate[j]];
                 shoulder_report[k] = q * 57.29578;
-                const rng: [2]f32 = imported.model.jnt_range[j] orelse .{ -9, 9 };
+                const rng: [2]f32 = imported.model.joint_range[j] orelse .{ -9, 9 };
                 if (q <= rng[0] + 0.02 or q >= rng[1] - 0.02) {
                     at_limit += 1;
                 }
@@ -4432,31 +4435,31 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
             const upper_len: f32 = vecLen(m_body_offset(&imported.model, fore_b));
             const lower_len: f32 = vecLen(m_body_offset(&imported.model, hand_b));
             const solution: rbt.TwoBoneSolution = rbt.solveTwoBoneLimb(
-                data.body_xpos[arm_b],
-                data.body_xpos[arm_b] + (positions_robot[hand_h] - positions_robot[arm_h]),
-                data.body_xpos[arm_b] + (positions_robot[fore_h] - positions_robot[arm_h]),
+                data.body_positions[arm_b],
+                data.body_positions[arm_b] + (positions_robot[hand_h] - positions_robot[arm_h]),
+                data.body_positions[arm_b] + (positions_robot[fore_h] - positions_robot[arm_h]),
                 upper_len,
                 lower_len,
             );
-            const hinge: usize = imported.model.body_jnt_adr[fore_b];
+            const hinge: usize = imported.model.body_first_joint[fore_b];
             const range: [2]f32 =
-                imported.model.jnt_range[hinge] orelse .{ -3.14159, 3.14159 };
-            const held: f32 = data.pos[imported.model.jnt_qpos_adr[hinge]];
+                imported.model.joint_range[hinge] orelse .{ -3.14159, 3.14159 };
+            const held: f32 = data.joint_positions[imported.model.joint_first_coordinate[hinge]];
             const achieved: f32 = angleBetweenDegrees(
-                normalize3(data.body_xpos[fore_b] - data.body_xpos[arm_b]),
-                normalize3(data.body_xpos[hand_b] - data.body_xpos[fore_b]),
+                normalize3(data.body_positions[fore_b] - data.body_positions[arm_b]),
+                normalize3(data.body_positions[hand_b] - data.body_positions[fore_b]),
             );
             // * WHICH joint is being read, and how many the body has - the -90.9 vs 18.6
             // discrepancy survives every geometric explanation, so the next suspect is that
-            // `body_jnt_adr` is not pointing at the elbow at all.
+            // `body_first_joint` is not pointing at the elbow at all.
             std.log.debug(
                 "            joint idx {d}  count {d}  axis ({d:.2},{d:.2},{d:.2})",
                 .{
                     hinge,
-                    imported.model.body_jnt_num[fore_b],
-                    imported.model.jnt_axis[hinge][0],
-                    imported.model.jnt_axis[hinge][1],
-                    imported.model.jnt_axis[hinge][2],
+                    imported.model.body_joint_count[fore_b],
+                    imported.model.joint_local_axis[hinge][0],
+                    imported.model.joint_local_axis[hinge][1],
+                    imported.model.joint_local_axis[hinge][2],
                 },
             );
             std.log.debug(
@@ -4524,21 +4527,21 @@ test "MINIMAL: setting the elbow hinge bends the arm by that angle" {
     // at once, on a bare model.** If the angle reads back, the pipeline is corrupting it; if it
     // does not, `kinematics` or the joint frame is wrong and everything above is built on a
     // false reading.
-    const hinge: usize = imported.model.body_jnt_adr[fore_b];
+    const hinge: usize = imported.model.body_first_joint[fore_b];
     const wanted = [_]f32{ -0.3, -0.9, -1.4, 0.4 };
 
     for (wanted) |angle| {
-        @memcpy(data.pos, imported.model.qpos0);
-        data.pos[imported.model.jnt_qpos_adr[hinge]] = angle;
+        @memcpy(data.joint_positions, imported.model.reference_joint_positions);
+        data.joint_positions[imported.model.joint_first_coordinate[hinge]] = angle;
         rbt.kinematics(&imported.model, &data);
 
-        const upper: rbt.Vec = data.body_xpos[fore_b] - data.body_xpos[arm_b];
-        const lower: rbt.Vec = data.body_xpos[hand_b] - data.body_xpos[fore_b];
+        const upper: rbt.Vec = data.body_positions[fore_b] - data.body_positions[arm_b];
+        const lower: rbt.Vec = data.body_positions[hand_b] - data.body_positions[fore_b];
         const bend: f32 = angleBetweenDegrees(normalize3(upper), normalize3(lower));
         std.log.debug("  qpos {d: >6.1} deg -> bend {d: >6.1} deg", .{ angle * 57.29578, bend });
     }
 
-    // -- *** THE ANSWER: THE ARM IS ALREADY BENT 109.5 DEGREES AT `qpos0` --
+    // -- *** THE ANSWER: THE ARM IS ALREADY BENT 109.5 DEGREES AT `reference_joint_positions` --
     //
     //     qpos  -17.2 -> bend  92.3        109.5 - 17.2
     //     qpos  -51.6 -> bend  57.9        109.5 - 51.6
@@ -4556,25 +4559,25 @@ test "MINIMAL: setting the elbow hinge bends the arm by that angle" {
     // what zero MEANS.**
     //
     // * The fix is one subtraction: `qpos = wanted_flexion - rest_flexion`, with `rest_flexion`
-    // measured from `qpos0` once per joint. **This is the reference-pose problem again, in
+    // measured from `reference_joint_positions` once per joint. **This is the reference-pose problem again, in
     // joint coordinates rather than in world space** - the fifth costume it has worn.
     const rest_bend: f32 = blk: {
-        @memcpy(data.pos, imported.model.qpos0);
+        @memcpy(data.joint_positions, imported.model.reference_joint_positions);
         rbt.kinematics(&imported.model, &data);
         break :blk angleBetweenDegrees(
-            normalize3(data.body_xpos[fore_b] - data.body_xpos[arm_b]),
-            normalize3(data.body_xpos[hand_b] - data.body_xpos[fore_b]),
+            normalize3(data.body_positions[fore_b] - data.body_positions[arm_b]),
+            normalize3(data.body_positions[hand_b] - data.body_positions[fore_b]),
         );
     };
     try expect(rest_bend > 100.0 and rest_bend < 120.0);
 
     for ([_]f32{ -0.3, -0.9, -1.4, 0.4 }) |angle| {
-        @memcpy(data.pos, imported.model.qpos0);
-        data.pos[imported.model.jnt_qpos_adr[hinge]] = angle;
+        @memcpy(data.joint_positions, imported.model.reference_joint_positions);
+        data.joint_positions[imported.model.joint_first_coordinate[hinge]] = angle;
         rbt.kinematics(&imported.model, &data);
         const measured: f32 = angleBetweenDegrees(
-            normalize3(data.body_xpos[fore_b] - data.body_xpos[arm_b]),
-            normalize3(data.body_xpos[hand_b] - data.body_xpos[fore_b]),
+            normalize3(data.body_positions[fore_b] - data.body_positions[arm_b]),
+            normalize3(data.body_positions[hand_b] - data.body_positions[fore_b]),
         );
         // * The relation, asserted across the whole range rather than at one sample.
         try expectApproxEqAbs(rest_bend + angle * 57.29578, measured, 0.5);
@@ -4658,13 +4661,13 @@ test "TORSO FOCUS: spine and shoulder axis, five frames, orientation only" {
 
     // -- *** THE TORSO'S TWO DIRECTIONS AT REST, in its OWN frame --
     //
-    // Spine (torso -> head) and the shoulder axis (left -> right upper arm). At `qpos0` every
+    // Spine (torso -> head) and the shoulder axis (left -> right upper arm). At `reference_joint_positions` every
     // body rotation is identity, so world equals local and these are the torso's rest frame
     // directly. Two directions fix an orientation completely; nothing is left free.
-    @memcpy(data.pos, imported.model.qpos0);
+    @memcpy(data.joint_positions, imported.model.reference_joint_positions);
     rbt.kinematics(&imported.model, &data);
-    const rest_spine: rbt.Vec = data.body_xpos[head_b] - data.body_xpos[torso_b];
-    const rest_shoulders: rbt.Vec = data.body_xpos[larm_b] - data.body_xpos[rarm_b];
+    const rest_spine: rbt.Vec = data.body_positions[head_b] - data.body_positions[torso_b];
+    const rest_shoulders: rbt.Vec = data.body_positions[larm_b] - data.body_positions[rarm_b];
 
     std.log.debug("TORSO FOCUS: angle between robot and human, per direction", .{});
     var worst_spine: f32 = 0;
@@ -4691,16 +4694,16 @@ test "TORSO FOCUS: spine and shoulder axis, five frames, orientation only" {
             human_spine,
             human_shoulders,
         );
-        @memcpy(data.pos, imported.model.qpos0);
-        const root_qpos: usize = imported.model.jnt_qpos_adr[0];
-        data.pos[root_qpos + 3] = world[0];
-        data.pos[root_qpos + 4] = world[1];
-        data.pos[root_qpos + 5] = world[2];
-        data.pos[root_qpos + 6] = world[3];
+        @memcpy(data.joint_positions, imported.model.reference_joint_positions);
+        const root_qpos: usize = imported.model.joint_first_coordinate[0];
+        data.joint_positions[root_qpos + 3] = world[0];
+        data.joint_positions[root_qpos + 4] = world[1];
+        data.joint_positions[root_qpos + 5] = world[2];
+        data.joint_positions[root_qpos + 6] = world[3];
         rbt.kinematics(&imported.model, &data);
 
-        const got_spine: rbt.Vec = data.body_xpos[head_b] - data.body_xpos[torso_b];
-        const got_shoulders: rbt.Vec = data.body_xpos[larm_b] - data.body_xpos[rarm_b];
+        const got_spine: rbt.Vec = data.body_positions[head_b] - data.body_positions[torso_b];
+        const got_shoulders: rbt.Vec = data.body_positions[larm_b] - data.body_positions[rarm_b];
         const spine_err: f32 = angleBetweenDegrees(normalize3(got_spine), normalize3(human_spine));
         const shoulder_err: f32 =
             angleBetweenDegrees(normalize3(got_shoulders), normalize3(human_shoulders));
@@ -4788,7 +4791,7 @@ fn runCoreRetarget(flex_model: bool) !void {
         names[i] = j.name;
         parents[i] = j.parent;
     }
-    const human_of_body: []i32 = try gpa.alloc(i32, imported.model.nbody);
+    const human_of_body: []i32 = try gpa.alloc(i32, imported.model.body_count);
     defer gpa.free(human_of_body);
     try rbt.resolveMatchTable(&rbt.lafan_to_humanoid, imported.names, names, human_of_body);
 
@@ -4835,25 +4838,25 @@ fn runCoreRetarget(flex_model: bool) !void {
 
     // -- *** REST DIRECTIONS IN EACH BODY'S LOCAL FRAME, NOT IN WORLD --
     //
-    // At `qpos0` every body rotation is identity, so the distinction is invisible here - and
+    // At `reference_joint_positions` every body rotation is identity, so the distinction is invisible here - and
     // that is exactly how the example diverged: it measured its rest directions from the SOLVED
     // T-pose, where the torso is already turned by the facing yaw, and got a torso 90 degrees
     // off on device. Pulling each direction into its body's frame makes the construction
     // frame-invariant: **the numbers below must not change**, and that is the check.
-    @memcpy(data.pos, imported.model.qpos0);
+    @memcpy(data.joint_positions, imported.model.reference_joint_positions);
     rbt.kinematics(&imported.model, &data);
-    const into_torso: rbt.Quat = zm.conjugate(data.body_xrot[torso_b]);
-    const into_pelvis: rbt.Quat = zm.conjugate(data.body_xrot[pelvis_b]);
+    const into_torso: rbt.Quat = zm.conjugate(data.body_orientations[torso_b]);
+    const into_pelvis: rbt.Quat = zm.conjugate(data.body_orientations[pelvis_b]);
     const rest_spine: rbt.Vec =
-        zm.rotate(into_torso, data.body_xpos[head_b] - data.body_xpos[torso_b]);
+        zm.rotate(into_torso, data.body_positions[head_b] - data.body_positions[torso_b]);
     const rest_shoulders: rbt.Vec =
-        zm.rotate(into_torso, data.body_xpos[larm_b] - data.body_xpos[rarm_b]);
+        zm.rotate(into_torso, data.body_positions[larm_b] - data.body_positions[rarm_b]);
     // * The PELVIS's spine direction points UP toward the torso - the robot's chain runs
     // torso -> pelvis DOWNWARD, so the pelvis's own "spine" is toward its parent.
     const rest_pelvis_up: rbt.Vec =
-        zm.rotate(into_pelvis, data.body_xpos[torso_b] - data.body_xpos[pelvis_b]);
+        zm.rotate(into_pelvis, data.body_positions[torso_b] - data.body_positions[pelvis_b]);
     const rest_hips: rbt.Vec =
-        zm.rotate(into_pelvis, data.body_xpos[lthigh_b] - data.body_xpos[rthigh_b]);
+        zm.rotate(into_pelvis, data.body_positions[lthigh_b] - data.body_positions[rthigh_b]);
 
     const pairs = [_]rbt.DirectionPair{
         .{
@@ -4928,11 +4931,11 @@ fn runCoreRetarget(flex_model: bool) !void {
         parents,
         rest_pos_t,
         rest_rot_t,
-        twist[0..imported.model.nbody],
-        parent_twist[0..imported.model.nbody],
+        twist[0..imported.model.body_count],
+        parent_twist[0..imported.model.body_count],
     );
     var aim_flags: [64]bool = undefined;
-    @memset(aim_flags[0..imported.model.nbody], false);
+    @memset(aim_flags[0..imported.model.body_count], false);
     var positions_robot: [256]rbt.Vec = undefined;
     var rotations_robot: [256]rbt.Quat = undefined;
     const yz: rbt.Quat = quatFromAxisAngle(vec(1, 0, 0), 1.5707963);
@@ -4942,12 +4945,12 @@ fn runCoreRetarget(flex_model: bool) !void {
 
     // * Each 1-DOF body's bend at qpos0 - zero is not straight.
     var rest_flexion_probe: [64]f32 = undefined;
-    @memset(rest_flexion_probe[0..imported.model.nbody], 0);
+    @memset(rest_flexion_probe[0..imported.model.body_count], 0);
     {
-        @memcpy(data.pos, imported.model.qpos0);
+        @memcpy(data.joint_positions, imported.model.reference_joint_positions);
         rbt.kinematics(&imported.model, &data);
-        for (1..imported.model.nbody) |b| {
-            if (imported.model.body_jnt_num[b] != 1) {
+        for (1..imported.model.body_count) |b| {
+            if (imported.model.body_joint_count[b] != 1) {
                 continue;
             }
             const par: u32 = imported.model.body_parent[b];
@@ -4955,15 +4958,15 @@ fn runCoreRetarget(flex_model: bool) !void {
                 continue;
             }
             var ch: ?usize = null;
-            for (1..imported.model.nbody) |c| {
+            for (1..imported.model.body_count) |c| {
                 if (imported.model.body_parent[c] == b) {
                     ch = c;
                     break;
                 }
             }
             const tip: usize = ch orelse continue;
-            const up: rbt.Vec = data.body_xpos[b] - data.body_xpos[par];
-            const lo: rbt.Vec = data.body_xpos[tip] - data.body_xpos[b];
+            const up: rbt.Vec = data.body_positions[b] - data.body_positions[par];
+            const lo: rbt.Vec = data.body_positions[tip] - data.body_positions[b];
             if (vecLen(up) > 1.0e-6 and vecLen(lo) > 1.0e-6) {
                 rest_flexion_probe[b] =
                     angleBetweenDegrees(normalize3(up), normalize3(lo)) / 57.29578;
@@ -4984,8 +4987,8 @@ fn runCoreRetarget(flex_model: bool) !void {
     {
         // -- *** THE ROBOT'S REST FOOT MUST BE READ FROM THE **SOLVED T-POSE** --
         //
-        // The first version read it at `qpos0` and compared against the capture's T-POSE toe.
-        // **Two different poses.** `qpos0` is the folded-arm configuration whose elbow rests at
+        // The first version read it at `reference_joint_positions` and compared against the capture's T-POSE toe.
+        // **Two different poses.** `reference_joint_positions` is the folded-arm configuration whose elbow rests at
         // 109.5 degrees; there is no reason its foot points where a T-posed foot does. The 64.9
         // degrees it reported was partly that mismatch, which is why applying it as an offset
         // made everything worse.
@@ -5008,8 +5011,8 @@ fn runCoreRetarget(flex_model: bool) !void {
             const q: rbt.Vec = rest_pos_t[j] * splat(0.0097);
             rest_robot_frame_probe[j] = vec(q[0], -q[2], q[1]);
         }
-        if (imported.model.nq <= tpose_probe.len and
-            rbt.ikScratchSize(imported.model.nv) <= tpose_scratch_probe.len and
+        if (imported.model.coordinate_count <= tpose_probe.len and
+            rbt.ikScratchSize(imported.model.dof_count) <= tpose_scratch_probe.len and
             pelvis_probe != 0)
         {
             rbt.solveRestPoseFromSource(
@@ -5020,11 +5023,11 @@ fn runCoreRetarget(flex_model: bool) !void {
                 parents,
                 pelvis_probe,
                 &tpose_tasks_probe,
-                tpose_scratch_probe[0..rbt.ikScratchSize(imported.model.nv)],
-                tpose_probe[0..imported.model.nq],
+                tpose_scratch_probe[0..rbt.ikScratchSize(imported.model.dof_count)],
+                tpose_probe[0..imported.model.coordinate_count],
             );
         } else {
-            @memcpy(data.pos, imported.model.qpos0);
+            @memcpy(data.joint_positions, imported.model.reference_joint_positions);
         }
         rbt.kinematics(&imported.model, &data);
         const foot_probe: usize = H.body(imported.names, "foot_right");
@@ -5032,13 +5035,13 @@ fn runCoreRetarget(flex_model: bool) !void {
         const toe_h: usize = H.find(capture.joints, "RightToeBase");
         var sole_p: rbt.Vec = .{ 0, 0, 0, 0 };
         var sole_l: f32 = 0;
-        for (0..imported.model.ngeom) |g| {
+        for (0..imported.model.geom_count) |g| {
             if (imported.model.geom_body[g] != foot_probe) {
                 continue;
             }
-            if (vecLen(imported.model.geom_pos[g]) > sole_l) {
-                sole_l = vecLen(imported.model.geom_pos[g]);
-                sole_p = imported.model.geom_pos[g];
+            if (vecLen(imported.model.geom_local_position[g]) > sole_l) {
+                sole_l = vecLen(imported.model.geom_local_position[g]);
+                sole_p = imported.model.geom_local_position[g];
             }
         }
         if (foot_probe != 0 and toe_h != 0 and sole_l > 1.0e-5) {
@@ -5049,7 +5052,7 @@ fn runCoreRetarget(flex_model: bool) !void {
                 rest_pos_t[toe_h][1] - rest_pos_t[ankle_h][1],
             );
             const robot_sole: rbt.Vec =
-                zm.rotate(data.body_xrot[foot_probe], normalize3(sole_p));
+                zm.rotate(data.body_orientations[foot_probe], normalize3(sole_p));
             std.log.debug("  FOOT REST OFFSET: robot sole vs capture toe = {d:.1} deg", .{
                 angleBetweenDegrees(robot_sole, normalize3(rest_toe)),
             });
@@ -5074,21 +5077,21 @@ fn runCoreRetarget(flex_model: bool) !void {
             .positions = positions_robot[0..joints],
             .rotations = rotations_robot[0..joints],
             .human_parents = parents,
-            .twist = twist[0..imported.model.nbody],
-            .parent_twist = parent_twist[0..imported.model.nbody],
-            .aim_at_child = aim_flags[0..imported.model.nbody],
+            .twist = twist[0..imported.model.body_count],
+            .parent_twist = parent_twist[0..imported.model.body_count],
+            .aim_at_child = aim_flags[0..imported.model.body_count],
             .direction_pairs = &pairs,
             // * Multi-DOF bodies solved by IK rather than the sequential fit - measured to take
             // a 3-DOF hip from 11-68 degrees of error to 0.0 on a reachable target.
-            .solve_scratch = solve_scratch[0..rbt.ikScratchSize(imported.model.nv)],
+            .solve_scratch = solve_scratch[0..rbt.ikScratchSize(imported.model.dof_count)],
             .solve_tasks = &solve_tasks,
         });
 
-        const got_spine: rbt.Vec = data.body_xpos[head_b] - data.body_xpos[torso_b];
+        const got_spine: rbt.Vec = data.body_positions[head_b] - data.body_positions[torso_b];
         const human_spine: rbt.Vec = positions_robot[head_h] - positions_robot[spine_h];
-        const got_pelvis_up: rbt.Vec = data.body_xpos[torso_b] - data.body_xpos[pelvis_b];
+        const got_pelvis_up: rbt.Vec = data.body_positions[torso_b] - data.body_positions[pelvis_b];
         const human_pelvis_up: rbt.Vec = positions_robot[spine_h] - positions_robot[hips_h];
-        const got_hips: rbt.Vec = data.body_xpos[lthigh_b] - data.body_xpos[rthigh_b];
+        const got_hips: rbt.Vec = data.body_positions[lthigh_b] - data.body_positions[rthigh_b];
         const human_hips: rbt.Vec = positions_robot[lleg_h] - positions_robot[rleg_h];
 
         const e_spine: f32 = angleBetweenDegrees(normalize3(got_spine), normalize3(human_spine));
@@ -5106,11 +5109,11 @@ fn runCoreRetarget(flex_model: bool) !void {
         var e_shin: f32 = 0;
         if (shin_bb != 0 and foot_bb != 0) {
             e_thigh = angleBetweenDegrees(
-                normalize3(data.body_xpos[shin_bb] - data.body_xpos[rthigh_b]),
+                normalize3(data.body_positions[shin_bb] - data.body_positions[rthigh_b]),
                 normalize3(positions_robot[leg_h2] - positions_robot[rleg_h]),
             );
             e_shin = angleBetweenDegrees(
-                normalize3(data.body_xpos[foot_bb] - data.body_xpos[shin_bb]),
+                normalize3(data.body_positions[foot_bb] - data.body_positions[shin_bb]),
                 normalize3(positions_robot[foot_h2] - positions_robot[leg_h2]),
             );
         }
@@ -5133,17 +5136,17 @@ fn runCoreRetarget(flex_model: bool) !void {
                 normalize3(positions_robot[leg_h2] - positions_robot[rleg_h]);
             const shin_dir: rbt.Vec =
                 normalize3(positions_robot[foot_h2] - positions_robot[leg_h2]);
-            const tl: f32 = vecLen(imported.model.body_pos[shin_bb]);
-            const sl: f32 = vecLen(imported.model.body_pos[foot_bb]);
-            const knee_t: rbt.Vec = data.body_xpos[rthigh_b] + thigh_dir * splat(tl);
+            const tl: f32 = vecLen(imported.model.body_rest_position[shin_bb]);
+            const sl: f32 = vecLen(imported.model.body_rest_position[foot_bb]);
+            const knee_t: rbt.Vec = data.body_positions[rthigh_b] + thigh_dir * splat(tl);
             const ankle_t: rbt.Vec = knee_t + shin_dir * splat(sl);
 
             var leg_mask2: [64]bool = undefined;
-            @memset(leg_mask2[0..imported.model.nv], false);
+            @memset(leg_mask2[0..imported.model.dof_count], false);
             for ([_]usize{ rthigh_b, shin_bb, foot_bb }) |b| {
-                const f0: usize = imported.model.body_dof_adr[b];
-                for (0..imported.model.body_dof_num[b]) |k| {
-                    if (f0 + k < imported.model.nv) {
+                const f0: usize = imported.model.body_first_dof[b];
+                for (0..imported.model.body_dof_count[b]) |k| {
+                    if (f0 + k < imported.model.dof_count) {
                         leg_mask2[f0 + k] = true;
                     }
                 }
@@ -5158,13 +5161,13 @@ fn runCoreRetarget(flex_model: bool) !void {
                 const toe_h4: usize = H.find(capture.joints, "RightToeBase");
                 var sole4: rbt.Vec = .{ 0, 0, 0, 0 };
                 var sl4: f32 = 0;
-                for (0..imported.model.ngeom) |g| {
+                for (0..imported.model.geom_count) |g| {
                     if (imported.model.geom_body[g] != foot_bb) {
                         continue;
                     }
-                    if (vecLen(imported.model.geom_pos[g]) > sl4) {
-                        sl4 = vecLen(imported.model.geom_pos[g]);
-                        sole4 = imported.model.geom_pos[g] * splat(2.0);
+                    if (vecLen(imported.model.geom_local_position[g]) > sl4) {
+                        sl4 = vecLen(imported.model.geom_local_position[g]);
+                        sole4 = imported.model.geom_local_position[g] * splat(2.0);
                     }
                 }
                 if (toe_h4 != 0 and sl4 > 1.0e-5) {
@@ -5196,14 +5199,14 @@ fn runCoreRetarget(flex_model: bool) !void {
                 }
             }
             var lsc: [4096]f32 = undefined;
-            const ln: usize = rbt.ikScratchSize(imported.model.nv);
+            const ln: usize = rbt.ikScratchSize(imported.model.dof_count);
             if (ln <= lsc.len) {
                 rbt.comPos(&imported.model, &data);
                 var lprev: f32 = 1.0e9;
                 for (0..80) |_| {
                     const e: f32 = rbt.ikStep(&imported.model, &data, leg_t[0..leg_t_n], .{
                         .damping = 0.05,
-                        .dof_mask = leg_mask2[0..imported.model.nv],
+                        .dof_mask = leg_mask2[0..imported.model.dof_count],
                         .respect_joint_limits = true,
                     }, lsc[0..ln]);
                     rbt.kinematics(&imported.model, &data);
@@ -5219,10 +5222,10 @@ fn runCoreRetarget(flex_model: bool) !void {
             // degrees and the combined solve only reached 12.9-14.4.
             if (leg_t_n == 3) {
                 var ankle_only: [64]bool = undefined;
-                @memset(ankle_only[0..imported.model.nv], false);
-                const af: usize = imported.model.body_dof_adr[foot_bb];
-                for (0..imported.model.body_dof_num[foot_bb]) |k| {
-                    if (af + k < imported.model.nv) {
+                @memset(ankle_only[0..imported.model.dof_count], false);
+                const af: usize = imported.model.body_first_dof[foot_bb];
+                for (0..imported.model.body_dof_count[foot_bb]) |k| {
+                    if (af + k < imported.model.dof_count) {
                         ankle_only[af + k] = true;
                     }
                 }
@@ -5238,14 +5241,14 @@ fn runCoreRetarget(flex_model: bool) !void {
                 // to be inherits every error above it.**
                 var aim_only: [1]rbt.IkTask = .{leg_t[2]};
                 aim_only[0].weight = 1.0;
-                aim_only[0].target_world = data.body_xpos[foot_bb] +
+                aim_only[0].target_world = data.body_positions[foot_bb] +
                     (leg_t[2].target_world - ankle_t);
                 rbt.comPos(&imported.model, &data);
                 var ap: f32 = 1.0e9;
                 for (0..40) |_| {
                     const e3: f32 = rbt.ikStep(&imported.model, &data, &aim_only, .{
                         .damping = 0.02,
-                        .dof_mask = ankle_only[0..imported.model.nv],
+                        .dof_mask = ankle_only[0..imported.model.dof_count],
                         .respect_joint_limits = true,
                     }, lsc[0..ln]);
                     rbt.kinematics(&imported.model, &data);
@@ -5258,14 +5261,14 @@ fn runCoreRetarget(flex_model: bool) !void {
             }
 
             const ct: f32 = angleBetweenDegrees(
-                normalize3(data.body_xpos[shin_bb] - data.body_xpos[rthigh_b]),
+                normalize3(data.body_positions[shin_bb] - data.body_positions[rthigh_b]),
                 thigh_dir,
             );
             const chain_shin: f32 = angleBetweenDegrees(
-                normalize3(data.body_xpos[foot_bb] - data.body_xpos[shin_bb]),
+                normalize3(data.body_positions[foot_bb] - data.body_positions[shin_bb]),
                 shin_dir,
             );
-            const ankle_err: f32 = vecLen(data.body_xpos[foot_bb] - ankle_t);
+            const ankle_err: f32 = vecLen(data.body_positions[foot_bb] - ankle_t);
 
             // -- *** THE TARGET IS REACHABLE BY CONSTRUCTION, SO WHAT IS REFUSING? --
             //
@@ -5276,11 +5279,11 @@ fn runCoreRetarget(flex_model: bool) !void {
             var pinned: [8]u8 = undefined;
             var pinned_n: usize = 0;
             for ([_]usize{ rthigh_b, shin_bb, foot_bb }) |bb| {
-                const j0: usize = imported.model.body_jnt_adr[bb];
-                for (0..imported.model.body_jnt_num[bb]) |k| {
+                const j0: usize = imported.model.body_first_joint[bb];
+                for (0..imported.model.body_joint_count[bb]) |k| {
                     const j: usize = j0 + k;
-                    const q: f32 = data.pos[imported.model.jnt_qpos_adr[j]];
-                    const rr: [2]f32 = imported.model.jnt_range[j] orelse continue;
+                    const q: f32 = data.joint_positions[imported.model.joint_first_coordinate[j]];
+                    const rr: [2]f32 = imported.model.joint_range[j] orelse continue;
                     if ((q <= rr[0] + 0.02 or q >= rr[1] - 0.02) and pinned_n < pinned.len) {
                         pinned[pinned_n] = if (bb == rthigh_b) 'h' else if (bb == shin_bb) 'k' else 'a';
                         pinned_n += 1;
@@ -5305,47 +5308,47 @@ fn runCoreRetarget(flex_model: bool) !void {
                 const toe_h3: usize = H.find(capture.joints, "RightToeBase");
                 var sole3: rbt.Vec = .{ 0, 0, 0, 0 };
                 var sl3: f32 = 0;
-                for (0..imported.model.ngeom) |g| {
+                for (0..imported.model.geom_count) |g| {
                     if (imported.model.geom_body[g] != foot_bb) {
                         continue;
                     }
-                    if (vecLen(imported.model.geom_pos[g]) > sl3) {
-                        sl3 = vecLen(imported.model.geom_pos[g]);
-                        sole3 = imported.model.geom_pos[g] * splat(2.0);
+                    if (vecLen(imported.model.geom_local_position[g]) > sl3) {
+                        sl3 = vecLen(imported.model.geom_local_position[g]);
+                        sole3 = imported.model.geom_local_position[g] * splat(2.0);
                     }
                 }
                 if (toe_h3 != 0 and sl3 > 1.0e-5) {
                     const want3: rbt.Vec =
                         normalize3(positions_robot[toe_h3] - positions_robot[foot_h2]);
-                    const aj0: usize = imported.model.body_jnt_adr[foot_bb];
-                    if (imported.model.body_jnt_num[foot_bb] == 2) {
-                        const saved_a: f32 = data.pos[imported.model.jnt_qpos_adr[aj0]];
-                        const saved_b: f32 = data.pos[imported.model.jnt_qpos_adr[aj0 + 1]];
-                        const ar0: [2]f32 = imported.model.jnt_range[aj0] orelse .{ -1, 1 };
-                        const ar1: [2]f32 = imported.model.jnt_range[aj0 + 1] orelse .{ -1, 1 };
+                    const aj0: usize = imported.model.body_first_joint[foot_bb];
+                    if (imported.model.body_joint_count[foot_bb] == 2) {
+                        const saved_a: f32 = data.joint_positions[imported.model.joint_first_coordinate[aj0]];
+                        const saved_b: f32 = data.joint_positions[imported.model.joint_first_coordinate[aj0 + 1]];
+                        const ar0: [2]f32 = imported.model.joint_range[aj0] orelse .{ -1, 1 };
+                        const ar1: [2]f32 = imported.model.joint_range[aj0 + 1] orelse .{ -1, 1 };
                         var ia: usize = 0;
                         while (ia <= 16) : (ia += 1) {
                             var ib: usize = 0;
                             while (ib <= 16) : (ib += 1) {
-                                data.pos[imported.model.jnt_qpos_adr[aj0]] = ar0[0] +
+                                data.joint_positions[imported.model.joint_first_coordinate[aj0]] = ar0[0] +
                                     (ar0[1] - ar0[0]) * float(ia) / 16.0;
-                                data.pos[imported.model.jnt_qpos_adr[aj0 + 1]] = ar1[0] +
+                                data.joint_positions[imported.model.joint_first_coordinate[aj0 + 1]] = ar1[0] +
                                     (ar1[1] - ar1[0]) * float(ib) / 16.0;
                                 rbt.kinematics(&imported.model, &data);
                                 best_possible = @min(best_possible, angleBetweenDegrees(
-                                    normalize3(zm.rotate(data.body_xrot[foot_bb], sole3)),
+                                    normalize3(zm.rotate(data.body_orientations[foot_bb], sole3)),
                                     want3,
                                 ));
                             }
                         }
-                        data.pos[imported.model.jnt_qpos_adr[aj0]] = saved_a;
-                        data.pos[imported.model.jnt_qpos_adr[aj0 + 1]] = saved_b;
+                        data.joint_positions[imported.model.joint_first_coordinate[aj0]] = saved_a;
+                        data.joint_positions[imported.model.joint_first_coordinate[aj0 + 1]] = saved_b;
                         rbt.kinematics(&imported.model, &data);
                     }
-                    const sole_world: rbt.Vec = data.body_xpos[foot_bb] +
-                        zm.rotate(data.body_xrot[foot_bb], sole3);
+                    const sole_world: rbt.Vec = data.body_positions[foot_bb] +
+                        zm.rotate(data.body_orientations[foot_bb], sole3);
                     foot_angle = angleBetweenDegrees(
-                        normalize3(sole_world - data.body_xpos[foot_bb]),
+                        normalize3(sole_world - data.body_positions[foot_bb]),
                         normalize3(positions_robot[toe_h3] - positions_robot[foot_h2]),
                     );
                 }
@@ -5379,34 +5382,35 @@ fn runCoreRetarget(flex_model: bool) !void {
         // has no ordering: it distributes across all three at once. **If IK does better, the fit
         // is the problem; if it matches, the range is.**
         {
+            const thigh_first_joint: u32 = imported.model.body_first_joint[rthigh_b];
             const saved: [3]f32 = .{
-                data.pos[imported.model.jnt_qpos_adr[imported.model.body_jnt_adr[rthigh_b] + 0]],
-                data.pos[imported.model.jnt_qpos_adr[imported.model.body_jnt_adr[rthigh_b] + 1]],
-                data.pos[imported.model.jnt_qpos_adr[imported.model.body_jnt_adr[rthigh_b] + 2]],
+                data.joint_positions[imported.model.joint_first_coordinate[thigh_first_joint + 0]],
+                data.joint_positions[imported.model.joint_first_coordinate[thigh_first_joint + 1]],
+                data.joint_positions[imported.model.joint_first_coordinate[thigh_first_joint + 2]],
             };
             const want_dir: rbt.Vec = normalize3(positions_robot[leg_h2] - positions_robot[rleg_h]);
             var thigh_mask: [64]bool = undefined;
-            @memset(thigh_mask[0..imported.model.nv], false);
-            const dof0: usize = imported.model.body_dof_adr[rthigh_b];
-            for (0..imported.model.body_dof_num[rthigh_b]) |k| {
-                if (dof0 + k < imported.model.nv) {
+            @memset(thigh_mask[0..imported.model.dof_count], false);
+            const dof0: usize = imported.model.body_first_dof[rthigh_b];
+            for (0..imported.model.body_dof_count[rthigh_b]) |k| {
+                if (dof0 + k < imported.model.dof_count) {
                     thigh_mask[dof0 + k] = true;
                 }
             }
             var knee_task: [1]rbt.IkTask = .{.{
                 .body = shin_bb,
-                .target_world = data.body_xpos[rthigh_b] +
-                    want_dir * splat(vecLen(imported.model.body_pos[shin_bb])),
+                .target_world = data.body_positions[rthigh_b] +
+                    want_dir * splat(vecLen(imported.model.body_rest_position[shin_bb])),
                 .weight = 1.0,
             }};
             var sc: [4096]f32 = undefined;
-            const need2: usize = rbt.ikScratchSize(imported.model.nv);
+            const need2: usize = rbt.ikScratchSize(imported.model.dof_count);
             if (need2 <= sc.len) {
                 rbt.comPos(&imported.model, &data);
                 for (0..60) |_| {
                     _ = rbt.ikStep(&imported.model, &data, &knee_task, .{
                         .damping = 0.05,
-                        .dof_mask = thigh_mask[0..imported.model.nv],
+                        .dof_mask = thigh_mask[0..imported.model.dof_count],
                         .respect_joint_limits = true,
                     }, sc[0..need2]);
                     rbt.kinematics(&imported.model, &data);
@@ -5414,13 +5418,13 @@ fn runCoreRetarget(flex_model: bool) !void {
                 }
             }
             const ik_thigh: f32 = angleBetweenDegrees(
-                normalize3(data.body_xpos[shin_bb] - data.body_xpos[rthigh_b]),
+                normalize3(data.body_positions[shin_bb] - data.body_positions[rthigh_b]),
                 want_dir,
             );
             std.log.debug("            thigh: fit {d: >5.1} deg   IK {d: >5.1} deg", .{ e_thigh, ik_thigh });
             // Restore, so the probe does not change what the frame reports.
             inline for (0..3) |k| {
-                data.pos[imported.model.jnt_qpos_adr[imported.model.body_jnt_adr[rthigh_b] + k]] = saved[k];
+                data.joint_positions[imported.model.joint_first_coordinate[thigh_first_joint + k]] = saved[k];
             }
             rbt.kinematics(&imported.model, &data);
         }
@@ -5428,11 +5432,11 @@ fn runCoreRetarget(flex_model: bool) !void {
         // * Is the HIP pinned? A 3-DOF joint missing its own bone by 90 degrees is either
         // limits or a target it cannot express.
         var hip_pinned: usize = 0;
-        const hip_j0: usize = imported.model.body_jnt_adr[rthigh_b];
-        for (0..imported.model.body_jnt_num[rthigh_b]) |k| {
+        const hip_j0: usize = imported.model.body_first_joint[rthigh_b];
+        for (0..imported.model.body_joint_count[rthigh_b]) |k| {
             const j: usize = hip_j0 + k;
-            const q: f32 = data.pos[imported.model.jnt_qpos_adr[j]];
-            const rr: [2]f32 = imported.model.jnt_range[j] orelse .{ -9, 9 };
+            const q: f32 = data.joint_positions[imported.model.joint_first_coordinate[j]];
+            const rr: [2]f32 = imported.model.joint_range[j] orelse .{ -9, 9 };
             if (q <= rr[0] + 0.02 or q >= rr[1] - 0.02) {
                 hip_pinned += 1;
             }
@@ -5440,7 +5444,16 @@ fn runCoreRetarget(flex_model: bool) !void {
         std.log.debug(
             "  frame {d: >4}:  torso {d: >5.1}   pelvis {d: >5.1}/{d: >5.1}   " ++
                 "THIGH {d: >5.1}   SHIN {d: >5.1}   hip pinned {d}/{d}",
-            .{ frame, e_spine, e_pelvis, e_hips, e_thigh, e_shin, hip_pinned, imported.model.body_jnt_num[rthigh_b] },
+            .{
+                frame,
+                e_spine,
+                e_pelvis,
+                e_hips,
+                e_thigh,
+                e_shin,
+                hip_pinned,
+                imported.model.body_joint_count[rthigh_b],
+            },
         );
         worst = @max(worst, e_spine);
     }
@@ -5470,13 +5483,13 @@ fn runCoreRetarget(flex_model: bool) !void {
             .positions = positions_robot[0..joints],
             .rotations = rotations_robot[0..joints],
             .human_parents = parents,
-            .twist = twist[0..imported.model.nbody],
-            .parent_twist = parent_twist[0..imported.model.nbody],
-            .aim_at_child = aim_flags[0..imported.model.nbody],
+            .twist = twist[0..imported.model.body_count],
+            .parent_twist = parent_twist[0..imported.model.body_count],
+            .aim_at_child = aim_flags[0..imported.model.body_count],
             .direction_pairs = &pairs,
             .root_world_position = positions_robot[spine_h],
         });
-        root_positions[slot] = data.body_xpos[torso_b];
+        root_positions[slot] = data.body_positions[torso_b];
         human_roots[slot] = positions_robot[spine_h];
     }
     // -- *** JITTER: EXCESS MOTION BETWEEN CONSECUTIVE FRAMES, COLD vs WARM --
@@ -5498,8 +5511,8 @@ fn runCoreRetarget(flex_model: bool) !void {
         var jitter_n: usize = 0;
         var previous_dirs: [64]rbt.Vec = undefined;
         var previous_human_dirs: [64]rbt.Vec = undefined;
-        @memset(previous_dirs[0..imported.model.nbody], vec(0, 0, 1));
-        @memset(previous_human_dirs[0..imported.model.nbody], vec(0, 0, 1));
+        @memset(previous_dirs[0..imported.model.body_count], vec(0, 0, 1));
+        @memset(previous_human_dirs[0..imported.model.body_count], vec(0, 0, 1));
         var f: usize = 1;
         while (f < capture.frame_count and f < 1200) : (f += 1) {
             poseFromBvhFrame(&capture, f, pos, rot);
@@ -5514,12 +5527,12 @@ fn runCoreRetarget(flex_model: bool) !void {
                 .positions = positions_robot[0..jj],
                 .rotations = rotations_robot[0..jj],
                 .human_parents = parents,
-                .twist = twist[0..imported.model.nbody],
-                .parent_twist = parent_twist[0..imported.model.nbody],
-                .aim_at_child = aim_flags[0..imported.model.nbody],
+                .twist = twist[0..imported.model.body_count],
+                .parent_twist = parent_twist[0..imported.model.body_count],
+                .aim_at_child = aim_flags[0..imported.model.body_count],
                 .direction_pairs = &pairs,
                 .root_world_position = positions_robot[spine_h],
-                .solve_scratch = solve_scratch[0..rbt.ikScratchSize(imported.model.nv)],
+                .solve_scratch = solve_scratch[0..rbt.ikScratchSize(imported.model.dof_count)],
                 .solve_tasks = &solve_tasks,
                 .warm_start = warm and f > 1,
             });
@@ -5552,16 +5565,16 @@ fn runCoreRetarget(flex_model: bool) !void {
                 }
                 const d1: rbt.Vec = normalize3(positions_robot[mh] - positions_robot[uh]);
                 const d2: rbt.Vec = normalize3(positions_robot[eh] - positions_robot[mh]);
-                const b1: f32 = vecLen(imported.model.body_pos[mb]);
-                const b2: f32 = vecLen(imported.model.body_pos[eb]);
-                const mid_t: rbt.Vec = data.body_xpos[ub] + d1 * splat(b1);
+                const b1: f32 = vecLen(imported.model.body_rest_position[mb]);
+                const b2: f32 = vecLen(imported.model.body_rest_position[eb]);
+                const mid_t: rbt.Vec = data.body_positions[ub] + d1 * splat(b1);
                 const end_t: rbt.Vec = mid_t + d2 * splat(b2);
                 var lm: [64]bool = undefined;
-                @memset(lm[0..imported.model.nv], false);
+                @memset(lm[0..imported.model.dof_count], false);
                 for ([_]usize{ ub, mb, eb }) |bb| {
-                    const f0: usize = imported.model.body_dof_adr[bb];
-                    for (0..imported.model.body_dof_num[bb]) |k| {
-                        if (f0 + k < imported.model.nv) {
+                    const f0: usize = imported.model.body_first_dof[bb];
+                    for (0..imported.model.body_dof_count[bb]) |k| {
+                        if (f0 + k < imported.model.dof_count) {
                             lm[f0 + k] = true;
                         }
                     }
@@ -5583,11 +5596,11 @@ fn runCoreRetarget(flex_model: bool) !void {
                     if (toe_h != 0) {
                         var sole: rbt.Vec = .{ 0, 0, 0, 0 };
                         var sole_len: f32 = 0;
-                        for (0..imported.model.ngeom) |g| {
+                        for (0..imported.model.geom_count) |g| {
                             if (imported.model.geom_body[g] != eb) {
                                 continue;
                             }
-                            const gp: rbt.Vec = imported.model.geom_pos[g];
+                            const gp: rbt.Vec = imported.model.geom_local_position[g];
                             if (vecLen(gp) > sole_len) {
                                 sole_len = vecLen(gp);
                                 sole = gp * splat(2.0);
@@ -5612,9 +5625,9 @@ fn runCoreRetarget(flex_model: bool) !void {
                 for (0..60) |_| {
                     const e2: f32 = rbt.ikStep(&imported.model, &data, lt[0..lt_n], .{
                         .damping = 0.05,
-                        .dof_mask = lm[0..imported.model.nv],
+                        .dof_mask = lm[0..imported.model.dof_count],
                         .respect_joint_limits = true,
-                    }, solve_scratch[0..rbt.ikScratchSize(imported.model.nv)]);
+                    }, solve_scratch[0..rbt.ikScratchSize(imported.model.dof_count)]);
                     rbt.kinematics(&imported.model, &data);
                     rbt.comPos(&imported.model, &data);
                     if (lp - e2 < 0.0002) {
@@ -5625,13 +5638,13 @@ fn runCoreRetarget(flex_model: bool) !void {
             }
 
             // * Every mapped body with a child bone, against the capture's own step.
-            for (1..imported.model.nbody) |b| {
+            for (1..imported.model.body_count) |b| {
                 const hb: i32 = human_of_body[b];
                 if (hb < 0) {
                     continue;
                 }
                 var child: ?usize = null;
-                for (1..imported.model.nbody) |c| {
+                for (1..imported.model.body_count) |c| {
                     if (imported.model.body_parent[c] == b) {
                         child = c;
                         break;
@@ -5642,7 +5655,7 @@ fn runCoreRetarget(flex_model: bool) !void {
                 if (hc < 0) {
                     continue;
                 }
-                const now: rbt.Vec = normalize3(data.body_xpos[child_b] - data.body_xpos[b]);
+                const now: rbt.Vec = normalize3(data.body_positions[child_b] - data.body_positions[b]);
                 const now_h: rbt.Vec = normalize3(
                     positions_robot[@intCast(hc)] - positions_robot[@intCast(hb)],
                 );
@@ -5735,14 +5748,14 @@ test "MINIMAL: two-bone through the shoulder places the hand on the target" {
     // degrees from where a plain aim puts it. So: shoulder fixed at rest, one reachable hand
     // target, run the SAME steps `solveLimbHere` runs, and measure the hand. No capture, no
     // conversion, no torso. **Whichever step loses the target is the one at fault.**
-    @memcpy(data.pos, imported.model.qpos0);
+    @memcpy(data.joint_positions, imported.model.reference_joint_positions);
     rbt.kinematics(&imported.model, &data);
-    const shoulder: rbt.Vec = data.body_xpos[arm_b];
-    const l1: f32 = vecLen(imported.model.body_pos[fore_b]);
-    const l2: f32 = vecLen(imported.model.body_pos[hand_b]);
+    const shoulder: rbt.Vec = data.body_positions[arm_b];
+    const l1: f32 = vecLen(imported.model.body_rest_position[fore_b]);
+    const l2: f32 = vecLen(imported.model.body_rest_position[hand_b]);
     const rest_bend: f32 = angleBetweenDegrees(
-        normalize3(data.body_xpos[fore_b] - data.body_xpos[arm_b]),
-        normalize3(data.body_xpos[hand_b] - data.body_xpos[fore_b]),
+        normalize3(data.body_positions[fore_b] - data.body_positions[arm_b]),
+        normalize3(data.body_positions[hand_b] - data.body_positions[fore_b]),
     ) / 57.29578;
 
     const target: rbt.Vec = shoulder + vec(0.15, -0.35, -0.25);
@@ -5753,7 +5766,7 @@ test "MINIMAL: two-bone through the shoulder places the hand on the target" {
     // Step 1: aim the upper arm at the solved elbow - WITH the twist chosen so the hinge axis is
     // normal to the plane through shoulder, elbow and hand. A plain shortest arc measured 0.620 m
     // of hand error with the elbow exact: right place, right angle, WRONG PLANE.
-    const local_bone: rbt.Vec = normalize3(imported.model.body_pos[fore_b]);
+    const local_bone: rbt.Vec = normalize3(imported.model.body_rest_position[fore_b]);
     const to_elbow: rbt.Vec = normalize3(sol.joint_position - shoulder);
     const to_hand_from_elbow: rbt.Vec = normalize3(target - sol.joint_position);
     // ** Shortest arc, NOT aimBoneWithTwist: the twist version costs 0.296 m of elbow on this
@@ -5761,18 +5774,22 @@ test "MINIMAL: two-bone through the shoulder places the hand on the target" {
     // a free choice. Documented at `solveLimbHere`.
     _ = to_hand_from_elbow;
     const want_world: rbt.Quat = arcBetween(local_bone, to_elbow);
-    const parent_world: rbt.Quat = data.body_xrot[imported.model.body_parent[arm_b]];
+    const parent_world: rbt.Quat = data.body_orientations[imported.model.body_parent[arm_b]];
     _ = rbt.fitBodyRotation(&imported.model, &data, arm_b, qmul(zm.conjugate(parent_world), want_world));
     rbt.kinematics(&imported.model, &data);
-    const elbow_got: rbt.Vec = data.body_xpos[fore_b];
+    const elbow_got: rbt.Vec = data.body_positions[fore_b];
     const elbow_err: f32 = vecLen(elbow_got - sol.joint_position);
 
     // Step 2: bend the hinge.
-    const hinge: usize = imported.model.body_jnt_adr[fore_b];
-    const range: [2]f32 = imported.model.jnt_range[hinge] orelse .{ -3.14, 3.14 };
-    data.pos[imported.model.jnt_qpos_adr[hinge]] = clamp(sol.flexion - rest_bend, range[0], range[1]);
+    const hinge: usize = imported.model.body_first_joint[fore_b];
+    const range: [2]f32 = imported.model.joint_range[hinge] orelse .{ -3.14, 3.14 };
+    data.joint_positions[imported.model.joint_first_coordinate[hinge]] = clamp(
+        sol.flexion - rest_bend,
+        range[0],
+        range[1],
+    );
     rbt.kinematics(&imported.model, &data);
-    const hand_got: rbt.Vec = data.body_xpos[hand_b];
+    const hand_got: rbt.Vec = data.body_positions[hand_b];
     const hand_err: f32 = vecLen(hand_got - target);
 
     std.log.debug(
@@ -5827,13 +5844,13 @@ test "MINIMAL: what the ankle's two DOF can actually do to the sole" {
     // The sole point, from the foot's own geom.
     var sole: rbt.Vec = .{ 0, 0, 0, 0 };
     var sole_len: f32 = 0;
-    for (0..imported.model.ngeom) |g| {
+    for (0..imported.model.geom_count) |g| {
         if (imported.model.geom_body[g] != foot_b) {
             continue;
         }
-        if (vecLen(imported.model.geom_pos[g]) > sole_len) {
-            sole_len = vecLen(imported.model.geom_pos[g]);
-            sole = imported.model.geom_pos[g];
+        if (vecLen(imported.model.geom_local_position[g]) > sole_len) {
+            sole_len = vecLen(imported.model.geom_local_position[g]);
+            sole = imported.model.geom_local_position[g];
         }
     }
     try expect(sole_len > 1.0e-5);
@@ -5847,25 +5864,25 @@ test "MINIMAL: what the ankle's two DOF can actually do to the sole" {
     // * A 2-DOF joint sweeps a 2-parameter SURFACE of directions, not a sphere. If that surface
     // is a narrow band, a 13-degree residual is the distance from the wanted direction to the
     // nearest point ON the band - a model fact, and no mapping change reaches it.
-    const j0: usize = imported.model.body_jnt_adr[foot_b];
-    try expect(imported.model.body_jnt_num[foot_b] == 2);
-    const r0: [2]f32 = imported.model.jnt_range[j0] orelse .{ -0.87, 0.87 };
-    const r1: [2]f32 = imported.model.jnt_range[j0 + 1] orelse .{ -0.87, 0.87 };
+    const j0: usize = imported.model.body_first_joint[foot_b];
+    try expect(imported.model.body_joint_count[foot_b] == 2);
+    const r0: [2]f32 = imported.model.joint_range[j0] orelse .{ -0.87, 0.87 };
+    const r1: [2]f32 = imported.model.joint_range[j0 + 1] orelse .{ -0.87, 0.87 };
 
-    @memcpy(data.pos, imported.model.qpos0);
+    @memcpy(data.joint_positions, imported.model.reference_joint_positions);
     rbt.kinematics(&imported.model, &data);
-    const rest_dir: rbt.Vec = normalize3(zm.rotate(data.body_xrot[foot_b], sole));
+    const rest_dir: rbt.Vec = normalize3(zm.rotate(data.body_orientations[foot_b], sole));
 
     var widest: f32 = 0;
     var a: f32 = r0[0];
     while (a <= r0[1] + 0.001) : (a += (r0[1] - r0[0]) / 8.0) {
         var b: f32 = r1[0];
         while (b <= r1[1] + 0.001) : (b += (r1[1] - r1[0]) / 8.0) {
-            @memcpy(data.pos, imported.model.qpos0);
-            data.pos[imported.model.jnt_qpos_adr[j0]] = a;
-            data.pos[imported.model.jnt_qpos_adr[j0 + 1]] = b;
+            @memcpy(data.joint_positions, imported.model.reference_joint_positions);
+            data.joint_positions[imported.model.joint_first_coordinate[j0]] = a;
+            data.joint_positions[imported.model.joint_first_coordinate[j0 + 1]] = b;
             rbt.kinematics(&imported.model, &data);
-            const dir: rbt.Vec = normalize3(zm.rotate(data.body_xrot[foot_b], sole));
+            const dir: rbt.Vec = normalize3(zm.rotate(data.body_orientations[foot_b], sole));
             widest = @max(widest, angleBetweenDegrees(rest_dir, dir));
         }
     }
@@ -5974,24 +5991,24 @@ fn frame166(flex: bool) !void {
         const cap_bend: f32 =
             angleBetweenDegrees(normalize3(cap_upper), normalize3(cap_lower));
         const cap_reach: f32 = vecLen(p_robot[hand_h] - p_robot[arm_h]);
-        const robot_span: f32 = vecLen(imported.model.body_pos[fore_b]) +
-            vecLen(imported.model.body_pos[hand_b]);
+        const robot_span: f32 = vecLen(imported.model.body_rest_position[fore_b]) +
+            vecLen(imported.model.body_rest_position[hand_b]);
 
         // Solve the arm exactly as the example does.
-        @memcpy(data.pos, imported.model.qpos0);
+        @memcpy(data.joint_positions, imported.model.reference_joint_positions);
         rbt.kinematics(&imported.model, &data);
         rbt.comPos(&imported.model, &data);
-        const l1: f32 = vecLen(imported.model.body_pos[fore_b]);
-        const l2: f32 = vecLen(imported.model.body_pos[hand_b]);
-        const elbow_t: rbt.Vec = data.body_xpos[arm_b] +
+        const l1: f32 = vecLen(imported.model.body_rest_position[fore_b]);
+        const l2: f32 = vecLen(imported.model.body_rest_position[hand_b]);
+        const elbow_t: rbt.Vec = data.body_positions[arm_b] +
             normalize3(cap_upper) * splat(l1);
         const hand_t: rbt.Vec = elbow_t + normalize3(cap_lower) * splat(l2);
         var mask: [64]bool = undefined;
-        @memset(mask[0..imported.model.nv], false);
+        @memset(mask[0..imported.model.dof_count], false);
         for ([_]usize{ arm_b, fore_b }) |bb| {
-            const f0: usize = imported.model.body_dof_adr[bb];
-            for (0..imported.model.body_dof_num[bb]) |k| {
-                if (f0 + k < imported.model.nv) {
+            const f0: usize = imported.model.body_first_dof[bb];
+            for (0..imported.model.body_dof_count[bb]) |k| {
+                if (f0 + k < imported.model.dof_count) {
                     mask[f0 + k] = true;
                 }
             }
@@ -6001,13 +6018,13 @@ fn frame166(flex: bool) !void {
             .{ .body = fore_b, .target_world = elbow_t, .weight = 0.2 },
         };
         var sc: [4096]f32 = undefined;
-        const need: usize = rbt.ikScratchSize(imported.model.nv);
+        const need: usize = rbt.ikScratchSize(imported.model.dof_count);
         var prev: f32 = 1.0e9;
         var iterations: usize = 0;
         for (0..60) |_| {
             const e: f32 = rbt.ikStep(&imported.model, &data, &tasks, .{
                 .damping = 0.05,
-                .dof_mask = mask[0..imported.model.nv],
+                .dof_mask = mask[0..imported.model.dof_count],
                 .respect_joint_limits = true,
             }, sc[0..need]);
             rbt.kinematics(&imported.model, &data);
@@ -6020,14 +6037,14 @@ fn frame166(flex: bool) !void {
         }
 
         const got_upper: f32 = angleBetweenDegrees(
-            normalize3(data.body_xpos[fore_b] - data.body_xpos[arm_b]),
+            normalize3(data.body_positions[fore_b] - data.body_positions[arm_b]),
             normalize3(cap_upper),
         );
-        const s0: usize = imported.model.body_jnt_adr[arm_b];
-        const q0: f32 = data.pos[imported.model.jnt_qpos_adr[s0]] * 57.29578;
-        const q1: f32 = data.pos[imported.model.jnt_qpos_adr[s0 + 1]] * 57.29578;
-        const e0: usize = imported.model.body_jnt_adr[fore_b];
-        const qe: f32 = data.pos[imported.model.jnt_qpos_adr[e0]] * 57.29578;
+        const s0: usize = imported.model.body_first_joint[arm_b];
+        const q0: f32 = data.joint_positions[imported.model.joint_first_coordinate[s0]] * 57.29578;
+        const q1: f32 = data.joint_positions[imported.model.joint_first_coordinate[s0 + 1]] * 57.29578;
+        const e0: usize = imported.model.body_first_joint[fore_b];
+        const qe: f32 = data.joint_positions[imported.model.joint_first_coordinate[e0]] * 57.29578;
 
         // -- *** THE BEST THE SHOULDER COULD POSSIBLY DO --
         //
@@ -6036,21 +6053,21 @@ fn frame166(flex: bool) !void {
         // reaches it** and the residual is the model's floor, not the solver's.
         var best_upper: f32 = 999;
         {
-            const sj: usize = imported.model.body_jnt_adr[arm_b];
-            const sr0: [2]f32 = imported.model.jnt_range[sj] orelse .{ -1.5, 1.0 };
-            const sr1: [2]f32 = imported.model.jnt_range[sj + 1] orelse .{ -1.5, 1.0 };
+            const sj: usize = imported.model.body_first_joint[arm_b];
+            const sr0: [2]f32 = imported.model.joint_range[sj] orelse .{ -1.5, 1.0 };
+            const sr1: [2]f32 = imported.model.joint_range[sj + 1] orelse .{ -1.5, 1.0 };
             var ia: usize = 0;
             while (ia <= 24) : (ia += 1) {
                 var ib: usize = 0;
                 while (ib <= 24) : (ib += 1) {
-                    @memcpy(data.pos, imported.model.qpos0);
-                    data.pos[imported.model.jnt_qpos_adr[sj]] =
+                    @memcpy(data.joint_positions, imported.model.reference_joint_positions);
+                    data.joint_positions[imported.model.joint_first_coordinate[sj]] =
                         sr0[0] + (sr0[1] - sr0[0]) * float(ia) / 24.0;
-                    data.pos[imported.model.jnt_qpos_adr[sj + 1]] =
+                    data.joint_positions[imported.model.joint_first_coordinate[sj + 1]] =
                         sr1[0] + (sr1[1] - sr1[0]) * float(ib) / 24.0;
                     rbt.kinematics(&imported.model, &data);
                     best_upper = @min(best_upper, angleBetweenDegrees(
-                        normalize3(data.body_xpos[fore_b] - data.body_xpos[arm_b]),
+                        normalize3(data.body_positions[fore_b] - data.body_positions[arm_b]),
                         normalize3(cap_upper),
                     ));
                 }
@@ -6122,7 +6139,7 @@ fn runWholeBody(
         names[i] = j.name;
         parents[i] = j.parent;
     }
-    const human_of_body: []i32 = try gpa.alloc(i32, imported.model.nbody);
+    const human_of_body: []i32 = try gpa.alloc(i32, imported.model.body_count);
     defer gpa.free(human_of_body);
     try rbt.resolveMatchTable(&rbt.lafan_to_humanoid, imported.names, names, human_of_body);
 
@@ -6143,7 +6160,7 @@ fn runWholeBody(
     // chain link. The capture's matching points are the same joints.
     // -- ** T-POSE PROXIMITY CORRESPONDENCE: DESIGNED, PROTOTYPED, NOT YET WORKING --
     //
-    // Simon's idea and the right one: **put both figures in the T-pose and let a point on the
+    // The right approach: **put both figures in the T-pose and let a point on the
     // robot's surface correspond to whatever is at the SAME PLACE on the human**, storing the
     // offset in that human bone's frame. Per frame the target is a rigid transform of the stored
     // offset - no search, no match table.
@@ -6196,8 +6213,8 @@ fn runWholeBody(
                 pelvis = i;
             }
         }
-        if (pelvis != 0 and imported.model.nq <= tq.len and
-            rbt.ikScratchSize(imported.model.nv) <= tsc.len)
+        if (pelvis != 0 and imported.model.coordinate_count <= tq.len and
+            rbt.ikScratchSize(imported.model.dof_count) <= tsc.len)
         {
             rbt.solveRestPoseFromSource(
                 &imported.model,
@@ -6207,18 +6224,21 @@ fn runWholeBody(
                 parents,
                 pelvis,
                 &tt,
-                tsc[0..rbt.ikScratchSize(imported.model.nv)],
-                tq[0..imported.model.nq],
+                tsc[0..rbt.ikScratchSize(imported.model.dof_count)],
+                tq[0..imported.model.coordinate_count],
             );
         } else {
-            @memcpy(data.pos[0..imported.model.nq], imported.model.qpos0[0..imported.model.nq]);
+            @memcpy(
+                data.joint_positions[0..imported.model.coordinate_count],
+                imported.model.reference_joint_positions[0..imported.model.coordinate_count],
+            );
         }
         rbt.kinematics(&imported.model, &data);
-        for (0..@min(imported.model.nbody, rest_rot_robot.len)) |b| {
-            rest_rot_robot[b] = data.body_xrot[b];
+        for (0..@min(imported.model.body_count, rest_rot_robot.len)) |b| {
+            rest_rot_robot[b] = data.body_orientations[b];
             // * The POSITIONS too: the correspondence self-check needs both halves of the rest
             // pose, and holding only the rotations was why it could not be checked before.
-            rest_pos_robot[b] = data.body_xpos[b];
+            rest_pos_robot[b] = data.body_positions[b];
         }
 
         // * The robot's SOLE direction in the solved T-pose - the reference the foot's offset is
@@ -6230,17 +6250,17 @@ fn runWholeBody(
             }
             var far: rbt.Vec = .{ 0, 0, 0, 0 };
             var far_len: f32 = 0;
-            for (0..imported.model.ngeom) |g| {
+            for (0..imported.model.geom_count) |g| {
                 if (imported.model.geom_body[g] != b) {
                     continue;
                 }
-                if (vecLen(imported.model.geom_pos[g]) > far_len) {
-                    far_len = vecLen(imported.model.geom_pos[g]);
-                    far = imported.model.geom_pos[g];
+                if (vecLen(imported.model.geom_local_position[g]) > far_len) {
+                    far_len = vecLen(imported.model.geom_local_position[g]);
+                    far = imported.model.geom_local_position[g];
                 }
             }
             if (far_len > 1.0e-5) {
-                rest_sole_world = zm.rotate(data.body_xrot[b], far);
+                rest_sole_world = zm.rotate(data.body_orientations[b], far);
             }
         }
     }
@@ -6305,9 +6325,9 @@ fn runWholeBody(
             .human_parents = parents,
             .rest_positions = rest_pos_t[0..@min(hn, rest_pos_t.len)],
             .rest_rotations = rest_rot_t[0..@min(hn, rest_rot_t.len)],
-            .robot_rest_rotations = rest_rot_robot[0..imported.model.nbody],
+            .robot_rest_rotations = rest_rot_robot[0..imported.model.body_count],
             .body_names = imported.names,
-            .rest_positions_robot = rest_pos_robot[0..imported.model.nbody],
+            .rest_positions_robot = rest_pos_robot[0..imported.model.body_count],
         }, &library_samples);
         // `buildPointSamples` asserts it had room, so a short harness buffer is the one gap left.
         try expect(library_n <= samples.len);
@@ -6329,7 +6349,7 @@ fn runWholeBody(
 
     // -- *** THE ORIENTATION `buildPointSamples` ACTUALLY CONSUMES --
     //
-    // The `SCALE` test prints frame disagreement at `qpos0`, which is where the MODEL FILE puts
+    // The `SCALE` test prints frame disagreement at `reference_joint_positions`, which is where the MODEL FILE puts
     // each body. **`buildPointSamples` reads `rest_rot_robot` - the SOLVED rest pose** - and a
     // criterion built from the first while consuming the second passed the head in the printout
     // and failed it in the check.
@@ -6349,9 +6369,9 @@ fn runWholeBody(
             .human_parents = parents,
             .rest_positions = rest_pos_t[0..@min(hn, rest_pos_t.len)],
             .rest_rotations = rest_rot_t[0..@min(hn, rest_rot_t.len)],
-            .robot_rest_rotations = rest_rot_robot[0..imported.model.nbody],
+            .robot_rest_rotations = rest_rot_robot[0..imported.model.body_count],
             .body_names = imported.names,
-            .rest_positions_robot = rest_pos_robot[0..imported.model.nbody],
+            .rest_positions_robot = rest_pos_robot[0..imported.model.body_count],
         }, &probe_samples);
 
         std.log.debug("NO-TIP LEAF TARGETS at the REST pose (where they land vs the joint)", .{});
@@ -6366,7 +6386,7 @@ fn runWholeBody(
             const target: rbt.Vec = rest_pos_t[sample.human] +
                 zm.rotate(rest_rot_t[sample.human], sample.human_local);
             // * The robot's own point, from the solved rest pose held in `data` at this stage.
-            const on_robot: rbt.Vec = data.body_xpos[sample.body] +
+            const on_robot: rbt.Vec = data.body_positions[sample.body] +
                 zm.rotate(rest_rot_robot[sample.body], sample.local);
             std.log.debug(
                 "  {s}[{d}] local ({d: >6.3},{d: >6.3},{d: >6.3})  target " ++
@@ -6396,14 +6416,14 @@ fn runWholeBody(
     // test reports 0.027.
     {
         var tallest: f32 = 0;
-        for (1..imported.model.nbody) |b| {
-            tallest = @max(tallest, data.body_xpos[b][2]);
-            for (0..imported.model.ngeom) |g| {
+        for (1..imported.model.body_count) |b| {
+            tallest = @max(tallest, data.body_positions[b][2]);
+            for (0..imported.model.geom_count) |g| {
                 if (imported.model.geom_body[g] != b) {
                     continue;
                 }
-                const world: rbt.Vec = data.body_xpos[b] +
-                    zm.rotate(data.body_xrot[b], imported.model.geom_pos[g]);
+                const world: rbt.Vec = data.body_positions[b] +
+                    zm.rotate(data.body_orientations[b], imported.model.geom_local_position[g]);
                 tallest = @max(tallest, world[2]);
             }
         }
@@ -6414,14 +6434,14 @@ fn runWholeBody(
         // example is still measuring something else. Four wrong answers preceded this one.
         var robot_bones: f32 = 0;
         var capture_bones: f32 = 0;
-        for (1..imported.model.nbody) |b| {
+        for (1..imported.model.body_count) |b| {
             const parent: u32 = imported.model.body_parent[b];
             if (parent == 0 or human_of_body[b] < 0 or human_of_body[parent] < 0) {
                 continue;
             }
             const hb: usize = @intCast(human_of_body[b]);
             const hp: usize = @intCast(human_of_body[parent]);
-            robot_bones += vecLen(imported.model.body_pos[b]);
+            robot_bones += vecLen(imported.model.body_rest_position[b]);
             // * `pos` is the capture's T-pose in ITS OWN units, as the example's `positions` are.
             capture_bones += vecLen(pos[hb] - pos[hp]);
         }
@@ -6499,7 +6519,7 @@ fn runWholeBody(
     }
 
     std.log.debug("SOLVED REST FRAME vs CAPTURE (the quantity buildPointSamples reads)", .{});
-    for (1..imported.model.nbody) |b| {
+    for (1..imported.model.body_count) |b| {
         if (human_of_body[b] < 0) {
             continue;
         }
@@ -6510,7 +6530,7 @@ fn runWholeBody(
         );
         // -- *** AND THE ANSWER IS: EVERY BODY READS 60-96 DEGREES, INCLUDING THE TORSO --
         //
-        // The torso is 0.0 at `qpos0` and 96.3 here. **That is not disagreement, it is a
+        // The torso is 0.0 at `reference_joint_positions` and 96.3 here. **That is not disagreement, it is a
         // CONVENTION**: Geno faces +Z and the robot faces +X, a constant yaw that applies to
         // every body equally.
         //
@@ -6529,7 +6549,7 @@ fn runWholeBody(
         std.log.debug("  {s: >16}: {d: >6.1} deg", .{ imported.names[b], degrees });
     }
 
-    std.log.debug("WHOLE BODY: {d} sample points over {d} bodies", .{ sample_n, imported.model.nbody });
+    std.log.debug("WHOLE BODY: {d} sample points over {d} bodies", .{ sample_n, imported.model.body_count });
 
     // -- *** THE SAMPLE RULE, AS AN ASSERTION RATHER THAN A COMMENT --
     //
@@ -6546,11 +6566,11 @@ fn runWholeBody(
     // no visible change to any number then being printed.
     {
         var per_body: [64]usize = undefined;
-        @memset(per_body[0..imported.model.nbody], 0);
+        @memset(per_body[0..imported.model.body_count], 0);
         for (0..sample_n) |i| {
             per_body[samples[i].body] += 1;
         }
-        for (1..imported.model.nbody) |b| {
+        for (1..imported.model.body_count) |b| {
             if (human_of_body[b] < 0) {
                 continue;
             }
@@ -6584,7 +6604,7 @@ fn runWholeBody(
 
     var tasks: [192]rbt.IkTask = undefined;
     var scratch: [8192]f32 = undefined;
-    const need: usize = rbt.ikScratchSize(imported.model.nv);
+    const need: usize = rbt.ikScratchSize(imported.model.dof_count);
     try expect(need <= scratch.len);
 
     var previous_qpos: [128]f32 = undefined;
@@ -6610,7 +6630,7 @@ fn runWholeBody(
         // **No detection and no constant** - the capture states where the ground is by touching
         // it.
         var floor_height: f32 = 1.0e9;
-        for (1..imported.model.nbody) |fb| {
+        for (1..imported.model.body_count) |fb| {
             if (human_of_body[fb] < 0) {
                 continue;
             }
@@ -6640,13 +6660,13 @@ fn runWholeBody(
         var retargeted: [64]rbt.Vec = undefined;
         // * Checked, not clamped: `@min(nbody, 64)` used to hand a bigger robot a skeleton with its
         // last bodies missing, and `solvePointCloud` would quietly fall back for them.
-        try expect(imported.model.nbody <= retargeted.len);
+        try expect(imported.model.body_count <= retargeted.len);
         {
-            const limit: usize = imported.model.nbody;
+            const limit: usize = imported.model.body_count;
             retargeted[0] = .{ 0, 0, 0, 0 };
             for (1..limit) |b| {
                 const parent: u32 = imported.model.body_parent[b];
-                const own_len: f32 = vecLen(imported.model.body_pos[b]);
+                const own_len: f32 = vecLen(imported.model.body_rest_position[b]);
                 if (parent == 0) {
                     // * Start the walk anywhere; a single translation below puts the whole
                     // skeleton where it belongs. **The shape is built first, the placement
@@ -6661,12 +6681,12 @@ fn runWholeBody(
                 const hb: i32 = human_of_body[b];
                 const hp: i32 = human_of_body[parent];
                 if (hb < 0 or hp < 0 or own_len < 1.0e-6) {
-                    retargeted[b] = retargeted[parent] + imported.model.body_pos[b];
+                    retargeted[b] = retargeted[parent] + imported.model.body_rest_position[b];
                     continue;
                 }
                 const bone: rbt.Vec = p_robot[@intCast(hb)] - p_robot[@intCast(hp)];
                 if (vecLen(bone) < 1.0e-6) {
-                    retargeted[b] = retargeted[parent] + imported.model.body_pos[b];
+                    retargeted[b] = retargeted[parent] + imported.model.body_rest_position[b];
                     continue;
                 }
                 retargeted[b] = retargeted[parent] +
@@ -6676,7 +6696,7 @@ fn runWholeBody(
 
         // -- *** PLACE THE SKELETON BY ITS BEST FIT, NOT BY ITS ROOT --
         //
-        // Simon: *"all bones are 10 cm off to the side."* **That is the signature of a bad
+        // Seen on screen: *"all bones are 10 cm off to the side."* **That is the signature of a bad
         // ANCHOR** - the retargeted skeleton is built outward from one body, so an error there
         // shifts every bone by the same amount.
         //
@@ -6692,7 +6712,7 @@ fn runWholeBody(
         {
             var offset: rbt.Vec = .{ 0, 0, 0, 0 };
             var counted: f32 = 0;
-            for (1..imported.model.nbody) |b| {
+            for (1..imported.model.body_count) |b| {
                 if (human_of_body[b] < 0) {
                     continue;
                 }
@@ -6701,7 +6721,7 @@ fn runWholeBody(
             }
             if (counted > 0) {
                 const shift: rbt.Vec = offset / splat(counted);
-                for (1..imported.model.nbody) |b| {
+                for (1..imported.model.body_count) |b| {
                     retargeted[b] += shift;
                 }
             }
@@ -6726,7 +6746,7 @@ fn runWholeBody(
         rbt.solvePointCloud(&imported.model, &data, samples[0..sample_n], .{
             .positions = p_robot[0..jj],
             .rotations = r_robot[0..jj],
-            .retargeted = retargeted[0..imported.model.nbody],
+            .retargeted = retargeted[0..imported.model.body_count],
             // * The root's target: its own mapped joint. `solvePointCloud` places the free
             // joint there before solving, so the figure starts near its answer.
             .root_world = if (human_of_body[1] >= 0)
@@ -6734,12 +6754,15 @@ fn runWholeBody(
             else
                 null,
             .position_pull = position_pull,
-            .previous_qpos = if (have_previous) previous_qpos[0..imported.model.nq] else null,
+            .previous_qpos = if (have_previous) previous_qpos[0..imported.model.coordinate_count] else null,
             .posture_weight = posture_weight,
             .scratch = scratch[0..need],
             .tasks = &tasks,
         });
-        @memcpy(previous_qpos[0..imported.model.nq], data.pos[0..imported.model.nq]);
+        @memcpy(
+            previous_qpos[0..imported.model.coordinate_count],
+            data.joint_positions[0..imported.model.coordinate_count],
+        );
         have_previous = true;
 
         // Report the same per-bone angles every other test uses, so this is comparable.
@@ -6781,21 +6804,27 @@ fn runWholeBody(
         // every time it has been used and has never been pointed here.**
         var fore_best: f32 = 999;
         {
-            // * The sweep destroys `data.pos`; save the SOLVED configuration and put it back, or
+            // * The sweep destroys `data.joint_positions`; save the SOLVED configuration and put it back, or
             // every number printed afterwards describes the last brute-force sample instead of
             // the solve. (It did: arm read 106-145 degrees until this was added.)
             var solved: [128]f32 = undefined;
-            @memcpy(solved[0..imported.model.nq], data.pos[0..imported.model.nq]);
+            @memcpy(
+                solved[0..imported.model.coordinate_count],
+                data.joint_positions[0..imported.model.coordinate_count],
+            );
             defer {
-                @memcpy(data.pos[0..imported.model.nq], solved[0..imported.model.nq]);
+                @memcpy(
+                    data.joint_positions[0..imported.model.coordinate_count],
+                    solved[0..imported.model.coordinate_count],
+                );
                 rbt.kinematics(&imported.model, &data);
                 rbt.comPos(&imported.model, &data);
             }
-            const sj: usize = imported.model.body_jnt_adr[ua];
-            const ej: usize = imported.model.body_jnt_adr[la];
-            const sr0: [2]f32 = imported.model.jnt_range[sj] orelse .{ -2.6, 2.6 };
-            const sr1: [2]f32 = imported.model.jnt_range[sj + 1] orelse .{ -2.6, 2.6 };
-            const er: [2]f32 = imported.model.jnt_range[ej] orelse .{ -2.6, 0.35 };
+            const sj: usize = imported.model.body_first_joint[ua];
+            const ej: usize = imported.model.body_first_joint[la];
+            const sr0: [2]f32 = imported.model.joint_range[sj] orelse .{ -2.6, 2.6 };
+            const sr1: [2]f32 = imported.model.joint_range[sj + 1] orelse .{ -2.6, 2.6 };
+            const er: [2]f32 = imported.model.joint_range[ej] orelse .{ -2.6, 0.35 };
             const want: rbt.Vec = normalize3(p_robot[hha] - p_robot[hla]);
             const steps: usize = 14;
             var ia: usize = 0;
@@ -6805,18 +6834,18 @@ fn runWholeBody(
                     var ic: usize = 0;
                     while (ic <= steps) : (ic += 1) {
                         @memcpy(
-                            data.pos[0..imported.model.nq],
-                            imported.model.qpos0[0..imported.model.nq],
+                            data.joint_positions[0..imported.model.coordinate_count],
+                            imported.model.reference_joint_positions[0..imported.model.coordinate_count],
                         );
-                        data.pos[imported.model.jnt_qpos_adr[sj]] =
+                        data.joint_positions[imported.model.joint_first_coordinate[sj]] =
                             sr0[0] + (sr0[1] - sr0[0]) * float(ia) / float(steps);
-                        data.pos[imported.model.jnt_qpos_adr[sj + 1]] =
+                        data.joint_positions[imported.model.joint_first_coordinate[sj + 1]] =
                             sr1[0] + (sr1[1] - sr1[0]) * float(ib) / float(steps);
-                        data.pos[imported.model.jnt_qpos_adr[ej]] =
+                        data.joint_positions[imported.model.joint_first_coordinate[ej]] =
                             er[0] + (er[1] - er[0]) * float(ic) / float(steps);
                         rbt.kinematics(&imported.model, &data);
                         fore_best = @min(fore_best, angleBetweenDegrees(
-                            normalize3(data.body_xpos[ha] - data.body_xpos[la]),
+                            normalize3(data.body_positions[ha] - data.body_positions[la]),
                             want,
                         ));
                     }
@@ -6830,7 +6859,7 @@ fn runWholeBody(
         // 24.6 degrees DOWN.** Aiming the sole straight at the capture's toe therefore asks the
         // foot to tilt 24.6 degrees into the floor.
         //
-        // * Removing this offset failed twice before - once computed between `qpos0` and a
+        // * Removing this offset failed twice before - once computed between `reference_joint_positions` and a
         // T-pose (two different poses), once against a leaf the rest solve had never AIMED.
         // **Both bugs are fixed; this is the first attempt where the two references genuinely
         // depict the same pose.**
@@ -6843,13 +6872,13 @@ fn runWholeBody(
             if (fb != 0 and sb != 0 and toe_j != 0) {
                 var sole: rbt.Vec = .{ 0, 0, 0, 0 };
                 var sl: f32 = 0;
-                for (0..imported.model.ngeom) |g| {
+                for (0..imported.model.geom_count) |g| {
                     if (imported.model.geom_body[g] != fb) {
                         continue;
                     }
-                    if (vecLen(imported.model.geom_pos[g]) > sl) {
-                        sl = vecLen(imported.model.geom_pos[g]);
-                        sole = imported.model.geom_pos[g];
+                    if (vecLen(imported.model.geom_local_position[g]) > sl) {
+                        sl = vecLen(imported.model.geom_local_position[g]);
+                        sole = imported.model.geom_local_position[g];
                     }
                 }
                 if (sl > 1.0e-5) {
@@ -6865,7 +6894,7 @@ fn runWholeBody(
                         normalize3(p_robot[toe_j] - p_robot[ah]),
                     );
                     const got: rbt.Vec = normalize3(
-                        zm.rotate(data.body_xrot[fb], sole),
+                        zm.rotate(data.body_orientations[fb], sole),
                     );
                     foot_with_offset = angleBetweenDegrees(got, want);
                 }
@@ -6874,7 +6903,7 @@ fn runWholeBody(
 
         // -- *** MEAN BODY OFFSET - the quantity every angle metric is BLIND to --
         //
-        // Simon saw "all bones 10 cm off to the side" while every number in this test held
+        // The eye saw "all bones 10 cm off to the side" while every number in this test held
         // steady. **Direction errors are invariant to translation**: shift the whole robot a
         // metre sideways and the torso, arm, forearm, thigh and shin readings do not change by a
         // single degree.
@@ -6887,16 +6916,16 @@ fn runWholeBody(
         //
         // **If the first is large the targets are wrong; if the second is, the solve is.**
         // Measuring only their sum cannot tell them apart, which is why the last fix moved a
-        // number without moving what Simon sees.
+        // number without moving what the eye sees.
         var body_offset: f32 = 0;
         var target_offset: f32 = 0;
         var offset_n: f32 = 0;
-        for (1..imported.model.nbody) |b| {
+        for (1..imported.model.body_count) |b| {
             if (human_of_body[b] < 0) {
                 continue;
             }
             const capture_here: rbt.Vec = p_robot[@intCast(human_of_body[b])];
-            body_offset += vecLen(data.body_xpos[b] - retargeted[b]);
+            body_offset += vecLen(data.body_positions[b] - retargeted[b]);
             target_offset += vecLen(retargeted[b] - capture_here);
             offset_n += 1;
         }
@@ -6917,11 +6946,11 @@ fn runWholeBody(
         var visual_sum: f32 = 0;
         var visual_worst: f32 = 0;
         var visual_worst_name: []const u8 = "none";
-        for (1..imported.model.nbody) |b| {
+        for (1..imported.model.body_count) |b| {
             if (human_of_body[b] < 0) {
                 continue;
             }
-            const d: f32 = vecLen(data.body_xpos[b] - p_robot[@intCast(human_of_body[b])]);
+            const d: f32 = vecLen(data.body_positions[b] - p_robot[@intCast(human_of_body[b])]);
             visual_sum += d;
             if (d > visual_worst) {
                 visual_worst = d;
@@ -6930,7 +6959,7 @@ fn runWholeBody(
         }
         const visual_mean: f32 = visual_sum / @max(offset_n, 1);
 
-        // -- *** THE SOLE AGAINST THE FLOOR - the number Simon is actually looking at --
+        // -- *** THE SOLE AGAINST THE FLOOR - the number the eye actually judges --
         //
         // `FOOT(offset)` measures the sole against the CAPTURE's toe direction, so levelling
         // deliberately departs from it and that metric reads worse BY CONSTRUCTION. **A change
@@ -6942,18 +6971,18 @@ fn runWholeBody(
             if (fb2 != 0) {
                 var sole2: rbt.Vec = .{ 0, 0, 0, 0 };
                 var sl2: f32 = 0;
-                for (0..imported.model.ngeom) |g| {
+                for (0..imported.model.geom_count) |g| {
                     if (imported.model.geom_body[g] != fb2) {
                         continue;
                     }
-                    if (vecLen(imported.model.geom_pos[g]) > sl2) {
-                        sl2 = vecLen(imported.model.geom_pos[g]);
-                        sole2 = imported.model.geom_pos[g];
+                    if (vecLen(imported.model.geom_local_position[g]) > sl2) {
+                        sl2 = vecLen(imported.model.geom_local_position[g]);
+                        sole2 = imported.model.geom_local_position[g];
                     }
                 }
                 if (sl2 > 1.0e-5) {
                     const world_dir: rbt.Vec =
-                        normalize3(zm.rotate(data.body_xrot[fb2], sole2));
+                        normalize3(zm.rotate(data.body_orientations[fb2], sole2));
                     // * Degrees away from horizontal. Zero is a sole flat on the ground.
                     sole_tilt = @abs(90.0 - angleBetweenDegrees(world_dir, vec(0, 0, 1)));
                 }
@@ -6964,7 +6993,7 @@ fn runWholeBody(
         // nothing measured when this was first called "worse".
         const torso_axis_error: f32 = if (torso_bb != 0 and la_bb != 0 and ra_bb != 0)
             angleBetweenDegrees(
-                normalize3(data.body_xpos[la_bb] - data.body_xpos[ra_bb]),
+                normalize3(data.body_positions[la_bb] - data.body_positions[ra_bb]),
                 normalize3(p_robot[la_h] - p_robot[ra_h]),
             )
         else
@@ -6977,19 +7006,19 @@ fn runWholeBody(
                 frame,
                 torso_axis_error,
                 angleBetweenDegrees(
-                    normalize3(data.body_xpos[la] - data.body_xpos[ua]),
+                    normalize3(data.body_positions[la] - data.body_positions[ua]),
                     normalize3(p_robot[hla] - p_robot[hua]),
                 ),
                 angleBetweenDegrees(
-                    normalize3(data.body_xpos[ha] - data.body_xpos[la]),
+                    normalize3(data.body_positions[ha] - data.body_positions[la]),
                     normalize3(p_robot[hha] - p_robot[hla]),
                 ),
                 angleBetweenDegrees(
-                    normalize3(data.body_xpos[sh] - data.body_xpos[th]),
+                    normalize3(data.body_positions[sh] - data.body_positions[th]),
                     normalize3(p_robot[hsh] - p_robot[hth]),
                 ),
                 angleBetweenDegrees(
-                    normalize3(data.body_xpos[ft] - data.body_xpos[sh]),
+                    normalize3(data.body_positions[ft] - data.body_positions[sh]),
                     normalize3(p_robot[hft] - p_robot[hsh]),
                 ),
                 visual_mean,
@@ -7016,8 +7045,8 @@ fn runWholeBody(
         var worst_frame: usize = 0;
         var previous_dir: [64]rbt.Vec = undefined;
         var previous_human: [64]rbt.Vec = undefined;
-        @memset(previous_dir[0..imported.model.nbody], vec(0, 0, 1));
-        @memset(previous_human[0..imported.model.nbody], vec(0, 0, 1));
+        @memset(previous_dir[0..imported.model.body_count], vec(0, 0, 1));
+        @memset(previous_human[0..imported.model.body_count], vec(0, 0, 1));
         var seeded: bool = false;
         var qprev: [128]f32 = undefined;
 
@@ -7056,18 +7085,21 @@ fn runWholeBody(
                 else
                     null,
                 .position_pull = 1.0,
-                .previous_qpos = if (seeded) qprev[0..imported.model.nq] else null,
+                .previous_qpos = if (seeded) qprev[0..imported.model.coordinate_count] else null,
                 .posture_weight = if (smooth) posture_weight else 0,
                 .limit_barrier = if (smooth) 1.0 else 0,
                 .iterations = 120,
                 .scratch = scratch[0..need],
                 .tasks = &tasks,
             });
-            @memcpy(qprev[0..imported.model.nq], data.pos[0..imported.model.nq]);
+            @memcpy(
+                qprev[0..imported.model.coordinate_count],
+                data.joint_positions[0..imported.model.coordinate_count],
+            );
 
             if (torso_bb != 0 and la_bb != 0 and ra_bb != 0) {
                 const now_axis: rbt.Vec =
-                    normalize3(data.body_xpos[la_bb] - data.body_xpos[ra_bb]);
+                    normalize3(data.body_positions[la_bb] - data.body_positions[ra_bb]);
                 const now_axis_h: rbt.Vec = normalize3(pr[la_h] - pr[ra_h]);
                 if (seeded) {
                     torso_worst = @max(torso_worst, angleBetweenDegrees(previous_torso, now_axis) -
@@ -7077,19 +7109,19 @@ fn runWholeBody(
                 previous_torso_h = now_axis_h;
             }
 
-            for (1..imported.model.nbody) |b| {
+            for (1..imported.model.body_count) |b| {
                 if (human_of_body[b] < 0) {
                     continue;
                 }
                 var child: ?usize = null;
-                for (1..imported.model.nbody) |c| {
+                for (1..imported.model.body_count) |c| {
                     if (imported.model.body_parent[c] == b and human_of_body[c] >= 0) {
                         child = c;
                         break;
                     }
                 }
                 const child_body: usize = child orelse continue;
-                const now: rbt.Vec = normalize3(data.body_xpos[child_body] - data.body_xpos[b]);
+                const now: rbt.Vec = normalize3(data.body_positions[child_body] - data.body_positions[b]);
                 const now_h: rbt.Vec = normalize3(
                     pr[@intCast(human_of_body[child_body])] - pr[@intCast(human_of_body[b])],
                 );
@@ -7162,7 +7194,7 @@ test "WHOLE BODY: one point-cloud solve against six sequential mechanisms" {
     // the workaround now costs more than it saves: it accumulates a chain away from the capture
     // for no remaining benefit.
     //
-    // ** Simon saw it before the metrics did - "the whole guy is really 10 cm to the side... the
+    // ** The eye saw it before the metrics did - "the whole guy is really 10 cm to the side... the
     // bones should really try to match the world positions better?" - and the split measurement
     // agreed: solve-miss 0.019 m against target-off 0.032. **The solve was fine; the targets were
     // in the wrong place on purpose.**
@@ -7340,7 +7372,7 @@ test "SCALE: is the robot bigger than the scaled capture, bone by bone?" {
     for (tpose.joints, 0..) |j, i| {
         names[i] = j.name;
     }
-    const human_of_body: []i32 = try gpa.alloc(i32, imported.model.nbody);
+    const human_of_body: []i32 = try gpa.alloc(i32, imported.model.body_count);
     defer gpa.free(human_of_body);
     try rbt.resolveMatchTable(&rbt.lafan_to_humanoid, imported.names, names, human_of_body);
     const pos: []rbt.Vec = try gpa.alloc(rbt.Vec, hn);
@@ -7403,10 +7435,10 @@ test "SCALE: is the robot bigger than the scaled capture, bone by bone?" {
     {
         var probe: rbt.Data = try .init(gpa, &imported.model);
         defer probe.deinit();
-        @memcpy(probe.pos, imported.model.qpos0);
+        @memcpy(probe.joint_positions, imported.model.reference_joint_positions);
         rbt.kinematics(&imported.model, &probe);
         std.log.debug("REST FRAME DISAGREEMENT (robot body vs capture joint)", .{});
-        for (1..imported.model.nbody) |b| {
+        for (1..imported.model.body_count) |b| {
             if (human_of_body[b] < 0) {
                 continue;
             }
@@ -7415,16 +7447,16 @@ test "SCALE: is the robot bigger than the scaled capture, bone by bone?" {
             // the same question, using the helper this file already trusts.
             // -- *** BOTH ORIENTATIONS, BECAUSE THEY ARE NOT THE SAME --
             //
-            // `qpos0` is where the model file puts the body; the SOLVED rest pose is where the
+            // `reference_joint_positions` is where the model file puts the body; the SOLVED rest pose is where the
             // retarget puts it after fitting the capture's T-pose. **A criterion written against
             // one and measured against the other is worth nothing** - which is exactly what
-            // happened: the head reads 0.0 at `qpos0` and fails the check that reads the solved
+            // happened: the head reads 0.0 at `reference_joint_positions` and fails the check that reads the solved
             // pose.
             //
             // * So print both, labelled. The consumer is `buildPointSamples`, which reads the
             // SOLVED column.
             const at_qpos0: f32 = angleBetweenDegrees(
-                zm.rotate(probe.body_xrot[b], vec(1, 0, 0)),
+                zm.rotate(probe.body_orientations[b], vec(1, 0, 0)),
                 zm.rotate(rot[hb], vec(1, 0, 0)),
             );
             // * The SOLVED rest orientation is not available in this test, which is itself
@@ -7439,12 +7471,12 @@ test "SCALE: is the robot bigger than the scaled capture, bone by bone?" {
     }
 
     std.log.debug("BONE LENGTHS at scale {d:.4} (robot / capture)", .{scale});
-    for (1..imported.model.nbody) |b| {
+    for (1..imported.model.body_count) |b| {
         const parent: u32 = imported.model.body_parent[b];
         if (parent == 0 or human_of_body[b] < 0 or human_of_body[parent] < 0) {
             continue;
         }
-        const robot_len: f32 = vecLen(imported.model.body_pos[b]);
+        const robot_len: f32 = vecLen(imported.model.body_rest_position[b]);
         const hb: usize = @intCast(human_of_body[b]);
         const hp: usize = @intCast(human_of_body[parent]);
         const human_len: f32 = vecLen(pos[hb] - pos[hp]) * scale;
@@ -7464,7 +7496,7 @@ test "SCALE: is the robot bigger than the scaled capture, bone by bone?" {
     }
     // -- *** THE FOOT: does the ROBOT's sole and the CAPTURE's ankle-to-toe agree with the floor?
     //
-    // Simon: *"in the t-pose the feet are not well aligned with the floor because ankle to ball
+    // Seen on screen: *"in the t-pose the feet are not well aligned with the floor because ankle to ball
     // has an angle in geno."* A retarget cannot fix a shape difference - but it can stop
     // pretending there is none, and the first thing to know is how big it is.
     {
@@ -7489,13 +7521,13 @@ test "SCALE: is the robot bigger than the scaled capture, bone by bone?" {
         if (foot_b != 0 and toe_h != 0) {
             var sole: rbt.Vec = .{ 0, 0, 0, 0 };
             var sole_len: f32 = 0;
-            for (0..imported.model.ngeom) |g| {
+            for (0..imported.model.geom_count) |g| {
                 if (imported.model.geom_body[g] != foot_b) {
                     continue;
                 }
-                if (vecLen(imported.model.geom_pos[g]) > sole_len) {
-                    sole_len = vecLen(imported.model.geom_pos[g]);
-                    sole = imported.model.geom_pos[g];
+                if (vecLen(imported.model.geom_local_position[g]) > sole_len) {
+                    sole_len = vecLen(imported.model.geom_local_position[g]);
+                    sole = imported.model.geom_local_position[g];
                 }
             }
             // Both in the robot's Z-up frame, measured against the horizontal plane.
@@ -7511,9 +7543,9 @@ test "SCALE: is the robot bigger than the scaled capture, bone by bone?" {
             // added to the model**, which is exactly the quantity it exists to measure.
             var probe_data: rbt.Data = try .init(gpa, &imported.model);
             defer probe_data.deinit();
-            @memcpy(probe_data.pos, imported.model.qpos0);
+            @memcpy(probe_data.joint_positions, imported.model.reference_joint_positions);
             rbt.kinematics(&imported.model, &probe_data);
-            const sole_world: rbt.Vec = zm.rotate(probe_data.body_xrot[foot_b], sole);
+            const sole_world: rbt.Vec = zm.rotate(probe_data.body_orientations[foot_b], sole);
             const robot_from_horizontal: f32 = 90.0 -
                 angleBetweenDegrees(normalize3(sole_world), up);
             const capture_from_horizontal: f32 = 90.0 -
@@ -7530,10 +7562,61 @@ test "SCALE: is the robot bigger than the scaled capture, bone by bone?" {
         }
     }
 
-    // ** The single number that answers Simon's question: if this is far from 1, the robot
+    // ** The single number that answers the question: if this is far from 1, the robot
     // cannot fit the capture at this scale and the root will slide to compromise.
     std.log.debug("  TOTAL: robot {d:.3} m  capture {d:.3} m  ratio {d:.3}   worst {s} at {d:.2}", .{
         total_robot, total_human, total_robot / @max(total_human, 1.0e-6), worst_name, worst_ratio,
     });
     try expect(total_robot > 0);
+}
+
+test "Newton's warm start on a standing Go1: the same stance, fewer rounds once settled" {
+    // Where a warm start pays: a robot holding its stance, its contacts the same step after step. Once settled the
+    // last step's accelerations often already meet the gradient's rule, and that step takes no round. Measured Nov 3:
+    // 901 rounds warm against 1,000 cold over the last 1,000 of 2,000 steps, the trunk at 0.30316 either way.
+    const gpa: Allocator = testing_allocator;
+    const source: []const u8 = @embedFile("tests/fixtures/robot/go1/go1.xml");
+    var trunk_heights: [2]f32 = .{ 0, 0 };
+    var settled_rounds: [2]u32 = .{ 0, 0 };
+    for ([_]bool{ false, true }) |warm| {
+        var doc: codecs.xml.Document = try codecs.xml.parse(gpa, source, null);
+        defer doc.deinit();
+        var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+        defer robot.deinit();
+        var options: rbt.Options = .{ .max_contacts = 128, .timestep = 1.0 / 500.0, .gravity = vec(0, 0, -9.81) };
+        options.solver.algorithm = .newton;
+        options.warm_start = warm;
+        var imported: Imported = try build(gpa, &robot, options);
+        defer imported.deinit();
+        var data: rbt.Data = try .init(gpa, &imported.model);
+        defer data.deinit();
+        try expect(applyKeyframe(&imported.model, &data, robot.keyframes[0]));
+        rbt.forward(&imported.model, &data);
+        const home: []f32 = try gpa.dupe(f32, robot.keyframes[0].qpos);
+        defer gpa.free(home);
+        var rounds_settled: u32 = 0;
+        for (0..2000) |step_index| {
+            standingContacts(&imported.model, &data);
+            @memset(data.applied_joint_forces, 0);
+            for (0..imported.model.joint_count) |ji| {
+                if (imported.model.joint_type[ji] != .hinge) {
+                    continue;
+                }
+                const qi: u32 = imported.model.joint_first_coordinate[ji];
+                const vi: u32 = imported.model.joint_first_dof[ji];
+                const want: f32 = 300.0 * (home[qi] - data.joint_positions[qi]) - 2.0 * data.joint_velocities[vi];
+                data.applied_joint_forces[vi] = clamp(want, -35.55, 35.55) + data.bias_joint_forces[vi];
+            }
+            rbt.step(&imported.model, &data);
+            if (step_index >= 1000) {
+                rounds_settled += data.solver_iterations;
+            }
+        }
+        const trunk: u32 = imported.bodyIndex("trunk") orelse unreachable;
+        trunk_heights[@intFromBool(warm)] = data.body_positions[trunk][2];
+        settled_rounds[@intFromBool(warm)] = rounds_settled;
+    }
+    // The same stance, and fewer rounds once settled.
+    try expectApproxEqAbs(trunk_heights[0], trunk_heights[1], 1.0e-4);
+    try expect(settled_rounds[1] < settled_rounds[0]);
 }

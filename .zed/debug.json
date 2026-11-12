@@ -1992,6 +1992,28 @@
     },
     {
         "adapter": "JavaScript",
+        "label": "Debug: robotgpu-lab",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/robotgpu_lab/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build robotgpu-lab"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: robotgpu-sidebyside",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/robotgpu_sidebyside/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build robotgpu-sidebyside"
+    },
+    {
+        "adapter": "JavaScript",
         "label": "Debug: rock-demo",
         "type": "chrome",
         "request": "launch",
@@ -5755,6 +5777,30 @@
             "settings set target.use-fast-stepping false"
         ],
         "build": "zig: build robot-sidebyside (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: robotgpu-lab (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/robotgpu_lab.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build robotgpu-lab (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: robotgpu-sidebyside (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/robotgpu_sidebyside.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build robotgpu-sidebyside (windows)"
     },
     {
         "adapter": "CodeLLDB",

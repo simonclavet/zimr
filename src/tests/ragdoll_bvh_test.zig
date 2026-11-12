@@ -144,7 +144,7 @@ test "ragdoll: the real Geno skeleton plays the real dance frame exactly" {
         rots[i] = quatFromChannels(j.channels, vals);
     }
 
-    @memcpy(d.pos, m.qpos0);
+    @memcpy(d.joint_positions, m.reference_joint_positions);
     rbt.poseFromLocalRotations(&m, &d, root_translation, rots);
     rbt.kinematics(&m, &d);
 
@@ -168,7 +168,7 @@ test "ragdoll: the real Geno skeleton plays the real dance frame exactly" {
     // 1.7 m figure - this is float noise, not agreement-within-reason.
     var worst: f32 = 0;
     for (0..n) |i| {
-        const got: Vec = d.body_xpos[i + 1]; // body 0 is the world
+        const got: Vec = d.body_positions[i + 1]; // body 0 is the world
         const want: Vec = ref_pos[i];
         inline for (0..3) |c| {
             worst = @max(worst, @abs(got[c] - want[c]));

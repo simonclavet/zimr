@@ -120,7 +120,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.tip = s.imported.bodyIndex("tip") orelse 0;
     s.actuation = try ctl.limbActuation(gpa, &s.imported.model, s.tip);
     s.ik_scratch = try gpa.alloc(Vec, ctl.Ik.scratchSize(&s.imported.model));
-    s.previous = try gpa.alloc(f32, s.imported.model.nq);
+    s.previous = try gpa.alloc(f32, s.imported.model.coordinate_count);
 
     s.damping = 0.05;
     s.target_radius = 2.0;
@@ -222,17 +222,17 @@ fn drawChain(s: *State, gl: *z.WgpuGl) void {
     }
 
     // Links, drawn from each body's own frame so what is shown is what the solver produced.
-    for (1..m.nbody) |b| {
-        const at: Vec = toRender(s.data.body_xpos[b]);
+    for (1..m.body_count) |b| {
+        const at: Vec = toRender(s.data.body_positions[b]);
         s.transform[0] = mulMat(translation(at[0], at[1], at[2]), scaling(0.09, 0.09, 0.09));
         z.drawMeshInstanced(gl, &s.sphere, &s.transform, joint_colour);
         const parent: u32 = m.body_parent[b];
         if (parent != rbt.world_body) {
-            z.drawLine3D(gl, toRender(s.data.body_xpos[parent]), at, link_colour);
+            z.drawLine3D(gl, toRender(s.data.body_positions[parent]), at, link_colour);
         }
     }
 
-    const tip_at: Vec = toRender(s.data.body_xpos[s.tip]);
+    const tip_at: Vec = toRender(s.data.body_positions[s.tip]);
     s.transform[0] = mulMat(translation(tip_at[0], tip_at[1], tip_at[2]), scaling(0.14, 0.14, 0.14));
     z.drawMeshInstanced(gl, &s.sphere, &s.transform, if (s.reached) tip_ok else tip_far);
 
@@ -257,7 +257,7 @@ fn update(f: *z.Frame, s: *State) void {
         s.target_angle = 0.6 * @sin(s.sweep_phase * 6.0);
     }
 
-    @memcpy(s.previous, s.data.pos);
+    @memcpy(s.previous, s.data.joint_positions);
     const result: ctl.Ik.Result = (ctl.Ik{
         .max_iterations = 12,
         .damping = s.damping,
@@ -275,8 +275,8 @@ fn update(f: *z.Frame, s: *State) void {
     s.reached = result.reached;
 
     var moved: f32 = 0;
-    for (0..model.nq) |q| {
-        moved = @max(moved, @abs(s.data.pos[q] - s.previous[q]));
+    for (0..model.coordinate_count) |q| {
+        moved = @max(moved, @abs(s.data.joint_positions[q] - s.previous[q]));
     }
     s.last_step = moved;
     s.peak_step = @max(s.peak_step, moved);

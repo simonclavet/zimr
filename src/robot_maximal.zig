@@ -10,7 +10,7 @@
 //!
 //!   * One rigid body per JOINTED robot body. A body with no joint - the humanoid's head and
 //!     hands - is welded, so its geoms join its nearest jointed ancestor's compound.
-//!   * Each body's shape is a compound of its geoms, posed as they are at `qpos0`, at density
+//!   * Each body's shape is a compound of its geoms, posed as they are at `reference_joint_positions`, at density
 //!     1000: MJCF's inertia-from-geoms default. Mass, centre of mass and inertia therefore come
 //!     out of the same geometry on both sides - which the first test checks rather than trusts.
 //!   * One joint per jointed body below the root, chosen by how many hinges it carries: one
@@ -141,121 +141,15 @@ pub const Drive = struct {
     swing_twist: bool = true,
 };
 
-/// The acceleration a critically damped (for `damping` 1) spring of `frequency` Hz asks of one
-/// joint over a step of `dt`, evaluated IMPLICITLY - at the end of the step.
-///
-/// *** WHY IMPLICIT. The explicit spring a = w^2e - 2 zeta wv, stepped by semi-implicit Euler, is
-/// stable only while h^2 + 4 zeta h < 4 with h = w*dt: for zeta = 1, h < 2sqrt2 - 2 ~ 0.83, which at 60 Hz
-/// caps the spring at w ~ 50 rad/s - 7.9 Hz. Asking for the spring at the END of the step,
-///     a = w^2(e - dt*v - dt^2*a) - 2 zeta w(v + dt*a),
-/// and solving for a gives the line below: backward Euler, stable for EVERY frequency. Stiffness
-/// then degrades gracefully toward "reach the target in a step or two" instead of blowing up -
-/// the same idea as Tan et al.'s stable PD, and the reason Jolt's frequency-stated springs
-/// (zimrphysics' motors) are stable at any setting. Feed the result to inverse dynamics.
-pub fn stableSpringAccel(
-    err: f32,
-    vel: f32,
-    frequency: f32,
-    damping: f32,
-    dt: f32,
-) f32 {
-    const omega: f32 = 2.0 * pi * frequency;
-    const h: f32 = omega * dt;
-    return (omega * omega * (err - dt * vel) - 2.0 * damping * omega * vel) /
-        (1.0 + 2.0 * damping * h + h * h);
-}
+/// The implicit spring's acceleration with its target at rest - robot.zig's (`robot.stableSpringAccel`), kept there,
+/// where the GPU's kernels can call it too.
+pub const stableSpringAccel = rbt.stableSpringAccel;
+/// The implicit spring's acceleration toward a moving target - robot.zig's (`robot.stableSpringAccelToward`).
+pub const stableSpringAccelToward = rbt.stableSpringAccelToward;
 
-/// The same spring, damped toward a MOVING target's velocity instead of zero - velocity feedforward.
-///
-/// Ask for the end-of-step spring as above, but let the damping act on the velocity RELATIVE to the
-/// target's: `a = w^2(e - dt*v - dt^2*a) - 2 zeta w(v + dt*a - target_vel)`. The position part is unchanged -
-/// `err` already points at where the target will BE at the end of the step, so the body's own motion is all
-/// that needs predicting - and solving gives the line below. With `target_vel` zero it is
-/// `stableSpringAccel` exactly. Why it matters: critically damped at 20 Hz, the zero-velocity spring keeps
-/// about 1.5% of a joint's velocity after one 1/60 s step, so every fast limb following a clip is braked
-/// all the time, and a body launched in stride is stopped in a frame.
-pub fn stableSpringAccelToward(
-    err: f32,
-    vel: f32,
-    target_vel: f32,
-    frequency: f32,
-    damping: f32,
-    dt: f32,
-) f32 {
-    const omega: f32 = 2.0 * pi * frequency;
-    const h: f32 = omega * dt;
-    return (omega * omega * (err - dt * vel) - 2.0 * damping * omega * (vel - target_vel)) /
-        (1.0 + 2.0 * damping * h + h * h);
-}
-
-/// Joint torques that give a FLOATING-base model the joint accelerations `accel` asks for
-/// (root entries ignored), with the root free to respond - floating-base inverse dynamics.
-///
-/// *** WHY NOT JUST THE JOINT ROWS OF M a + c. Those assume the root does not accelerate: they
-/// are fixed-base torques. On a free body the root DOES accelerate - every joint torque pushes
-/// back on it - and applying fixed-base torques to it threw the falling humanoid off at the
-/// velocity cap at every frequency tried. The root has no actuator, so its rows must be zero:
-///     M_rr a_r + M_rj a_j + c_r = 0   ->   a_r = -M_rr^-1 (c_r + M_rj a_j)
-/// and the torques are the joint rows of M a + c with that a_r. Contacts are left out - they
-/// are unknown until the step solves them - so this is exact in flight and an approximation
-/// in contact. `d` must be forward-current with `rbt.biasForce` done; the root must be joint 0,
-/// a free joint (6 DOFs from 0). `dense` holds nv*nv, `full` nv, and `out` receives nv torques.
-pub fn floatingBaseTorques(
-    m: *const rbt.Model,
-    d: *rbt.Data,
-    accel: []const f32,
-    dense: []f32,
-    full: []f32,
-    out: []f32,
-) void {
-    const nv: usize = m.nv;
-    assertf(m.jnt_type[0] == .free and m.jnt_dof_adr[0] == 0, @src(), "root must be joint 0, free", .{});
-    rbt.massMatrixDense(m, d, dense);
-    // The 6x6 root block, and the right-hand side -(c_r + M_rj a_j), in one augmented matrix.
-    var block: [6][7]f32 = undefined;
-    for (0..6) |r| {
-        var rhs: f32 = -d.bias_force[r];
-        for (6..nv) |j| {
-            rhs -= dense[r * nv + j] * accel[j];
-        }
-        for (0..6) |c| {
-            block[r][c] = dense[r * nv + c];
-        }
-        block[r][6] = rhs;
-    }
-    // Gaussian elimination with partial pivoting; the root block is a rigid body's spatial
-    // inertia plus what the limbs add, so it is symmetric positive definite and never singular.
-    for (0..6) |col| {
-        var pivot: usize = col;
-        for (col + 1..6) |r| {
-            if (@abs(block[r][col]) > @abs(block[pivot][col])) {
-                pivot = r;
-            }
-        }
-        const swapped: [7]f32 = block[col];
-        block[col] = block[pivot];
-        block[pivot] = swapped;
-        for (col + 1..6) |r| {
-            const factor: f32 = block[r][col] / block[col][col];
-            for (col..7) |c| {
-                block[r][c] -= factor * block[col][c];
-            }
-        }
-    }
-    var root_accel: [6]f32 = undefined;
-    var row: usize = 6;
-    while (row > 0) {
-        row -= 1;
-        var value: f32 = block[row][6];
-        for (row + 1..6) |c| {
-            value -= block[row][c] * root_accel[c];
-        }
-        root_accel[row] = value / block[row][row];
-    }
-    @memcpy(full[0..6], &root_accel);
-    @memcpy(full[6..nv], accel[6..nv]);
-    rbt.inverseDynamics(m, d, full, out);
-}
+/// Floating-base inverse dynamics - robot.zig's (`robot.floatingBaseTorques`), kept there, where the GPU's kernels can
+/// run the same law.
+pub const floatingBaseTorques = rbt.floatingBaseTorques;
 
 /// A robot body frame in the world: origin and rotation.
 pub const Frame = struct {
@@ -298,7 +192,7 @@ pub const Ragdoll = struct {
         return self.handles[part].index();
     }
 
-    /// The world pose of a part's robot-body frame - what `rbt.Data.body_xpos`/`body_xrot`
+    /// The world pose of a part's robot-body frame - what `rbt.Data.body_xpos`/`body_orientations`
     /// would say for the same body.
     pub fn bodyFrame(
         self: *const Ragdoll,
@@ -339,7 +233,7 @@ pub const Ragdoll = struct {
             if (joint.hinge_count == 1) {
                 c.motor = .{
                     .mode = .position,
-                    .target_position = target.pos[m.jnt_qpos_adr[joint.hinges[0]]],
+                    .target_position = target.joint_positions[m.joint_first_coordinate[joint.hinges[0]]],
                     .max_force = drive.max_torque,
                     .frequency = drive.frequency,
                     .damping = drive.damping,
@@ -349,8 +243,8 @@ pub const Ragdoll = struct {
             if (!drive.swing_twist) {
                 continue;
             }
-            const parent_rot: Quat = target.body_xrot[self.robot_body[joint.parent]];
-            const child_rot: Quat = target.body_xrot[self.robot_body[joint.child]];
+            const parent_rot: Quat = target.body_orientations[self.robot_body[joint.parent]];
+            const child_rot: Quat = target.body_orientations[self.robot_body[joint.child]];
             c.target_orientation = qmul(
                 conjugate(qmul(parent_rot, c.constraint_to_body_a)),
                 qmul(child_rot, c.constraint_to_body_b),
@@ -401,9 +295,9 @@ pub const Ragdoll = struct {
         var coms: [max_parts]Vec = undefined;
         var rots: [max_parts]Quat = undefined;
         for (0..self.partCount()) |part| {
-            rots[part] = d.body_xrot[self.robot_body[part]];
+            rots[part] = d.body_orientations[self.robot_body[part]];
             // The root, and any part without a joint above it, takes the reduced position.
-            coms[part] = d.body_xpos[self.robot_body[part]] + rotate(rots[part], self.com_local[part]);
+            coms[part] = d.body_positions[self.robot_body[part]] + rotate(rots[part], self.com_local[part]);
         }
         // Parts are in robot-body order, so a parent is always placed before its child.
         for (self.joints) |joint| {
@@ -462,7 +356,7 @@ fn halfCone(m: *const rbt.Model, joint: u32, limits: bool) f32 {
     if (!limits) {
         return pi;
     }
-    const range: [2]f32 = m.jnt_range[joint] orelse return 0.5 * pi;
+    const range: [2]f32 = m.joint_range[joint] orelse return 0.5 * pi;
     return @max(@abs(range[0]), @abs(range[1]));
 }
 
@@ -475,7 +369,7 @@ fn localPivot(
     return rotate(conjugate(body.rot), anchor - body.com_pos);
 }
 
-/// `build`'s body: every part and joint made at `qpos0` (a private rest pose), unposed.
+/// `build`'s body: every part and joint made at `reference_joint_positions` (a private rest pose), unposed.
 fn buildAtRest(
     gpa: Allocator,
     world: *zimrphysics.World,
@@ -484,23 +378,23 @@ fn buildAtRest(
 ) !Ragdoll {
     var rest: rbt.Data = try .init(gpa, m);
     defer rest.deinit();
-    @memcpy(rest.pos, m.qpos0);
+    @memcpy(rest.joint_positions, m.reference_joint_positions);
     rest.stage = .stale;
     rbt.forward(m, &rest);
     const at: *const rbt.Data = &rest;
-    const body_count: usize = m.nbody;
+    const body_count: usize = m.body_count;
 
     // -- Which robot bodies get a part: every body carrying a joint. --
     const jointed: []bool = try gpa.alloc(bool, body_count);
     defer gpa.free(jointed);
     @memset(jointed, false);
-    for (0..m.njnt) |j| {
-        const kind: rbt.JointType = m.jnt_type[j];
+    for (0..m.joint_count) |j| {
+        const kind: rbt.JointType = m.joint_type[j];
         const supported: bool = kind == .hinge or kind == .free;
         if (!supported) {
             return error.UnsupportedJoint;
         }
-        jointed[m.jnt_body[j]] = true;
+        jointed[m.joint_body[j]] = true;
     }
 
     const part_of_body: []u32 = try gpa.alloc(u32, body_count);
@@ -537,11 +431,11 @@ fn buildAtRest(
     defer children.deinit(gpa);
     for (0..part_count) |part| {
         const home: u32 = robot_body[part];
-        const home_pos: Vec = at.body_xpos[home];
-        const home_rot: Quat = at.body_xrot[home];
+        const home_pos: Vec = at.body_positions[home];
+        const home_rot: Quat = at.body_orientations[home];
         const to_home: Quat = conjugate(home_rot);
         children.clearRetainingCapacity();
-        for (0..m.ngeom) |g| {
+        for (0..m.geom_count) |g| {
             const owner: u32 = m.geom_body[g];
             if (part_of_body[owner] != part) {
                 continue;
@@ -551,8 +445,11 @@ fn buildAtRest(
                 .capsule => |c| .{ .capsule = .{ .half_height = c.half_height, .radius = c.radius } },
                 else => return error.UnsupportedGeom,
             };
-            const geom_pos: Vec = at.body_xpos[owner] + rotate(at.body_xrot[owner], m.geom_pos[g]);
-            const geom_rot: Quat = qmul(at.body_xrot[owner], m.geom_rot[g]);
+            const geom_pos: Vec = at.body_positions[owner] + rotate(
+                at.body_orientations[owner],
+                m.geom_local_position[g],
+            );
+            const geom_rot: Quat = qmul(at.body_orientations[owner], m.geom_local_rotation[g]);
             try children.append(gpa, .{
                 .shape = try world.shapes.add(gpa, leaf),
                 .local_pos = rotate(to_home, geom_pos - home_pos),
@@ -594,8 +491,8 @@ fn buildAtRest(
         }
         var hinges: [3]u32 = undefined;
         var hinge_count: u32 = 0;
-        for (0..m.njnt) |j| {
-            const on_this_body: bool = m.jnt_body[j] == child_body and m.jnt_type[j] == .hinge;
+        for (0..m.joint_count) |j| {
+            const on_this_body: bool = m.joint_body[j] == child_body and m.joint_type[j] == .hinge;
             if (!on_this_body) {
                 continue;
             }
@@ -608,21 +505,21 @@ fn buildAtRest(
         if (hinge_count == 0) {
             return error.JointedBodyWithoutHinge;
         }
-        const child_rot: Quat = at.body_xrot[child_body];
+        const child_rot: Quat = at.body_orientations[child_body];
         const first: u32 = hinges[0];
         var pivots_agree: bool = true;
         for (hinges[1..hinge_count]) |other| {
-            pivots_agree = pivots_agree and length3(m.jnt_pos[other] - m.jnt_pos[first]) < 1.0e-6;
+            pivots_agree = pivots_agree and length3(m.joint_local_anchor[other] - m.joint_local_anchor[first]) < 1.0e-6;
         }
-        const anchor: Vec = at.body_xpos[child_body] + rotate(child_rot, m.jnt_pos[first]);
+        const anchor: Vec = at.body_positions[child_body] + rotate(child_rot, m.joint_local_anchor[first]);
         const constraint_index: u32 = @intCast(world.constraints.items.len);
         const parent_handle: zimrphysics.BodyHandle = handles[parent_part];
         const child_handle: zimrphysics.BodyHandle = handles[part];
         if (hinge_count == 1) {
-            const range: ?[2]f32 = m.jnt_range[first];
+            const range: ?[2]f32 = m.joint_range[first];
             try zimrphysics.createRevoluteJoint(world, parent_handle, child_handle, .{
                 .anchor = anchor,
-                .axis = rotate(child_rot, m.jnt_axis[first]),
+                .axis = rotate(child_rot, m.joint_local_axis[first]),
                 .has_limits = opts.limits and range != null,
                 .limit_min = if (range) |r| r[0] else 0.0,
                 .limit_max = if (range) |r| r[1] else 0.0,
@@ -646,7 +543,7 @@ fn buildAtRest(
                     };
                     const free_twist: [2]f32 = .{ -pi, pi };
                     const twist_range: [2]f32 = if (st_limits)
-                        m.jnt_range[twist] orelse free_twist
+                        m.joint_range[twist] orelse free_twist
                     else
                         free_twist;
                     const locked_normal: f32 = if (st_limits) opts.locked_axis_slack else pi;
@@ -656,8 +553,8 @@ fn buildAtRest(
                         locked_normal;
                     try zimrphysics.createSwingTwistJoint(world, parent_handle, child_handle, .{
                         .anchor = anchor,
-                        .twist_axis = rotate(child_rot, m.jnt_axis[twist]),
-                        .plane_axis = rotate(child_rot, m.jnt_axis[plane]),
+                        .twist_axis = rotate(child_rot, m.joint_local_axis[twist]),
+                        .plane_axis = rotate(child_rot, m.joint_local_axis[plane]),
                         .swing_type = .pyramid,
                         // * Jolt's cones bound the swing WITHIN the plane each names, so the cone for
                         // rotation ABOUT the plane axis is `normal_half_cone`, and about the normal
@@ -691,9 +588,9 @@ fn buildAtRest(
     body_offset_rot[0] = quat_identity;
     for (1..body_count) |b| {
         const home: u32 = robot_body[part_of_body[b]];
-        const to_home: Quat = conjugate(at.body_xrot[home]);
-        body_offset_pos[b] = rotate(to_home, at.body_xpos[b] - at.body_xpos[home]);
-        body_offset_rot[b] = qmul(to_home, at.body_xrot[b]);
+        const to_home: Quat = conjugate(at.body_orientations[home]);
+        body_offset_pos[b] = rotate(to_home, at.body_positions[b] - at.body_positions[home]);
+        body_offset_rot[b] = qmul(to_home, at.body_orientations[b]);
     }
 
     return .{
@@ -714,9 +611,9 @@ fn buildAtRest(
 ///
 /// A zimrphysics joint measures from its orientation AT CREATION: a revolute joint's zero angle is
 /// the pose it was built in, and so are a swing-twist joint's frames - while `driveToPose` hands a
-/// hinge motor the raw MJCF angle and the limits are MJCF ranges, both measured from `qpos0`.
+/// hinge motor the raw MJCF angle and the limits are MJCF ranges, both measured from `reference_joint_positions`.
 /// Built in any other pose, every hinge would be driven - and limited - off by its angle at
-/// creation. So the parts and joints are always made at `qpos0` (`buildAtRest`), where the
+/// creation. So the parts and joints are always made at `reference_joint_positions` (`buildAtRest`), where the
 /// engine's zeros are MJCF's, and the finished ragdoll is moved to `d`: any pose is valid.
 pub fn build(
     gpa: Allocator,
@@ -737,8 +634,8 @@ pub fn build(
 /// The plan's "limp" baseline on the REDUCED side: no joint stiffness, damping or armature and
 /// no tendon springs, because the maximal side has none of them. Contacts and limits stay.
 pub fn limpReduced(m: *rbt.Model) void {
-    @memset(m.jnt_stiffness, 0.0);
-    @memset(m.jnt_damping, 0.0);
+    @memset(m.joint_stiffness, 0.0);
+    @memset(m.joint_damping, 0.0);
     m.has_dof_damping = false;
     @memset(m.dof_armature, 0.0);
     @memset(m.tendon_stiffness, 0.0);
@@ -758,7 +655,7 @@ const expect = std.testing.expect;
 const test_timestep: f32 = 1.0 / 500.0;
 
 /// The MJCF humanoid, built for the comparison: Z-up gravity, Newton (the solver a ragdoll
-/// needs, per `robot_physics`' ragdoll test), and posed at `qpos0` with its kinematics current.
+/// needs, per `robot_physics`' ragdoll test), and posed at `reference_joint_positions` with its kinematics current.
 const Humanoid = struct {
     /// The XML the document was parsed from, when it had to be edited (fixed base); else empty.
     source: []u8,
@@ -800,8 +697,8 @@ const Humanoid = struct {
         h.imported = try robot_mjcf.build(gpa, &h.robot, options);
         errdefer h.imported.deinit();
         h.data = try rbt.Data.init(gpa, &h.imported.model);
-        @memcpy(h.data.pos, h.imported.model.qpos0);
-        @memset(h.data.vel, 0);
+        @memcpy(h.data.joint_positions, h.imported.model.reference_joint_positions);
+        @memset(h.data.joint_velocities, 0);
         h.data.stage = .stale;
         rbt.forward(&h.imported.model, &h.data);
     }
@@ -819,8 +716,11 @@ const Humanoid = struct {
         const m: *const rbt.Model = &h.imported.model;
         var total: f32 = 0.0;
         var weighted: Vec = vec_zero;
-        for (1..m.nbody) |b| {
-            const com: Vec = h.data.body_xpos[b] + rotate(h.data.body_xrot[b], m.body_ipos[b]);
+        for (1..m.body_count) |b| {
+            const com: Vec = h.data.body_positions[b] + rotate(
+                h.data.body_orientations[b],
+                m.body_centre_of_mass_offset[b],
+            );
             total += m.body_mass[b];
             weighted += splat(m.body_mass[b]) * com;
         }
@@ -831,13 +731,13 @@ const Humanoid = struct {
     /// that lands upright makes few contacts and proves little.
     fn tippedDropPose(h: *Humanoid) void {
         _ = robot_mjcf.applyKeyframe(&h.imported.model, &h.data, h.robot.keyframes[0]);
-        h.data.pos[2] = 1.2;
+        h.data.joint_positions[2] = 1.2;
         const tipped: Quat = quatFromAxisAngle(normalize3(vec(1, 0.3, 0)), 1.4);
-        h.data.pos[3] = tipped[0];
-        h.data.pos[4] = tipped[1];
-        h.data.pos[5] = tipped[2];
-        h.data.pos[6] = tipped[3];
-        @memset(h.data.vel, 0);
+        h.data.joint_positions[3] = tipped[0];
+        h.data.joint_positions[4] = tipped[1];
+        h.data.joint_positions[5] = tipped[2];
+        h.data.joint_positions[6] = tipped[3];
+        @memset(h.data.joint_velocities, 0);
         h.data.stage = .stale;
         rbt.forward(&h.imported.model, &h.data);
     }
@@ -883,11 +783,14 @@ test "robot_maximal: the maximal humanoid has the reduced one's mass, centre of 
         // The reduced side's numbers for the same set of bodies, combined.
         var mass: f32 = 0.0;
         var weighted: Vec = vec_zero;
-        for (1..m.nbody) |b| {
+        for (1..m.body_count) |b| {
             if (ragdoll.part_of_body[b] != part) {
                 continue;
             }
-            const com: Vec = h.data.body_xpos[b] + rotate(h.data.body_xrot[b], m.body_ipos[b]);
+            const com: Vec = h.data.body_positions[b] + rotate(
+                h.data.body_orientations[b],
+                m.body_centre_of_mass_offset[b],
+            );
             mass += m.body_mass[b];
             weighted += splat(m.body_mass[b]) * com;
         }
@@ -909,14 +812,14 @@ test "robot_maximal: the maximal humanoid has the reduced one's mass, centre of 
         const basis: [3]Vec = .{ vec(1, 0, 0), vec(0, 1, 0), vec(0, 0, 1) };
         for (basis) |e| {
             var reduced: Vec = vec_zero;
-            for (1..m.nbody) |b| {
+            for (1..m.body_count) |b| {
                 if (ragdoll.part_of_body[b] != part) {
                     continue;
                 }
-                const rot: Quat = h.data.body_xrot[b];
-                const com: Vec = h.data.body_xpos[b] + rotate(rot, m.body_ipos[b]);
+                const rot: Quat = h.data.body_orientations[b];
+                const com: Vec = h.data.body_positions[b] + rotate(rot, m.body_centre_of_mass_offset[b]);
                 const r: Vec = com - com_reduced;
-                reduced += rotate(rot, applyTensor(m.body_inertia[b], rotate(conjugate(rot), e)));
+                reduced += rotate(rot, applyTensor(m.body_local_inertia[b], rotate(conjugate(rot), e)));
                 reduced += splat(m.body_mass[b]) * (splat(dot3(r, r)) * e - r * splat(dot3(r, e)));
             }
             const moments: Vec = vec(
@@ -973,12 +876,12 @@ test "robot_maximal: every part's frame reads back as the reduced forward kinema
     for (0..ragdoll.partCount()) |part| {
         const frame: Frame = ragdoll.bodyFrame(&world, part);
         const robot_body: u32 = ragdoll.robot_body[part];
-        const q: Quat = h.data.body_xrot[robot_body];
+        const q: Quat = h.data.body_orientations[robot_body];
         const same: Vec = frame.rot - q;
         const flipped: Vec = frame.rot + q;
         const rot_error: f32 = @min(@reduce(.Add, same * same), @reduce(.Add, flipped * flipped));
         worst = @max(worst, @sqrt(rot_error));
-        worst_position = @max(worst_position, length3(frame.pos - h.data.body_xpos[robot_body]));
+        worst_position = @max(worst_position, length3(frame.pos - h.data.body_positions[robot_body]));
     }
     // Where the robot's hinges share a pivot, the maximal joint follows the pose exactly; where
     // they do not (the ankles), the gap IS the approximation, and it is printed, not hidden.
@@ -1129,15 +1032,15 @@ test "robot_maximal: the drop - both humanoids land, and the maximal joints stay
             try bridge.sync(&world, m, &h.data);
             try zimrphysics.step(&world, test_timestep);
             bridge.harvest(&h.data);
-            @memset(h.data.applied_force, 0);
+            @memset(h.data.applied_joint_forces, 0);
             rbt.step(m, &h.data);
             reduced_contacts = @max(reduced_contacts, h.data.contact_count);
         }
         rbt.forward(m, &h.data);
-        for (0..m.nv) |i| {
-            reduced_speed = @max(reduced_speed, @abs(h.data.vel[i]));
+        for (0..m.dof_count) |i| {
+            reduced_speed = @max(reduced_speed, @abs(h.data.joint_velocities[i]));
         }
-        reduced_height = h.data.body_xpos[1][2];
+        reduced_height = h.data.body_positions[1][2];
     }
     report.print(
         "\n  robot_maximal drop, 6 s at 1/500, limp: REDUCED torso {d:.3} m, settled speed {d:.3}, " ++
@@ -1242,15 +1145,15 @@ test "robot_maximal: one hinge at a time - does an in-range MJCF angle sit insid
         var pushed: u32 = 0;
         var probes: u32 = 0;
         report.print("\n  robot_maximal one-hinge probes, twist on the {t} hinge:\n", .{choice});
-        for (0..m.njnt) |j| {
-            const range: ?[2]f32 = m.jnt_range[j];
-            const is_limited_hinge: bool = m.jnt_type[j] == .hinge and range != null;
+        for (0..m.joint_count) |j| {
+            const range: ?[2]f32 = m.joint_range[j];
+            const is_limited_hinge: bool = m.joint_type[j] == .hinge and range != null;
             if (!is_limited_hinge) {
                 continue;
             }
             const r: [2]f32 = range.?;
             // The joint this hinge belongs to: the one whose child part is the hinge's body.
-            const child_part: u32 = ragdoll.part_of_body[m.jnt_body[j]];
+            const child_part: u32 = ragdoll.part_of_body[m.joint_body[j]];
             var joint_index: usize = 0;
             for (ragdoll.joints, 0..) |joint, i| {
                 if (joint.child == child_part) {
@@ -1260,8 +1163,8 @@ test "robot_maximal: one hinge at a time - does an in-range MJCF angle sit insid
             const joint: Joint = ragdoll.joints[joint_index];
             for ([_]f32{ 0.1, 0.9 }) |fraction| {
                 const angle: f32 = r[0] + fraction * (r[1] - r[0]);
-                @memcpy(h.data.pos, m.qpos0);
-                h.data.pos[m.jnt_qpos_adr[j]] = angle;
+                @memcpy(h.data.joint_positions, m.reference_joint_positions);
+                h.data.joint_positions[m.joint_first_coordinate[j]] = angle;
                 h.data.stage = .stale;
                 rbt.forward(m, &h.data);
                 try ragdoll.setPose(gpa, &world, &h.data);
@@ -1275,7 +1178,7 @@ test "robot_maximal: one hinge at a time - does an in-range MJCF angle sit insid
                     pushed += 1;
                     report.print("    hinge {d:>2} (body {d:>2}, {d} hinges) at {d:>6.3} rad " ++
                         "of [{d:.3}, {d:.3}]: pushed {d:.5} rad\n", .{
-                        j, m.jnt_body[j], joint.hinge_count, angle, r[0], r[1], push,
+                        j, m.joint_body[j], joint.hinge_count, angle, r[0], r[1], push,
                     });
                 }
             }
@@ -1326,7 +1229,7 @@ pub fn worstJointErrorDeg(
         const parent_body: u32 = ragdoll.robot_body[joint.parent];
         const child_body: u32 = ragdoll.robot_body[joint.child];
         const now: Quat = qmul(conjugate(now_rots[parent_body]), now_rots[child_body]);
-        const want: Quat = qmul(conjugate(target.body_xrot[parent_body]), target.body_xrot[child_body]);
+        const want: Quat = qmul(conjugate(target.body_orientations[parent_body]), target.body_orientations[child_body]);
         const alignment: f32 = @abs(@reduce(.Add, now * want));
         // * A diverged body has NaN rotations, and `@max` DROPS a NaN operand - so a blown-up
         // run would report whatever finite joint was left, as a steady number. Say so instead.
@@ -1348,27 +1251,27 @@ fn stepReducedFixed(
     torque: []f32,
 ) void {
     rbt.forward(m, d);
-    @memset(d.applied_force, 0);
+    @memset(d.applied_joint_forces, 0);
     @memset(a_des, 0);
     rbt.biasForce(m, d);
-    for (0..m.njnt) |j| {
-        if (m.jnt_type[j] != .hinge) {
+    for (0..m.joint_count) |j| {
+        if (m.joint_type[j] != .hinge) {
             continue;
         }
-        const q: u32 = m.jnt_qpos_adr[j];
-        const v: u32 = m.jnt_dof_adr[j];
-        const err: f32 = target.pos[q] - d.pos[q];
+        const q: u32 = m.joint_first_coordinate[j];
+        const v: u32 = m.joint_first_dof[j];
+        const err: f32 = target.joint_positions[q] - d.joint_positions[q];
         switch (method) {
             .reduced_pd => |pd| {
-                const feed_forward: f32 = if (pd.gravity) d.bias_force[v] else 0.0;
-                d.applied_force[v] = pd.kp * err - pd.kv * d.vel[v] + feed_forward;
+                const feed_forward: f32 = if (pd.gravity) d.bias_joint_forces[v] else 0.0;
+                d.applied_joint_forces[v] = pd.kp * err - pd.kv * d.joint_velocities[v] + feed_forward;
             },
             .reduced_computed_torque => |ct| {
                 const omega: f32 = 2.0 * pi * ct.frequency;
-                a_des[v] = omega * omega * err - 2.0 * omega * d.vel[v];
+                a_des[v] = omega * omega * err - 2.0 * omega * d.joint_velocities[v];
             },
             .reduced_implicit_ct => |ict| {
-                a_des[v] = stableSpringAccel(err, d.vel[v], ict.frequency, 1.0, m.opt.timestep);
+                a_des[v] = stableSpringAccel(err, d.joint_velocities[v], ict.frequency, 1.0, m.opt.timestep);
             },
             .reduced_diagonal => |dg| {
                 const omega: f32 = 2.0 * pi * dg.frequency;
@@ -1378,9 +1281,9 @@ fn stepReducedFixed(
                 a_des[v] = 1.0;
                 rbt.inverseDynamics(m, d, a_des, torque);
                 a_des[v] = 0.0;
-                const inertia: f32 = torque[v] - d.bias_force[v];
-                d.applied_force[v] = inertia * (omega * omega * err - 2.0 * omega * d.vel[v]) +
-                    d.bias_force[v];
+                const inertia: f32 = torque[v] - d.bias_joint_forces[v];
+                d.applied_joint_forces[v] = inertia * (omega * omega * err - 2.0 * omega * d.joint_velocities[v]) +
+                    d.bias_joint_forces[v];
             },
             .maximal_motors => unreachable,
         }
@@ -1390,10 +1293,10 @@ fn stepReducedFixed(
     if (uses_inverse_dynamics) {
         // Fixed base: every DOF is a hinge, and M a + c is exactly the torque that makes it so.
         rbt.inverseDynamics(m, d, a_des, torque);
-        for (0..m.njnt) |j| {
-            if (m.jnt_type[j] == .hinge) {
-                const v: u32 = m.jnt_dof_adr[j];
-                d.applied_force[v] = torque[v];
+        for (0..m.joint_count) |j| {
+            if (m.joint_type[j] == .hinge) {
+                const v: u32 = m.joint_first_dof[j];
+                d.applied_joint_forces[v] = torque[v];
             }
         }
     }
@@ -1478,12 +1381,12 @@ test "robot_maximal: reaching a pose - root pinned, gravity on, both engines, th
                 limpReduced(m);
                 var target: rbt.Data = try .init(gpa, m);
                 defer target.deinit();
-                @memcpy(target.pos, m.qpos0);
+                @memcpy(target.joint_positions, m.reference_joint_positions);
                 if (reach_squat) {
                     // The keyframe was written for the floating model: 7 root values, then hinges.
                     const key: []const f32 = h.robot.keyframes[0].qpos;
-                    try expect(key.len == m.nq + 7);
-                    @memcpy(target.pos, key[7..]);
+                    try expect(key.len == m.coordinate_count + 7);
+                    @memcpy(target.joint_positions, key[7..]);
                 }
                 target.stage = .stale;
                 rbt.forward(m, &target);
@@ -1499,11 +1402,11 @@ test "robot_maximal: reaching a pose - root pinned, gravity on, both engines, th
                 var ragdoll: Ragdoll = try build(gpa, &world, m, &h.data, .{ .limits = maximal_limits });
                 defer ragdoll.deinit();
 
-                const a_des: []f32 = try gpa.alloc(f32, m.nv);
+                const a_des: []f32 = try gpa.alloc(f32, m.dof_count);
                 defer gpa.free(a_des);
-                const torque: []f32 = try gpa.alloc(f32, m.nv);
+                const torque: []f32 = try gpa.alloc(f32, m.dof_count);
                 defer gpa.free(torque);
-                const rots: []Quat = try gpa.alloc(Quat, m.nbody);
+                const rots: []Quat = try gpa.alloc(Quat, m.body_count);
                 defer gpa.free(rots);
 
                 const is_maximal: bool = run.method == .maximal_motors;
@@ -1517,13 +1420,13 @@ test "robot_maximal: reaching a pose - root pinned, gravity on, both engines, th
                 for (1..steps + 1) |step| {
                     if (is_maximal) {
                         try zimrphysics.step(&world, dt);
-                        for (1..m.nbody) |b| {
+                        for (1..m.body_count) |b| {
                             rots[b] = ragdoll.robotBodyFrame(&world, b).rot;
                         }
                     } else {
                         stepReducedFixed(m, &h.data, &target, run.method, a_des, torque);
                         rbt.forward(m, &h.data);
-                        @memcpy(rots[1..], h.data.body_xrot[1..m.nbody]);
+                        @memcpy(rots[1..], h.data.body_orientations[1..m.body_count]);
                     }
                     const err: f32 = worstJointErrorDeg(&ragdoll, rots, &target) orelse {
                         diverged_at = @intCast(step);
@@ -1611,7 +1514,7 @@ test "robot_maximal: holding the squat while falling onto the floor, at 60 Hz, b
         limpReduced(m);
         var target: rbt.Data = try .init(gpa, m);
         defer target.deinit();
-        @memcpy(target.pos, m.qpos0);
+        @memcpy(target.joint_positions, m.reference_joint_positions);
         _ = robot_mjcf.applyKeyframe(m, &target, h.robot.keyframes[0]);
         target.stage = .stale;
         rbt.forward(m, &target);
@@ -1641,31 +1544,37 @@ test "robot_maximal: holding the squat while falling onto the floor, at 60 Hz, b
         defer bridge.deinit(&world_reduced);
         bridge.listen(&world_reduced);
 
-        const a_des: []f32 = try gpa.alloc(f32, m.nv);
+        const a_des: []f32 = try gpa.alloc(f32, m.dof_count);
         defer gpa.free(a_des);
-        const torque: []f32 = try gpa.alloc(f32, m.nv);
+        const torque: []f32 = try gpa.alloc(f32, m.dof_count);
         defer gpa.free(torque);
-        const full: []f32 = try gpa.alloc(f32, m.nv);
+        const full: []f32 = try gpa.alloc(f32, m.dof_count);
         defer gpa.free(full);
-        const dense: []f32 = try gpa.alloc(f32, @as(usize, m.nv) * m.nv);
+        const dense: []f32 = try gpa.alloc(f32, @as(usize, m.dof_count) * m.dof_count);
         defer gpa.free(dense);
-        const rots: []Quat = try gpa.alloc(Quat, m.nbody);
+        const rots: []Quat = try gpa.alloc(Quat, m.body_count);
         defer gpa.free(rots);
         for (0..steps) |_| {
             rbt.forward(m, &h.data);
             try bridge.sync(&world_reduced, m, &h.data);
             try zimrphysics.step(&world_reduced, dt);
             bridge.harvest(&h.data);
-            @memset(h.data.applied_force, 0);
+            @memset(h.data.applied_joint_forces, 0);
             if (holding) {
                 @memset(a_des, 0);
-                for (0..m.njnt) |j| {
-                    if (m.jnt_type[j] != .hinge) {
+                for (0..m.joint_count) |j| {
+                    if (m.joint_type[j] != .hinge) {
                         continue;
                     }
-                    const q: u32 = m.jnt_qpos_adr[j];
-                    const v: u32 = m.jnt_dof_adr[j];
-                    a_des[v] = stableSpringAccel(target.pos[q] - h.data.pos[q], h.data.vel[v], frequency, 1.0, dt);
+                    const q: u32 = m.joint_first_coordinate[j];
+                    const v: u32 = m.joint_first_dof[j];
+                    a_des[v] = stableSpringAccel(
+                        target.joint_positions[q] - h.data.joint_positions[q],
+                        h.data.joint_velocities[v],
+                        frequency,
+                        1.0,
+                        dt,
+                    );
                 }
                 rbt.biasForce(m, &h.data);
                 if (config.floating_base) {
@@ -1673,10 +1582,10 @@ test "robot_maximal: holding the squat while falling onto the floor, at 60 Hz, b
                 } else {
                     rbt.inverseDynamics(m, &h.data, a_des, torque);
                 }
-                for (0..m.njnt) |j| {
-                    if (m.jnt_type[j] == .hinge) {
-                        const v: u32 = m.jnt_dof_adr[j];
-                        h.data.applied_force[v] = torque[v];
+                for (0..m.joint_count) |j| {
+                    if (m.joint_type[j] == .hinge) {
+                        const v: u32 = m.joint_first_dof[j];
+                        h.data.applied_joint_forces[v] = torque[v];
                     }
                 }
             }
@@ -1684,15 +1593,15 @@ test "robot_maximal: holding the squat while falling onto the floor, at 60 Hz, b
             try zimrphysics.step(&world_maximal, dt);
         }
         rbt.forward(m, &h.data);
-        @memcpy(rots[1..], h.data.body_xrot[1..m.nbody]);
+        @memcpy(rots[1..], h.data.body_orientations[1..m.body_count]);
         const reduced_error: ?f32 = worstJointErrorDeg(&ragdoll, rots, &target);
-        for (1..m.nbody) |b| {
+        for (1..m.body_count) |b| {
             rots[b] = ragdoll.robotBodyFrame(&world_maximal, b).rot;
         }
         const maximal_error: ?f32 = worstJointErrorDeg(&ragdoll, rots, &target);
         var reduced_speed: f32 = 0.0;
-        for (0..m.nv) |i| {
-            reduced_speed = @max(reduced_speed, @abs(h.data.vel[i]));
+        for (0..m.dof_count) |i| {
+            reduced_speed = @max(reduced_speed, @abs(h.data.joint_velocities[i]));
         }
         report.print(
             "\n  falling hold, 60 Hz, {d} Hz spring: REDUCED ({s}) error {d:.1} deg, speed {d:.2}, " ++
@@ -1704,7 +1613,7 @@ test "robot_maximal: holding the squat while falling onto the floor, at 60 Hz, b
                 if (config.floating_base) "floating-base ID" else "fixed-base rows",
                 reduced_error orelse -1.0,
                 reduced_speed,
-                h.data.body_xpos[1][2],
+                h.data.body_positions[1][2],
                 config.maximal_limits,
                 config.maximal_gyroscopic,
                 config.maximal_velocity_steps,
@@ -1761,7 +1670,7 @@ test "robot_maximal: driving a FREE body to the squat at 60 Hz - zero gravity, t
             }
             var target: rbt.Data = try .init(gpa, m);
             defer target.deinit();
-            @memcpy(target.pos, m.qpos0);
+            @memcpy(target.joint_positions, m.reference_joint_positions);
             _ = robot_mjcf.applyKeyframe(m, &target, h.robot.keyframes[0]);
             target.stage = .stale;
             rbt.forward(m, &target);
@@ -1778,47 +1687,53 @@ test "robot_maximal: driving a FREE body to the squat at 60 Hz - zero gravity, t
             if (scenario.tipped) {
                 // Rest joints, the drop's root rotation: the same body, turned.
                 const tipped: Quat = quatFromAxisAngle(normalize3(vec(1, 0.3, 0)), 1.4);
-                h.data.pos[3] = tipped[0];
-                h.data.pos[4] = tipped[1];
-                h.data.pos[5] = tipped[2];
-                h.data.pos[6] = tipped[3];
+                h.data.joint_positions[3] = tipped[0];
+                h.data.joint_positions[4] = tipped[1];
+                h.data.joint_positions[5] = tipped[2];
+                h.data.joint_positions[6] = tipped[3];
                 h.data.stage = .stale;
                 rbt.forward(m, &h.data);
                 try ragdoll.setPose(gpa, &world, &h.data);
             }
             ragdoll.driveToPose(&world, m, &target, .{ .frequency = 10 });
 
-            const a_des: []f32 = try gpa.alloc(f32, m.nv);
+            const a_des: []f32 = try gpa.alloc(f32, m.dof_count);
             defer gpa.free(a_des);
-            const torque: []f32 = try gpa.alloc(f32, m.nv);
+            const torque: []f32 = try gpa.alloc(f32, m.dof_count);
             defer gpa.free(torque);
-            const full: []f32 = try gpa.alloc(f32, m.nv);
+            const full: []f32 = try gpa.alloc(f32, m.dof_count);
             defer gpa.free(full);
-            const dense: []f32 = try gpa.alloc(f32, @as(usize, m.nv) * m.nv);
+            const dense: []f32 = try gpa.alloc(f32, @as(usize, m.dof_count) * m.dof_count);
             defer gpa.free(dense);
-            const rots: []Quat = try gpa.alloc(Quat, m.nbody);
+            const rots: []Quat = try gpa.alloc(Quat, m.body_count);
             defer gpa.free(rots);
             var reduced_at: [3]f32 = .{ 0, 0, 0 };
             var maximal_at: [3]f32 = .{ 0, 0, 0 };
             var peak_gap: f32 = 0.0;
             for (1..steps + 1) |step| {
                 rbt.forward(m, &h.data);
-                @memset(h.data.applied_force, 0);
+                @memset(h.data.applied_joint_forces, 0);
                 @memset(a_des, 0);
-                for (0..m.njnt) |j| {
-                    if (m.jnt_type[j] != .hinge) {
+                for (0..m.joint_count) |j| {
+                    if (m.joint_type[j] != .hinge) {
                         continue;
                     }
-                    const q: u32 = m.jnt_qpos_adr[j];
-                    const v: u32 = m.jnt_dof_adr[j];
-                    a_des[v] = stableSpringAccel(target.pos[q] - h.data.pos[q], h.data.vel[v], 10, 1.0, dt);
+                    const q: u32 = m.joint_first_coordinate[j];
+                    const v: u32 = m.joint_first_dof[j];
+                    a_des[v] = stableSpringAccel(
+                        target.joint_positions[q] - h.data.joint_positions[q],
+                        h.data.joint_velocities[v],
+                        10,
+                        1.0,
+                        dt,
+                    );
                 }
                 rbt.biasForce(m, &h.data);
                 floatingBaseTorques(m, &h.data, a_des, dense, full, torque);
-                for (0..m.njnt) |j| {
-                    if (m.jnt_type[j] == .hinge) {
-                        const v: u32 = m.jnt_dof_adr[j];
-                        h.data.applied_force[v] = torque[v];
+                for (0..m.joint_count) |j| {
+                    if (m.joint_type[j] == .hinge) {
+                        const v: u32 = m.joint_first_dof[j];
+                        h.data.applied_joint_forces[v] = torque[v];
                     }
                 }
                 rbt.step(m, &h.data);
@@ -1827,9 +1742,9 @@ test "robot_maximal: driving a FREE body to the squat at 60 Hz - zero gravity, t
                 const checkpoint: ?usize = if (step == 30) 0 else if (step == 60) 1 else if (step == 120) 2 else null;
                 if (checkpoint) |c| {
                     rbt.forward(m, &h.data);
-                    @memcpy(rots[1..], h.data.body_xrot[1..m.nbody]);
+                    @memcpy(rots[1..], h.data.body_orientations[1..m.body_count]);
                     reduced_at[c] = worstJointErrorDeg(&ragdoll, rots, &target) orelse -1.0;
-                    for (1..m.nbody) |b| {
+                    for (1..m.body_count) |b| {
                         rots[b] = ragdoll.robotBodyFrame(&world, b).rot;
                     }
                     maximal_at[c] = worstJointErrorDeg(&ragdoll, rots, &target) orelse -1.0;
@@ -1899,7 +1814,7 @@ test "robot_maximal: maximal motors on the floor at a 60 Hz frame rate - what ma
         const m: *rbt.Model = &h.imported.model;
         var target: rbt.Data = try .init(gpa, m);
         defer target.deinit();
-        @memcpy(target.pos, m.qpos0);
+        @memcpy(target.joint_positions, m.reference_joint_positions);
         _ = robot_mjcf.applyKeyframe(m, &target, h.robot.keyframes[0]);
         target.stage = .stale;
         rbt.forward(m, &target);
@@ -1916,7 +1831,7 @@ test "robot_maximal: maximal motors on the floor at a 60 Hz frame rate - what ma
             .max_torque = drive.max_torque,
             .swing_twist = drive.swing_twist,
         });
-        const rots: []Quat = try gpa.alloc(Quat, m.nbody);
+        const rots: []Quat = try gpa.alloc(Quat, m.body_count);
         defer gpa.free(rots);
         var peak_gap: f32 = 0.0;
         var peak_speed_late: f32 = 0.0;
@@ -1929,7 +1844,7 @@ test "robot_maximal: maximal motors on the floor at a 60 Hz frame rate - what ma
                 peak_speed_late = @max(peak_speed_late, ragdoll.peakSpeed(&world));
             }
         }
-        for (1..m.nbody) |b| {
+        for (1..m.body_count) |b| {
             rots[b] = ragdoll.robotBodyFrame(&world, b).rot;
         }
         const err: f32 = worstJointErrorDeg(&ragdoll, rots, &target) orelse -1.0;
@@ -1963,7 +1878,7 @@ test "robot_maximal: standing - can each engine hold the standing pose on the fl
         limpReduced(m);
         var target: rbt.Data = try .init(gpa, m);
         defer target.deinit();
-        @memcpy(target.pos, m.qpos0);
+        @memcpy(target.joint_positions, m.reference_joint_positions);
         target.stage = .stale;
         rbt.forward(m, &target);
 
@@ -1979,21 +1894,21 @@ test "robot_maximal: standing - can each engine hold the standing pose on the fl
         bridge.listen(&world_reduced);
 
         // The shove: the whole body given a forward velocity, as a push at the torso would.
-        h.data.vel[0] = shove;
+        h.data.joint_velocities[0] = shove;
         const root_part: u32 = ragdoll.part_of_body[1];
         for (0..ragdoll.partCount()) |part| {
             try world_maximal.setLinearVelocity(gpa, ragdoll.handles[part], vec(shove, 0, 0));
         }
 
-        const a_des: []f32 = try gpa.alloc(f32, m.nv);
+        const a_des: []f32 = try gpa.alloc(f32, m.dof_count);
         defer gpa.free(a_des);
-        const torque: []f32 = try gpa.alloc(f32, m.nv);
+        const torque: []f32 = try gpa.alloc(f32, m.dof_count);
         defer gpa.free(torque);
-        const full: []f32 = try gpa.alloc(f32, m.nv);
+        const full: []f32 = try gpa.alloc(f32, m.dof_count);
         defer gpa.free(full);
-        const dense: []f32 = try gpa.alloc(f32, @as(usize, m.nv) * m.nv);
+        const dense: []f32 = try gpa.alloc(f32, @as(usize, m.dof_count) * m.dof_count);
         defer gpa.free(dense);
-        const rots: []Quat = try gpa.alloc(Quat, m.nbody);
+        const rots: []Quat = try gpa.alloc(Quat, m.body_count);
         defer gpa.free(rots);
         var reduced_upright: f32 = 0.0;
         var maximal_upright: f32 = 0.0;
@@ -2004,29 +1919,35 @@ test "robot_maximal: standing - can each engine hold the standing pose on the fl
             try bridge.sync(&world_reduced, m, &h.data);
             try zimrphysics.step(&world_reduced, dt);
             bridge.harvest(&h.data);
-            @memset(h.data.applied_force, 0);
+            @memset(h.data.applied_joint_forces, 0);
             @memset(a_des, 0);
-            for (0..m.njnt) |j| {
-                if (m.jnt_type[j] != .hinge) {
+            for (0..m.joint_count) |j| {
+                if (m.joint_type[j] != .hinge) {
                     continue;
                 }
-                const q: u32 = m.jnt_qpos_adr[j];
-                const v: u32 = m.jnt_dof_adr[j];
-                a_des[v] = stableSpringAccel(target.pos[q] - h.data.pos[q], h.data.vel[v], 20, 1.0, dt);
+                const q: u32 = m.joint_first_coordinate[j];
+                const v: u32 = m.joint_first_dof[j];
+                a_des[v] = stableSpringAccel(
+                    target.joint_positions[q] - h.data.joint_positions[q],
+                    h.data.joint_velocities[v],
+                    20,
+                    1.0,
+                    dt,
+                );
             }
             rbt.biasForce(m, &h.data);
             floatingBaseTorques(m, &h.data, a_des, dense, full, torque);
-            for (0..m.njnt) |j| {
-                if (m.jnt_type[j] == .hinge) {
-                    const v: u32 = m.jnt_dof_adr[j];
-                    h.data.applied_force[v] = torque[v];
+            for (0..m.joint_count) |j| {
+                if (m.joint_type[j] == .hinge) {
+                    const v: u32 = m.joint_first_dof[j];
+                    h.data.applied_joint_forces[v] = torque[v];
                 }
             }
             rbt.step(m, &h.data);
             try zimrphysics.step(&world_maximal, dt);
             rbt.forward(m, &h.data);
             const t: f32 = float(frame + 1) * dt;
-            if (reduced_standing and h.data.body_xpos[1][2] > 0.8) {
+            if (reduced_standing and h.data.body_positions[1][2] > 0.8) {
                 reduced_upright = t;
             } else {
                 reduced_standing = false;
@@ -2037,9 +1958,9 @@ test "robot_maximal: standing - can each engine hold the standing pose on the fl
                 maximal_standing = false;
             }
         }
-        @memcpy(rots[1..], h.data.body_xrot[1..m.nbody]);
+        @memcpy(rots[1..], h.data.body_orientations[1..m.body_count]);
         const reduced_error: f32 = worstJointErrorDeg(&ragdoll, rots, &target) orelse -1.0;
-        for (1..m.nbody) |b| {
+        for (1..m.body_count) |b| {
             rots[b] = ragdoll.robotBodyFrame(&world_maximal, b).rot;
         }
         const maximal_error: f32 = worstJointErrorDeg(&ragdoll, rots, &target) orelse -1.0;
@@ -2063,16 +1984,16 @@ test "robot_maximal: massDiagonal against the mass matrix measured through inver
         const m: *const rbt.Model = &h.imported.model;
         rbt.forward(m, &h.data);
         rbt.biasForce(m, &h.data);
-        const unit: []f32 = try gpa.alloc(f32, m.nv);
+        const unit: []f32 = try gpa.alloc(f32, m.dof_count);
         defer gpa.free(unit);
-        const out: []f32 = try gpa.alloc(f32, m.nv);
+        const out: []f32 = try gpa.alloc(f32, m.dof_count);
         defer gpa.free(out);
         var disagreements: u32 = 0;
-        for (0..m.nv) |i| {
+        for (0..m.dof_count) |i| {
             @memset(unit, 0);
             unit[i] = 1.0;
             rbt.inverseDynamics(m, &h.data, unit, out);
-            const measured: f32 = out[i] - h.data.bias_force[i];
+            const measured: f32 = out[i] - h.data.bias_joint_forces[i];
             const read: f32 = rbt.massDiagonal(m, &h.data, @intCast(i));
             if (@abs(measured - read) > 1.0e-4 * @max(1.0, @abs(measured))) {
                 disagreements += 1;
@@ -2082,7 +2003,7 @@ test "robot_maximal: massDiagonal against the mass matrix measured through inver
             }
         }
         report.print("  massDiagonal, {s} humanoid: {d} of {d} DOFs disagree\n", .{
-            if (fixed_base) "fixed-base" else "floating", disagreements, m.nv,
+            if (fixed_base) "fixed-base" else "floating", disagreements, m.dof_count,
         });
         try expect(disagreements == 0);
     }

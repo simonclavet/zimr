@@ -760,6 +760,9 @@ fn HeaderOf(comptime kernel: anytype) type {
 ///      for bytes that cross a boundary, so require it. An anonymous literal still
 ///      coerces to an extern struct, so no call site changes.
 fn assertPod(comptime T: type, comptime kernel: []const u8) void {
+    // A header can be large - robotgpu's `Params` nests its whole layout, one small struct per array - and the walk
+    // visits every field, so it needs more than the compiler's default budget of backward branches.
+    @setEvalBranchQuota(100_000);
     switch (@typeInfo(T)) {
         .pointer => @compileError("jobs: kernel '" ++ kernel ++ "' has a POINTER in its header (" ++
             @typeName(T) ++ "). The header is copied into another wasm instance, where that address " ++

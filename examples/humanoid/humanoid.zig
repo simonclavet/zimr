@@ -51,7 +51,7 @@ const Quat = zm.Quat;
 ///
 /// `GeomShape` says so in one line - "zimr's capsule convention, not MuJoCo's" - and every foot
 /// calculation here used Z. The endpoints were therefore perpendicular to the real sole, which
-/// is why the sole appeared to be raked 5.5 degrees even at `qpos0` (where this robot stands, so
+/// is why the sole appeared to be raked 5.5 degrees even at `reference_joint_positions` (where this robot stands, so
 /// it cannot be), why the built pose looked tilted 13.2 degrees, and why fitting a plane through
 /// those points rotated the body 45 degrees.
 ///
@@ -77,6 +77,7 @@ const translation = zm.translation;
 const scaling = zm.scaling;
 const quatToMat = zm.quatToMat;
 const identity = zm.identity;
+const assertUnreachable = zm.assertUnreachable;
 
 /// The Go1 runs at 500 Hz in Menagerie, and its contacts want it.
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -274,10 +275,10 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // * THE HUMANOID'S DOFs ARE THE ONES BEFORE THE FIRST BALL. `buildScene` appends the loose
     // bodies after the robot, so counting up to the first ball's joint gives the prefix - and
     // reading the model rather than hardcoding 27 keeps it right if the model changes.
-    s.robot_dof_count = s.imported.model.nv;
+    s.robot_dof_count = s.imported.model.dof_count;
     if (s.imported.bodyIndex(ball_names[0])) |first_ball| {
-        const joint: u32 = s.imported.model.body_jnt_adr[first_ball];
-        s.robot_dof_count = s.imported.model.jnt_dof_adr[joint];
+        const joint: u32 = s.imported.model.body_first_joint[first_ball];
+        s.robot_dof_count = s.imported.model.joint_first_dof[joint];
     }
 
     s.world = try zp.World.init(gpa, 128);
@@ -293,12 +294,12 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
     // * THE DEFAULT POSE IS THE STANDING ONE. Unlike the Go1, whose `home` keyframe is what
     // stands it up, this model's four keyframes are squat / one-legged / prone / supine - all
-    // interesting and none of them the pose to hold. `qpos0` is upright.
+    // interesting and none of them the pose to hold. `reference_joint_positions` is upright.
     rbt.forward(&s.imported.model, &s.data);
     s.bridge = try bridge_mod.Bridge.init(gpa, &s.world, &s.imported.model, &s.data, 128);
     s.bridge.listen(&s.world);
 
-    s.home = try gpa.dupe(f32, s.data.pos);
+    s.home = try gpa.dupe(f32, s.data.joint_positions);
     s.actuation = try ctl.Actuation.init(gpa, &s.imported.model);
 
     // * THE GENERATED CYLINDER SPANS z in [0, height], NOT [-h/2, +h/2]. Its parametric
@@ -323,7 +324,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.shove_dir = .{ 1, 0 };
     s.shove_seed = 0x2545f491;
     s.one_leg = false;
-    s.pose_scratch = try gpa.alloc(f32, s.imported.model.nq);
+    s.pose_scratch = try gpa.alloc(f32, s.imported.model.coordinate_count);
     s.arm_act_right = if (s.imported.bodyIndex("hand_right")) |h|
         try ctl.limbActuation(gpa, &s.imported.model, h)
     else
@@ -342,11 +343,11 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // the tracker then demanded 55 rad/s of arm velocity, and that was the explosion.
     s.momentum_rate = 40.0;
     s.limb_swing = 0;
-    s.mom_lin = try gpa.alloc(Vec, s.imported.model.nv);
-    s.mom_ang = try gpa.alloc(Vec, s.imported.model.nv);
-    s.mom_s1 = try gpa.alloc(Vec, s.imported.model.nv);
-    s.mom_s2 = try gpa.alloc(Vec, s.imported.model.nv);
-    s.limb_dof = try gpa.alloc(bool, s.imported.model.nv);
+    s.mom_lin = try gpa.alloc(Vec, s.imported.model.dof_count);
+    s.mom_ang = try gpa.alloc(Vec, s.imported.model.dof_count);
+    s.mom_s1 = try gpa.alloc(Vec, s.imported.model.dof_count);
+    s.mom_s2 = try gpa.alloc(Vec, s.imported.model.dof_count);
+    s.limb_dof = try gpa.alloc(bool, s.imported.model.dof_count);
     @memset(s.limb_dof, false);
     // * AND THE ARMS LEAVE THE POSE SERVO. Holding a joint at an angle while also commanding it
     // a velocity is two controllers fighting: at kp 400 the servo wins and nothing swings, and
@@ -369,8 +370,8 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
             "upper_arm_right", "lower_arm_right", "hand_right",
             "upper_arm_left",  "lower_arm_left",  "hand_left",
         };
-        for (0..model.njnt) |j| {
-            const body: u32 = model.jnt_body[j];
+        for (0..model.joint_count) |j| {
+            const body: u32 = model.joint_body[j];
             var is_limb: bool = false;
             for (limb_names) |name| {
                 if (s.imported.bodyIndex(name)) |index| {
@@ -382,9 +383,9 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
             if (!is_limb) {
                 continue;
             }
-            for (0..model.jnt_type[j].dofCount()) |k| {
-                const dof: u32 = model.jnt_dof_adr[j] + @as(u32, @intCast(k));
-                if (dof < model.nv) {
+            for (0..model.joint_type[j].dofCount()) |k| {
+                const dof: u32 = model.joint_first_dof[j] + @as(u32, @intCast(k));
+                if (dof < model.dof_count) {
                     s.limb_dof[dof] = true;
                     // * OUT OF THE POSE SERVO. A joint cannot be held at an angle and commanded
                     // a velocity by two controllers at once - at kp 400 the servo wins and
@@ -403,8 +404,8 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.balance_plan = try mpc.BalancePlan.init(gpa, 40);
     @memset(s.balance_plan.ctrl, 0);
     @memset(s.balance_plan.reference, 0);
-    s.com_jac = try gpa.alloc(Vec, s.imported.model.nv);
-    s.com_scratch = try gpa.alloc(Vec, s.imported.model.nv);
+    s.com_jac = try gpa.alloc(Vec, s.imported.model.dof_count);
+    s.com_scratch = try gpa.alloc(Vec, s.imported.model.dof_count);
     s.balance_hold = try ctl.Actuation.init(gpa, &s.imported.model);
     {
         // * INITIALISED BEFORE THE LOOKUP, NOT BY IT. A `continue` on a missing body leaves
@@ -419,19 +420,19 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         var found: u32 = 0;
         for (feet, 0..) |name, i| {
             const foot: u32 = s.imported.bodyIndex(name) orelse continue;
-            if (model.body_jnt_num[foot] == 0) {
+            if (model.body_joint_count[foot] == 0) {
                 continue;
             }
-            const dof: u32 = model.jnt_dof_adr[model.body_jnt_adr[foot]];
-            if (dof >= model.nv) {
+            const dof: u32 = model.joint_first_dof[model.body_first_joint[foot]];
+            if (dof >= model.dof_count) {
                 continue;
             }
             s.ankle_foot[i] = foot;
             s.ankle_dof[i] = dof;
             s.balance_hold.powered[dof] = false;
-            if (model.body_jnt_num[foot] > 1) {
-                const roll: u32 = model.jnt_dof_adr[model.body_jnt_adr[foot] + 1];
-                if (roll < model.nv) {
+            if (model.body_joint_count[foot] > 1) {
+                const roll: u32 = model.joint_first_dof[model.body_first_joint[foot] + 1];
+                if (roll < model.dof_count) {
                     s.ankle_roll_dof[i] = roll;
                     // * AND IT STAYS IN THE POSE SERVO. It is only taken out when the one-leg
                     // pose is selected, below - a joint that is neither servo'd nor commanded is
@@ -443,7 +444,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         // * AND THE ARMS COME OUT OF THE SERVO HERE, once `balance_hold` exists. A joint cannot
         // be held at an angle and commanded a velocity by two controllers at once - at kp 400
         // the servo wins and nothing swings.
-        for (0..model.nv) |v| {
+        for (0..model.dof_count) |v| {
             if (s.limb_dof[v]) {
                 s.balance_hold.powered[v] = false;
             }
@@ -460,7 +461,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         // leaves the example exactly as it was and the work visible.
         s.balance_on = false;
         s.ankles_ready = found == 2;
-        s.robot_body_count = model.nbody;
+        s.robot_body_count = model.body_count;
         if (s.imported.bodyIndex(ball_names[0])) |first_ball| {
             s.robot_body_count = first_ball;
         }
@@ -469,8 +470,8 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.hand = s.imported.bodyIndex("hand_right") orelse 1;
     // Start the goal where the hand already is, so switching IK on changes nothing until a
     // slider moves - a target that snaps the arm on activation reads as a bug.
-    s.ik_goal = s.data.body_xpos[s.hand];
-    const rest_com: Vec = s.data.subtree_com[rbt.world_body];
+    s.ik_goal = s.data.body_positions[s.hand];
+    const rest_com: Vec = s.data.subtree_centres_of_mass[rbt.world_body];
     s.com_goal = .{ rest_com[0], rest_com[1] };
     s.ik_on = false;
     s.hold_com = true;
@@ -531,7 +532,7 @@ fn jointIndex(s: *State, want: []const u8) ?u32 {
 
 fn setJoint(s: *State, name: []const u8, angle: f32) void {
     if (jointIndex(s, name)) |j| {
-        s.data.pos[s.imported.model.jnt_qpos_adr[j]] = angle;
+        s.data.joint_positions[s.imported.model.joint_first_coordinate[j]] = angle;
     }
 }
 
@@ -553,7 +554,7 @@ fn levelFoot(s: *State, foot: u32) void {
     const m: *const rbt.Model = &s.imported.model;
     s.data.stage = .stale;
     rbt.forward(m, &s.data);
-    const up: Vec = zm.rotate(s.data.body_xrot[foot], vec(0, 0, 1));
+    const up: Vec = zm.rotate(s.data.body_orientations[foot], vec(0, 0, 1));
     const axis: Vec = cross(up, vec(0, 0, 1));
     const sine: f32 = length3(axis);
     if (sine < 1.0e-6) {
@@ -561,16 +562,16 @@ fn levelFoot(s: *State, foot: u32) void {
     }
     const angle: f32 = atan2Rad(sine, dot3(up, vec(0, 0, 1)));
     const fix: Quat = zm.quatFromAxisAngle(axis / splat(sine), angle);
-    const root: u32 = m.jnt_qpos_adr[0];
+    const root: u32 = m.joint_first_coordinate[0];
     const current: Quat = .{
-        s.data.pos[root + 3], s.data.pos[root + 4],
-        s.data.pos[root + 5], s.data.pos[root + 6],
+        s.data.joint_positions[root + 3], s.data.joint_positions[root + 4],
+        s.data.joint_positions[root + 5], s.data.joint_positions[root + 6],
     };
     const fixed: Quat = zm.qmul(fix, current);
-    s.data.pos[root + 3] = fixed[0];
-    s.data.pos[root + 4] = fixed[1];
-    s.data.pos[root + 5] = fixed[2];
-    s.data.pos[root + 6] = fixed[3];
+    s.data.joint_positions[root + 3] = fixed[0];
+    s.data.joint_positions[root + 4] = fixed[1];
+    s.data.joint_positions[root + 5] = fixed[2];
+    s.data.joint_positions[root + 6] = fixed[3];
     s.data.stage = .stale;
     rbt.forward(m, &s.data);
 }
@@ -582,7 +583,7 @@ fn settleFoot(s: *State, foot: u32) void {
     // first and levelling second leaves the foot either buried or floating.
     levelFoot(s, foot);
     var lowest: f32 = 1.0e9;
-    for (0..m.ngeom) |g| {
+    for (0..m.geom_count) |g| {
         if (m.geom_body[g] != foot) {
             continue;
         }
@@ -595,13 +596,16 @@ fn settleFoot(s: *State, foot: u32) void {
             .sphere => |sp| sp.radius,
             else => continue,
         };
-        const axis: Vec = zm.rotate(zm.qmul(s.data.body_xrot[foot], m.geom_rot[g]), capsule_axis);
-        const centre: Vec = s.data.body_xpos[foot] + zm.rotate(s.data.body_xrot[foot], m.geom_pos[g]);
+        const axis: Vec = zm.rotate(zm.qmul(s.data.body_orientations[foot], m.geom_local_rotation[g]), capsule_axis);
+        const centre: Vec = s.data.body_positions[foot] + zm.rotate(
+            s.data.body_orientations[foot],
+            m.geom_local_position[g],
+        );
         inline for ([_]f32{ -1.0, 1.0 }) |end| {
             lowest = @min(lowest, (centre + axis * splat(end * half))[2] - radius);
         }
     }
-    s.data.pos[m.jnt_qpos_adr[0] + 2] -= lowest;
+    s.data.joint_positions[m.joint_first_coordinate[0] + 2] -= lowest;
     s.data.stage = .stale;
     rbt.forward(m, &s.data);
 }
@@ -621,10 +625,10 @@ fn settleFoot(s: *State, foot: u32) void {
 /// nothing. That is why it fell forward rather than simply wobbling.
 fn comOverFoot(s: *State, foot: u32) [2]f32 {
     const m: *const rbt.Model = &s.imported.model;
-    const com: Vec = s.data.subtree_com[rbt.world_body];
+    const com: Vec = s.data.subtree_centres_of_mass[rbt.world_body];
     var total: Vec = vec(0, 0, 0);
     var count: f32 = 0;
-    for (0..m.ngeom) |g| {
+    for (0..m.geom_count) |g| {
         if (m.geom_body[g] != foot) {
             continue;
         }
@@ -632,20 +636,20 @@ fn comOverFoot(s: *State, foot: u32) [2]f32 {
             .capsule => |c| c.half_height,
             else => continue,
         };
-        const axis: Vec = zm.rotate(zm.qmul(s.data.body_xrot[foot], m.geom_rot[g]), capsule_axis);
-        const mid: Vec = s.data.body_xpos[foot] +
-            zm.rotate(s.data.body_xrot[foot], m.geom_pos[g]);
+        const axis: Vec = zm.rotate(zm.qmul(s.data.body_orientations[foot], m.geom_local_rotation[g]), capsule_axis);
+        const mid: Vec = s.data.body_positions[foot] +
+            zm.rotate(s.data.body_orientations[foot], m.geom_local_position[g]);
         inline for ([_]f32{ -1.0, 1.0 }) |end| {
             total += mid + axis * splat(end * half);
             count += 1;
         }
     }
-    const at: Vec = if (count > 0) total / splat(count) else s.data.body_xpos[foot];
+    const at: Vec = if (count > 0) total / splat(count) else s.data.body_positions[foot];
     return .{ com[0] - at[0], com[1] - at[1] };
 }
 
 /// Build a stand-on-the-right-leg pose: left leg lifted, arms out at 45 degrees, and the centre
-/// of mass placed exactly over the support foot. Writes into `out` (length `nq`).
+/// of mass placed exactly over the support foot. Writes into `out` (length `coordinate_count`).
 ///
 /// -- *** WHY PROCEDURAL RATHER THAN THE SHIPPED KEYFRAME --
 ///
@@ -666,14 +670,14 @@ fn buildOneLegPose(s: *State) void {
     const hand_left: u32 = s.imported.bodyIndex("hand_left") orelse return;
     const arm_r: u32 = s.imported.bodyIndex("upper_arm_right") orelse return;
     const arm_l: u32 = s.imported.bodyIndex("upper_arm_left") orelse return;
-    const root: u32 = m.jnt_qpos_adr[0];
+    const root: u32 = m.joint_first_coordinate[0];
 
-    // * LEAVES THE POSE IN `data.pos` RATHER THAN RESTORING. An earlier version saved the
+    // * LEAVES THE POSE IN `data.joint_positions` RATHER THAN RESTORING. An earlier version saved the
     // current pose into `pose_scratch` and restored on exit - then the caller passed
     // `pose_scratch` as the OUTPUT, so the save buffer and the result were the same array. It
     // happened to work and was one edit away from not. The only caller is `restorePose`, which
     // wants the pose applied anyway.
-    @memcpy(s.data.pos, m.qpos0);
+    @memcpy(s.data.joint_positions, m.reference_joint_positions);
     // Lift the left leg clear.
     setJoint(s, "hip_y_left", -0.85);
     setJoint(s, "knee_left", -1.30);
@@ -690,8 +694,8 @@ fn buildOneLegPose(s: *State) void {
     // * AND A 2x2 NEWTON PUTS THE MASS OVER THE FOOT. Translating the root moves foot and mass
     // together, so their offset is set by the joints alone - `hip_x` swings it sideways,
     // `hip_y` fore-and-aft. Measured, this converges in ONE step to 0.6 mm.
-    const hip_x: u32 = m.jnt_qpos_adr[jointIndex(s, "hip_x_right") orelse return];
-    const hip_y: u32 = m.jnt_qpos_adr[jointIndex(s, "hip_y_right") orelse return];
+    const hip_x: u32 = m.joint_first_coordinate[jointIndex(s, "hip_x_right") orelse return];
+    const hip_y: u32 = m.joint_first_coordinate[jointIndex(s, "hip_y_right") orelse return];
     for (0..14) |_| {
         settleFoot(s, right_foot);
         const err: [2]f32 = comOverFoot(s, right_foot);
@@ -701,13 +705,13 @@ fn buildOneLegPose(s: *State) void {
         var jac: [4]f32 = undefined;
         const eps: f32 = 0.01;
         inline for (.{ hip_x, hip_y }, 0..) |q, col| {
-            const keep: f32 = s.data.pos[q];
-            s.data.pos[q] = keep + eps;
+            const keep: f32 = s.data.joint_positions[q];
+            s.data.joint_positions[q] = keep + eps;
             settleFoot(s, right_foot);
             const moved: [2]f32 = comOverFoot(s, right_foot);
             jac[0 * 2 + col] = (moved[0] - err[0]) / eps;
             jac[1 * 2 + col] = (moved[1] - err[1]) / eps;
-            s.data.pos[q] = keep;
+            s.data.joint_positions[q] = keep;
         }
         const det: f32 = jac[0] * jac[3] - jac[1] * jac[2];
         if (@abs(det) < 1.0e-6) {
@@ -715,8 +719,8 @@ fn buildOneLegPose(s: *State) void {
         }
         const dx: f32 = (-err[0] * jac[3] + err[1] * jac[1]) / det;
         const dy: f32 = (-jac[0] * err[1] + jac[2] * err[0]) / det;
-        s.data.pos[hip_x] = clamp(s.data.pos[hip_x] + clamp(dx, -0.15, 0.15), -0.52, 0.17);
-        s.data.pos[hip_y] = clamp(s.data.pos[hip_y] + clamp(dy, -0.15, 0.15), -2.6, 0.35);
+        s.data.joint_positions[hip_x] = clamp(s.data.joint_positions[hip_x] + clamp(dx, -0.15, 0.15), -0.52, 0.17);
+        s.data.joint_positions[hip_y] = clamp(s.data.joint_positions[hip_y] + clamp(dy, -0.15, 0.15), -2.6, 0.35);
     }
     // * THE ARMS GO OUT BY IK, NOT BY ANGLE. The shoulder axes are `2 1 1` and `0 -1 1` - not
     // orthogonal and not aligned with anything, so "45 degrees" in joint space would mean
@@ -727,14 +731,14 @@ fn buildOneLegPose(s: *State) void {
             m,
             &s.data,
             s.arm_act_right,
-            .{ .body = hand_right, .offset = vec(0, 0, 0), .goal = s.data.body_xpos[arm_r] + vec(diag, -diag, 0) },
+            .{ .body = hand_right, .offset = vec(0, 0, 0), .goal = s.data.body_positions[arm_r] + vec(diag, -diag, 0) },
             s.ik_scratch,
         );
         _ = (ctl.Ik{ .max_iterations = 10, .max_step = 0.20 }).solve(
             m,
             &s.data,
             s.arm_act_left,
-            .{ .body = hand_left, .offset = vec(0, 0, 0), .goal = s.data.body_xpos[arm_l] + vec(diag, diag, 0) },
+            .{ .body = hand_left, .offset = vec(0, 0, 0), .goal = s.data.body_positions[arm_l] + vec(diag, diag, 0) },
             s.ik_scratch,
         );
     }
@@ -750,13 +754,13 @@ fn buildOneLegPose(s: *State) void {
         var jac: [4]f32 = undefined;
         const eps: f32 = 0.01;
         inline for (.{ hip_x, hip_y }, 0..) |q, col| {
-            const keep: f32 = s.data.pos[q];
-            s.data.pos[q] = keep + eps;
+            const keep: f32 = s.data.joint_positions[q];
+            s.data.joint_positions[q] = keep + eps;
             settleFoot(s, right_foot);
             const moved: [2]f32 = comOverFoot(s, right_foot);
             jac[0 * 2 + col] = (moved[0] - err[0]) / eps;
             jac[1 * 2 + col] = (moved[1] - err[1]) / eps;
-            s.data.pos[q] = keep;
+            s.data.joint_positions[q] = keep;
         }
         const det: f32 = jac[0] * jac[3] - jac[1] * jac[2];
         if (@abs(det) < 1.0e-6) {
@@ -764,8 +768,8 @@ fn buildOneLegPose(s: *State) void {
         }
         const dx: f32 = (-err[0] * jac[3] + err[1] * jac[1]) / det;
         const dy: f32 = (-jac[0] * err[1] + jac[2] * err[0]) / det;
-        s.data.pos[hip_x] = clamp(s.data.pos[hip_x] + clamp(dx, -0.15, 0.15), -0.52, 0.17);
-        s.data.pos[hip_y] = clamp(s.data.pos[hip_y] + clamp(dy, -0.15, 0.15), -2.6, 0.35);
+        s.data.joint_positions[hip_x] = clamp(s.data.joint_positions[hip_x] + clamp(dx, -0.15, 0.15), -0.52, 0.17);
+        s.data.joint_positions[hip_y] = clamp(s.data.joint_positions[hip_y] + clamp(dy, -0.15, 0.15), -2.6, 0.35);
     }
     settleFoot(s, right_foot);
     _ = root;
@@ -806,12 +810,12 @@ fn restorePose(s: *State, keyframe: ?u32) void {
     } else if (s.one_leg) {
         buildOneLegPose(s);
     } else {
-        @memcpy(s.data.pos, s.imported.model.qpos0);
+        @memcpy(s.data.joint_positions, s.imported.model.reference_joint_positions);
     }
-    @memset(s.data.vel, 0);
+    @memset(s.data.joint_velocities, 0);
     s.data.stage = .stale;
     rbt.forward(&s.imported.model, &s.data);
-    @memcpy(s.home, s.data.pos);
+    @memcpy(s.home, s.data.joint_positions);
     s.data.forgetWarmStart();
     s.peak_force = 0;
 
@@ -827,7 +831,7 @@ fn restorePose(s: *State, keyframe: ?u32) void {
     // robot. Everything the controller accumulates is cleared here.
     @memset(s.balance_plan.ctrl, 0);
     @memset(s.balance_plan.reference, 0);
-    @memset(s.data.applied_force, 0);
+    @memset(s.data.applied_joint_forces, 0);
     s.want_cop = .{ 0, 0 };
     s.carried_load = 0;
     s.limb_swing = 0;
@@ -910,7 +914,7 @@ fn control(s: *State) void {
         if (mass <= 0) {
             continue;
         }
-        com += s.data.body_xipos[b] * splat(mass);
+        com += s.data.body_centres_of_mass[b] * splat(mass);
         robot_mass += mass;
     }
     if (robot_mass <= 0) {
@@ -919,7 +923,7 @@ fn control(s: *State) void {
     com *= splat(1.0 / robot_mass);
     ctl.comJacobian(m, &s.data, s.com_jac, s.com_scratch);
     for (0..s.robot_dof_count) |v| {
-        com_vel += s.com_jac[v] * splat(s.data.vel[v]);
+        com_vel += s.com_jac[v] * splat(s.data.joint_velocities[v]);
     }
 
     var x: [mpc.lipm_state_dim]f32 = @splat(0);
@@ -997,7 +1001,7 @@ fn control(s: *State) void {
         inline for (0..3) |a| {
             inline for (0..3) |b| {
                 var sum: f32 = 0;
-                for (0..m.nv) |v| {
+                for (0..m.dof_count) |v| {
                     if (!s.limb_dof[v]) {
                         continue;
                     }
@@ -1012,7 +1016,7 @@ fn control(s: *State) void {
         gram[8] += ridge;
         var lambda: [3]f32 = .{ want_x, want_y, 0 };
         if (ctl.solve3Pub(&gram, &lambda)) {
-            for (0..m.nv) |v| {
+            for (0..m.dof_count) |v| {
                 if (!s.limb_dof[v]) {
                     continue;
                 }
@@ -1030,19 +1034,19 @@ fn control(s: *State) void {
                 // momentum command returns to zero - without it they keep whatever pose the
                 // last swing left them in.
                 // * NO POSTURE TERM. Mapping a velocity dof back to its position index via
-                // `dof_jnt` reached out of bounds - and the arms do not need it: when the
+                // `dof_joint` reached out of bounds - and the arms do not need it: when the
                 // momentum command returns to zero the velocity target does too, and the
                 // damping brings them to rest. A pose pull is a nicety; correctness is not.
-                s.data.applied_force[v] += clamp(
-                    20.0 * (want_qvel - s.data.vel[v]),
+                s.data.applied_joint_forces[v] += clamp(
+                    20.0 * (want_qvel - s.data.joint_velocities[v]),
                     -60.0,
                     60.0,
                 );
             }
         }
         var swing: f32 = 0;
-        for (0..m.nq) |q| {
-            swing = @max(swing, @abs(s.data.pos[q] - s.home[q]));
+        for (0..m.coordinate_count) |q| {
+            swing = @max(swing, @abs(s.data.joint_positions[q] - s.home[q]));
         }
         s.limb_swing = swing;
     }
@@ -1059,9 +1063,9 @@ fn control(s: *State) void {
     // settled in one print what several turns of cross-product argument had not.
     const share: f32 = if (s.one_leg) 1.0 else 0.5;
     for (s.ankle_dof, s.ankle_roll_dof, s.ankle_foot) |dof, roll_dof, foot| {
-        const lever_x: f32 = s.want_cop[0] - s.data.body_xpos[foot][0];
-        const lever_y: f32 = s.want_cop[1] - s.data.body_xpos[foot][1];
-        s.data.applied_force[dof] = share * carried * lever_x - s.ankle_damping * s.data.vel[dof];
+        const lever_x: f32 = s.want_cop[0] - s.data.body_positions[foot][0];
+        const lever_y: f32 = s.want_cop[1] - s.data.body_positions[foot][1];
+        s.data.applied_joint_forces[dof] = share * carried * lever_x - s.ankle_damping * s.data.joint_velocities[dof];
         // *** ROLL ONLY ON ONE LEG. With TWO feet down, the lateral centre of pressure is set by
         // how the load SPLITS BETWEEN THE FEET - a 0.3 m stance width - not by rolling either
         // ankle inside its own 0.06 m sole. Commanding roll there fights a stance that was
@@ -1069,9 +1073,9 @@ fn control(s: *State) void {
         // across six pushes.
         //
         // On one leg it is the only lateral authority there is, and worth 2.45 rad of tilt.
-        if (s.one_leg and roll_dof < m.nv) {
-            s.data.applied_force[roll_dof] = -share * carried * lever_y -
-                s.ankle_damping * s.data.vel[roll_dof];
+        if (s.one_leg and roll_dof < m.dof_count) {
+            s.data.applied_joint_forces[roll_dof] = -share * carried * lever_y -
+                s.ankle_damping * s.data.joint_velocities[roll_dof];
         }
     }
 }
@@ -1111,21 +1115,21 @@ fn throwBall(s: *State, cam: Camera3D) void {
     // nothing until the ball is already halfway to the robot.
     const from: Vec = eye + aim * splat(ball_radius);
 
-    const j: u32 = m.body_jnt_adr[body];
-    const q: u32 = m.jnt_qpos_adr[j];
-    const v: u32 = m.jnt_dof_adr[j];
-    s.data.pos[q + 0] = from[0];
-    s.data.pos[q + 1] = from[1];
-    s.data.pos[q + 2] = from[2];
-    s.data.pos[q + 3] = 0;
-    s.data.pos[q + 4] = 0;
-    s.data.pos[q + 5] = 0;
-    s.data.pos[q + 6] = 1;
-    @memset(s.data.vel[v..][0..6], 0);
+    const j: u32 = m.body_first_joint[body];
+    const q: u32 = m.joint_first_coordinate[j];
+    const v: u32 = m.joint_first_dof[j];
+    s.data.joint_positions[q + 0] = from[0];
+    s.data.joint_positions[q + 1] = from[1];
+    s.data.joint_positions[q + 2] = from[2];
+    s.data.joint_positions[q + 3] = 0;
+    s.data.joint_positions[q + 4] = 0;
+    s.data.joint_positions[q + 5] = 0;
+    s.data.joint_positions[q + 6] = 1;
+    @memset(s.data.joint_velocities[v..][0..6], 0);
     const speed: f32 = 4.5;
-    s.data.vel[v + 0] = aim[0] * speed;
-    s.data.vel[v + 1] = aim[1] * speed;
-    s.data.vel[v + 2] = aim[2] * speed;
+    s.data.joint_velocities[v + 0] = aim[0] * speed;
+    s.data.joint_velocities[v + 1] = aim[1] * speed;
+    s.data.joint_velocities[v + 2] = aim[2] * speed;
     s.data.stage = .stale;
     // * The warm start describes contacts that no longer exist for this body - see
     // `Data.forgetWarmStart`. Cheap, and the alternative is an impulse from a different scene.
@@ -1150,12 +1154,12 @@ fn shove(s: *State) void {
     s.shove_seed = s.shove_seed *% 1664525 +% 1013904223;
     const angle: f32 = float(s.shove_seed >> 8) * (2.0 * pi / 16777216.0);
     s.shove_dir = .{ @cos(angle), @sin(angle) };
-    for (0..m.njnt) |j| {
-        if (m.jnt_type[j] == .free) {
+    for (0..m.joint_count) |j| {
+        if (m.joint_type[j] == .free) {
             // The free joint's velocity DOFs are linear first, then angular.
-            const v: u32 = m.jnt_dof_adr[j];
-            s.data.vel[v + 0] += s.shove_speed * s.shove_dir[0];
-            s.data.vel[v + 1] += s.shove_speed * s.shove_dir[1];
+            const v: u32 = m.joint_first_dof[j];
+            s.data.joint_velocities[v + 0] += s.shove_speed * s.shove_dir[0];
+            s.data.joint_velocities[v + 1] += s.shove_speed * s.shove_dir[1];
             s.data.stage = .stale;
         }
     }
@@ -1168,15 +1172,15 @@ fn shove(s: *State) void {
 /// case the two solvers disagree about.
 fn dropLimp(s: *State) void {
     _ = rmj.applyKeyframe(&s.imported.model, &s.data, s.robot.keyframes[0]);
-    s.data.pos[2] = 1.2;
+    s.data.joint_positions[2] = 1.2;
     const tipped: Quat = zm.quatFromAxisAngle(normalize3(vec(1, 0.3, 0)), 1.4);
-    s.data.pos[3] = tipped[0];
-    s.data.pos[4] = tipped[1];
-    s.data.pos[5] = tipped[2];
-    s.data.pos[6] = tipped[3];
-    @memset(s.data.vel, 0);
-    @memset(s.data.acc, 0);
-    @memset(s.data.applied_force, 0);
+    s.data.joint_positions[3] = tipped[0];
+    s.data.joint_positions[4] = tipped[1];
+    s.data.joint_positions[5] = tipped[2];
+    s.data.joint_positions[6] = tipped[3];
+    @memset(s.data.joint_velocities, 0);
+    @memset(s.data.joint_accelerations, 0);
+    @memset(s.data.applied_joint_forces, 0);
     s.data.clearContacts();
     // * AND THE WARM START GOES TOO, or the first solve after the teleport begins from forces
     // that belonged to a body somewhere else entirely.
@@ -1208,12 +1212,12 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
     u.setNextWindowSize(.{ panel_w, @min(560.0, viewport_h * 0.7) }, .{});
     if (u.window("Humanoid, 27 DOF, imported from MJCF", .{})) |window| {
         defer window.close();
-        u.text("{d} bodies   {d} DOF   {d} collision geoms", .{ m.nbody - 1, m.nv, m.ngeom });
+        u.text("{d} bodies   {d} DOF   {d} collision geoms", .{ m.body_count - 1, m.dof_count, m.geom_count });
         // * THE BODY IS CALLED `torso` HERE, NOT `trunk`. Copied from the Go1 demo, where the
         // name is different, and `bodyIndex` returning null then fell back to body 1 - a
         // readout that was always plausible and always wrong.
         const torso: u32 = s.imported.bodyIndex("torso") orelse 1;
-        u.text("torso height {d:.4} m   (standing 1.2820)", .{s.data.body_xpos[torso][2]});
+        u.text("torso height {d:.4} m   (standing 1.2820)", .{s.data.body_positions[torso][2]});
         // * WHAT IS BEING HELD, SHOWN. Without it a button press that worked and a button
         // press that did nothing look identical - which is exactly the ambiguity that made
         // "poses don't seem to work" hard to pin down.
@@ -1268,8 +1272,11 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
         }
         if (s.balance_on) {
             u.text("  wants CoP x {d:>7.4}   carrying {d:>6.1} N", .{ s.want_cop[0], s.carried_load });
-            const com: Vec = s.data.subtree_com[rbt.world_body];
-            u.text("  CM x {d:>7.4}   lean {d:>7.4} m", .{ com[0], com[0] - s.data.body_xpos[s.ankle_foot[0]][0] });
+            const com: Vec = s.data.subtree_centres_of_mass[rbt.world_body];
+            u.text(
+                "  CM x {d:>7.4}   lean {d:>7.4} m",
+                .{ com[0], com[0] - s.data.body_positions[s.ankle_foot[0]][0] },
+            );
             _ = u.slider("ankle damping", &s.ankle_damping, .{ .min = 1, .max = 30, .fmt = "{d:.1}" });
             // * ZERO IS THE ANKLE STRATEGY ALONE - the pressure shifts inside the foot and
             // nothing else moves. Raise it and the arms start carrying momentum, which is the
@@ -1358,7 +1365,7 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
         if (u.button("stand", .{})) {
             s.one_leg = false;
             for (s.ankle_roll_dof) |roll| {
-                if (roll < s.imported.model.nv) {
+                if (roll < s.imported.model.dof_count) {
                     s.balance_hold.powered[roll] = true;
                 }
             }
@@ -1367,7 +1374,7 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
         u.separator();
         // -- * THE MODEL'S OWN KEYFRAMES, and one of them is meant to fail --
         //
-        // None of the four is the standing pose, which is why `home` comes from `qpos0`.
+        // None of the four is the standing pose, which is why `home` comes from `reference_joint_positions`.
         // Measured, holding each for three seconds at kp 400:
         //
         //     squat              0.596 -> 0.575   holds
@@ -1408,7 +1415,7 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
         if (u.button("stand on right leg (built)", .{})) {
             s.one_leg = true;
             for (s.ankle_roll_dof) |roll| {
-                if (roll < s.imported.model.nv) {
+                if (roll < s.imported.model.dof_count) {
                     s.balance_hold.powered[roll] = false;
                 }
             }
@@ -1449,15 +1456,15 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
 fn drawRobot(s: *State, gl: *z.WgpuGl) void {
     const m: *const rbt.Model = &s.imported.model;
     const to_y_up: Mat = zm.zUpToYUp();
-    for (0..m.ngeom) |g| {
+    for (0..m.geom_count) |g| {
         const body: u32 = m.geom_body[g];
         // * A GEOM'S WORLD POSE IS ITS BODY'S, COMPOSED WITH ITS OWN OFFSET. The engine
-        // stores the offset (`geom_pos`/`geom_rot`) and the body's world pose separately -
+        // stores the offset (`geom_local_position`/`geom_local_rotation`) and the body's world pose separately -
         // it never needs the product except when something is drawn or collided, so it does
         // not keep one.
-        const body_rot: Quat = s.data.body_xrot[body];
-        const world_pos: Vec = s.data.body_xpos[body] + zm.rotate(body_rot, m.geom_pos[g]);
-        const world_rot: Mat = quatToMat(zm.qmul(body_rot, m.geom_rot[g]));
+        const body_rot: Quat = s.data.body_orientations[body];
+        const world_pos: Vec = s.data.body_positions[body] + zm.rotate(body_rot, m.geom_local_position[g]);
+        const world_rot: Mat = quatToMat(zm.qmul(body_rot, m.geom_local_rotation[g]));
         const place: Mat = mulMat(mulMat(to_y_up, translation(world_pos[0], world_pos[1], world_pos[2])), world_rot);
         // Feet are the interesting part, so they get a brighter colour.
         const tint: Color = if (body == 0) trunk_col else link_col;
@@ -1520,7 +1527,7 @@ fn drawRobot(s: *State, gl: *z.WgpuGl) void {
     // The projectiles, drawn from the tree like everything else.
     for (0..ball_count) |i| {
         const body: u32 = s.imported.bodyIndex(ball_names[i]) orelse continue;
-        const p: Vec = s.data.body_xpos[body];
+        const p: Vec = s.data.body_positions[body];
         s.transform[0] = mulMat(
             mulMat(to_y_up, translation(p[0], p[1], p[2])),
             scaling(ball_radius, ball_radius, ball_radius),
@@ -1533,7 +1540,7 @@ fn drawRobot(s: *State, gl: *z.WgpuGl) void {
     // number the panel prints, where the eye already is.
     if (s.ik_on) {
         const goal_y_up: Vec = vec(s.ik_goal[0], s.ik_goal[2], -s.ik_goal[1]);
-        const hand_at: Vec = s.data.body_xpos[s.hand];
+        const hand_at: Vec = s.data.body_positions[s.hand];
         const hand_y_up: Vec = vec(hand_at[0], hand_at[2], -hand_at[1]);
         z.drawSphere(gl, goal_y_up, .{
             .radius = 0.04,
@@ -1579,7 +1586,7 @@ fn update(f: *z.Frame, s: *State) void {
         s.com_error = result.com_error;
         // The solved pose becomes the target the PD controller drives toward, so the arm still
         // travels there under its torque limits and can be knocked off course.
-        @memcpy(s.home, s.data.pos);
+        @memcpy(s.home, s.data.joint_positions);
     }
 
     s.accumulator += @min(f.time.delta_time, 0.1);
@@ -1589,10 +1596,10 @@ fn update(f: *z.Frame, s: *State) void {
         rbt.forward(&s.imported.model, &s.data);
         if (s.physics_on) {
             s.bridge.sync(&s.world, &s.imported.model, &s.data) catch |err| {
-                zm.assertUnreachable(@src(), "proxy sync failed: {t}", .{err});
+                assertUnreachable(@src(), "proxy sync failed: {t}", .{err});
             };
             zp.step(&s.world, timestep) catch |err| {
-                zm.assertUnreachable(@src(), "world step failed: {t}", .{err});
+                assertUnreachable(@src(), "world step failed: {t}", .{err});
             };
             s.bridge.harvest(&s.data);
         }
@@ -1606,8 +1613,8 @@ fn update(f: *z.Frame, s: *State) void {
     // rolling peak makes it readable, and resets each second so it tracks the present rather
     // than remembering the landing.
     var fastest: f32 = 0;
-    for (0..s.imported.model.nv) |i| {
-        fastest = @max(fastest, @abs(s.data.vel[i]));
+    for (0..s.imported.model.dof_count) |i| {
+        fastest = @max(fastest, @abs(s.data.joint_velocities[i]));
     }
     s.recent_peak_speed = @max(s.recent_peak_speed, fastest);
 
@@ -1618,12 +1625,12 @@ fn update(f: *z.Frame, s: *State) void {
     // throwable balls - so the figure described the balls as much as the humanoid. It is a
     // readout about the robot; it should read the robot.
     var momentum: [80]f32 = undefined;
-    const nv: usize = s.imported.model.nv;
+    const nv: usize = s.imported.model.dof_count;
     if (nv <= momentum.len) {
-        rbt.mulM(&s.imported.model, &s.data, s.data.vel, momentum[0..nv]);
+        rbt.mulM(&s.imported.model, &s.data, s.data.joint_velocities, momentum[0..nv]);
         var energy: f32 = 0;
         for (0..s.robot_dof_count) |i| {
-            energy += 0.5 * s.data.vel[i] * momentum[i];
+            energy += 0.5 * s.data.joint_velocities[i] * momentum[i];
         }
         s.kinetic_energy = energy;
         s.energy_clock += f.time.delta_time;

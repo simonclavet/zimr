@@ -347,7 +347,7 @@ fn policyPlaysAsTrained(
         for (trainer_action) |*component| {
             component.* = clamp(component.*, -limit, limit);
         }
-        lab.policyMeanAction(&policy, observation, scratch, policy_action);
+        lab.policyMeanAction(&policy, observation, &.{}, scratch, policy_action);
         if (!eql(f32, trainer_action, policy_action)) {
             return false;
         }
@@ -469,6 +469,7 @@ fn probeAndRecord(
     probed: ProbedController,
     judge_settings: lab.PolicyJudgeSettings,
     action_scale: f32,
+    learner_clock: u32,
     probe: track.RecoveryProbe,
     recoveries: *ArrayList(u8),
     batches: u64,
@@ -486,6 +487,7 @@ fn probeAndRecord(
                 .action_scale = action_scale,
                 .task = judge_settings.task,
                 .body_names = body_names,
+                .decide_every = learner_clock,
             };
             try track.probeRecovery(gpa, model, clip, fleet_options, judge_settings.starts, actor, probe, bands);
         },
@@ -493,7 +495,7 @@ fn probeAndRecord(
     if (recoveries.items.len == 0) {
         try recoveries.appendSlice(gpa, lab.RecoveryLog.header);
     }
-    try lab.RecoveryLog.appendLines(gpa, recoveries, batches, minutes, clip_label, bands, clip.frame_time);
+    try lab.RecoveryLog.appendLines(gpa, recoveries, batches, minutes, clip_label, bands);
     const recoveries_path: []const u8 = try runFilePath(arena, folder, .recoveries);
     try writeWhole(arena, io, recoveries_path, recoveries.items);
     const probed_controller: []const u8 = switch (probed) {
@@ -510,7 +512,7 @@ fn probeAndRecord(
             band.pushes,
             band.survivalRate(),
             band.recoveryRate(),
-            band.meanRecoverySeconds(clip.frame_time),
+            band.meanRecoverySeconds(),
         });
     }
 }
@@ -528,6 +530,8 @@ fn judgeNewestPolicy(
     trainer: *Trainer,
     progress: *RunProgress,
 ) !void {
+    // The PPO learner's fleets decide every physics step: its policy file brings its own clock (`decimation`).
+    const every_physics_step: u32 = 1;
     trainer.waitForReadback();
     const fleet: *track.Fleet = trainer.env.fleet;
     const clip: *const dance.Clip = fleet.clips[0];
@@ -539,10 +543,20 @@ fn judgeNewestPolicy(
         .bodies = trainer.options.bodies,
     };
     const body_names: []const []const u8 = fleet.options.body_names;
+    const whole_clip_start = [_]usize{1};
+    var whole_settings: lab.PolicyJudgeSettings = settings;
+    whole_settings.starts = &whole_clip_start;
+    var whole_label_buffer: [80]u8 = undefined;
+    const whole_label: []const u8 = try bufPrint(&whole_label_buffer, "{s}/whole", .{progress.clip_label});
     if (progress.judgements.items.len == 0) {
         try progress.judgements.appendSlice(gpa, lab.JudgeLog.header);
         const servo: track.Judgement = try lab.judgePolicy(gpa, arena, trainer.m, body_names, clip, null, settings);
         try lab.JudgeLog.appendLine(gpa, &progress.judgements, 0, 0, progress.clip_label, servo);
+        // SUPERMIMIC'S EVALUATION: the whole clip from its first frame a start is defined at, one start - recorded as
+        // the clip's "/whole" line, from which its normalised return and whether it reached the end are read.
+        const servo_whole: track.Judgement =
+            try lab.judgePolicy(gpa, arena, trainer.m, body_names, clip, null, whole_settings);
+        try lab.JudgeLog.appendLine(gpa, &progress.judgements, 0, 0, whole_label, servo_whole);
         try probeAndRecord(
             gpa,
             arena,
@@ -555,6 +569,7 @@ fn judgeNewestPolicy(
             .servo,
             settings,
             trainer.env.options.action_scale,
+            every_physics_step,
             (lab.GenoControls{}).probe,
             &progress.recoveries,
             0,
@@ -565,6 +580,9 @@ fn judgeNewestPolicy(
     const judgement: track.Judgement = try lab.judgePolicy(gpa, arena, trainer.m, body_names, clip, &policy, settings);
     const minutes: f32 = trainingMinutes(progress);
     try lab.JudgeLog.appendLine(gpa, &progress.judgements, trainer.iterations, minutes, progress.clip_label, judgement);
+    const whole: track.Judgement =
+        try lab.judgePolicy(gpa, arena, trainer.m, body_names, clip, &policy, whole_settings);
+    try lab.JudgeLog.appendLine(gpa, &progress.judgements, trainer.iterations, minutes, whole_label, whole);
     const batches: u64 = trainer.iterations;
     const recoveries: *ArrayList(u8) = &progress.recoveries;
     try probeAndRecord(
@@ -579,6 +597,7 @@ fn judgeNewestPolicy(
         .{ .policy = &policy },
         settings,
         trainer.env.options.action_scale,
+        every_physics_step,
         (lab.GenoControls{}).probe,
         recoveries,
         batches,
@@ -968,7 +987,7 @@ const RecentRounds = struct {
     }
 
     /// Seconds between failures over the window (`ppo_track.secondsToFailure`); null while nothing in it failed.
-    fn secondsToFailure(self: *const RecentRounds, physics_steps_per_second: f32) ?f32 {
+    fn secondsToFailure(self: *const RecentRounds, steps_per_second: f32) ?f32 {
         var steps_watched: u64 = 0;
         var failures: u64 = 0;
         const counted: usize = @min(self.count, window_rounds);
@@ -976,7 +995,7 @@ const RecentRounds = struct {
             steps_watched += self.steps_watched[slot];
             failures += self.failures[slot];
         }
-        return ppo_track.secondsToFailure(steps_watched, failures, physics_steps_per_second);
+        return ppo_track.secondsToFailure(steps_watched, failures, steps_per_second);
     }
 };
 
@@ -1109,7 +1128,8 @@ fn superTrackPolicy(
 ) !lab.GenoPolicy {
     learner.waitForReadback();
     learner.syncMirror();
-    return lab.policyOfSuperTrack(arena, learner.policyParts(), action_scale);
+    const learner_clock: u32 = learner.fleet.options.decide_every;
+    return lab.policyOfSuperTrack(arena, learner.policyParts(), action_scale, learner_clock);
 }
 
 /// Everything a SuperTrack run keeps, each file written whole: its state (`supertrack_state`), its policy, its log
@@ -1148,14 +1168,15 @@ fn saveSuperTrack(
     }
     const log_path: []const u8 = try runFilePath(arena, folder, .log);
     try writeWhole(arena, io, log_path, progress.log.items);
-    const physics_steps_per_second: f32 = 1.0 / learner.fleet.m.opt.timestep;
+    // The learner's counts are of its fleet's steps - decisions - so they become seconds at its clock.
+    const decisions_per_second: f32 = 1.0 / learner.fleet.decisionSeconds();
     // Each clip on its own line, when there are several.
     const clip_count: usize = progress.clip_labels.len;
     const clip_statuses: []lab.ClipStatus = try arena.alloc(lab.ClipStatus, if (clip_count > 1) clip_count else 0);
     for (clip_statuses, progress.clip_labels[0..clip_statuses.len], 0..) |*clip_status, label, clip| {
         clip_status.* = .{
             .clip = label,
-            .recent_seconds_to_failure = progress.clip_recent[clip].secondsToFailure(physics_steps_per_second),
+            .recent_seconds_to_failure = progress.clip_recent[clip].secondsToFailure(decisions_per_second),
         };
     }
     const status: RunStatus = .{
@@ -1164,7 +1185,7 @@ fn saveSuperTrack(
         .steps = learner.exposure,
         .training_minutes = superTrackMinutes(progress),
         .servo_seconds_to_failure = progress.servo_seconds_to_failure,
-        .recent_seconds_to_failure = progress.recent.secondsToFailure(physics_steps_per_second),
+        .recent_seconds_to_failure = progress.recent.secondsToFailure(decisions_per_second),
         .assist = 0,
         .written_at_seconds = native_os.wallClockSeconds(io),
         .clips = clip_statuses,
@@ -1289,11 +1310,21 @@ fn judgeSuperTrackPolicy(
             .task = geno.tracking_task,
             .bodies = geno.drecon_bodies,
         };
+        // SUPERMIMIC'S EVALUATION: the whole clip from its first frame a start is defined at, one start - recorded as
+        // the clip's "/whole" line, from which its normalised return and whether it reached the end are read.
+        const whole_clip_start = [_]usize{1};
+        var whole_settings: lab.PolicyJudgeSettings = judge_settings;
+        whole_settings.starts = &whole_clip_start;
+        var whole_label_buffer: [80]u8 = undefined;
+        const whole_label: []const u8 = try bufPrint(&whole_label_buffer, "{s}/whole", .{clip_label});
         // The servo alone on this clip, once: the baseline every judgement of it is read against.
         if (is_first_judgement) {
             const servo: track.Judgement =
                 try lab.judgePolicy(gpa, arena, model, body_names, clip, null, judge_settings);
             try lab.JudgeLog.appendLine(gpa, &progress.judgements, 0, 0, clip_label, servo);
+            const servo_whole: track.Judgement =
+                try lab.judgePolicy(gpa, arena, model, body_names, clip, null, whole_settings);
+            try lab.JudgeLog.appendLine(gpa, &progress.judgements, 0, 0, whole_label, servo_whole);
             try probeAndRecord(
                 gpa,
                 arena,
@@ -1306,6 +1337,7 @@ fn judgeSuperTrackPolicy(
                 .servo,
                 judge_settings,
                 settings.action_scale,
+                settings.decide_every,
                 probe,
                 &progress.recoveries,
                 0,
@@ -1313,17 +1345,23 @@ fn judgeSuperTrackPolicy(
             );
         }
         var judgement: track.Judgement = undefined;
+        var whole: track.Judgement = undefined;
         if (policy) |file_policy| {
             judgement = try lab.judgePolicy(gpa, arena, model, body_names, clip, file_policy, judge_settings);
+            whole = try lab.judgePolicy(gpa, arena, model, body_names, clip, file_policy, whole_settings);
         } else {
+            // The learner judged at its own clock, as it acts.
             const fleet_options: track.Fleet.Options = .{
                 .action_scale = settings.action_scale,
                 .task = judge_settings.task,
                 .body_names = body_names,
+                .decide_every = settings.decide_every,
             };
             judgement = try track.judge(gpa, model, clip, fleet_options, starts, judged.learner_actor);
+            whole = try track.judge(gpa, model, clip, fleet_options, &whole_clip_start, judged.learner_actor);
         }
         try lab.JudgeLog.appendLine(gpa, &progress.judgements, rounds, minutes, clip_label, judgement);
+        try lab.JudgeLog.appendLine(gpa, &progress.judgements, rounds, minutes, whole_label, whole);
         try probeAndRecord(
             gpa,
             arena,
@@ -1336,6 +1374,7 @@ fn judgeSuperTrackPolicy(
             judged,
             judge_settings,
             settings.action_scale,
+            settings.decide_every,
             probe,
             &progress.recoveries,
             rounds,
@@ -1716,6 +1755,8 @@ fn runSuperTrack(
         .clip_assignment = clip_assignment,
         .curriculum = settings.curriculum,
         .physics_threads = physicsThreads(settings.physics_threads),
+        .decide_every = settings.decide_every,
+        .max_steps = settings.max_steps,
     });
     // The physics' tasks on the trainer's own threads: the same numbers, sooner.
     fleet.physics_io = io;

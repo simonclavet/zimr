@@ -26,7 +26,7 @@
 // Serve:    bun run webtests/server.ts --web-dir=zig-out/wgpu-cube
 // Browse:   http://localhost:8000/index.html
 //
-// CANNOT be verified in the sandbox (no GPU); Simon verifies the
+// CANNOT be verified in the sandbox (no GPU); it is verified by eye, the
 // spinning cube in the browser.  The build-side contract: compiles
 // clean, the embedded WGSL is naga-valid, lint 0.
 

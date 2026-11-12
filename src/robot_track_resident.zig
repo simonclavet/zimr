@@ -403,6 +403,23 @@ pub const Options = struct {
     /// Exploration noise, in units of the policy's raw output - in the simulator while collecting, and
     /// inside every training rollout.
     sigma: f32 = 0.1,
+    /// THE ACTION FILTER (DReCon's action smoothing, `track.filterAction`): at every decision the action the fleet is
+    /// given is `filter` x the action chosen + (1 - filter) x the action it was given at the character's previous
+    /// decision - so no joint's target ever jumps, and the policy must ask for more than it wants to move one quickly.
+    /// The fleet records what it is given, so the replay holds the applied actions; the filter's state is the
+    /// previous one. A character's filter starts at rest, a zero action, with every episode. 1 is no filter: the
+    /// chosen action given exactly. DReCon's is 0.2 - set once training passes its imagined actions through the
+    /// filter too, so the world model and the policy learn the actions the physics is given.
+    filter: f32 = 0.25,
+    /// THE ACTION FILTER's SHARE FOR THE LIMBS' STIFFNESSES, at each decision as `filter` is for the joints' offsets
+    /// (`writeAction`; the kit's `stiffness_filter`): a stiffness may want to move faster or slower than a pose. 1: no
+    /// filter. A run parameter, as `filter` is. This trainer's policy outputs the offsets alone (a fleet with limb
+    /// stiffness is refused), so the share acts once a policy has stiffness outputs.
+    stiffness_filter: f32 = 0.5,
+    /// THE POLICY SEES THE ACTION APPLIED BEFORE ITS DECISION (the kit's `sees_applied`): with the action filter on,
+    /// what is applied is half of the control state - a policy blind to it cannot tell where its filtered action
+    /// stands. Its block starts at zero, so the policy begins exactly as one that cannot see it.
+    sees_applied: bool = true,
     /// The price on the size of the raw action, beside the policy's tracking loss.
     w_action: f32 = 0.01,
     /// The smoothness price on the policy's action along a window (CAPS; `robot_latent.LearnerOptions.w_smooth`).
@@ -476,12 +493,16 @@ pub const SavedOptions = extern struct {
     rate_decay_hours: f32,
     rate_floor_share: f32,
     sigma: f32,
+    filter: f32,
+    // The two filter shares, eight bytes together: every later field stays where it is aligned.
+    stiffness_filter: f32,
     w_action: f32,
     w_smooth: f32,
     barrier: kit_mod.FailureBarrier,
     train_critic: bool,
-    /// The three bytes after a bool, written as zeros (`hasNoPadding`, `savedOptionsOf`).
-    padding_after_train_critic: [3]u8,
+    sees_applied: bool,
+    /// The two bytes after the two bools, written as zeros (`hasNoPadding`, `savedOptionsOf`).
+    padding_after_train_critic: [2]u8,
     critic: kit_mod.CriticOptions,
     value_tail: f32,
     value_tail_ramp_updates: u32,
@@ -705,6 +726,9 @@ pub const PolicyParts = struct {
     hidden_width: usize,
     action_count: usize,
     normalizer: latent.Normalizer,
+    /// The action filter the policy acted through in training (`Options.filter`, the joints' offsets' share): a player
+    /// gives its actions through the same filter, so it acts as the policy learned to.
+    filter: f32,
 };
 
 /// THE POLICY AS THE CPU ACTS WITH IT: the policy's weights as the CPU last saw them, the flow's and the synergies'
@@ -723,6 +747,9 @@ pub fn HostPolicy(comptime M: type) type {
         /// The character's normalised state and goal, and the raw action the inference leaves.
         z: []f32 = &.{},
         goal: []f32 = &.{},
+        /// The action applied before this decision - the character's last given action - which the policy reads
+        /// through the block packed after its layers (zero until trained). Empty: the policy does not read it.
+        applied: []const f32 = &.{},
         raw: []f32 = &.{},
         /// The flow's value - its shapes and offsets, the same for the whole run - when the learner has a flow.
         flow: ?kit_mod.FlowActor(M) = null,
@@ -760,13 +787,24 @@ pub fn HostPolicy(comptime M: type) type {
             const b2: usize = w2 + hp * hp;
             const w3: usize = b2 + hp;
             const b3: usize = w3 + hp * self.raw.len;
-            // The two input blocks are summed into one pre-activation, which is exactly what the kit's
-            // stacked first layer does on the GPU - the same arithmetic, a different order (there, one
-            // block after the other), so the two agree to rounding rather than to the bit.
+            // The block reading the action applied before the decision, after the third layer's bias, `actions x hp`.
+            const w_applied: usize = b3 + self.raw.len;
+            // The two input blocks are summed into one pre-activation in the kit's own order (`dense_fwd`
+            // over the row [goal | state]): the bias, then every goal term, then every state term. Float
+            // addition is not associative, so the order is what makes this policy and the kit's - on the
+            // CPU twin, and the device's but for its own rounding - give the same actions to the bit.
             for (0..hp) |j| {
                 var sum: f32 = self.mirror[b1 + j];
-                for (self.goal, self.z, 0..) |g, x, i| {
-                    sum += g * self.mirror[w_goal + i * hp + j] + x * self.mirror[w_state + i * hp + j];
+                for (self.goal, 0..) |g, i| {
+                    sum += g * self.mirror[w_goal + i * hp + j];
+                }
+                for (self.z, 0..) |x, i| {
+                    sum += x * self.mirror[w_state + i * hp + j];
+                }
+                // The action applied before this decision, through its own block, after the goal's and the state's
+                // terms - the kit's order (`applied_add_activate`) - and only then the tanh.
+                for (self.applied, 0..) |x, i| {
+                    sum += x * self.mirror[w_applied + i * hp + j];
                 }
                 self.hidden1[j] = zm.tanh(sum);
             }
@@ -867,10 +905,10 @@ pub fn ActingScratch(comptime M: type) type {
             host.flow_coefficients = try gpa.alloc(f32, shape.flow_coefficients.len);
             const scratch: Self = .{
                 .host = host,
-                .simulated = try track.State.init(gpa, m.nbody),
-                .reference = try track.State.init(gpa, m.nbody),
+                .simulated = try track.State.init(gpa, m.body_count),
+                .reference = try track.State.init(gpa, m.body_count),
                 .probe = try rbt.Data.init(gpa, m),
-                .raw_features = try gpa.alloc(f32, track.localSize(m.nbody)),
+                .raw_features = try gpa.alloc(f32, track.localSize(m.body_count)),
                 .flow_start_noise = try gpa.alloc(f32, flow_numbers),
             };
             return scratch;
@@ -1095,11 +1133,19 @@ pub fn Resident(comptime M: type) type {
             norm: latent.Normalizer,
             options: Options,
         ) !*Self {
+            const filter_in_range: bool = options.filter > 0.0 and options.filter <= 1.0;
+            assertf(filter_in_range, @src(), "the filter {d}: a share of the new action, in (0, 1]", .{options.filter});
             const self: *Self = try gpa.create(Self);
             errdefer gpa.destroy(self);
             const m: *rbt.Model = fleet.m;
-            const feature_count: u32 = @intCast(track.localSize(m.nbody));
+            const feature_count: u32 = @intCast(track.localSize(m.body_count));
             const actions: u32 = @intCast(track.actionSize(m));
+            // This trainer's policy outputs the joints' offsets alone: a fleet whose actions also hold each limb's
+            // stiffness is refused by name, not read with the wrong width.
+            const fleet_learns_offsets_alone: bool = fleet.action_width == actions;
+            if (!fleet_learns_offsets_alone) {
+                return error.LimbStiffnessNotLearnedByThisTrainer;
+            }
             // whole-init-first: the whole struct first - defaults applied, every field named.
             self.* = .{
                 .gpa = undefined,
@@ -1213,6 +1259,12 @@ pub fn Resident(comptime M: type) type {
             self.kit.sigma = options.sigma;
             self.kit.w_action = options.w_action;
             self.kit.w_smooth = options.w_smooth;
+            // The action filter as this trainer applies it when acting (`writeAction`), so the rollouts blend the same
+            // way. Its actions are the joints' offsets alone (refused otherwise above): no number is a stiffness.
+            self.kit.filter = options.filter;
+            self.kit.stiffness_filter = options.stiffness_filter;
+            self.kit.stiffness_count = 0;
+            self.kit.sees_applied = options.sees_applied;
             // The failure barrier reads two features of the rolled state: the head's world height, and the world's up
             // seen from the root. Where they are follows from `track.local`'s layout, which writes, for the B
             // character bodies (every body but the world), four blocks of per-body numbers, then one height per
@@ -1228,8 +1280,8 @@ pub fn Resident(comptime M: type) type {
             assertf(barrier_has_its_head, @src(), "the failure barrier needs the task's head body", .{});
             // With the barrier off there may be no head; any body serves, as nothing reads the column.
             const head_body: usize = fleet.head orelse 1;
-            self.kit.barrier_head_column = @intCast(track.localHeightColumn(m.nbody, head_body));
-            self.kit.barrier_up_column = @intCast(track.localUpColumn(m.nbody));
+            self.kit.barrier_head_column = @intCast(track.localHeightColumn(m.body_count, head_body));
+            self.kit.barrier_up_column = @intCast(track.localUpColumn(m.body_count));
             // Planning judges danger by the head's height and the up direction, so it needs the task's head body.
             if (options.planning.enabled) {
                 const has_head: bool = fleet.head != null;
@@ -1316,9 +1368,9 @@ pub fn Resident(comptime M: type) type {
             // readback window starts at nothing), acting would otherwise run on uninitialised memory
             // and simulate nonsense for a whole round. All zeros is the servo alone - no correction.
             @memset(self.host.mirror, 0.0);
-            self.sim = try track.State.init(gpa, m.nbody);
+            self.sim = try track.State.init(gpa, m.body_count);
             errdefer self.sim.deinit(gpa);
-            self.reference = try track.State.init(gpa, m.nbody);
+            self.reference = try track.State.init(gpa, m.body_count);
             errdefer self.reference.deinit(gpa);
             self.probe = try rbt.Data.init(gpa, m);
             errdefer self.probe.deinit();
@@ -1420,7 +1472,8 @@ pub fn Resident(comptime M: type) type {
             // gets Xavier's 1/sqrt(fan-in), which keeps a tanh layer's outputs in its useful range
             // instead of saturated; an output layer gets a hundredth of that, so both networks begin as
             // the identity of their job - the world model predicting "nothing changes", the policy
-            // "no correction", which is the servo alone.
+            // "no correction", which is the servo alone. Last, the policy's block for the action applied
+            // before its decision, at ZERO like a bias: the policy starts out as the one that cannot see it.
             const layers = [_][3]usize{
                 .{ (f + r + a) * h, f + r + a, 1 }, .{ h, 0, 0 },
                 .{ h * h, h, 1 },                   .{ h, 0, 0 },
@@ -1428,6 +1481,7 @@ pub fn Resident(comptime M: type) type {
                 .{ 2 * f * hp, 2 * f, 1 },          .{ hp, 0, 0 },
                 .{ hp * hp, hp, 1 },                .{ hp, 0, 0 },
                 .{ hp * a, hp, 0 },                 .{ a, 0, 0 },
+                .{ a * hp, 0, 0 },
             };
             var at: usize = 0;
             for (layers) |layer| {
@@ -1578,9 +1632,10 @@ pub fn Resident(comptime M: type) type {
         /// PHASE 1 OF AN ACTING STEP, character `env` (`act`): whether it acts from a plan, and - when it does not -
         /// every random number its action will use: the flow's fresh noise (one per synergy) when the learner has a
         /// flow, then the exploration's (one per action); none at a noise scale of zero, none for a character acting
-        /// from its plan. All of them come from the learner's one random stream, so they are drawn here, on the
-        /// calling thread, in the characters' order: each character then holds its own numbers, and its action -
-        /// phase 2 - comes out the same wherever and in whatever order it is computed.
+        /// from its plan. The flow's come from the learner's one random stream, so they are drawn here, on the
+        /// calling thread, in the characters' order; the exploration's are drawn by counter (`rbt.explorationNoise`'s
+        /// draws), the same on a device. Each character then holds its own numbers, and its action - phase 2 - comes
+        /// out the same wherever and in whatever order it is computed.
         fn prepareActing(self: *Self, env: usize, acting: Acting, random: Random) void {
             const planned: ?[]const f32 = if (acting.may_act_from_plans) self.plannedCorrection(env) else null;
             self.acting_planned[env] = planned;
@@ -1596,8 +1651,14 @@ pub fn Resident(comptime M: type) type {
             if (spread == 0.0) {
                 return;
             }
-            for (numbers[flow_count..][0..self.host.raw.len]) |*exploration| {
-                exploration.* = random.floatNorm(f32);
+            // The exploration's numbers by counter - the world, the decision about to be stepped (the fleet's step
+            // advances its number first, so this decision's pushes share the count), the action - exactly the draws of
+            // `rbt.explorationNoise`, so a simulator on the device explores with the very same numbers.
+            const decision: u32 = self.fleet.decision_number + 1;
+            const world: u32 = @intCast(env);
+            for (numbers[flow_count..][0..self.host.raw.len], 0..) |*exploration, action_index| {
+                const action: u32 = @intCast(action_index);
+                exploration.* = rbt.drawNormal(self.fleet.draw_seed, world, decision, .explore_action, action);
             }
         }
 
@@ -1612,6 +1673,10 @@ pub fn Resident(comptime M: type) type {
         ) void {
             const host: *HostPolicy(M) = &scratch.host;
             supertrackFeaturesInto(self.fleet, env, self.norm, scratch.featureScratch(), host.goal, host.z);
+            // The action applied before this decision - the character's slot, holding what it was given last - which
+            // the policy reads through its block.
+            const action_width: usize = host.raw.len;
+            host.applied = self.actions[env * action_width ..][0..action_width];
             if (self.acting_planned[env]) |planned_correction| {
                 host.policyRow();
                 host.addCorrection(planned_correction);
@@ -1744,24 +1809,60 @@ pub fn Resident(comptime M: type) type {
         /// world. Such an action is replaced by zero, and counted.
         fn writeAction(self: *Self, env: usize) void {
             const action_width: usize = self.host.raw.len;
-            for (self.actions[env * action_width ..][0..action_width], self.host.raw) |*slot, chosen| {
-                if (chosen == chosen and @abs(chosen) < 1.0e30) {
-                    slot.* = chosen;
-                } else {
-                    slot.* = 0.0;
-                    self.nonfinite_actions += 1;
-                }
-            }
+            const chosen: []f32 = self.host.raw;
+            const given: []f32 = self.actions[env * action_width ..][0..action_width];
+            const offset_count: usize = track.actionSize(self.fleet.m);
+            const nonfinite_count: usize = giveAction(self.options, offset_count, chosen, given);
+            self.nonfinite_actions += nonfinite_count;
         }
 
-        /// What each character whose episode just ended forgets, after the fleet's step: its hazard history - the new
-        /// episode's first hazard has no rise - and teacher 3's pending example and own goal - no next step will
-        /// complete the example, and the goal it aimed at is no goal of the episode it starts.
+        /// GIVES ONE CHARACTER ITS CHOSEN ACTION, as training does (`writeAction`) and as the judge does
+        /// (`actOnJudgedFleet`), so a judged policy acts exactly as it trained. Never a non-finite action into the
+        /// physics: each such component asks for nothing (`chosen` is its decision's scratch, read by nothing after,
+        /// so it is made safe in place). Then the action filter into the character's slot, which holds the action
+        /// given at its previous decision: the joints' offsets at `filter`, the limbs' stiffnesses after them at
+        /// `stiffness_filter`. Returns how many components were not finite.
+        fn giveAction(
+            options: Options,
+            offset_count: usize,
+            chosen: []f32,
+            given: []f32,
+        ) usize {
+            var nonfinite_count: usize = 0;
+            for (chosen) |*component| {
+                const usable: bool = isFinite(component.*);
+                if (!usable) {
+                    component.* = 0.0;
+                    nonfinite_count += 1;
+                }
+            }
+            filterActionPart(options.filter, chosen[0..offset_count], given[0..offset_count]);
+            filterActionPart(options.stiffness_filter, chosen[offset_count..], given[offset_count..]);
+            return nonfinite_count;
+        }
+
+        /// One part of an action into its slot at `share` (`track.filterAction`). At 1 the chosen numbers are copied
+        /// exactly - the blend would turn a negative zero positive.
+        fn filterActionPart(share: f32, chosen: []const f32, given: []f32) void {
+            if (share == 1.0) {
+                @memcpy(given, chosen);
+                return;
+            }
+            track.filterAction(share, chosen, given);
+        }
+
+        /// What each character whose episode just ended forgets, after the fleet's step: the action it was given - its
+        /// filter starts at rest in the new episode - its hazard history - the new episode's first hazard has no rise -
+        /// and teacher 3's pending example and own goal - no next step will complete the example, and the goal it
+        /// aimed at is no goal of the episode it starts.
         fn forgetEndedEpisodes(self: *Self) void {
+            const action_width: usize = self.host.raw.len;
             for (self.fleet.dones, 0..) |ended, env| {
                 if (!ended) {
                     continue;
                 }
+                // The new episode's filter starts at rest (`Options.filter`).
+                @memset(self.actions[env * action_width ..][0..action_width], 0.0);
                 if (self.planning_flags != null) {
                     self.previous_hazard_known[env] = false;
                 }
@@ -1925,7 +2026,11 @@ pub fn Resident(comptime M: type) type {
             // The layout `init` began - after the kit, its data and the policy's optimiser - continued here.
             const critic_arena: Allocator = self.critic_arena.allocator();
             if (options.train_critic) {
-                const critic: kit_mod.LatentCritic(M) = try .init(critic_arena, layout, source, options.critic);
+                var critic: kit_mod.LatentCritic(M) = try .init(critic_arena, layout, source, options.critic);
+                // The imagined fit reads the policy rollout's states, in the kit's blocks from step 1.
+                if (options.critic.imagined_share > 0) {
+                    critic.reserveImagined(layout, kit.blockZ(1));
+                }
                 // The value tail at the policy rollout's end, when the policy's loss carries one.
                 if (options.value_tail > 0) {
                     var value_tail: kit_mod.LatentCritic(M).Tail = try critic.initTail(critic_arena, layout, kit.rows);
@@ -2482,6 +2587,16 @@ pub fn Resident(comptime M: type) type {
                 }
             }
             self.kit.policyTrainStep(self.options.policy_rate * policy_share, self.policy_updates);
+            // The critic fitted to this update's imagined rollout, still in the kit's blocks (`imagined_share`): where
+            // the policy reads it, under the policy it judges. Its steps count with the real ones' - one optimiser.
+            if (self.critic) |*critic| {
+                if (critic.options.imagined_share > 0) {
+                    self.critic_updates += 1;
+                    const critic_share: f32 = self.rateShare(self.critic_updates);
+                    critic.options.learning_rate = self.options.critic.learning_rate * critic_share;
+                    critic.updateImagined(self.kit.pipe, self.critic_updates);
+                }
+            }
         }
 
         /// One round of the loop: simulate, then train each network, each update in its own slot.
@@ -2587,7 +2702,18 @@ pub fn Resident(comptime M: type) type {
                     // warm-up. Train nothing this round rather than train on slots we cannot vouch for.
                     return false;
                 };
-                start.* = .{ .env = @intCast(window.env), .index = window.first };
+                // Whether the window continues its episode: the record before it is the same segment's, so the
+                // window's first decision blends into, and reads, the action given just before it.
+                const has_previous: bool = window.first > 0;
+                const replay: track.Replay = self.fleet.replay;
+                const first_segment: u32 = replay.segmentAt(window.env, window.first);
+                const continues_segment: bool = has_previous and
+                    replay.segmentAt(window.env, window.first - 1) == first_segment;
+                start.* = .{
+                    .env = @intCast(window.env),
+                    .index = window.first,
+                    .continues_segment = continues_segment,
+                };
             }
             self.data.stageStarts(self.starts, slot, window_length);
             return true;
@@ -2621,6 +2747,7 @@ pub fn Resident(comptime M: type) type {
                 .hidden_width = self.host.hidden1.len,
                 .action_count = self.host.raw.len,
                 .normalizer = self.norm,
+                .filter = self.options.filter,
             };
         }
 
@@ -2639,8 +2766,13 @@ pub fn Resident(comptime M: type) type {
         ) void {
             const self: *Self = @ptrCast(@alignCast(context));
             const per_character: usize = self.host.raw.len;
+            const offset_count: usize = track.actionSize(fleet.m);
             for (0..fleet.options.envs) |env| {
                 self.featuresOf(fleet, env);
+                // The judged character's slot holds the action it was given last (at rest when its judgement began):
+                // the action applied before this decision, which the policy reads.
+                const slot: []f32 = actions[env * per_character ..][0..per_character];
+                self.host.applied = slot;
                 // Judged: the policy, with a flow's typical correction - from zero noise, nothing drawn.
                 if (self.kit.flow_actor != null) {
                     @memset(self.flow_start_noise, 0);
@@ -2648,10 +2780,9 @@ pub fn Resident(comptime M: type) type {
                 } else {
                     self.host.policyRow();
                 }
-                for (actions[env * per_character ..][0..per_character], self.host.raw) |*slot, raw| {
-                    // Never a non-finite action into the physics (as `act`): the judge's fleet is as easily poisoned.
-                    slot.* = if (raw == raw and @abs(raw) < 1.0e30) raw else 0.0;
-                }
+                // Given as training gives it: never non-finite, then through the action filter into the slot. The
+                // judge counts no non-finite actions of its own; training's count is the one watched.
+                _ = giveAction(self.options, offset_count, self.host.raw, slot);
             }
         }
 

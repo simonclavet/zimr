@@ -22,6 +22,12 @@
 const std = @import("std");
 const ArrayList = std.ArrayList;
 const endsWith = std.mem.endsWith;
+const Allocator = std.mem.Allocator;
+const eql = std.mem.eql;
+const indexOfPos = std.mem.indexOfPos;
+const indexOfScalarPos = std.mem.indexOfScalarPos;
+const dirname = std.fs.path.dirname;
+const Io = std.Io;
 
 // Local aliases for the std.Build types this file works with so the
 // type annotations at every `const x: T = b.addX(...)` site stay
@@ -103,11 +109,67 @@ pub const WgslCorpus = struct {
     }
 };
 
+/// ONE SPIR-V OPTIMIZATION as a build step: `input` through tools/spirvopt.zig with `passes` (its flags, run in order;
+/// `-O` for its whole preset), written to `output_name` in the step's own directory.
+fn optimizeSpirv(
+    b: *Build,
+    optimizer: *std.Build.Step.Compile,
+    input: LazyPath,
+    passes: []const []const u8,
+    output_name: []const u8,
+) LazyPath {
+    const optimize_run: *Run = b.addRunArtifact(optimizer);
+    optimize_run.addArgs(passes);
+    optimize_run.addFileArg(input);
+    optimize_run.addArg("-o");
+    return optimize_run.addOutputFileArg(output_name);
+}
+
 /// Pipeline context.  Stores the shared subbuild dependency and the
 /// known paths to the three vendored tool binaries (built once by
 /// `tools/build.zig`).  Construct once at the top of `pub fn build`,
 /// pass around to every `addShader` / `addShaderImport` call.
+/// The files one source file imports by path (`@import("....zig")`, relative to the file's own directory) that exist.
+/// Imports of modules (`std`, `zm`) carry no `.zig` and are left out; a path that names no file is skipped - the text
+/// `@import("` can sit inside a string as well as begin an import, and an input that does not exist would fail a step.
+/// The file's text is read into `scratch` and freed before returning; the paths are `b`'s.
+fn directPathImports(
+    b: *Build,
+    scratch: Allocator,
+    importer: []const u8,
+) []const []const u8 {
+    const io: Io = b.graph.io;
+    const root_directory: Io.Dir = b.root.root_dir.handle;
+    const text: []u8 = root_directory.readFileAlloc(io, importer, scratch, .limited(64 << 20)) catch return &.{};
+    defer scratch.free(text);
+    const directory: []const u8 = dirname(importer) orelse "";
+    const opening: []const u8 = "@import(\"";
+    var imports: ArrayList([]const u8) = .empty;
+    var at: usize = 0;
+    while (indexOfPos(u8, text, at, opening)) |found| {
+        const name_start: usize = found + opening.len;
+        const name_end: usize = indexOfScalarPos(u8, text, name_start, '"') orelse break;
+        at = name_end;
+        const imported: []const u8 = text[name_start..name_end];
+        if (!endsWith(u8, imported, ".zig")) {
+            continue;
+        }
+        const path: []const u8 = b.pathJoin(&.{ directory, imported });
+        root_directory.access(io, path, .{}) catch continue;
+        imports.append(b.allocator, path) catch @panic("out of memory");
+    }
+    return imports.items;
+}
+
+/// Every source file's own path imports, by the file's path from the build root (`directPathImports`).
+const PathImports = std.StringHashMapUnmanaged([]const []const u8);
+
 pub const ShaderPipeline = struct {
+    /// Each source file's own path imports, read once for the whole build (`directPathImports`): a build makes
+    /// hundreds of kernel compiles, most of them over the same few large roots. Behind a pointer, made once at `init`,
+    /// so the many functions that take the pipeline as `*const` can still fill it.
+    path_imports: *PathImports,
+
     b: *std.Build,
     /// Every compute kernel entry built so far, in the order the build wired them: what `kernels-wgsl` installs, and
     /// what a native build embeds.
@@ -138,6 +200,29 @@ pub const ShaderPipeline = struct {
     /// fall back to the `*_path` + tools_dep behavior (the C++ SPIR-V
     /// tools always use that; they're genuinely external).
     spv2wgsl_exe: ?*std.Build.Step.Compile = null,
+    /// The SPIR-V optimizer (`-Dspirv-opt`, tools/spirvopt.zig): when set, every compute kernel's SPIR-V is optimized
+    /// before Vulkan and WGSL take it - for Vulkan by its -O pipeline, for the web by `spirvopt_web_passes`.
+    spirvopt_exe: ?*std.Build.Step.Compile = null,
+    /// THE WEB's PASSES: the -O pipeline, in its order, without merge-return and without inlining. Inlined, a helper's
+    /// early return becomes a break out of an inlined region, after which WGSL's uniformity analysis takes everything
+    /// - a `workgroupBarrier` included - as non-uniform, where a call that returns is uniform again; kept as functions,
+    /// the helpers keep the kernels valid WGSL, and the module comes out smaller than -O's (no body copied per caller).
+    spirvopt_web_passes: []const []const u8 = &.{
+        "--wrap-opkill",                    "--eliminate-dead-branches",        "--eliminate-dead-functions",
+        "--eliminate-dead-code-aggressive", "--private-to-local",               "--eliminate-local-single-block",
+        "--eliminate-local-single-store",   "--eliminate-dead-code-aggressive", "--scalar-replacement=0",
+        "--convert-local-access-chains",    "--eliminate-local-single-block",   "--eliminate-local-single-store",
+        "--eliminate-dead-code-aggressive", "--ssa-rewrite",                    "--eliminate-dead-code-aggressive",
+        "--ccp",                            "--eliminate-dead-code-aggressive", "--loop-unroll",
+        "--eliminate-dead-branches",        "--redundancy-elimination",         "--combine-access-chains",
+        "--simplify-instructions",          "--scalar-replacement=0",           "--convert-local-access-chains",
+        "--eliminate-local-single-block",   "--eliminate-local-single-store",   "--eliminate-dead-code-aggressive",
+        "--ssa-rewrite",                    "--eliminate-dead-code-aggressive", "--vector-dce",
+        "--eliminate-dead-inserts",         "--eliminate-dead-branches",        "--simplify-instructions",
+        "--if-conversion",                  "--copy-propagate-arrays",          "--reduce-load-size",
+        "--eliminate-dead-code-aggressive", "--merge-blocks",                   "--redundancy-elimination",
+        "--eliminate-dead-branches",        "--merge-blocks",                   "--simplify-instructions",
+    },
     /// `shader_interface` named module - wired into per-shader IO
     /// modules so IO files' `@import("shader_interface")` resolves.
     /// Only used by `addShader` when `opts.shader_io != null` (typed-
@@ -160,11 +245,14 @@ pub const ShaderPipeline = struct {
         shader_interface_mod: *std.Build.Module,
         zimrmath_mod: *std.Build.Module,
     ) ShaderPipeline {
+        const path_imports: *PathImports = b.allocator.create(PathImports) catch @panic("out of memory");
+        path_imports.* = .empty;
         return .{
             .b = b,
             .tools_dep = tools_dep,
             .shader_interface_mod = shader_interface_mod,
             .zimrmath_mod = zimrmath_mod,
+            .path_imports = path_imports,
         };
     }
 
@@ -483,12 +571,12 @@ pub const ShaderPipeline = struct {
             compile.addArg("--dep");
             compile.addArg(externs_module_name);
         }
-        compile.addPrefixedFileArg("-Mroot=", source);
-        compile.addPrefixedFileArg("-Mzm=", b.path("src/zimrmath.zig"));
+        self.addModuleRoot(compile, "-Mroot=", source);
+        self.addModuleRoot(compile, "-Mzm=", b.path("src/zimrmath.zig"));
         // Declare the shader_builtins module (it `@import("zm")` for Vec/Vec2).
         compile.addArg("--dep");
         compile.addArg("zm");
-        compile.addPrefixedFileArg("-Mshader_builtins=", b.path("src/shader_builtins.zig"));
+        self.addModuleRoot(compile, "-Mshader_builtins=", b.path("src/shader_builtins.zig"));
         if (externs_module) |path| {
             // externs' own dep table - must precede the `-M<name>=`
             // that closes the module declaration (per `zig build-exe`'s
@@ -620,6 +708,61 @@ pub const ShaderPipeline = struct {
         robotgpu_sizes: ?LazyPath = null,
     };
 
+    /// A MODULE ROOT HANDED TO A KERNEL's COMPILE (`-M<name>=<root>`), with the files it imports by path made inputs
+    /// of the compile. The compile runs as a command, and the build reruns a command only when an input it knows of
+    /// changes: it knows the roots it is handed, not the files those roots import by path
+    /// (`@import("robotgpu_program.zig")`). A change to one of those alone would leave the SPIR-V stale - the GPU
+    /// running old code while the CPU twin runs the new, which no check of entry points can see. So every root's path
+    /// imports are found, followed to theirs, and declared. A generated root needs none of this: the step that makes
+    /// it is already an input.
+    fn addModuleRoot(
+        self: *const ShaderPipeline,
+        compile: *Run,
+        flag: []const u8,
+        root: LazyPath,
+    ) void {
+        compile.addPrefixedFileArg(flag, root);
+        const root_path: []const u8 = switch (root) {
+            .src_path => |source| source.sub_path,
+            else => return,
+        };
+        var seen: ArrayList([]const u8) = .empty;
+        self.declarePathImports(compile, root_path, &seen);
+    }
+
+    /// Every file `importer` imports by path declared an input of `compile`, and followed in turn; `seen` holds the
+    /// files already declared for this compile, so each is declared once and a cycle of imports ends.
+    fn declarePathImports(
+        self: *const ShaderPipeline,
+        compile: *Run,
+        importer: []const u8,
+        seen: *ArrayList([]const u8),
+    ) void {
+        for (self.pathImportsOf(importer)) |path| {
+            const already_seen: bool = for (seen.items) |known| {
+                if (eql(u8, known, path)) {
+                    break true;
+                }
+            } else false;
+            if (already_seen) {
+                continue;
+            }
+            seen.append(self.b.allocator, path) catch @panic("out of memory");
+            compile.addFileInput(self.b.path(path));
+            self.declarePathImports(compile, path, seen);
+        }
+    }
+
+    /// `file`'s own path imports, read on the first asking and remembered for the rest of the build.
+    fn pathImportsOf(self: *const ShaderPipeline, file: []const u8) []const []const u8 {
+        if (self.path_imports.get(file)) |known| {
+            return known;
+        }
+        const imports: []const []const u8 = directPathImports(self.b, std.heap.page_allocator, file);
+        self.path_imports.put(self.b.allocator, file, imports) catch @panic("out of memory");
+        return imports;
+    }
+
     /// Compile a kernel file to SPIR-V, with the modules it imports (`KernelModules`): Zig's SPIR-V backend, the
     /// same flags as the fragment path. Returns the module's SPIR-V.
     fn compileKernelSpirv(
@@ -666,12 +809,12 @@ pub const ShaderPipeline = struct {
             compile.addArg("--dep");
             compile.addArg("robotgpu_sizes");
         }
-        compile.addPrefixedFileArg("-Mroot=", source);
-        compile.addPrefixedFileArg("-Mzm=", b.path("src/zimrmath.zig"));
+        self.addModuleRoot(compile, "-Mroot=", source);
+        self.addModuleRoot(compile, "-Mzm=", b.path("src/zimrmath.zig"));
         // kompute re-exports zm (as `k.math`), so the kompute module needs zm too.
         compile.addArg("--dep");
         compile.addArg("zm");
-        compile.addPrefixedFileArg("-Mkompute=", b.path("src/kompute.zig"));
+        self.addModuleRoot(compile, "-Mkompute=", b.path("src/kompute.zig"));
         if (modules.zimrnum or modules.zimrrl) {
             // THE KERNEL CALLS THE HOST FUNCTION INSTEAD OF RESTATING IT
             //
@@ -683,7 +826,7 @@ pub const ShaderPipeline = struct {
             compile.addArg("zm");
             compile.addArg("--dep");
             compile.addArg("kompute");
-            compile.addPrefixedFileArg("-Mzn=", b.path("src/zimrnum.zig"));
+            self.addModuleRoot(compile, "-Mzn=", b.path("src/zimrnum.zig"));
         }
         if (modules.zimrrl) {
             // zrl's own dependency list: it imports zm and zn.
@@ -691,7 +834,7 @@ pub const ShaderPipeline = struct {
             compile.addArg("zm");
             compile.addArg("--dep");
             compile.addArg("zn");
-            compile.addPrefixedFileArg("-Mzrl=", b.path("src/zimrrl.zig"));
+            self.addModuleRoot(compile, "-Mzrl=", b.path("src/zimrrl.zig"));
         }
         if (modules.robot) {
             // robot.zig's own dependency list - zm and the profiler, a module of its own too, which reads only zm on
@@ -700,14 +843,14 @@ pub const ShaderPipeline = struct {
             compile.addArg("zm");
             compile.addArg("--dep");
             compile.addArg("profiler");
-            compile.addPrefixedFileArg("-Mrobot=", b.path("src/robot.zig"));
+            self.addModuleRoot(compile, "-Mrobot=", b.path("src/robot.zig"));
             compile.addArg("--dep");
             compile.addArg("zm");
-            compile.addPrefixedFileArg("-Mprofiler=", b.path("src/profiler.zig"));
+            self.addModuleRoot(compile, "-Mprofiler=", b.path("src/profiler.zig"));
         }
         if (modules.robotgpu_sizes) |sizes_file| {
             // The sizes file imports nothing.
-            compile.addPrefixedFileArg("-Mrobotgpu_sizes=", sizes_file);
+            self.addModuleRoot(compile, "-Mrobotgpu_sizes=", sizes_file);
         }
         return raw_spv;
     }
@@ -736,10 +879,31 @@ pub const ShaderPipeline = struct {
         /// dependency list only when `wants_zimrnum` is.
         wants_zimrrl: bool,
     ) ComputeOutput {
+        const modules: KernelModules = .{ .zimrnum = wants_zimrnum, .zimrrl = wants_zimrrl };
+        return self.addComputeOutputWithModules(source, entry, modules);
+    }
+
+    /// `addComputeOutput` for a kernel that imports more than zimrnum and zimrrl - robot.zig, or a robotgpu sizes file
+    /// (`KernelModules`): its SPIR-V compiled with every module it names, then `entry` translated to WGSL.
+    pub fn addComputeOutputWithModules(
+        self: *ShaderPipeline,
+        source: LazyPath,
+        entry: ?[]const u8,
+        modules: KernelModules,
+    ) ComputeOutput {
         const b: *Build = self.b;
         // Stage 1: Zig -> SPIR-V.
-        const modules: KernelModules = .{ .zimrnum = wants_zimrnum, .zimrrl = wants_zimrrl };
         const raw_spv: LazyPath = self.compileKernelSpirv(source, modules);
+        // Stage 1b, with `-Dspirv-opt`: the SPIR-V optimized - for Vulkan by the -O pipeline, for the web by the
+        // web's passes (`spirvopt_web_passes`).
+        const spv: LazyPath = if (self.spirvopt_exe) |optimizer|
+            optimizeSpirv(b, optimizer, raw_spv, &.{"-O"}, "compute.opt.spv")
+        else
+            raw_spv;
+        const web_spv: LazyPath = if (self.spirvopt_exe) |optimizer|
+            optimizeSpirv(b, optimizer, raw_spv, self.spirvopt_web_passes, "compute.web.spv")
+        else
+            raw_spv;
 
         // Stage 2: SPIR-V -> WGSL. @workgroup_size comes from the SPIR-V LocalSize.
         const w: *Run = if (self.spv2wgsl_exe) |exe| awblk: {
@@ -762,7 +926,7 @@ pub const ShaderPipeline = struct {
         if (entry) |e| {
             w.addArg(b.fmt("--entry={s}", .{e}));
         }
-        w.addFileArg(raw_spv);
+        w.addFileArg(web_spv);
         const wgsl: LazyPath = w.addOutputFileArg("compute.wgsl");
         // Canonical, as `LazyPath.path` makes its own (separators, `.`/`..`): one file, one name, however reached.
         const source_name: []const u8 = std.fs.path.resolveAlloc(b.allocator, &.{source.getDisplayName()}) catch
@@ -771,7 +935,7 @@ pub const ShaderPipeline = struct {
         const output: ComputeOutput = .{
             .name = b.fmt("{s}__{s}", .{ file_name, entry orelse "main" }),
             .source_name = source_name,
-            .spv = raw_spv,
+            .spv = spv,
             .wgsl = wgsl,
         };
         self.compute_outputs.append(b.allocator, output) catch @panic("OOM");
@@ -829,8 +993,22 @@ pub const ShaderPipeline = struct {
         wants_zimrrl: bool,
         embed: KernelEmbed,
     ) void {
+        const modules: KernelModules = .{ .zimrnum = wants_zimrnum, .zimrrl = wants_zimrrl };
+        self.addComputeKernelImportsWithModules(mod, source, entries, modules, embed);
+    }
+
+    /// `addComputeKernelImports` for a kernel that imports more than zimrnum and zimrrl (`KernelModules`): each entry's
+    /// shader, compiled with every module the kernel names, imported into `mod` as `<entry>_wgsl`.
+    pub fn addComputeKernelImportsWithModules(
+        self: *ShaderPipeline,
+        mod: *Module,
+        source: LazyPath,
+        entries: []const []const u8,
+        modules: KernelModules,
+        embed: KernelEmbed,
+    ) void {
         for (entries) |entry| {
-            const output: ComputeOutput = self.addComputeOutput(source, entry, wants_zimrnum, wants_zimrrl);
+            const output: ComputeOutput = self.addComputeOutputWithModules(source, entry, modules);
             mod.addAnonymousImport(
                 self.b.fmt("{s}_wgsl", .{entry}),
                 .{ .root_source_file = output.embedded(embed) },

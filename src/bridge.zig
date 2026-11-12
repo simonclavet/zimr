@@ -1125,6 +1125,9 @@ const BridgeGlobals = struct {
         // device.limits.maxTextureDimension2D: a canvas larger than this cannot
         // be rendered into, so the backing store is clamped to it.
         max_backing_dim: f64 = 8192,
+        // The workgroup memory the device was granted (`maxComputeWorkgroupStorageSize`): WebGPU's default until the
+        // device resolves with the adapter's own.
+        max_workgroup_storage: f64 = 16384,
         format_list: Value = .{ .h = 0 }, // lazily-built JS array of format names
         /// The page's TextEncoder, made once at boot (`main`'s long-lived handles): made lazily, the first use could
         /// fall inside a frame's handle scope, or a listener's, and the handle would be reclaimed when it closed.
@@ -1944,6 +1947,9 @@ const ZimrWgpu = struct {
     }
     fn jsDeviceGetQueue(_: f64) f64 {
         return 1;
+    }
+    fn jsDeviceWorkgroupStorageLimit(_: f64) f64 {
+        return g.wgpu.max_workgroup_storage;
     }
     fn jsGetSurface() f64 {
         if (!g.wgpu.have_canvas) {
@@ -3976,6 +3982,66 @@ const ZimrWgpu = struct {
         desc.set("label", modString(label_ptr, label_len));
         return @floatFromInt(tblInsert(g.boot.gpu_device.call("createComputePipeline", .{desc})));
     }
+    /// A COMPUTE PIPELINE MADE IN THE BACKGROUND (`GPUDevice.createComputePipelineAsync`): the browser compiles it off
+    /// the page's thread - several at once, where it can - while the page goes on drawing. The handle is given at
+    /// once, to a placeholder marked pending; when the browser's promise resolves, the pipeline takes the
+    /// placeholder's place in the table, so every later use of the handle finds the pipeline, and it carries the
+    /// milliseconds the browser took. `jsComputePipelineState` says how far a handle has come.
+    fn jsDeviceCreateComputePipelineInBackground(
+        _: f64,
+        layout: f64,
+        shader_module: f64,
+        entry_point_ptr: f64,
+        entry_point_len: f64,
+        label_ptr: f64,
+        label_len: f64,
+    ) f64 {
+        const compute: Value = global().get("Object").new(.{});
+        compute.set("module", tblGet(shader_module));
+        compute.set("entryPoint", modString(entry_point_ptr, entry_point_len));
+        const desc: Value = global().get("Object").new(.{});
+        desc.set("layout", tblGet(layout));
+        desc.set("compute", compute);
+        desc.set("label", modString(label_ptr, label_len));
+        const pending: Value = global().get("Object").new(.{});
+        const id: u32 = tblInsert(pending);
+        // What the asking needs, as one object: the bridge's `new` and `call` carry few arguments.
+        const asked: Value = global().get("Object").new(.{});
+        asked.set("device", g.boot.gpu_device);
+        asked.set("desc", desc);
+        asked.set("objects", g.wgpu.objects);
+        asked.set("id", Value{ .h = js_num(@floatFromInt(id)) });
+        asked.set("pending", pending);
+        const ask_in_background: Value = global().get("Function").new(.{
+            str("asked"),
+            str("var pending=asked.pending,objects=asked.objects,id=asked.id,desc=asked.desc;" ++
+                "pending.zimrPipelineState=0;" ++
+                "var started=performance.now();" ++
+                "asked.device.createComputePipelineAsync(desc).then(function(pipeline){" ++
+                "pipeline.zimrPipelineMs=performance.now()-started;" ++
+                "if(objects.has(id)){objects.set(id,pipeline);}" ++
+                "},function(reason){" ++
+                "pending.zimrPipelineState=2;" ++
+                "console.error('zimr: compute pipeline '+desc.label+' was refused: '+reason);});"),
+        });
+        _ = ask_in_background.call("call", .{ global(), asked });
+        return @floatFromInt(id);
+    }
+    /// How far a compute pipeline made in the background has come: 0 while the browser compiles it, 1 once the
+    /// pipeline stands in the table, 2 if the browser refused it. A pipeline made in the call is 1.
+    fn jsComputePipelineState(id: f64) f64 {
+        const state: f64 = js_to_num(tblGet(id).get("zimrPipelineState").h);
+        // Only a placeholder carries the mark: on a pipeline the property is undefined, which is not a number.
+        const is_placeholder: bool = state == state;
+        return if (is_placeholder) state else 1;
+    }
+    /// The milliseconds the browser took to make a pipeline in the background: 0 while it is pending, and for a
+    /// pipeline made in the call.
+    fn jsComputePipelineMilliseconds(id: f64) f64 {
+        const milliseconds: f64 = js_to_num(tblGet(id).get("zimrPipelineMs").h);
+        const is_measured: bool = milliseconds == milliseconds;
+        return if (is_measured) milliseconds else 0;
+    }
 
     // ---- copies + async buffer readback (Phase 3d remainder) ---------------
     fn jsEncoderCopyBufferToBuffer(
@@ -4106,6 +4172,7 @@ const ZimrWgpu = struct {
     fn install(ns: Value) void {
         ns.set("js_init_device", funcNum(&jsInitDevice));
         ns.set("js_device_get_queue", funcNum(&jsDeviceGetQueue));
+        ns.set("js_device_workgroup_storage_limit", funcNum(&jsDeviceWorkgroupStorageLimit));
         ns.set("js_get_surface", funcNum(&jsGetSurface));
         ns.set("js_surface_get_current_texture", funcNum(&jsSurfaceGetCurrentTexture));
         ns.set("js_surface_present", funcNum(&jsSurfacePresent));
@@ -4158,6 +4225,9 @@ const ZimrWgpu = struct {
         ns.set("js_device_create_pipeline_layout", funcNum(&jsDeviceCreatePipelineLayout));
         ns.set("js_device_create_render_pipeline", funcNum(&jsDeviceCreateRenderPipeline));
         ns.set("js_device_create_compute_pipeline", funcNum(&jsDeviceCreateComputePipeline));
+        ns.set("js_device_create_compute_pipeline_async", funcNum(&jsDeviceCreateComputePipelineInBackground));
+        ns.set("js_compute_pipeline_state", funcNum(&jsComputePipelineState));
+        ns.set("js_compute_pipeline_milliseconds", funcNum(&jsComputePipelineMilliseconds));
         ns.set("js_encoder_copy_buffer_to_buffer", funcNum(&jsEncoderCopyBufferToBuffer));
         ns.set("js_encoder_copy_texture_to_buffer", funcNum(&jsEncoderCopyTextureToBuffer));
         ns.set("js_buffer_read_start", funcNum(&jsBufferReadStart));
@@ -7142,18 +7212,28 @@ const ZimrBoot = struct {
                 const has_timestamp_query: bool = adapter_features.call("has", .{str("timestamp-query")}).truthy();
                 g.boot.timestamp_supported = has_timestamp_query;
 
+                // WORKGROUP MEMORY: WebGPU grants 16 KB unless asked, and a kernel
+                // that keeps its working set there - robotgpu's Newton holds a
+                // world's Hessian - needs more. The adapter's own limit is asked
+                // for: within what the adapter supports, so it is never refused.
+                const device_desc: Value = global().get("Object").new(.{});
+                const required_limits: Value = global().get("Object").new(.{});
+                const adapter_limits: Value = adapter.get("limits");
+                const adapter_workgroup_storage: f64 = adapter_limits.getNum("maxComputeWorkgroupStorageSize");
+                const storage_is_usable: bool = adapter_workgroup_storage >= 1; // false for NaN too
+                if (storage_is_usable) {
+                    const storage_value: Value = .{ .h = js_num(adapter_workgroup_storage) };
+                    required_limits.set("maxComputeWorkgroupStorageSize", storage_value);
+                }
+                device_desc.set("requiredLimits", required_limits);
                 // requestDevice(...) -> a promise of the GPUDevice. Request the
                 // timestamp-query feature only when the adapter advertises it.
-                var device_promise: Value = undefined;
                 if (has_timestamp_query) {
                     const required_features: Value = global().get("Array").new(.{});
                     _ = required_features.call("push", .{str("timestamp-query")});
-                    const device_desc: Value = global().get("Object").new(.{});
                     device_desc.set("requiredFeatures", required_features);
-                    device_promise = adapter.call("requestDevice", .{device_desc});
-                } else {
-                    device_promise = adapter.call("requestDevice", .{});
                 }
+                const device_promise: Value = adapter.call("requestDevice", .{device_desc});
                 g.boot.pending_promise = js_promise_register(device_promise.h);
                 g.boot.stage = 2;
             },
@@ -7168,6 +7248,10 @@ const ZimrBoot = struct {
                 const limit_is_usable: bool = max_texture_dim >= 1; // false for NaN too
                 if (limit_is_usable) {
                     g.wgpu.max_backing_dim = max_texture_dim;
+                }
+                const granted_workgroup_storage: f64 = device.get("limits").getNum("maxComputeWorkgroupStorageSize");
+                if (granted_workgroup_storage >= 1) {
+                    g.wgpu.max_workgroup_storage = granted_workgroup_storage;
                 }
                 // Surface GPU validation errors instead of silently going black.
                 _ = device.call("addEventListener", .{ str("uncapturederror"), func(&onGpuError) });

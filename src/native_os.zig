@@ -118,17 +118,33 @@ pub fn environmentVariable(comptime name: []const u8, buffer: []u8) ?[]const u8 
 
 // ---- The clock ----
 
-/// A monotonic clock in milliseconds: Windows' performance counter, or Linux's `CLOCK_MONOTONIC` - both unaffected by
-/// changes to the wall-clock time, and both starting at an arbitrary point, so only differences mean anything.
+/// A clock reading in milliseconds, from its whole seconds and its nanoseconds - each system's `timespec` fields
+/// widened to `i64` by the caller.
+fn millisecondsOf(whole_seconds: i64, nanoseconds_part: i64) f64 {
+    const seconds: f64 = @floatFromInt(whole_seconds);
+    const nanoseconds: f64 = @floatFromInt(nanoseconds_part);
+    return seconds * 1000.0 + nanoseconds / 1_000_000.0;
+}
+
+/// A monotonic clock in milliseconds: Windows' performance counter, Linux's `CLOCK_MONOTONIC`, or any other system's
+/// through its C library - each unaffected by changes to the wall-clock time, and each starting at an arbitrary point,
+/// so only differences mean anything.
 pub fn monotonicMilliseconds() f64 {
     if (comptime is_windows) {
         return win32.monotonicMilliseconds();
     }
+    if (comptime builtin.os.tag == .linux) {
+        // Linux's clock through its system call, not the C library's wrapper: a build that does not link libc - a
+        // test root such as the sound tests' - cannot call the C library at all. Android is Linux here.
+        var linux_now: std.os.linux.timespec = undefined;
+        _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &linux_now);
+        return millisecondsOf(@intCast(linux_now.sec), @intCast(linux_now.nsec));
+    }
+    // Every other system - macOS first - through its C library, which such a system always links: macOS offers
+    // no other way to its kernel.
     var now: std.c.timespec = undefined;
     _ = std.c.clock_gettime(.MONOTONIC, &now);
-    const seconds: f64 = @floatFromInt(now.sec);
-    const nanoseconds: f64 = @floatFromInt(now.nsec);
-    return seconds * 1000.0 + nanoseconds / 1_000_000.0;
+    return millisecondsOf(@intCast(now.sec), @intCast(now.nsec));
 }
 
 // ---- The services' Io ----

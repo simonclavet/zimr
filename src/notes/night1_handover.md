@@ -11,8 +11,9 @@ run writes is large and is not source - in `C:\dev\geno_runs\`, with the recipe 
 | `night1_improve` | the Gaussian policy with returns - a character that loses the reference lives on and comes back where the motion has got to | `night1_reproduce`: what returning teaches |
 | `night1_reproduce` | SuperMimic's recipe on the minute: an episode ends at a loss | - |
 
-All three: the minute (dance, get-up, walk, run), 32 characters, horizon 32 over the world model's 8, networks 256 wide,
-the critic and its tail, the rates' cosine over 8 hours, pushes from hour 1 to full strength at hour 7 (0.5 a second,
+All three: the minute (dance, get-up, walk, run), 32 characters, the policy and the world model deciding at 30 Hz
+over 60 Hz physics (`decide_every = 2`, so every count is in decisions), horizon 16 (0.53 s) over the world model's 8,
+networks 680 wide (the critic 170), the critic and its tail, the rates' cosine over 8 hours, pushes from hour 1 to full strength at hour 7 (0.5 a second,
 up to 3.5 m/s, a quarter of starts in trouble), judged and checkpointed every 30 minutes, until stopped.
 
 ## Sharing one machine
@@ -102,7 +103,10 @@ At one hour - before any push:
 ## The morning
 
 - `status.zon`: the state, `collapse`, `nonfinite`.
-- `judge.csv`: each clip's time to failure through the night, run against run at the same minutes.
+- `judge.csv`: each clip's time to failure through the night, run against run at the same minutes. Each clip also
+  has a `<clip>/whole` line - the whole clip from frame 1, one start, SuperMimic's evaluation: its normalised return
+  is `super_mimic_return_sum / (5 x super_mimic_available_steps)` (SuperMimic's LAFAN1 result: 0.827), and the clip
+  failed when that line's `reached_end` is 0.
 - `recovery.csv`: per clip and push speed - survived, lost, returned, not returned. The night's question is the return
   rate, returned / (returned + not returned), at 2 to 5 m/s: full against improve against reproduce.
 - Send the three folders' `status.zon`, `judge.csv`, `recovery.csv` and `log.csv` - not the state files.

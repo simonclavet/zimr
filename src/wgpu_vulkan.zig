@@ -665,6 +665,12 @@ var host: ?*Host = null;
 
 /// The running host. Every GPU call goes through it, so a call made before a window is attached or a headless
 /// host is started is reported by name.
+/// Whether a host has been started (`startHeadless`, a window's attach): the host is one per process, so a caller
+/// that may come second - a test among many - asks before starting one.
+pub fn isStarted() bool {
+    return host != null;
+}
+
 fn theHost() *Host {
     return host orelse panic("vulkan host: none started - attach a window, or start a headless host, first", .{});
 }
@@ -3721,6 +3727,11 @@ pub fn shutdown() MessageCounts {
 /// The browser's `requestAdapter` and `requestDevice` in one: brings Vulkan up, and returns the one device's handle.
 pub fn initDevice() u32 {
     const self: *Host = theHost();
+    // Brought up once: a second call - a second test of one process - is given the device already made, rather than
+    // a second Vulkan instance over the first.
+    if (self.device != .null_handle) {
+        return 1;
+    }
     bringUp(self) catch |err| panic("vulkan host: bringing Vulkan up failed: {s}", .{@errorName(err)});
     return 1;
 }
@@ -3729,6 +3740,14 @@ pub fn initDevice() u32 {
 pub fn deviceGetQueue(device: u32) u32 {
     _ = device;
     return 1;
+}
+
+/// The most shared memory one compute workgroup may declare (`VkPhysicalDeviceLimits::maxComputeSharedMemorySize`),
+/// what WebGPU calls `maxComputeWorkgroupStorageSize`.
+pub fn deviceWorkgroupStorageLimit(device: u32) u32 {
+    _ = device;
+    const self: *Host = theHost();
+    return self.gpu.compute.max_shared_memory_bytes;
 }
 
 /// The one surface: the window's swapchain, created here on first use.

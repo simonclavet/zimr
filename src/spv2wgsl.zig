@@ -176,6 +176,7 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 const ArrayList = std.ArrayList;
+const eql = std.mem.eql;
 
 const Io = std.Io;
 
@@ -202,6 +203,7 @@ const splitScalar = std.mem.splitScalar;
 const trim = std.mem.trim;
 
 const parseInt = std.fmt.parseInt;
+const parseFloat = std.fmt.parseFloat;
 
 // =============================================================================
 // SPIR-V opcodes + spec enums
@@ -878,11 +880,25 @@ const State = struct {
     /// forbids plain `[]` load/store on an `atomic<T>`.  Sparse, sized to
     /// id-bound; indexed by variable id.
     atomic_var: []bool = &.{},
+    /// Per variable: a UNIFORM workgroup array (`kompute.sharedUniform`, named with `uniform_workgroup_prefix`), every
+    /// load of which is written as `workgroupUniformLoad(&...)` - the read WGSL's validators take as the same in every
+    /// invocation, so a barrier behind a decision made on it stands in uniform control flow. Sparse, sized to id-bound;
+    /// indexed by variable id (`markUniformWorkgroupVariables`).
+    uniform_var: []bool = &.{},
+    /// Per id: a TRIVIAL phi - every incoming value the same constant - named by that constant, with no variable
+    /// (`trivialPhiConstant`). Sized to id-bound.
+    trivial_phi: []bool = &.{},
 
     /// Look up the WGSL name of a SPIR-V id, for `ir_emit`'s duck-typed
     /// `idName` helper.
     pub fn wgslNameOf(self: *State, id: u32) []const u8 {
         return lookupId(self, id).wgsl_name;
+    }
+
+    /// Whether phi `id` is TRIVIAL - every incoming value the same constant - and so named by that constant, with no
+    /// variable to assign (`trivialPhiConstant`): `ir_emit`'s assignment emitters skip it.
+    pub fn isTrivialPhi(self: *State, id: u32) bool {
+        return id < self.trivial_phi.len and self.trivial_phi[id];
     }
 
     /// Duck-typed accessor used by ir_emit to format switch case
@@ -1027,6 +1043,8 @@ const State = struct {
             .hoisted = try arena.alloc(bool, bound),
             .hoist_type = try arena.alloc(u32, bound),
             .atomic_var = try arena.alloc(bool, bound),
+            .uniform_var = try arena.alloc(bool, bound),
+            .trivial_phi = try arena.alloc(bool, bound),
         };
         for (s.ids) |*i| {
             i.* = .{};
@@ -1037,6 +1055,8 @@ const State = struct {
         @memset(s.hoisted, false);
         @memset(s.hoist_type, 0);
         @memset(s.atomic_var, false);
+        @memset(s.uniform_var, false);
+        @memset(s.trivial_phi, false);
         return s;
     }
 };
@@ -1195,9 +1215,59 @@ fn readSpvString(
     return .{ .bytes = out, .word_count = n_words };
 }
 
+/// WGSL's KEYWORDS AND RESERVED WORDS, as the WGSL specification lists them: no declaration may be named by one. Many
+/// are ordinary names in Zig - `active`, `filter`, `match`, `self`, `type`, `target` - and a kernel's locals reach the
+/// WGSL by their Zig names (the SPIR-V's debug names), so `sanitizeName` renames any name that is one.
+const wgsl_reserved_words = [_][]const u8{
+    // The keywords.
+    "alias",         "break",       "case",             "const",            "const_assert",     "continue",
+    "continuing",    "default",     "diagnostic",       "discard",          "else",             "enable",
+    "false",         "fn",          "for",              "if",               "let",              "loop",
+    "override",      "requires",    "return",           "struct",           "switch",           "true",
+    "var",           "while",
+    // The reserved words.
+          "NULL",             "Self",             "abstract",         "active",
+    "alignas",       "alignof",     "as",               "asm",              "asm_fragment",     "async",
+    "attribute",     "auto",        "await",            "become",           "binding_array",    "cast",
+    "catch",         "class",       "co_await",         "co_return",        "co_yield",         "coherent",
+    "column_major",  "common",      "compile",          "compile_fragment", "concept",          "const_cast",
+    "consteval",     "constexpr",   "constinit",        "crate",            "debugger",         "decltype",
+    "delete",        "demote",      "demote_to_helper", "do",               "dynamic_cast",     "enum",
+    "explicit",      "export",      "extends",          "extern",           "external",         "fallthrough",
+    "filter",        "final",       "finally",          "friend",           "from",             "fxgroup",
+    "get",           "goto",        "groupshared",      "highp",            "impl",             "implements",
+    "import",        "inline",      "instanceof",       "interface",        "layout",           "lowp",
+    "macro",         "macro_rules", "match",            "mediump",          "meta",             "mod",
+    "module",        "move",        "mut",              "mutable",          "namespace",        "new",
+    "nil",           "noexcept",    "noinline",         "nointerpolation",  "non_coherent",     "noncoherent",
+    "noperspective", "null",        "nullptr",          "of",               "operator",         "package",
+    "packoffset",    "partition",   "pass",             "patch",            "pixelfragment",    "precise",
+    "precision",     "premerge",    "priv",             "protected",        "pub",              "public",
+    "readonly",      "ref",         "regardless",       "register",         "reinterpret_cast", "require",
+    "resource",      "restrict",    "self",             "set",              "shared",           "signed",
+    "sizeof",        "smooth",      "snorm",            "static",           "static_assert",    "static_cast",
+    "std",           "subroutine",  "super",            "target",           "template",         "this",
+    "thread_local",  "throw",       "trait",            "try",              "type",             "typedef",
+    "typeid",        "typename",    "typeof",           "union",            "unless",           "unorm",
+    "unsafe",        "unsized",     "use",              "using",            "varying",          "virtual",
+    "volatile",      "wgsl",        "where",            "with",             "writeonly",        "yield",
+};
+
+/// Whether `name` is one of WGSL's keywords or reserved words (`wgsl_reserved_words`).
+fn isWgslReservedWord(name: []const u8) bool {
+    for (wgsl_reserved_words) |word| {
+        if (eql(u8, word, name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /// Convert an arbitrary identifier string to a WGSL-safe identifier. WGSL
-/// allows ASCII letters, digits, and underscores, and identifiers must not
-/// start with a digit.
+/// allows ASCII letters, digits, and underscores; identifiers must not
+/// start with a digit, nor with two underscores (reserved to the
+/// implementation), nor be a keyword or a reserved word - such a name gets a
+/// trailing underscore (`active` becomes `active_`).
 fn sanitizeName(arena: Allocator, s: []const u8) ![]const u8 {
     if (s.len == 0) {
         return arena.dupe(u8, "_anon");
@@ -1214,7 +1284,29 @@ fn sanitizeName(arena: Allocator, s: []const u8) ![]const u8 {
             try out.append(arena, '_');
         }
     }
+    // Two leading underscores are the implementation's: `__x` becomes `_z_x`.
+    const starts_reserved: bool = out.items.len >= 2 and out.items[0] == '_' and out.items[1] == '_';
+    if (starts_reserved) {
+        try out.insert(arena, 1, 'z');
+    }
+    if (isWgslReservedWord(out.items)) {
+        try out.append(arena, '_');
+    }
     return out.toOwnedSlice(arena);
+}
+
+test "sanitizeName: a WGSL keyword or reserved word is renamed, an ordinary name kept" {
+    // A kernel's locals reach the WGSL by their Zig names: robot.zig's line search named one `active`, which WGSL
+    // reserves, and Chrome's Tint refused the module ("'active' is a reserved keyword").
+    var arena_state: ArenaAllocator = .init(testing_allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    try expectEqualStrings("active_", try sanitizeName(arena, "active"));
+    try expectEqualStrings("loop_", try sanitizeName(arena, "loop"));
+    try expectEqualStrings("type_", try sanitizeName(arena, "type"));
+    try expectEqualStrings("_z_hidden", try sanitizeName(arena, "__hidden"));
+    try expectEqualStrings("left_the_cost", try sanitizeName(arena, "left_the_cost"));
+    try expectEqualStrings("_1x", try sanitizeName(arena, "1x"));
 }
 
 fn findMemberDeco(
@@ -1351,7 +1443,19 @@ fn renderConstant(
         // A bitcast from the exact bit pattern is the sanctioned spelling and is what every
         // other WGSL producer emits. It also preserves WHICH NaN and the sign of the infinity,
         // which a literal could not have done anyway.
-        const s_int: []const u8 = try allocPrint(arena, "{d}", .{f});
+        //
+        // ---- F32'S LARGEST VALUES: THE SHORTEST DECIMAL LIES PAST THE RANGE ----
+        //
+        // WGSL reads a literal as an abstract float (f64), which must then lie within f32's finite range. f32's largest
+        // finite number is 340282346638528859811704183484516925440; its shortest decimal, 3.4028235e38, reads back
+        // past it, and Tint refuses the module ("cannot be represented as 'f32'"). Those values are written by the
+        // exact value's shortest f64 decimal instead, which reads back to that value exactly; every other constant
+        // keeps its shortest f32 spelling.
+        const shortest: []const u8 = try allocPrint(arena, "{d}", .{f});
+        const f32_largest_finite: f64 = 340282346638528859811704183484516925440.0;
+        const read_back: f64 = parseFloat(f64, shortest) catch 0;
+        const is_past_range: bool = @abs(read_back) > f32_largest_finite;
+        const s_int: []const u8 = if (is_past_range) try allocPrint(arena, "{d}", .{@as(f64, f)}) else shortest;
         if (std.mem.indexOfAny(u8, s_int, ".eEnN") == null) {
             // No decimal point, exponent, or inf/nan marker -> append ".0" so WGSL reads it as
             // a float rather than an AbstractInt. `nN` catches the `nan`/`inf` spellings, which
@@ -1447,6 +1551,10 @@ fn applyMemberDecoration(s: *State, ops: []const u32) !void {
     }
 }
 
+/// The name prefix of a UNIFORM workgroup array: kompute's `uniform_shared_prefix` (`sharedUniform`), which this must
+/// stay equal to - `src/tests.zig` holds the two to it.
+pub const uniform_workgroup_prefix = "zimr_uniform_";
+
 fn pass2_decorations(s: *State) !void {
     for (s.inst_off.items) |off| {
         const w0: u32 = s.spirv[off];
@@ -1478,10 +1586,15 @@ fn pass2_decorations(s: *State) !void {
                     // gives correct, COLLISION-FREE binding names: two storage
                     // buffers sampled through one `inline` helper keep `src`/`dst`
                     // rather than both becoming the param name `buf`.
+                    // A UNIFORM workgroup array's name (`uniform_workgroup_prefix`) is kept the same way: it is the
+                    // mark `markUniformWorkgroupVariables` reads, and the array is passed to a helper - kompute's
+                    // `workgroupUniformLoad` - on every read, so a parameter's name arrives for it every time.
                     const existing: []const u8 = s.ids[target].wgsl_name;
-                    const name_is_kbuf: bool = startsWith(u8, name, "kbuf_");
-                    const existing_is_kbuf: bool = startsWith(u8, existing, "kbuf_");
-                    if (name_is_kbuf or !existing_is_kbuf) {
+                    const name_is_kept: bool = startsWith(u8, name, "kbuf_") or
+                        startsWith(u8, name, uniform_workgroup_prefix);
+                    const existing_is_kept: bool = startsWith(u8, existing, "kbuf_") or
+                        startsWith(u8, existing, uniform_workgroup_prefix);
+                    if (name_is_kept or !existing_is_kept) {
                         s.ids[target].wgsl_name = name;
                     }
                 }
@@ -1743,6 +1856,25 @@ test "renderConstant: a whole-valued float keeps its fractional part" {
     const one: u32 = 0x3F80_0000;
     const one_text: []const u8 = try renderConstant(arena, "f32", &.{one});
     try expectEqualStrings("1.0", one_text);
+}
+
+test "renderConstant: f32's largest values are written within f32's range, every other value as before" {
+    // Tint refused robot.zig's line search, which starts a minimum at f32's largest finite number: its shortest
+    // decimal, read as WGSL reads it, lies past f32's range.
+    var arena_state: ArenaAllocator = .init(testing_allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    const f32_largest_finite: f64 = 340282346638528859811704183484516925440.0;
+    const largest_bits: u32 = 0x7f7fffff;
+    for ([_]u32{ largest_bits, largest_bits | 0x80000000 }) |bits| {
+        const spelling: []const u8 = try renderConstant(arena, "f32", &.{bits});
+        const read_back: f64 = try parseFloat(f64, spelling);
+        try expect(@abs(read_back) <= f32_largest_finite);
+        try expectEqual(@as(f32, @bitCast(bits)), @as(f32, @floatCast(read_back)));
+    }
+    // An ordinary constant keeps its shortest spelling.
+    const half_bits: u32 = @bitCast(@as(f32, 0.5));
+    try expectEqualStrings("0.5", try renderConstant(arena, "f32", &.{half_bits}));
 }
 
 /// A NaN or infinity, as a HELPER FUNCTION returning its bit pattern.
@@ -2506,6 +2638,58 @@ fn checkBarrierUniformity(s: *State) !void {
 /// This is what drives `array<atomic<u32>>` emission and the load/store->atomic
 /// rerouting.  The instruction's pointer operand is the element's address; its
 /// root OpVariable is the binding to taint.
+/// Mark every UNIFORM workgroup array - a workgroup variable named with `uniform_workgroup_prefix` - so `emitLoad`
+/// writes each read of it as `workgroupUniformLoad(&...)`. Names are known from `pass1_walk` on.
+/// A TRIVIAL PHI's constant: the id of the constant every incoming edge of the phi with operands `phi_operands`
+/// ([result-type, result-id, value, parent, value, parent, ...]) brings, or null when the edges bring different values
+/// or a value that is not a constant.
+///
+/// Zig's SPIR-V backend merges control flow through phis that say which block came before, and when both branches of
+/// an `if` rejoin, both bring the same constant. Written as a `var` assigned in each branch, such a phi reads to WGSL's
+/// uniformity analysis as a value set under the `if`'s condition: when that condition depends on the invocation
+/// (`if (lane == 0) { ... }`), everything decided on the phi afterwards counts as non-uniform, and a barrier after it -
+/// in a loop a whole workgroup runs - is refused. A phi that receives one constant on every edge holds that constant,
+/// whichever edge was taken; naming it by the constant is the same program, and the analysis sees a constant. A phi
+/// whose edges bring different values is a real choice between paths, and stays a variable.
+fn trivialPhiConstant(s: *const State, phi_operands: []const u32) ?u32 {
+    if (phi_operands.len < 4) {
+        return null;
+    }
+    const first_value: u32 = phi_operands[2];
+    var operand: usize = 2;
+    while (operand < phi_operands.len) : (operand += 2) {
+        if (phi_operands[operand] != first_value) {
+            return null;
+        }
+    }
+    if (first_value >= s.ids.len or s.ids[first_value].kind != .constant) {
+        return null;
+    }
+    return first_value;
+}
+
+fn markUniformWorkgroupVariables(s: *State) void {
+    for (s.inst_off.items) |off| {
+        const w0: u32 = s.spirv[off];
+        const op: types.Op = @fromBackingInt(@intCast(types.opcodeOf(w0)));
+        if (op != .Variable) {
+            continue;
+        }
+        // result-type, result-id, storage-class[, init]
+        const ops: []const u32 = types.operandsAt(s.spirv, off);
+        if (ops.len < 3) {
+            continue;
+        }
+        const variable: u32 = ops[1];
+        const in_workgroup_memory: bool = ops[2] == @backingInt(types.StorageClass.Workgroup);
+        if (!in_workgroup_memory or variable >= s.uniform_var.len) {
+            continue;
+        }
+        const name: []const u8 = s.ids[variable].wgsl_name;
+        s.uniform_var[variable] = startsWith(u8, name, uniform_workgroup_prefix);
+    }
+}
+
 fn markAtomicBindings(s: *State) !void {
     // Build an id -> defining-instruction-offset map (sparse, id-bound).
     const def_off: []u32 = try s.arena.alloc(u32, s.ids.len);
@@ -3918,7 +4102,9 @@ pub const ir_build = struct {
 
     /// Which structured-exit terminator a branch to a given block produces,
     /// as the IR's terminator tag.
-    const ExitKind = enum { exit_if, exit_loop, exit_switch, cont };
+    /// How a branch to a stop ends the chain. `ret`: the stop is the merge of spirv-opt's merge-return wrapper, which
+    /// only returns - the branch is a `return` (`isReturnWrapper`).
+    const ExitKind = enum { exit_if, exit_loop, exit_switch, cont, ret };
 
     const Stop = struct {
         /// SPIR-V block id that, when branched to, ends the current chain.
@@ -4111,6 +4297,23 @@ pub const ir_build = struct {
             }
         }
 
+        /// Is block `info` spirv-opt's MERGE-RETURN WRAPPER - a case-less switch (an `OpSwitch` of three words: its
+        /// selector and its default) whose merge block returns at once, no phi and no code before its `OpReturn`?
+        fn isReturnWrapper(self: *const Builder, info: BlockInfo) bool {
+            const terminator_word: u32 = self.spirv[self.inst_off[info.terminator_inst_idx]];
+            const is_switch: bool = types.opcodeOf(terminator_word) == @backingInt(types.Op.Switch);
+            if (!is_switch or types.wordCountOf(terminator_word) != 3) {
+                return false;
+            }
+            const merge_info: BlockInfo = self.table.get(info.merge_id) orelse return false;
+            const returns_at_once: bool = merge_info.terminator_inst_idx == merge_info.label_inst_idx + 1;
+            if (!returns_at_once) {
+                return false;
+            }
+            const merge_word: u32 = self.spirv[self.inst_off[merge_info.terminator_inst_idx]];
+            return types.opcodeOf(merge_word) == @backingInt(types.Op.Return);
+        }
+
         /// Make the empty exit terminator for a given exit kind.
         fn emptyExit(kind: ExitKind) ir.Terminator {
             return switch (kind) {
@@ -4118,6 +4321,7 @@ pub const ir_build = struct {
                 .exit_loop => .{ .exit_loop = .{} },
                 .exit_switch => .{ .exit_switch = .{} },
                 .cont => .{ .cont = .{} },
+                .ret => .ret,
             };
         }
 
@@ -4236,6 +4440,19 @@ pub const ir_build = struct {
                         cur_id = merge_id;
                     },
                     .switch_header => {
+                        // SPIRV-OPT's MERGE-RETURN WRAPPER, UNDONE: a case-less switch at the function's top whose
+                        // merge only returns. Its default target is this chain's next block, and every branch to
+                        // its merge a `return` - the early returns the wrapper replaced. Kept as a switch, a break
+                        // under a runtime condition would make Tint judge all that follows it non-uniform (a barrier
+                        // there rejected), as the same exit written as a return does not.
+                        const at_function_top: bool = stops.items.items.len == 0;
+                        if (at_function_top and self.isReturnWrapper(info)) {
+                            try items.append(self.arena, .{ .body = cur_id });
+                            try stops.push(.{ .target = info.merge_id, .kind = .ret });
+                            const wrapper_off: u32 = self.inst_off[info.terminator_inst_idx];
+                            cur_id = types.operandsAt(self.spirv, wrapper_off)[1];
+                            continue;
+                        }
                         // The header's own body (between OpLabel and the
                         // SelectionMerge/OpSwitch) is emitted first, then the
                         // Switch.
@@ -6199,6 +6416,58 @@ pub const ir_build = struct {
         try ir.validate(&body);
     }
 
+    test "build lowers spirv-opt's merge-return wrapper as its body: its breaks returns, the code after them kept" {
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
+        defer arena_inst.deinit();
+        const a: Allocator = arena_inst.allocator();
+
+        // spirv-opt's merge-return turns an early return into a break out of a switch with only a default. Here the
+        // entry block %10 is such a switch (merge %80) whose default is ANOTHER one (%20, merge %50); after the inner
+        // switch, the if at %50 breaks out of the outer switch on its true side (%60 -> %80) and falls to its merge
+        // %70 on the false side - the code that must survive, inside the outer switch's default.
+        const words = [_]u32{
+            0x07230203,                 0x00010600, 0, 99, 0, // header
+            inst(5, types.Op.Function), 2,          1, 0,  3,
+            inst(2, types.Op.Label), 10, //
+            inst(3, types.Op.SelectionMerge), 80, 0, //
+            inst(3, types.Op.Switch), 99, 20, // outer: selector %99, default %20, no cases
+            inst(2, types.Op.Label), 20, //
+            inst(3, types.Op.SelectionMerge), 50, 0, //
+            inst(3, types.Op.Switch), 99, 30, // inner: default %30, no cases
+            inst(2, types.Op.Label), 30, //
+            inst(2, types.Op.Branch), 50, //
+            inst(2, types.Op.Label), 50, //
+            inst(3, types.Op.SelectionMerge), 70, 0, //
+            inst(4, types.Op.BranchConditional), 98, 60, 70, //
+            inst(2, types.Op.Label), 60, //
+            inst(2, types.Op.Branch), 80, // the break out of the outer switch
+            inst(2, types.Op.Label), 70, //
+            inst(2, types.Op.Branch), 80, // the code after the if
+            inst(2, types.Op.Label),  80, //
+            inst(1, types.Op.Return), inst(1, types.Op.FunctionEnd),
+        };
+        const offs: []u32 = try instOffsets(a, &words);
+        const body: ir.FnBody = try build(a, 0, offs.len - 1, offs, &words);
+
+        // The outer switch is the merge-return wrapper - its merge %80 only returns - so it is lowered as its body
+        // (`isReturnWrapper`): the break at %60 becomes a `return`, and %70, the code after the if, stays in the
+        // function's own chain, which then returns.
+        const entry_items: []const ir.Item = body.entry.items;
+        var if_with_return: bool = false;
+        var block_after_if_kept: bool = false;
+        for (entry_items) |item| {
+            if (item == .construct and item.construct.* == .if_) {
+                if_with_return = if_with_return or item.construct.if_.true_blk.term == .ret;
+            }
+            if (item == .body and item.body == 70) {
+                block_after_if_kept = true;
+            }
+        }
+        try testing.expect(if_with_return);
+        try testing.expect(block_after_if_kept);
+        try testing.expect(body.entry.term == .ret);
+        try ir.validate(&body);
+    }
     test "build dedups switch selectors that share a case body" {
         var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
@@ -6507,8 +6776,12 @@ pub const ir_emit = struct {
         enc: Enclosing,
     ) anyerror!void {
         _ = enc;
-        // Initialize the loop-carried header phis BEFORE the loop.
+        // Initialize the loop-carried header phis BEFORE the loop - all but the trivial ones, which are their
+        // constant (`State.isTrivialPhi`).
         for (lp.header_params) |p| {
+            if (s.isTrivialPhi(p.phi_id)) {
+                continue;
+            }
             if (p.init) |init_id| {
                 try indent(out, arena, depth);
                 try fmt(out, arena, "{s} = {s};\n", .{ s.wgslNameOf(p.phi_id), s.wgslNameOf(init_id) });
@@ -6541,6 +6814,9 @@ pub const ir_emit = struct {
             }
         }
         for (lp.header_params, 0..) |p, i| {
+            if (s.isTrivialPhi(p.phi_id)) {
+                continue;
+            }
             try indent(out, arena, depth + 2);
             try fmt(out, arena, "{s} = {s};\n", .{ s.wgslNameOf(p.phi_id), s.wgslNameOf(lp.iter_args[i]) });
         }
@@ -6679,7 +6955,8 @@ pub const ir_emit = struct {
 
     /// Emit `phi{results[i].phi_id} = <args[i]>;` for each i.  The exit's
     /// arg count equals the construct's result count (the IR invariant
-    /// `ir.validate` enforces), so this is a clean positional pairing.
+    /// `ir.validate` enforces), so this is a clean positional pairing. A
+    /// trivial phi (`State.isTrivialPhi`) is its constant, with nothing to assign.
     fn emitPhiAssigns(
         s: anytype,
         out: *EmitList,
@@ -6691,6 +6968,9 @@ pub const ir_emit = struct {
         for (results, 0..) |p, i| {
             if (i >= args.len) {
                 break;
+            }
+            if (s.isTrivialPhi(p.phi_id)) {
+                continue;
             }
             try indent(out, arena, depth);
             try fmt(out, arena, "{s} = {s};\n", .{ s.wgslNameOf(p.phi_id), s.wgslNameOf(args[i]) });
@@ -6735,6 +7015,12 @@ pub const ir_emit = struct {
 
         pub fn wgslNameOf(self: *FakeState, id: u32) []const u8 {
             return allocPrint(self.arena, "v{d}", .{id}) catch "?";
+        }
+
+        pub fn isTrivialPhi(self: *FakeState, id: u32) bool {
+            _ = self;
+            _ = id;
+            return false;
         }
 
         pub fn scalarTypeNameOf(self: *FakeState, id: u32) []const u8 {
@@ -7086,6 +7372,14 @@ fn emitLoad(
         try bprint(out, s.arena, "atomicLoad(&{s});\n", .{ptr});
         return;
     }
+    // A UNIFORM workgroup array (`kompute.sharedUniform`): every invocation reads it together, and the read must be
+    // WGSL's `workgroupUniformLoad` for the validators to take what is decided on it as uniform. ptr is an access path
+    // like `zimr_uniform_rounds_left[0]`, whose root variable carries the mark, or the variable itself.
+    const uniform_root: u32 = if (ptr_info.kind == .variable) ops[2] else ptr_info.extra_a;
+    if (uniform_root != 0 and uniform_root < s.uniform_var.len and s.uniform_var[uniform_root]) {
+        try bprint(out, s.arena, "workgroupUniformLoad(&{s});\n", .{ptr});
+        return;
+    }
     try bprint(out, s.arena, "{s};\n", .{ptr});
 }
 
@@ -7200,8 +7494,29 @@ fn emitCompositeExtract(
 
     var buf: ArrayList(u8) = .empty;
     try bstr(&buf, s.arena, composite);
-    for (indices) |i| {
-        try bprint(&buf, s.arena, "[{d}]", .{i});
+    // The composite's type walked as the indices descend it, as `emitAccessChain` walks a pointee: a STRUCT's member is
+    // NAMED (`.field_N` - WGSL indexes no structure, so `p[1]` is refused), a vector's lane, a matrix's column or an
+    // array's element is indexed. A Zig optional passed by value is such a struct - its payload, then its flag.
+    var cur_type: u32 = lookupId(s, ops[2]).type_id;
+    for (indices) |index| {
+        const cur_info: *const IdInfo = lookupType(s, cur_type);
+        switch (cur_info.kind) {
+            .type_struct => {
+                try bprint(&buf, s.arena, ".field_{d}", .{index});
+                cur_type = advanceStructMember(s, cur_type, index) orelse cur_type;
+            },
+            .type_vector, .type_matrix => {
+                try bprint(&buf, s.arena, "[{d}]", .{index});
+                cur_type = cur_info.extra_b;
+            },
+            .type_array => {
+                try bprint(&buf, s.arena, "[{d}]", .{index});
+                cur_type = cur_info.extra_a;
+            },
+            else => {
+                try bprint(&buf, s.arena, "[{d}]", .{index});
+            },
+        }
     }
     const expr: []const u8 = try buf.toOwnedSlice(s.arena);
 
@@ -7970,6 +8285,27 @@ fn emitUnhandledPlaceholder(
     );
 }
 
+test "a composite extract names a struct's member and indexes a vector's lane - WGSL indexes no structure" {
+    var arena_state: ArenaAllocator = .init(testing_allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    // A module header whose id bound covers the ids set by hand below; no instruction is read.
+    const header: [5]u32 = .{ 0x07230203, 0x00010000, 0, 32, 0 };
+    var s: State = try .init(arena, &header);
+    setId(&s, 1, .{ .kind = .type_scalar, .wgsl_name = "u32" });
+    setId(&s, 2, .{ .kind = .type_struct, .wgsl_name = "S2" });
+    setId(&s, 3, .{ .kind = .value, .type_id = 2, .wgsl_name = "p" });
+    setId(&s, 4, .{ .kind = .type_scalar, .wgsl_name = "f32" });
+    setId(&s, 5, .{ .kind = .type_vector, .wgsl_name = "vec4<f32>", .extra_a = 4, .extra_b = 4 });
+    setId(&s, 6, .{ .kind = .value, .type_id = 5, .wgsl_name = "v" });
+    var out: ArrayList(u8) = .empty;
+    // A Zig optional passed by value is a struct - its payload, then its flag: the flag is member 1, `p.field_1`.
+    try emitCompositeExtract(&s, &out, &.{ 1, 10, 3, 1 });
+    // A vector's lane 2 stays an index.
+    try emitCompositeExtract(&s, &out, &.{ 4, 11, 6, 2 });
+    try expectEqualStrings("  let _10: u32 = p.field_1;\n  let _11: f32 = v[2];\n", out.items);
+}
+
 test "no lowering is never silent: an opcode or GLSL.std.450 instruction without one leaves an // ERROR: marker" {
     // `warnUnhandled` names each opcode at `warn` in a Debug build: the diagnostic working, but a passing test prints
     // nothing, so the bar is raised for this test.
@@ -8512,6 +8848,32 @@ fn appendValueOperands(
     }
 }
 
+/// A POINTER USED OUTSIDE ITS BLOCK CARRIES ITS INDICES THERE. An access chain's pointer is written as text at every
+/// load and store through it (`kbuf.field_0[_i]`, see `emitLoad`), so a load in another block names the chain's index
+/// values in that block too - each is hoisted with it (a function-scope `var`), through every access chain the pointer
+/// is built on. spirv-opt's redundancy elimination reuses one pointer across blocks, which this makes safe.
+fn hoistChainIndices(
+    s: *State,
+    chain_off: []const u32,
+    def_block: []const u32,
+    def_type: []const u32,
+    pointer_id: u32,
+) void {
+    var current: u32 = pointer_id;
+    while (@as(usize, current) < chain_off.len and chain_off[current] != 0) {
+        // An access chain's operands: its result type, its result, its base, then its indices.
+        const chain_ops: []const u32 = types.operandsAt(s.spirv, chain_off[current]);
+        for (chain_ops[3..]) |index_id| {
+            const defined_in_body: bool = @as(usize, index_id) < def_block.len and def_block[index_id] != 0;
+            if (defined_in_body) {
+                s.hoisted[index_id] = true;
+                s.hoist_type[index_id] = def_type[index_id];
+            }
+        }
+        current = chain_ops[2];
+    }
+}
+
 /// Mark instruction results that are used OUTSIDE their defining block,
 /// so emission declares them as a function-scope `var` (assigned at the
 /// def site) instead of a block-scoped `let` (which WGSL would not have
@@ -8536,6 +8898,9 @@ fn markHoistedResults(
     @memset(def_block, 0);
     const def_type: []u32 = try s.arena.alloc(u32, s.ids.len);
     @memset(def_type, 0);
+    // result id -> the offset of the access chain that defines it (0: not an access chain), for `hoistChainIndices`.
+    const chain_off: []u32 = try s.arena.alloc(u32, s.ids.len);
+    @memset(chain_off, 0);
 
     var cur_block: u32 = 0;
     var idx: usize = fn_k;
@@ -8558,6 +8923,10 @@ fn markHoistedResults(
                 def_block[rid] = cur_block;
                 // result-type is ops[0] for these value ops.
                 def_type[rid] = ops[0];
+                const is_access_chain: bool = op == .AccessChain or op == .InBoundsAccessChain;
+                if (is_access_chain) {
+                    chain_off[rid] = off;
+                }
             }
         }
     }
@@ -8615,6 +8984,7 @@ fn markHoistedResults(
             if (db != 0 and db != cur_block) {
                 s.hoisted[used_id] = true;
                 s.hoist_type[used_id] = def_type[used_id];
+                hoistChainIndices(s, chain_off, def_block, def_type, used_id);
             }
         }
     }
@@ -8674,13 +9044,20 @@ fn emitOneFunction(
                 },
                 .Phi => {
                     const phi_id: u32 = popnds[1];
-                    try phis.append(s.arena, phi_id);
-                    const pname: []const u8 = try allocPrint(s.arena, "phi{d}", .{phi_id});
-                    setId(s, phi_id, .{
-                        .kind = .value,
-                        .type_id = popnds[0],
-                        .wgsl_name = pname,
-                    });
+                    // A TRIVIAL phi is the constant it receives on every edge (`trivialPhiConstant`): named by it,
+                    // with no variable and nothing to assign.
+                    if (trivialPhiConstant(s, popnds)) |constant_id| {
+                        setId(s, phi_id, s.ids[constant_id]);
+                        s.trivial_phi[phi_id] = true;
+                    } else {
+                        try phis.append(s.arena, phi_id);
+                        const pname: []const u8 = try allocPrint(s.arena, "phi{d}", .{phi_id});
+                        setId(s, phi_id, .{
+                            .kind = .value,
+                            .type_id = popnds[0],
+                            .wgsl_name = pname,
+                        });
+                    }
                 },
                 else => {},
             }
@@ -9909,6 +10286,13 @@ pub const sccp = struct {
                             // (top can occur transiently before the condition is
                             // evaluated; the fixpoint re-runs. A condition that
                             // stays top leaves both edges marked - sound.)
+                            // A condition that WAS a constant on an earlier pass - a phi seen
+                            // through only the edges then live - and is varying now loses its
+                            // fold: the folds must match the fixpoint, not a pass on the way to
+                            // it, or the arm not taken is dropped while it still runs.
+                            if (self.a.folded.remove(info.id)) {
+                                self.changed = true;
+                            }
                             try self.markEdge(info.id, true_target);
                             try self.markEdge(info.id, false_target);
                         },
@@ -9938,7 +10322,12 @@ pub const sccp = struct {
                             try self.markEdge(info.id, taken);
                         },
                         else => {
-                            // Varying selector: default + every case label is live.
+                            // Varying selector: default + every case label is live. A selector
+                            // that was a constant on an earlier pass loses its fold, as a
+                            // conditional branch's condition does.
+                            if (self.a.folded.remove(info.id)) {
+                                self.changed = true;
+                            }
                             try self.markEdge(info.id, default_target);
                             var i: u32 = off + 3;
                             while (i + 1 < off + word_count) : (i += 2) {
@@ -10070,6 +10459,24 @@ pub const sccp = struct {
             off += word_count;
         }
         return offs.toOwnedSlice(arena);
+    }
+
+    /// Is block `info`'s terminator a CASE-LESS switch - an `OpSwitch` with only its selector and its default (three
+    /// words)? spirv-opt's merge-return pass wraps a function's body in such switches, so that an early return becomes
+    /// a `break` to the switch's merge. Such a switch is never folded: folding gains nothing, since its one edge is
+    /// already unconditional, and it drops the construct those breaks leave - a break then reads as a plain branch past
+    /// the code that follows it, and that code is lost (`src/notes/spv2wgsl_dropped_block.md`). `buildSwitch` lowers
+    /// it as WGSL's own `switch` with a `default`, inside which `break` leaves the switch.
+    fn isCaselessSwitch(
+        spirv: []const u32,
+        inst_off: []const u32,
+        info: bt.BlockInfo,
+    ) bool {
+        const terminator_off: u32 = inst_off[info.terminator_inst_idx];
+        const terminator_word: u32 = spirv[terminator_off];
+        const is_switch: bool = types.opcodeOf(terminator_word) == @backingInt(types.Op.Switch);
+        const only_selector_and_default: bool = types.wordCountOf(terminator_word) == 3;
+        return is_switch and only_selector_and_default;
     }
 
     /// Would folding a selection or switch whose merge is `merge_id` lose code? It
@@ -10504,6 +10911,10 @@ pub const sccp = struct {
                     // mergeBlockPhiWouldOrphan - testing (a) alone (as this did)
                     // disabled folding for nearly every selection Zig emits.
                     if (mergeBlockPhiWouldOrphan(spirv, inst_off, &table, info.merge_id)) {
+                        continue;
+                    }
+                    // Never fold a case-less switch: the breaks inside it need its construct (`isCaselessSwitch`).
+                    if (isCaselessSwitch(spirv, inst_off, info)) {
                         continue;
                     }
                     if (back_edge_blocks.contains(block_id)) {
@@ -11181,6 +11592,7 @@ pub fn convertSpirvToWgslEntry(
     // undecorated interface variable before anything gets auto-numbered.
     try checkGraphicsInterfaceDecorated(&state);
     try markAtomicBindings(&state);
+    markUniformWorkgroupVariables(&state);
     try checkBarrierUniformity(&state);
     try pass3_types_globals(&state);
     try pass4_functions(&state);

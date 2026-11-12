@@ -217,9 +217,9 @@ fn makeArm(gpa: Allocator, model: *const rbt.Model, planned: bool) !Arm {
         .data = try rbt.Data.init(gpa, model),
         .plan = try mpc.Plan.init(gpa, model, preview_knots),
         .planned = planned,
-        .reference = try gpa.alloc(f32, (preview_knots + 1) * (model.nq + model.nv)),
-        .aim = try gpa.alloc(f32, model.nq),
-        .keep = try gpa.alloc(f32, model.nq),
+        .reference = try gpa.alloc(f32, (preview_knots + 1) * (model.coordinate_count + model.dof_count)),
+        .aim = try gpa.alloc(f32, model.coordinate_count),
+        .keep = try gpa.alloc(f32, model.coordinate_count),
         .error_sum = 0,
         .error_count = 0,
         .tick = 0,
@@ -241,7 +241,7 @@ const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 fn buildPoseTable(s: *State) void {
     const m: *rbt.Model = &s.model;
     s.loop_period = 2.0 * pi / @max(0.01, s.speed);
-    @memcpy(s.planner.data.pos, s.rest);
+    @memcpy(s.planner.data.joint_positions, s.rest);
     s.planner.data.stage = .stale;
     rbt.forward(m, &s.planner.data);
     var pass: u32 = 0;
@@ -256,7 +256,10 @@ fn buildPoseTable(s: *State) void {
                 s.ik_scratch,
             );
             if (pass == 1) {
-                @memcpy(s.pose_table[i * m.nq ..][0..m.nq], s.planner.data.pos[0..m.nq]);
+                @memcpy(
+                    s.pose_table[i * m.coordinate_count ..][0..m.coordinate_count],
+                    s.planner.data.joint_positions[0..m.coordinate_count],
+                );
             }
         }
     }
@@ -264,15 +267,15 @@ fn buildPoseTable(s: *State) void {
 
 fn resetArms(s: *State) void {
     inline for (.{ &s.servo, &s.planner }) |a| {
-        @memcpy(a.data.pos, s.rest);
-        @memset(a.data.vel, 0);
-        @memset(a.data.ctrl, 0);
-        // -- *** AND `applied_force`, WHICH IS THE ONE THAT COST A DAY --
+        @memcpy(a.data.joint_positions, s.rest);
+        @memset(a.data.joint_velocities, 0);
+        @memset(a.data.controls, 0);
+        // -- *** AND `applied_joint_forces`, WHICH IS THE ONE THAT COST A DAY --
         //
         // `PoseHold` writes it and clears it each apply; a planner drives `ctrl` and never
         // touches it, so it inherits whatever a servo left and `step` adds BOTH. Measured, the
         // same planner scored 0.096 rad clean and 2.69 rad after a PD had run.
-        @memset(a.data.applied_force, 0);
+        @memset(a.data.applied_joint_forces, 0);
         a.data.stage = .stale;
         rbt.forward(&s.model, &a.data);
         @memset(a.plan.ctrl, 0);
@@ -301,7 +304,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.servo = try makeArm(gpa, &s.model, false);
     s.planner = try makeArm(gpa, &s.model, true);
     rbt.forward(&s.model, &s.servo.data);
-    s.rest = try gpa.dupe(f32, s.servo.data.pos);
+    s.rest = try gpa.dupe(f32, s.servo.data.joint_positions);
 
     s.arm_act = try ctl.limbActuation(gpa, &s.model, s.grip);
     s.all_act = try ctl.Actuation.init(gpa, &s.model);
@@ -309,19 +312,19 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
     s.state_w = try gpa.alloc(f32, s.planner.plan.ndx);
     s.term_w = try gpa.alloc(f32, s.planner.plan.ndx);
-    s.ctrl_w = try gpa.alloc(f32, s.model.nu);
+    s.ctrl_w = try gpa.alloc(f32, s.model.actuator_count);
     // * TRACKING WEIGHTS AT EVERY KNOT, not a terminal push - the whole path matters, which is
     // the opposite of a deadline reach. And the reference is a trajectory by construction, so
     // the "destination as a reference" mistake cannot be made here.
-    for (0..s.model.nv) |i| {
+    for (0..s.model.dof_count) |i| {
         s.state_w[i] = 8.0;
-        s.state_w[s.model.nv + i] = 0.05;
+        s.state_w[s.model.dof_count + i] = 0.05;
         s.term_w[i] = 40.0;
-        s.term_w[s.model.nv + i] = 1.0;
+        s.term_w[s.model.dof_count + i] = 1.0;
     }
     @memset(s.ctrl_w, 1.0e-5);
 
-    s.pose_table = try gpa.alloc(f32, table_size * s.model.nq);
+    s.pose_table = try gpa.alloc(f32, table_size * s.model.coordinate_count);
     s.loop_period = 0;
     s.clock = 0;
     s.speed = 2.2; // tip travels about 1.0 m/s
@@ -347,7 +350,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
 /// The tabulated pose at time `t`, linearly interpolated between neighbours.
 fn poseAt(s: *const State, t: f32, out: []f32) void {
-    const nq: u32 = s.model.nq;
+    const nq: u32 = s.model.coordinate_count;
     const phase: f32 = @mod(t / @max(0.001, s.loop_period), 1.0) * float(table_size);
     const lo: u32 = @min(table_size - 1, zm.floori(u32, phase));
     const hi: u32 = (lo + 1) % table_size;
@@ -388,7 +391,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 
 fn advance(s: *State, a: *Arm) void {
     const m: *rbt.Model = &s.model;
-    const nstate: u32 = m.nq + m.nv;
+    const nstate: u32 = m.coordinate_count + m.dof_count;
 
     if (a.planned) {
         // -- *** THE PREVIEW: EVERY KNOT GETS THE TARGET AT THAT KNOT'S FUTURE TIME --
@@ -402,8 +405,8 @@ fn advance(s: *State, a: *Arm) void {
             for (0..a.plan.horizon + 1) |k| {
                 const when: f32 = s.clock + float(k) * sim_dt;
                 poseAt(s, when, a.aim);
-                @memcpy(a.reference[k * nstate ..][0..m.nq], a.aim);
-                @memset(a.reference[k * nstate + m.nq ..][0..m.nv], 0);
+                @memcpy(a.reference[k * nstate ..][0..m.coordinate_count], a.aim);
+                @memset(a.reference[k * nstate + m.coordinate_count ..][0..m.dof_count], 0);
             }
             _ = mpc.optimize(m, &a.data, &a.plan, .{
                 .state = s.state_w,
@@ -415,7 +418,7 @@ fn advance(s: *State, a: *Arm) void {
         // ** AND `feedbackControl` COVERS THE GAP BETWEEN REPLANS, which is what real MPC does
         // and what the tutorial describes: the backward pass returns a GAIN as well as a
         // sequence, so the plan keeps correcting for where the robot actually is.
-        mpc.feedbackControl(m, &a.data, &a.plan, a.data.ctrl[0..m.nu]);
+        mpc.feedbackControl(m, &a.data, &a.plan, a.data.controls[0..m.actuator_count]);
         mpc.shift(&a.plan);
         a.tick += 1;
     } else {
@@ -435,9 +438,9 @@ fn advance(s: *State, a: *Arm) void {
 
     rbt.step(m, &a.data);
     rbt.forward(m, &a.data);
-    a.live = length3(a.data.body_xpos[s.grip] - targetAt(s.clock, s.speed));
+    a.live = length3(a.data.body_positions[s.grip] - targetAt(s.clock, s.speed));
     // A ring buffer, so the trace is always the last lap or so rather than growing forever.
-    a.trail[a.trail_next] = a.data.body_xpos[s.grip];
+    a.trail[a.trail_next] = a.data.body_positions[s.grip];
     a.trail_next = (a.trail_next + 1) % a.trail.len;
     a.trail_count = @min(a.trail_count + 1, a.trail.len);
     if (s.clock > 1.5) {
@@ -528,11 +531,11 @@ fn drawArm(s: *State, gl: *z.WgpuGl, a: *const Arm, depth: f32) void {
         previous = here;
     }
 
-    for (1..m.nbody) |b| {
-        const at: Vec = toRender(a.data.body_xpos[b], depth);
+    for (1..m.body_count) |b| {
+        const at: Vec = toRender(a.data.body_positions[b], depth);
         const parent: u32 = m.body_parent[b];
         if (parent != rbt.world_body) {
-            z.drawLine3D(gl, toRender(a.data.body_xpos[parent], depth), at, link_colour);
+            z.drawLine3D(gl, toRender(a.data.body_positions[parent], depth), at, link_colour);
         }
         const tip: bool = b == s.grip;
         const size: f32 = if (tip) 0.11 else 0.05;
@@ -558,7 +561,7 @@ fn drawArm(s: *State, gl: *z.WgpuGl, a: *const Arm, depth: f32) void {
     const goal: Vec = toRender(targetAt(s.clock, s.speed), depth);
     s.transform[0] = mulMat(translation(goal[0], goal[1], goal[2]), scaling(0.06, 0.06, 0.06));
     z.drawMeshInstanced(gl, &s.cube, &s.transform, target_colour);
-    z.drawLine3D(gl, toRender(a.data.body_xpos[s.grip], depth), goal, lag_colour);
+    z.drawLine3D(gl, toRender(a.data.body_positions[s.grip], depth), goal, lag_colour);
 }
 
 fn update(f: *z.Frame, s: *State) void {

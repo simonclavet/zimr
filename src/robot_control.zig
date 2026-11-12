@@ -8,7 +8,7 @@
 //!
 //! **Gravity compensation is something a MOTOR does, and only actuated DOFs have one.**
 //!
-//! `bias_force` covers every degree of freedom - including a floating base's six and a free
+//! `bias_joint_forces` covers every degree of freedom - including a floating base's six and a free
 //! crate's six. Adding all of it cancels the machine's own weight:
 //!
 //!   * a crate tower in `robot_3d` hung in the air;
@@ -63,11 +63,11 @@ pub const Actuation = struct {
     /// driven by a scalar torque at all. A floating base has no motor by construction, and a
     /// controller that forgets it makes the robot fly.
     pub fn init(gpa: Allocator, model: *const rbt.Model) !Actuation {
-        const powered: []bool = try gpa.alloc(bool, model.nv);
+        const powered: []bool = try gpa.alloc(bool, model.dof_count);
         @memset(powered, false);
-        for (0..model.njnt) |j| {
-            switch (model.jnt_type[j]) {
-                .hinge, .slide => powered[model.jnt_dof_adr[j]] = true,
+        for (0..model.joint_count) |j| {
+            switch (model.joint_type[j]) {
+                .hinge, .slide => powered[model.joint_first_dof[j]] = true,
                 // ---- A BALL JOINT IS POWERED NOW, AND A FREE ONE STILL IS NOT ----
                 //
                 // *** THE NOTE ABOVE SAID A BALL JOINT CANNOT BE DRIVEN BY A SCALAR TORQUE, AND
@@ -84,7 +84,7 @@ pub const Actuation = struct {
                 // base has no motor by construction, and a controller that forgets it makes the
                 // robot fly.
                 .ball => {
-                    const base: u32 = model.jnt_dof_adr[j];
+                    const base: u32 = model.joint_first_dof[j];
                     inline for (0..3) |k| {
                         powered[base + k] = true;
                     }
@@ -102,9 +102,9 @@ pub const Actuation = struct {
 
 /// Which joint owns a velocity DOF.
 fn dofJoint(model: *const rbt.Model, dof: u32) u32 {
-    for (0..model.njnt) |j| {
-        const first: u32 = model.jnt_dof_adr[j];
-        const width: u32 = switch (model.jnt_type[j]) {
+    for (0..model.joint_count) |j| {
+        const first: u32 = model.joint_first_dof[j];
+        const width: u32 = switch (model.joint_type[j]) {
             .free => 6,
             .ball => 3,
             .hinge, .slide => 1,
@@ -127,17 +127,17 @@ fn dofJoint(model: *const rbt.Model, dof: u32) u32 {
 /// Masking to one limb makes them independent, which is what allows the standard quadruped
 /// trick: pin every foot where it stands, move the body, and let each leg solve alone.
 pub fn limbActuation(gpa: Allocator, model: *const rbt.Model, tip: u32) !Actuation {
-    const powered: []bool = try gpa.alloc(bool, model.nv);
+    const powered: []bool = try gpa.alloc(bool, model.dof_count);
     @memset(powered, false);
     var walk: u32 = tip;
     while (walk != rbt.world_body) : (walk = model.body_parent[walk]) {
-        const first: u32 = model.body_dof_adr[walk];
-        for (0..model.body_dof_num[walk]) |k| {
+        const first: u32 = model.body_first_dof[walk];
+        for (0..model.body_dof_count[walk]) |k| {
             const v: u32 = first + @as(u32, @intCast(k));
             // * THE ROOT'S SIX DOFs ARE ON THIS PATH AND MUST STAY OFF. A floating base sits
             // between every foot and the world, so walking to the root sweeps it up - and an
             // IK solver allowed to use it "plants the foot" by sliding the whole robot.
-            switch (model.jnt_type[dofJoint(model, v)]) {
+            switch (model.joint_type[dofJoint(model, v)]) {
                 .hinge, .slide => powered[v] = true,
                 // Ball joints are driveable now - see the note in `init`. `v` is already the
                 // DOF here, so each of a ball joint's three is powered as it is visited.
@@ -180,7 +180,7 @@ pub const PoseHold = struct {
     scale_by_inertia: bool = false,
     max_torque: f32 = 1000.0,
 
-    /// Write torques into `data.applied_force`.
+    /// Write torques into `data.applied_joint_forces`.
     ///
     /// Call between `forward` and `step` - the law reads positions and velocities that
     /// `forward` computed, and `step` consumes the forces.
@@ -190,13 +190,13 @@ pub const PoseHold = struct {
         data: *rbt.Data,
         actuation: Actuation,
     ) void {
-        @memset(data.applied_force, 0);
-        for (0..model.njnt) |j| {
-            const v: u32 = model.jnt_dof_adr[j];
+        @memset(data.applied_joint_forces, 0);
+        for (0..model.joint_count) |j| {
+            const v: u32 = model.joint_first_dof[j];
             if (!actuation.powered[v]) {
                 continue;
             }
-            const q: u32 = model.jnt_qpos_adr[j];
+            const q: u32 = model.joint_first_coordinate[j];
             // -- *** THE GAINS ARE SCALED BY EACH JOINT'S OWN INERTIA --
             //
             // A gain in torque units is only meaningful next to an inertia, and a robot's
@@ -231,7 +231,7 @@ pub const PoseHold = struct {
             // on three DOFs wants. **Written here rather than left to the caller** because a
             // caller that got it wrong would produce a character twitching plausibly toward
             // nothing.
-            if (model.jnt_type[j] == .ball) {
+            if (model.joint_type[j] == .ball) {
                 // ---- THE ERROR IS A ROTATION VECTOR, IN THE TARGET'S FRAME ----
                 //
                 // `zm.subQuat(current, target)` is MuJoCo's `mju_subQuat`: it returns the
@@ -253,10 +253,10 @@ pub const PoseHold = struct {
                 // `subQuat` also normalizes both inputs, because an integrated quaternion drifts
                 // off the unit sphere and `conj` stops being the inverse when it does.
                 const current: rbt.Quat = quat(
-                    data.pos[q],
-                    data.pos[q + 1],
-                    data.pos[q + 2],
-                    data.pos[q + 3],
+                    data.joint_positions[q],
+                    data.joint_positions[q + 1],
+                    data.joint_positions[q + 2],
+                    data.joint_positions[q + 3],
                 );
                 const want: rbt.Quat = quat(
                     self.target[q],
@@ -289,10 +289,10 @@ pub const PoseHold = struct {
                     else
                         1.0;
                     const torque: f32 = ball_inertia *
-                        (self.kp * err[k] - self.kv * data.vel[v + k]);
-                    // `bias_force` INSIDE the clamp, matching the scalar path exactly.
-                    data.applied_force[v + k] = clamp(
-                        torque + data.bias_force[v + k],
+                        (self.kp * err[k] - self.kv * data.joint_velocities[v + k]);
+                    // `bias_joint_forces` INSIDE the clamp, matching the scalar path exactly.
+                    data.applied_joint_forces[v + k] = clamp(
+                        torque + data.bias_joint_forces[v + k],
                         -self.max_torque,
                         self.max_torque,
                     );
@@ -301,14 +301,14 @@ pub const PoseHold = struct {
             }
 
             const wanted: f32 = inertia *
-                (self.kp * (self.target[q] - data.pos[q]) - self.kv * data.vel[v]);
+                (self.kp * (self.target[q] - data.joint_positions[q]) - self.kv * data.joint_velocities[v]);
             // * GRAVITY COMPENSATION IS ADDED, THEN THE TOTAL IS CLAMPED. Clamping only the
             // tracking part would let a weak motor treat its own weight as free, so a robot
             // with a 1 N*m rating could still hold up any load. The rating bounds everything
             // the motor does.
             //
             // *** AND THE CODE NOW DOES WHAT THE COMMENT ABOVE ALWAYS SAID. It used to clamp
-            // `wanted` and add `bias_force` OUTSIDE the clamp, so the real ceiling was
+            // `wanted` and add `bias_joint_forces` OUTSIDE the clamp, so the real ceiling was
             // `max_torque + gravity` - measured at **1589 N*m on a heavy arm rated 400**. Every
             // PD-versus-planner comparison in this project was therefore giving the servo up to
             // four times the torque its planner opponent was held to by `boxQP`.
@@ -316,8 +316,8 @@ pub const PoseHold = struct {
             // * A COMMENT THAT DISAGREES WITH ITS CODE IS A BUG REPORT SOMEONE ALREADY WROTE.
             // This one stated the correct semantics and was three lines above the line that
             // broke them.
-            data.applied_force[v] = clamp(
-                wanted + data.bias_force[v],
+            data.applied_joint_forces[v] = clamp(
+                wanted + data.bias_joint_forces[v],
                 -self.max_torque,
                 self.max_torque,
             );
@@ -433,9 +433,9 @@ pub const Ik = struct {
         reached: bool,
     };
 
-    /// Iterate `data.pos` toward a configuration that reaches `target`.
+    /// Iterate `data.joint_positions` toward a configuration that reaches `target`.
     ///
-    /// * ONLY `data.pos` AND THE POSITION STAGE ARE TOUCHED. No forces, no contacts, no warm
+    /// * ONLY `data.joint_positions` AND THE POSITION STAGE ARE TOUCHED. No forces, no contacts, no warm
     /// start - a solve is a kinematic question and must not disturb the dynamics it will be
     /// handed back to.
     ///
@@ -450,7 +450,7 @@ pub const Ik = struct {
         target: IkTarget,
         scratch: []Vec,
     ) Result {
-        const nv: usize = model.nv;
+        const nv: usize = model.dof_count;
         // `jacPoint` gives one Vec per DOF - column-per-joint rather than three row arrays,
         // which is both the natural layout and the one that makes `J*J^T` a single pass.
         const jac: []Vec = scratch[0..nv];
@@ -477,18 +477,18 @@ pub const Ik = struct {
             // forces in the WARM START. The next real step seeded from them, and the mass
             // matrix went NaN: `factorM: pivot 24 is nan` while reaching into the tower.
             //
-            // `kinematics` places the bodies and `comPos` builds `cdof` and `subtree_com` -
+            // `kinematics` places the bodies and `comPos` builds `dof_axes` and `subtree_centres_of_mass` -
             // which is exactly what `jacPoint` reads, and nothing more. Neither touches a
             // force, a contact or the warm start.
             //
             // * BOTH ARE NEEDED. `kinematics` alone sets the stage to `.position`, so
             // `jacPoint`'s stage assertion passes - and its Jacobian is then built from STALE
-            // `cdof`, giving a wrong direction with no error anywhere. The IK tests caught it
+            // `dof_axes`, giving a wrong direction with no error anywhere. The IK tests caught it
             // by failing to converge; a looser test would have shipped it.
             rbt.kinematics(model, data);
             rbt.comPos(model, data);
-            const at: Vec = data.body_xpos[target.body] +
-                zm.rotate(data.body_xrot[target.body], target.offset);
+            const at: Vec = data.body_positions[target.body] +
+                zm.rotate(data.body_orientations[target.body], target.offset);
             const delta: Vec = target.goal - at;
             gap = length3(delta);
 
@@ -505,7 +505,7 @@ pub const Ik = struct {
             var turn: Vec = vec_zero;
             if (target.orientation) |wanted| {
                 const misalignment: Quat =
-                    qmul(wanted, zm.conjugate(data.body_xrot[target.body]));
+                    qmul(wanted, zm.conjugate(data.body_orientations[target.body]));
                 const shortest: Quat = if (misalignment[3] < 0) -misalignment else misalignment;
                 turn = vec(2 * shortest[0], 2 * shortest[1], 2 * shortest[2]);
                 // * ONE NUMBER OUT, POSITION-DOMINANT. The halves are in different units -
@@ -577,20 +577,20 @@ pub const Ik = struct {
             }
             const scale: f32 = if (largest > self.max_step) self.max_step / largest else 1.0;
 
-            for (0..model.njnt) |j| {
-                const v: u32 = model.jnt_dof_adr[j];
+            for (0..model.joint_count) |j| {
+                const v: u32 = model.joint_first_dof[j];
                 if (!actuation.powered[v]) {
                     continue;
                 }
-                const q: u32 = model.jnt_qpos_adr[j];
-                var next: f32 = data.pos[q] + scale * step_dq[v];
+                const q: u32 = model.joint_first_coordinate[j];
+                var next: f32 = data.joint_positions[q] + scale * step_dq[v];
                 // * JOINT LIMITS ARE RESPECTED HERE, not left to the constraint solver. An IK
                 // answer that violates a limit is not a pose the robot can hold, and handing
                 // one to a controller produces a machine fighting itself.
-                if (model.jnt_range[j]) |range| {
+                if (model.joint_range[j]) |range| {
                     next = clamp(next, range[0], range[1]);
                 }
-                data.pos[q] = next;
+                data.joint_positions[q] = next;
             }
             data.stage = .stale;
         }
@@ -603,7 +603,7 @@ pub const Ik = struct {
     pub fn scratchSize(model: *const rbt.Model) usize {
         // Two Vec slices for the linear and angular Jacobians, plus one more reinterpreted as
         // the joint-space step. See `solve`.
-        return 3 * model.nv;
+        return 3 * model.dof_count;
     }
 };
 
@@ -636,13 +636,13 @@ test "ik: a KUKA reaches a target it can reach" {
     defer gpa.free(scratch);
 
     // Start folded, so the solve has real work rather than a nudge.
-    for (0..model.njnt) |j| {
-        data.pos[model.jnt_qpos_adr[j]] = 0.3;
+    for (0..model.joint_count) |j| {
+        data.joint_positions[model.joint_first_coordinate[j]] = 0.3;
     }
     data.stage = .stale;
 
     // A point comfortably inside the arm's reach - the iiwa is about 1.3 m tall.
-    const wrist: u32 = model.nbody - 1;
+    const wrist: u32 = model.body_count - 1;
     const goal: Vec = vec(0.35, 0.15, 0.75);
     const ik: Ik = .{};
     const result: Ik.Result = ik.solve(&model, &data, actuation, .{
@@ -656,7 +656,7 @@ test "ik: a KUKA reaches a target it can reach" {
     // And the arm really is there - re-derived from kinematics rather than trusting the
     // solver's own bookkeeping.
     rbt.forward(&model, &data);
-    try expectApproxEqAbs(@as(f32, 0), length3(data.body_xpos[wrist] - goal), 2.0e-3);
+    try expectApproxEqAbs(@as(f32, 0), length3(data.body_positions[wrist] - goal), 2.0e-3);
 }
 
 test "ik: an unreachable target gives the closest approach, not a failure" {
@@ -673,7 +673,7 @@ test "ik: an unreachable target gives the closest approach, not a failure" {
     const scratch: []Vec = try gpa.alloc(Vec, Ik.scratchSize(&model));
     defer gpa.free(scratch);
 
-    const wrist: u32 = model.nbody - 1;
+    const wrist: u32 = model.body_count - 1;
     const far_away: Vec = vec(50, 0, 0);
     const result: Ik.Result = (Ik{}).solve(&model, &data, actuation, .{
         .body = wrist,
@@ -684,7 +684,7 @@ test "ik: an unreachable target gives the closest approach, not a failure" {
     // It stretched TOWARD the target rather than flailing: the wrist ends up out along +x, and
     // nothing is NaN.
     rbt.forward(&model, &data);
-    const at: Vec = data.body_xpos[wrist];
+    const at: Vec = data.body_positions[wrist];
     try expect(at[0] > 0.3);
     try expect(length3(at) < 2.0);
     try expect(result.error_distance == result.error_distance);
@@ -705,14 +705,14 @@ test "ik: joint limits are respected by the answer" {
 
     // Drive at something far enough to make the solver want to run every joint to its stop.
     _ = (Ik{}).solve(&model, &data, actuation, .{
-        .body = model.nbody - 1,
+        .body = model.body_count - 1,
         .goal = vec(0, 0, 5),
     }, scratch);
 
     var checked: u32 = 0;
-    for (0..model.njnt) |j| {
-        const range: [2]f32 = model.jnt_range[j] orelse continue;
-        const q: f32 = data.pos[model.jnt_qpos_adr[j]];
+    for (0..model.joint_count) |j| {
+        const range: [2]f32 = model.joint_range[j] orelse continue;
+        const q: f32 = data.joint_positions[model.joint_first_coordinate[j]];
         try expect(q >= range[0] - 1.0e-5);
         try expect(q <= range[1] + 1.0e-5);
         checked += 1;
@@ -724,7 +724,7 @@ test "ik: joint limits are respected by the answer" {
 
 test "control: only powered DOFs are driven" {
     // *** THE RULE THAT HAS BITTEN THREE TIMES - crates hanging in mid-air, and a Go1 rising
-    // at a steady 2.4 m/s. `bias_force` covers every DOF including a floating base's six, and
+    // at a steady 2.4 m/s. `bias_joint_forces` covers every DOF including a floating base's six, and
     // adding all of it cancels the machine's own weight.
     const gpa: Allocator = testing_allocator;
     const Floating: type = rbt.Spec(.{
@@ -759,7 +759,7 @@ test "control: only powered DOFs are driven" {
     }
     try expect(powered == 1);
 
-    const target: []f32 = try gpa.alloc(f32, model.nq);
+    const target: []f32 = try gpa.alloc(f32, model.coordinate_count);
     defer gpa.free(target);
     @memset(target, 0);
     const hold: PoseHold = .{ .target = target };
@@ -769,20 +769,20 @@ test "control: only powered DOFs are driven" {
 
     // * THE FREE JOINT GETS NOTHING. If it were gravity-compensated the base would float; the
     // test is that the six root DOFs carry exactly zero applied force.
-    const root_dof: u32 = model.jnt_dof_adr[0];
+    const root_dof: u32 = model.joint_first_dof[0];
     for (0..6) |k| {
-        try expectApproxEqAbs(@as(f32, 0), data.applied_force[root_dof + k], 1.0e-6);
+        try expectApproxEqAbs(@as(f32, 0), data.applied_joint_forces[root_dof + k], 1.0e-6);
     }
 
     // And it really does fall, over a whole second, rather than hanging.
-    const start: f32 = data.body_xpos[1][1];
+    const start: f32 = data.body_positions[1][1];
     for (0..240) |_| {
         rbt.forward(&model, &data);
         hold.apply(&model, &data, actuation);
         rbt.step(&model, &data);
     }
     rbt.forward(&model, &data);
-    try expect(data.body_xpos[1][1] < start - 1.0);
+    try expect(data.body_positions[1][1] < start - 1.0);
 }
 
 test "* THE GATE: a 27-DOF humanoid stands for 10 seconds" {
@@ -829,7 +829,7 @@ test "* THE GATE: a 27-DOF humanoid stands for 10 seconds" {
     bridge.listen(&world);
 
     // The model's default pose IS standing - no keyframe needed, unlike the Go1.
-    const home: []f32 = try gpa.dupe(f32, data.pos);
+    const home: []f32 = try gpa.dupe(f32, data.joint_positions);
     defer gpa.free(home);
 
     // -- ** THE GAINS ARE NARROW, AND BOTH FAILURES ARE INSTRUCTIVE --
@@ -858,12 +858,12 @@ test "* THE GATE: a 27-DOF humanoid stands for 10 seconds" {
     const torso: u32 = imported.bodyIndex("torso").?;
     // It starts at 1.282 and settles within a centimetre; 5 cm is a generous gate on a robot
     // 1.28 m tall, and the measured drift is 4.5 mm.
-    try expectApproxEqAbs(@as(f32, 1.282), data.body_xpos[torso][2], 0.05);
+    try expectApproxEqAbs(@as(f32, 1.282), data.body_positions[torso][2], 0.05);
     // Nothing is moving. 5 cm/s over ten seconds is a machine at rest rather than one drifting
     // slowly enough to survive a short test.
     var fastest: f32 = 0;
-    for (0..model.nv) |i| {
-        fastest = @max(fastest, @abs(data.vel[i]));
+    for (0..model.dof_count) |i| {
+        fastest = @max(fastest, @abs(data.joint_velocities[i]));
     }
     try expect(fastest < 0.05);
     // And it is standing ON something, rather than having found some other equilibrium.
@@ -878,7 +878,7 @@ test "* THE GATE: a 27-DOF humanoid stands for 10 seconds" {
 /// weighted average of each body's own point Jacobian. There is no shortcut: every body
 /// contributes, which is exactly why moving an arm shifts a standing robot's balance.
 ///
-/// `scratch` needs `model.nv` vectors, and `jac` is filled with `nv` columns.
+/// `scratch` needs `model.dof_count` vectors, and `jac` is filled with `dof_count` columns.
 pub fn comJacobian(
     model: *const rbt.Model,
     data: *const rbt.Data,
@@ -887,7 +887,7 @@ pub fn comJacobian(
 ) void {
     @memset(jac, vec_zero);
     var total: f32 = 0;
-    for (1..model.nbody) |body| {
+    for (1..model.body_count) |body| {
         const mass: f32 = model.body_mass[body];
         if (mass <= 0) {
             continue;
@@ -935,18 +935,18 @@ pub fn centroidalMomentum(
 ) void {
     @memset(jac, vec_zero);
     @memset(jac_rot, vec_zero);
-    const centre: Vec = data.subtree_com[rbt.world_body];
+    const centre: Vec = data.subtree_centres_of_mass[rbt.world_body];
 
-    for (1..model.nbody) |body| {
+    for (1..model.body_count) |body| {
         const mass: f32 = model.body_mass[body];
         if (mass <= 0) {
             continue;
         }
         rbt.jacBodyCom(model, data, @intCast(body), scratch, scratch_rot);
-        const arm: Vec = data.body_xipos[body] - centre;
-        const world_inertia: rbt.Inertia = model.body_inertia[body].rotated(data.body_xrot[body]);
+        const arm: Vec = data.body_centres_of_mass[body] - centre;
+        const world_inertia: rbt.Inertia = model.body_local_inertia[body].rotated(data.body_orientations[body]);
 
-        for (0..model.nv) |v| {
+        for (0..model.dof_count) |v| {
             // Linear rows: momentum is just mass times the centre-of-mass velocity.
             jac[v] += scratch[v] * splat(mass);
             // Angular rows: the body's own spin, plus the orbital term from its offset.
@@ -960,7 +960,7 @@ pub fn centroidalMomentum(
 /// The robot's actual centroidal momentum, summed over bodies from the spatial algebra.
 ///
 /// * A SECOND ROUTE TO THE SAME NUMBER, ON PURPOSE. This never touches a Jacobian; it reads
-/// `cinert` and `cvel`, which the dynamics maintains for its own reasons. Comparing it against
+/// `body_inertias` and `body_velocities`, which the dynamics maintains for its own reasons. Comparing it against
 /// `centroidalMomentum(...)*v` checks the matrix assembly against something that shares no code
 /// with it - the same discipline that caught a missing block in the trunk model's Jacobian.
 pub fn centroidalMomentumDirect(
@@ -971,22 +971,22 @@ pub fn centroidalMomentumDirect(
 ) void {
     angular.* = vec_zero;
     linear.* = vec_zero;
-    const centre: Vec = data.subtree_com[rbt.world_body];
+    const centre: Vec = data.subtree_centres_of_mass[rbt.world_body];
 
-    for (1..model.nbody) |body| {
+    for (1..model.body_count) |body| {
         const mass: f32 = model.body_mass[body];
         if (mass <= 0) {
             continue;
         }
-        // `cvel` is about the subtree's centre of mass; shift it to the body's own.
-        const at_root: rbt.Motion = data.cvel[body];
-        const root_com: Vec = data.subtree_com[model.body_root[body]];
-        const body_com_vel: Vec = at_root.lin + cross(at_root.ang, data.body_xipos[body] - root_com);
-        const world_inertia: rbt.Inertia = model.body_inertia[body].rotated(data.body_xrot[body]);
+        // `body_velocities` is about the subtree's centre of mass; shift it to the body's own.
+        const at_root: rbt.Motion = data.body_velocities[body];
+        const root_com: Vec = data.subtree_centres_of_mass[model.body_root[body]];
+        const body_com_vel: Vec = at_root.lin + cross(at_root.ang, data.body_centres_of_mass[body] - root_com);
+        const world_inertia: rbt.Inertia = model.body_local_inertia[body].rotated(data.body_orientations[body]);
         const spun: rbt.Force = world_inertia.mul(.{ .ang = at_root.ang, .lin = vec_zero });
 
         linear.* += body_com_vel * splat(mass);
-        angular.* += spun.ang + cross(data.body_xipos[body] - centre, body_com_vel * splat(mass));
+        angular.* += spun.ang + cross(data.body_centres_of_mass[body] - centre, body_com_vel * splat(mass));
     }
 }
 
@@ -1030,7 +1030,7 @@ fn solve3(matrix: *[9]f32, rhs: *[3]f32) bool {
 }
 
 /// Joint torques that produce a requested rate of change of angular momentum about the centre
-/// of mass. `scratch` is `3 x nv`; `out` is `nv` and is ACCUMULATED into.
+/// of mass. `scratch` is `3 x nv`; `out` is `dof_count` and is ACCUMULATED into.
 ///
 /// -- *** WHY THE TRANSPOSE IS NOT ENOUGH, MEASURED --
 ///
@@ -1066,7 +1066,7 @@ pub fn momentumTorques(
     scratch: []f32,
     out: []f32,
 ) void {
-    const nv: usize = model.nv;
+    const nv: usize = model.dof_count;
     assertf(scratch.len >= 3 * nv, @src(), "momentumTorques: scratch wants 3*nv", .{});
     assertf(out.len == nv, @src(), "momentumTorques: out wants nv", .{});
 
@@ -1169,7 +1169,7 @@ pub const BalancedIk = struct {
         target: IkTarget,
         scratch: []Vec,
     ) Result {
-        const nv: usize = model.nv;
+        const nv: usize = model.dof_count;
         // -- ** THE NESTED SOLVE GETS ITS OWN REGION, and that is not paranoia --
         //
         // `Ik.solve` needs three slices of its own and was previously handed THIS buffer, whose
@@ -1191,13 +1191,13 @@ pub const BalancedIk = struct {
 
         // Then one balance correction, projected so it cannot move the hand.
         rbt.kinematics(model, data);
-        const com: Vec = data.subtree_com[rbt.world_body];
+        const com: Vec = data.subtree_centres_of_mass[rbt.world_body];
         const drift: Vec = vec(self.com_goal[0] - com[0], self.com_goal[1] - com[1], 0);
         const com_error: f32 = length3(drift);
 
         comJacobian(model, data, com_jac, work);
-        const at: Vec = data.body_xpos[target.body] +
-            zm.rotate(data.body_xrot[target.body], target.offset);
+        const at: Vec = data.body_positions[target.body] +
+            zm.rotate(data.body_orientations[target.body], target.offset);
         rbt.jacPoint(model, data, target.body, at, hand_jac, null);
         for (0..nv) |i| {
             if (!actuation.powered[i]) {
@@ -1210,8 +1210,8 @@ pub const BalancedIk = struct {
         // descent direction on the CM error, it costs one pass, and it cannot blow up near a
         // singularity the way a pseudo-inverse would. Exactness is not needed for a secondary
         // objective that is re-solved every iteration anyway.
-        for (0..model.njnt) |j| {
-            const v: u32 = model.jnt_dof_adr[j];
+        for (0..model.joint_count) |j| {
+            const v: u32 = model.joint_first_dof[j];
             if (!actuation.powered[v]) {
                 continue;
             }
@@ -1224,12 +1224,12 @@ pub const BalancedIk = struct {
             const hand_sensitivity: f32 = length3(hand_jac[v]);
             const projected: f32 = raw / (1.0 + 4.0 * hand_sensitivity);
 
-            const q: u32 = model.jnt_qpos_adr[j];
-            var next: f32 = data.pos[q] + clamp(projected, -self.reach.max_step, self.reach.max_step);
-            if (model.jnt_range[j]) |range| {
+            const q: u32 = model.joint_first_coordinate[j];
+            var next: f32 = data.joint_positions[q] + clamp(projected, -self.reach.max_step, self.reach.max_step);
+            if (model.joint_range[j]) |range| {
                 next = clamp(next, range[0], range[1]);
             }
-            data.pos[q] = next;
+            data.joint_positions[q] = next;
         }
         data.stage = .stale;
         rbt.kinematics(model, data);
@@ -1239,7 +1239,7 @@ pub const BalancedIk = struct {
 
     /// Three slices of its own, plus a separate three for the `Ik` it runs inside itself.
     pub fn scratchSize(model: *const rbt.Model) usize {
-        return 3 * model.nv + Ik.scratchSize(model);
+        return 3 * model.dof_count + Ik.scratchSize(model);
     }
 };
 
@@ -1275,21 +1275,21 @@ test "ik: reaching while holding the centre of mass" {
 
     const hand: u32 = imported.bodyIndex("hand_right").?;
     rbt.forward(model, &data);
-    const rest_com: Vec = data.subtree_com[rbt.world_body];
+    const rest_com: Vec = data.subtree_centres_of_mass[rbt.world_body];
 
     // A target across the body, which is what makes the CM move: reaching to the far side
     // swings arm mass over the opposite foot.
     const goal: Vec = vec(0.20, -0.45, 1.55);
 
     // Plain IK first, for the comparison.
-    @memcpy(data.pos, model.qpos0);
+    @memcpy(data.joint_positions, model.reference_joint_positions);
     data.stage = .stale;
     _ = (Ik{}).solve(model, &data, actuation, .{ .body = hand, .goal = goal }, scratch);
     rbt.forward(model, &data);
-    const plain_drift: f32 = comDrift(data.subtree_com[rbt.world_body], rest_com);
+    const plain_drift: f32 = comDrift(data.subtree_centres_of_mass[rbt.world_body], rest_com);
 
     // Then the balanced version, iterated the way a demo would each frame.
-    @memcpy(data.pos, model.qpos0);
+    @memcpy(data.joint_positions, model.reference_joint_positions);
     data.stage = .stale;
     var result: BalancedIk.Result = undefined;
     for (0..40) |_| {
@@ -1299,7 +1299,7 @@ test "ik: reaching while holding the centre of mass" {
         }).solve(model, &data, actuation, .{ .body = hand, .goal = goal }, scratch);
     }
     rbt.forward(model, &data);
-    const balanced_drift: f32 = comDrift(data.subtree_com[rbt.world_body], rest_com);
+    const balanced_drift: f32 = comDrift(data.subtree_centres_of_mass[rbt.world_body], rest_com);
 
     // -- * THE CM MOVES MUCH LESS, AND THE HAND STILL ARRIVES --
     //
@@ -1326,7 +1326,7 @@ test "ik: reaching while holding the centre of mass" {
 pub const Env = struct {
     model: *const rbt.Model,
     data: rbt.Data,
-    /// The pose `reset` returns to. Defaults to the model's `qpos0`.
+    /// The pose `reset` returns to. Defaults to the model's `reference_joint_positions`.
     start: rbt.State,
     observation: []f32,
     gpa: Allocator,
@@ -1355,7 +1355,7 @@ pub const Env = struct {
 
     /// How many numbers a policy must produce.
     pub fn actionSize(self: *const Env) usize {
-        return self.model.nu;
+        return self.model.actuator_count;
     }
 
     /// How many it receives. See `rbt.observe` for the layout.
@@ -1370,7 +1370,7 @@ pub const Env = struct {
     /// wants normalised actions can supply its own default; the engine reports what the model
     /// declared.
     pub fn actionRange(self: *const Env, index: usize) ?[2]f32 {
-        return self.model.act_ctrl_range[index];
+        return self.model.actuator_control_range[index];
     }
 
     /// Put the environment back at its start state and return the first observation.
@@ -1383,8 +1383,8 @@ pub const Env = struct {
 
     /// Make `start` whatever the environment is in right now.
     ///
-    /// Useful for episodes that begin from a settled pose rather than from `qpos0` - a legged
-    /// robot's `qpos0` is usually a pose it immediately falls out of, and starting every
+    /// Useful for episodes that begin from a settled pose rather than from `reference_joint_positions` - a legged
+    /// robot's `reference_joint_positions` is usually a pose it immediately falls out of, and starting every
     /// episode with the same half-second of settling wastes a policy's time learning it.
     pub fn markStart(self: *Env) void {
         rbt.forward(self.model, &self.data);
@@ -1399,7 +1399,7 @@ pub const Env = struct {
     /// its simulator rather than solve its task.
     pub fn step(self: *Env, action: []const f32) []const f32 {
         for (action, 0..) |value, i| {
-            self.data.ctrl[i] = if (self.model.act_ctrl_range[i]) |range|
+            self.data.controls[i] = if (self.model.actuator_control_range[i]) |range|
                 clamp(value, range[0], range[1])
             else
                 value;
@@ -1455,7 +1455,7 @@ test "* env: reset replays, and actions are clamped to what the model declares" 
     for (0..300) |_| {
         _ = env.step(&.{0.4});
     }
-    const first: f32 = env.data.pos[0];
+    const first: f32 = env.data.joint_positions[0];
 
     _ = env.reset();
     for (0..300) |_| {
@@ -1463,7 +1463,7 @@ test "* env: reset replays, and actions are clamped to what the model declares" 
     }
     // Bit-for-bit: a reset that leaves anything behind makes consecutive episodes differ, and
     // a policy trained on that is learning partly from its own history.
-    try expectEqual(first, env.data.pos[0]);
+    try expectEqual(first, env.data.joint_positions[0]);
 
     // -- * AND AN OUT-OF-RANGE ACTION IS CLAMPED, NOT HONOURED --
     //
@@ -1473,17 +1473,17 @@ test "* env: reset replays, and actions are clamped to what the model declares" 
     for (0..300) |_| {
         _ = env.step(&.{50.0});
     }
-    const wild: f32 = env.data.pos[0];
+    const wild: f32 = env.data.joint_positions[0];
 
     _ = env.reset();
     for (0..300) |_| {
         _ = env.step(&.{1.0});
     }
-    try expectEqual(wild, env.data.pos[0]);
+    try expectEqual(wild, env.data.joint_positions[0]);
 }
 
 test "env: markStart makes a settled pose the episode start" {
-    // A legged robot's `qpos0` is usually a pose it immediately falls out of, so every episode
+    // A legged robot's `reference_joint_positions` is usually a pose it immediately falls out of, so every episode
     // would begin with the same half-second of settling - time a policy spends learning
     // something the environment could simply not do to it.
     const gpa: Allocator = testing_allocator;
@@ -1517,7 +1517,7 @@ test "env: markStart makes a settled pose the episode start" {
     for (0..2000) |_| {
         _ = env.step(&.{});
     }
-    const settled: f32 = env.data.pos[0];
+    const settled: f32 = env.data.joint_positions[0];
     try expect(@abs(settled) > 0.3); // it really did move
 
     env.markStart();
@@ -1525,8 +1525,8 @@ test "env: markStart makes a settled pose the episode start" {
         _ = env.step(&.{});
     }
     _ = env.reset();
-    // * RESET NOW RETURNS TO THE SETTLED POSE, not to `qpos0`.
-    try expectApproxEqAbs(settled, env.data.pos[0], 1.0e-4);
+    // * RESET NOW RETURNS TO THE SETTLED POSE, not to `reference_joint_positions`.
+    try expectApproxEqAbs(settled, env.data.joint_positions[0], 1.0e-4);
 }
 
 test "* ik: an orientation target aims the jaws, which a position target cannot" {
@@ -1560,7 +1560,7 @@ test "* ik: an orientation target aims the jaws, which a position target cannot"
     const jawDirection = struct {
         fn go(m: *const rbt.Model, d: *rbt.Data, body: u32) Vec {
             _ = m;
-            return zm.rotate(d.body_xrot[body], vec(0, 0, 1));
+            return zm.rotate(d.body_orientations[body], vec(0, 0, 1));
         }
     }.go;
 
@@ -1589,7 +1589,7 @@ test "* ik: an orientation target aims the jaws, which a position target cannot"
     );
     rbt.forward(model, &data);
     const aimed_jaws: Vec = jawDirection(model, &data, wrist);
-    const reached: Vec = data.body_xpos[wrist] + zm.rotate(data.body_xrot[wrist], grasp);
+    const reached: Vec = data.body_positions[wrist] + zm.rotate(data.body_orientations[wrist], grasp);
 
     // * BOTH REACH THE POINT. Adding three rows must not cost the three that already worked.
     try expect(position_only.error_distance < 0.01);
@@ -1697,7 +1697,7 @@ pub const Batch = struct {
     /// `actions` is `count x actionSize`, row-major - the same layout the observations come
     /// back in, so a policy reads and writes matrices of the same shape.
     pub fn step(self: *Batch, actions: []const f32) []const f32 {
-        const action_width: usize = self.model.nu;
+        const action_width: usize = self.model.actuator_count;
         const width: usize = rbt.observationSize(self.model);
         // * THE LOOP BODY TOUCHES ONLY ITS OWN `Env` and a read-only `Model`. That is the
         // property a scheduler would need, and it is asserted by test rather than assumed.
@@ -1774,7 +1774,7 @@ test "* batch: many environments agree bit-for-bit with running each alone" {
         for (0..600) |_| {
             _ = env.step(actions[i * action_width ..][0..action_width]);
         }
-        solo[i] = .{ env.data.pos[0], env.data.pos[1] };
+        solo[i] = .{ env.data.joint_positions[0], env.data.joint_positions[1] };
     }
 
     // -- All of them together --
@@ -1786,8 +1786,8 @@ test "* batch: many environments agree bit-for-bit with running each alone" {
     }
 
     for (0..environments) |i| {
-        try expectEqual(solo[i][0], batch.envs[i].data.pos[0]);
-        try expectEqual(solo[i][1], batch.envs[i].data.pos[1]);
+        try expectEqual(solo[i][0], batch.envs[i].data.joint_positions[0]);
+        try expectEqual(solo[i][1], batch.envs[i].data.joint_positions[1]);
     }
 
     // ** AND THE MATRIX IS LAID OUT THE WAY A POLICY READS IT. An off-by-one in the row stride
@@ -1797,8 +1797,8 @@ test "* batch: many environments agree bit-for-bit with running each alone" {
     try expectEqual(environments * width, batch.observations.len);
     for (0..environments) |i| {
         const row: []const f32 = batch.observationOf(i);
-        try expectEqual(batch.envs[i].data.pos[0], row[0]);
-        try expectEqual(batch.envs[i].data.pos[1], row[1]);
+        try expectEqual(batch.envs[i].data.joint_positions[0], row[0]);
+        try expectEqual(batch.envs[i].data.joint_positions[1], row[1]);
         // The row really is a window into the flat buffer, not a copy of one.
         try expectEqual(batch.observations[i * width], row[0]);
     }
@@ -1853,13 +1853,13 @@ test "** PoseHold: inertia-scaled gains must both HOLD and not explode" {
 
     _ = rmj.applyKeyframe(model, &data, robot.keyframes[0]);
     rbt.forward(model, &data);
-    const upright: f32 = data.body_xpos[1][2];
+    const upright: f32 = data.body_positions[1][2];
 
     var bridge: robot_physics.Bridge = try .init(gpa, &world, model, &data, 256);
     defer bridge.deinit(&world);
     bridge.listen(&world);
 
-    const home: []f32 = try gpa.dupe(f32, data.pos);
+    const home: []f32 = try gpa.dupe(f32, data.joint_positions);
     defer gpa.free(home);
 
     // * THE DEMO'S SHIPPED SETTING, in torque units. `kv = 10` is the stability limit for this
@@ -1886,7 +1886,7 @@ test "** PoseHold: inertia-scaled gains must both HOLD and not explode" {
     //
     // Measured 0.565 against a starting 0.596. The bar is 70%, which the shipped omega = 20 failed
     // at 0.266 and everything from 30 upward passes comfortably.
-    try expect(data.body_xpos[1][2] > upright * 0.7);
+    try expect(data.body_positions[1][2] > upright * 0.7);
 
     // -- * HALF TWO: SHOVING IT DOES NOT BLOW IT UP --
     //
@@ -1894,11 +1894,11 @@ test "** PoseHold: inertia-scaled gains must both HOLD and not explode" {
     // at 39; here it peaks near 36 and comes back down.
     var peak_energy: f32 = 0;
     for (0..4) |_| {
-        for (0..model.njnt) |j| {
-            if (model.jnt_type[j] == .free) {
-                const dof: u32 = model.jnt_dof_adr[j];
-                data.vel[dof + 0] += 1.2;
-                data.vel[dof + 1] += 0.4;
+        for (0..model.joint_count) |j| {
+            if (model.joint_type[j] == .free) {
+                const dof: u32 = model.joint_first_dof[j];
+                data.joint_velocities[dof + 0] += 1.2;
+                data.joint_velocities[dof + 1] += 0.4;
                 data.stage = .stale;
             }
         }
@@ -1915,10 +1915,10 @@ test "** PoseHold: inertia-scaled gains must both HOLD and not explode" {
             // multiplying by whatever was in the buffer - which is the whole point of having it.
             rbt.forward(model, &data);
             var momentum: [64]f32 = undefined;
-            rbt.mulM(model, &data, data.vel, momentum[0..model.nv]);
+            rbt.mulM(model, &data, data.joint_velocities, momentum[0..model.dof_count]);
             var energy: f32 = 0;
-            for (0..model.nv) |i| {
-                energy += 0.5 * data.vel[i] * momentum[i];
+            for (0..model.dof_count) |i| {
+                energy += 0.5 * data.joint_velocities[i] * momentum[i];
             }
             peak_energy = @max(peak_energy, energy);
         }
@@ -1954,8 +1954,8 @@ test "** PoseHold: inertia-scaled gains must both HOLD and not explode" {
         rbt.step(model, &data);
         rbt.forward(model, &data);
         var sum: f32 = 0;
-        for (6..model.nv) |i| {
-            sum += data.vel[i] * data.vel[i];
+        for (6..model.dof_count) |i| {
+            sum += data.joint_velocities[i] * data.joint_velocities[i];
         }
         jitter = @max(jitter, @sqrt(sum));
     }
@@ -1967,7 +1967,7 @@ test "*** centroidal momentum: the matrix agrees with a sum that shares no code 
     // -- TWO INDEPENDENT ROUTES TO THE SAME SIX NUMBERS --
     //
     // `centroidalMomentum` assembles a 6 x nv matrix out of body Jacobians. `...Direct` sums
-    // over bodies using `cinert`/`cvel`, which the dynamics maintains for its own purposes and
+    // over bodies using `body_inertias`/`body_velocities`, which the dynamics maintains for its own purposes and
     // which never touches a Jacobian. If they agree on a non-trivial velocity, the assembly is
     // right - the same cross-check that caught a missing block in the trunk model.
     const gpa: Allocator = testing_allocator;
@@ -1987,13 +1987,13 @@ test "*** centroidal momentum: the matrix agrees with a sum that shares no code 
     var data: rbt.Data = try .init(gpa, model);
     defer data.deinit();
 
-    const jac: []Vec = try gpa.alloc(Vec, model.nv);
+    const jac: []Vec = try gpa.alloc(Vec, model.dof_count);
     defer gpa.free(jac);
-    const jac_rot: []Vec = try gpa.alloc(Vec, model.nv);
+    const jac_rot: []Vec = try gpa.alloc(Vec, model.dof_count);
     defer gpa.free(jac_rot);
-    const scratch: []Vec = try gpa.alloc(Vec, model.nv);
+    const scratch: []Vec = try gpa.alloc(Vec, model.dof_count);
     defer gpa.free(scratch);
-    const scratch_rot: []Vec = try gpa.alloc(Vec, model.nv);
+    const scratch_rot: []Vec = try gpa.alloc(Vec, model.dof_count);
     defer gpa.free(scratch_rot);
 
     // A pose and a velocity with nothing symmetric about them, so no term can cancel by luck.
@@ -2004,17 +2004,17 @@ test "*** centroidal momentum: the matrix agrees with a sum that shares no code 
             _ = rmj.applyKeyframe(model, &data, kf);
         }
     }
-    for (0..model.nv) |v| {
-        data.vel[v] = rng.float(f32) * 2.0 - 1.0;
+    for (0..model.dof_count) |v| {
+        data.joint_velocities[v] = rng.float(f32) * 2.0 - 1.0;
     }
     rbt.forward(model, &data);
 
     centroidalMomentum(model, &data, jac, jac_rot, scratch, scratch_rot);
     var from_matrix_lin: Vec = vec_zero;
     var from_matrix_ang: Vec = vec_zero;
-    for (0..model.nv) |v| {
-        from_matrix_lin += jac[v] * splat(data.vel[v]);
-        from_matrix_ang += jac_rot[v] * splat(data.vel[v]);
+    for (0..model.dof_count) |v| {
+        from_matrix_lin += jac[v] * splat(data.joint_velocities[v]);
+        from_matrix_ang += jac_rot[v] * splat(data.joint_velocities[v]);
     }
 
     var direct_ang: Vec = vec_zero;
@@ -2068,11 +2068,11 @@ test "*** centroidal momentum: angular momentum is CONSERVED in free flight" {
         }
     }
     // Well clear of the ground, and thrown into a tumble so the limbs really do move.
-    data.pos[model.jnt_qpos_adr[0] + 2] += 5.0;
+    data.joint_positions[model.joint_first_coordinate[0] + 2] += 5.0;
     var seed: Random.DefaultPrng = .init(0x1234567);
     const rng: Random = seed.random();
-    for (0..model.nv) |v| {
-        data.vel[v] = rng.float(f32) * 4.0 - 2.0;
+    for (0..model.dof_count) |v| {
+        data.joint_velocities[v] = rng.float(f32) * 4.0 - 2.0;
     }
     rbt.forward(model, &data);
 
@@ -2082,7 +2082,7 @@ test "*** centroidal momentum: angular momentum is CONSERVED in free flight" {
     try expect(length3(start_ang) > 0.5); // a real tumble, not a nudge
 
     for (0..1000) |_| { // half a second of free flight
-        @memset(data.ctrl, 0);
+        @memset(data.controls, 0);
         data.clearContacts();
         rbt.step(model, &data);
     }
@@ -2151,22 +2151,22 @@ test "momentum torques: SKIPPED - free flight is the wrong gate; see the note ab
     var data: rbt.Data = try .init(gpa, model);
     defer data.deinit();
 
-    const rows: []Vec = try gpa.alloc(Vec, model.nv);
+    const rows: []Vec = try gpa.alloc(Vec, model.dof_count);
     defer gpa.free(rows);
-    const linear_rows: []Vec = try gpa.alloc(Vec, model.nv);
+    const linear_rows: []Vec = try gpa.alloc(Vec, model.dof_count);
     defer gpa.free(linear_rows);
-    const s1: []Vec = try gpa.alloc(Vec, model.nv);
+    const s1: []Vec = try gpa.alloc(Vec, model.dof_count);
     defer gpa.free(s1);
-    const s2: []Vec = try gpa.alloc(Vec, model.nv);
+    const s2: []Vec = try gpa.alloc(Vec, model.dof_count);
     defer gpa.free(s2);
-    const scratch: []f32 = try gpa.alloc(f32, 3 * model.nv);
+    const scratch: []f32 = try gpa.alloc(f32, 3 * model.dof_count);
     defer gpa.free(scratch);
-    const torque: []f32 = try gpa.alloc(f32, model.nv);
+    const torque: []f32 = try gpa.alloc(f32, model.dof_count);
     defer gpa.free(torque);
 
     // * THE BASE IS NOT ACTUATED, which is the whole mechanism: a robot in the air torques its
     // limbs and the base reacts. Marking it actuated would grant an authority it does not have.
-    const actuated: []bool = try gpa.alloc(bool, model.nv);
+    const actuated: []bool = try gpa.alloc(bool, model.dof_count);
     defer gpa.free(actuated);
     @memset(actuated, true);
     for (0..6) |v| {
@@ -2187,8 +2187,8 @@ test "momentum torques: SKIPPED - free flight is the wrong gate; see the note ab
                 _ = rmj.applyKeyframe(model, &data, kf);
             }
         }
-        data.pos[model.jnt_qpos_adr[0] + 2] += 5.0;
-        @memset(data.vel, 0);
+        data.joint_positions[model.joint_first_coordinate[0] + 2] += 5.0;
+        @memset(data.joint_velocities, 0);
         rbt.forward(model, &data);
 
         var before_ang: Vec = vec_zero;
@@ -2202,7 +2202,7 @@ test "momentum torques: SKIPPED - free flight is the wrong gate; see the note ab
             rbt.factorM(model, &data);
             @memset(torque, 0);
             momentumTorques(model, &data, direction * splat(30.0), actuated, rows, scratch, torque);
-            @memcpy(data.applied_force, torque);
+            @memcpy(data.applied_joint_forces, torque);
             data.clearContacts();
             rbt.step(model, &data);
         }
@@ -2241,12 +2241,12 @@ fn runOpenLoop(
     var survived: usize = 0;
     for (0..frames) |frame| {
         const rotations: []const rbt.Quat = clip[frame * bodies ..][0..bodies];
-        for (0..model.njnt) |j| {
-            if (model.jnt_type[j] != .ball) {
+        for (0..model.joint_count) |j| {
+            if (model.joint_type[j] != .ball) {
                 continue;
             }
-            const q: u32 = model.jnt_qpos_adr[j];
-            const r: rbt.Quat = rotations[model.jnt_body[j]];
+            const q: u32 = model.joint_first_coordinate[j];
+            const r: rbt.Quat = rotations[model.joint_body[j]];
             inline for (0..4) |k| {
                 target[q + k] = r[k];
             }
@@ -2261,7 +2261,7 @@ fn runOpenLoop(
         }
         // FALLEN = the root dropped by half its starting height. Crude and unambiguous: a
         // knee-bend is not a fall and a character on the floor is.
-        if (data.body_xpos[1][2] < start_height * 0.5) {
+        if (data.body_positions[1][2] < start_height * 0.5) {
             return survived;
         }
         survived += 1;
@@ -2328,7 +2328,7 @@ test "stage 0: how long does open-loop clip playback keep a humanoid upright" {
     defer data.deinit();
     rbt.forward(&imported.model, &data);
 
-    const bodies: usize = imported.model.nbody;
+    const bodies: usize = imported.model.body_count;
 
     // ---- the ground, in its own physics world ----
     var world: zimrphysics.World = try .init(gpa, 256);
@@ -2425,36 +2425,36 @@ test "stage 0: how long does open-loop clip playback keep a humanoid upright" {
     }
 
     // ---- run it ----
-    const target: []f32 = try gpa.alloc(f32, imported.model.nq);
+    const target: []f32 = try gpa.alloc(f32, imported.model.coordinate_count);
     defer gpa.free(target);
-    @memcpy(target, data.pos);
+    @memcpy(target, data.joint_positions);
 
     var actuation: Actuation = try .init(gpa, &imported.model);
     defer actuation.deinit();
 
     const dt: f32 = 1.0 / 240.0;
     const substeps_per_frame: usize = 4;
-    const start_height: f32 = data.body_xpos[1][2];
+    const start_height: f32 = data.body_positions[1][2];
     // ---- THE CHARACTER STARTS ON THE CLIP'S FIRST FRAME, NOT IN ITS REST POSE ----
     //
-    // *** THE FIRST VERSION OF THIS MEASUREMENT STARTED FROM `qpos0` - a T-pose - while the PD
+    // *** THE FIRST VERSION OF THIS MEASUREMENT STARTED FROM `reference_joint_positions` - a T-pose - while the PD
     // target was the clip's frame 0, a dance pose. The controller then had to cross that entire
     // gap in one step, which is a shove at t = 0 that has nothing to do with whether the clip is
     // trackable. **Reference state initialisation is not an optimisation here, it is the
     // difference between measuring the clip and measuring a lurch.**
     //
     // Both papers reset to a frame of the reference for exactly this reason.
-    const start_pose: []f32 = try gpa.dupe(f32, data.pos);
+    const start_pose: []f32 = try gpa.dupe(f32, data.joint_positions);
     defer gpa.free(start_pose);
     {
         const rotations: []const rbt.Quat = clip[0..bodies];
-        for (0..imported.model.njnt) |j| {
-            const q: u32 = imported.model.jnt_qpos_adr[j];
-            const r: rbt.Quat = rotations[imported.model.jnt_body[j]];
-            switch (imported.model.jnt_type[j]) {
+        for (0..imported.model.joint_count) |j| {
+            const q: u32 = imported.model.joint_first_coordinate[j];
+            const r: rbt.Quat = rotations[imported.model.joint_body[j]];
+            switch (imported.model.joint_type[j]) {
                 // A free joint's qpos is position then quaternion, so the rotation starts at
                 // `q + 3`. The ROOT's orientation comes from the clip too - leaving it at the
-                // rest pose starts the character facing whatever direction `qpos0` faced, which
+                // rest pose starts the character facing whatever direction `reference_joint_positions` faced, which
                 // is a shove in yaw before the first step.
                 .free => inline for (0..4) |k| {
                     start_pose[q + 3 + k] = r[k];
@@ -2488,8 +2488,8 @@ test "stage 0: how long does open-loop clip playback keep a humanoid upright" {
     var best_kv: f32 = 0;
 
     for (gains) |pair| {
-        @memcpy(data.pos, start_pose);
-        @memset(data.vel, 0);
+        @memcpy(data.joint_positions, start_pose);
+        @memset(data.joint_velocities, 0);
         rbt.forward(&imported.model, &data);
         const survived: usize = runOpenLoop(
             &imported.model,
@@ -2535,7 +2535,7 @@ test "stage 0: how long does open-loop clip playback keep a humanoid upright" {
             survived_s,
             float(frames) / 60.0,
             start_height,
-            data.body_xpos[1][2],
+            data.body_positions[1][2],
         },
     );
 
@@ -2546,7 +2546,7 @@ test "stage 0: how long does open-loop clip playback keep a humanoid upright" {
     // nothing about whether nine seconds or two is the right answer. The number itself is the
     // deliverable and it is printed by `robot-bench`, not asserted here.
     try expect(survived_s > 0.1);
-    try expect(isFinite(data.body_xpos[1][2]));
+    try expect(isFinite(data.body_positions[1][2]));
 }
 
 test "stage 0 debug: does the IK solve wind joints past their limits" {
@@ -2589,14 +2589,14 @@ test "stage 0 debug: does the IK solve wind joints past their limits" {
 
     report.print("\n  hinge limits as the model declares them:\n", .{});
     var unlimited: usize = 0;
-    for (0..m.njnt) |j| {
-        if (m.jnt_type[j] != .hinge) {
+    for (0..m.joint_count) |j| {
+        if (m.joint_type[j] != .hinge) {
             continue;
         }
-        if (m.jnt_range[j]) |range| {
+        if (m.joint_range[j]) |range| {
             report.print("    joint {d:>2} on {s:<16} [{d:>7.2} .. {d:>7.2}] rad\n", .{
                 j,
-                imported.names[m.jnt_body[j]],
+                imported.names[m.joint_body[j]],
                 range[0],
                 range[1],
             });
@@ -2609,13 +2609,13 @@ test "stage 0 debug: does the IK solve wind joints past their limits" {
     // exactly the number on screen. If this count is high, the model is the answer.
     report.print("    UNLIMITED hinges: {d}\n", .{unlimited});
 
-    try expect(m.njnt > 0);
+    try expect(m.joint_count > 0);
 }
 
 test "stage 0 debug: can a PD servo hold ONE elbow, with everything else frozen" {
     // ---- THE SMALLEST POSSIBLE SERVO QUESTION ----
     //
-    // Simon's suggestion, and the right one: 1825 degrees of error on a twenty-four joint
+    // The right check: 1825 degrees of error on a twenty-four joint
     // character says nothing about WHICH part is broken. **One elbow, everything else held at
     // rest, a constant target - if that does not track, nothing downstream can.**
     //
@@ -2670,9 +2670,9 @@ test "stage 0 debug: can a PD servo hold ONE elbow, with everything else frozen"
 
     // The right elbow: `lower_arm_right`'s only hinge, limits [-2.62, 0.35].
     var elbow: usize = 0;
-    for (0..m.njnt) |j| {
-        if (m.jnt_type[j] == .hinge and
-            eql(u8, imported.names[m.jnt_body[j]], "lower_arm_right"))
+    for (0..m.joint_count) |j| {
+        if (m.joint_type[j] == .hinge and
+            eql(u8, imported.names[m.joint_body[j]], "lower_arm_right"))
         {
             elbow = j;
             break;
@@ -2680,21 +2680,22 @@ test "stage 0 debug: can a PD servo hold ONE elbow, with everything else frozen"
     }
     try expect(elbow != 0);
 
-    const target: []f32 = try gpa.dupe(f32, data.pos);
+    const target: []f32 = try gpa.dupe(f32, data.joint_positions);
     defer gpa.free(target);
     const goal: f32 = -1.0; // comfortably inside [-2.62, 0.35]
-    target[m.jnt_qpos_adr[elbow]] = goal;
+    target[m.joint_first_coordinate[elbow]] = goal;
 
     var actuation: Actuation = try .init(gpa, m);
     defer actuation.deinit();
 
     // ** THE ROOT IS PINNED EVERY STEP, so this measures the servo and nothing else - no
     // balance, no falling, no contact. The character hangs in space and is asked to bend one arm.
-    const root_q: u32 = m.jnt_qpos_adr[0];
-    const root_v: u32 = m.jnt_dof_adr[0];
+    const root_q: u32 = m.joint_first_coordinate[0];
+    const root_v: u32 = m.joint_first_dof[0];
     const rest_root: [7]f32 = .{
-        data.pos[root_q],     data.pos[root_q + 1], data.pos[root_q + 2], data.pos[root_q + 3],
-        data.pos[root_q + 4], data.pos[root_q + 5], data.pos[root_q + 6],
+        data.joint_positions[root_q],     data.joint_positions[root_q + 1], data.joint_positions[root_q + 2],
+        data.joint_positions[root_q + 3], data.joint_positions[root_q + 4], data.joint_positions[root_q + 5],
+        data.joint_positions[root_q + 6],
     };
 
     const Trial = struct { kp: f32, kv: f32, inertia: bool, quadruped_style: bool = false };
@@ -2712,9 +2713,9 @@ test "stage 0 debug: can a PD servo hold ONE elbow, with everything else frozen"
     report.print("\n  one elbow, target {d:.2} rad, root pinned, 2 s:\n", .{goal});
 
     for (trials) |trial| {
-        @memcpy(data.pos, target);
-        data.pos[m.jnt_qpos_adr[elbow]] = 0; // start away from the goal
-        @memset(data.vel, 0);
+        @memcpy(data.joint_positions, target);
+        data.joint_positions[m.joint_first_coordinate[elbow]] = 0; // start away from the goal
+        @memset(data.joint_velocities, 0);
         rbt.forward(m, &data);
 
         const hold: PoseHold = .{
@@ -2738,19 +2739,21 @@ test "stage 0 debug: can a PD servo hold ONE elbow, with everything else frozen"
             // ---- THE QUADRUPED'S OWN SERVO, INLINE, AS A CONTROL ----
             //
             // `examples/quadruped` stands a Go1 with this and it works. It is structurally the
-            // same PD as `PoseHold` with ONE difference: it adds `bias_force` OUTSIDE the clamp,
+            // same PD as `PoseHold` with ONE difference: it adds `bias_joint_forces` OUTSIDE the clamp,
             // where `PoseHold` adds it inside. Running both here says whether that placement is
             // the whole story.
             if (trial.quadruped_style) {
-                @memset(data.applied_force, 0);
-                for (0..m.njnt) |j| {
-                    if (m.jnt_type[j] != .hinge) {
+                @memset(data.applied_joint_forces, 0);
+                for (0..m.joint_count) |j| {
+                    if (m.joint_type[j] != .hinge) {
                         continue;
                     }
-                    const q: u32 = m.jnt_qpos_adr[j];
-                    const v: u32 = m.jnt_dof_adr[j];
-                    const wanted: f32 = trial.kp * (target[q] - data.pos[q]) - trial.kv * data.vel[v];
-                    data.applied_force[v] = clamp(wanted, -1000.0, 1000.0) + data.bias_force[v];
+                    const q: u32 = m.joint_first_coordinate[j];
+                    const v: u32 = m.joint_first_dof[j];
+                    const position: f32 = data.joint_positions[q];
+                    const rate: f32 = data.joint_velocities[v];
+                    const wanted: f32 = trial.kp * (target[q] - position) - trial.kv * rate;
+                    data.applied_joint_forces[v] = clamp(wanted, -1000.0, 1000.0) + data.bias_joint_forces[v];
                 }
             } else {
                 hold.apply(m, &data, actuation);
@@ -2758,10 +2761,10 @@ test "stage 0 debug: can a PD servo hold ONE elbow, with everything else frozen"
             rbt.step(m, &data);
 
             inline for (0..7) |k| {
-                data.pos[root_q + k] = rest_root[k];
+                data.joint_positions[root_q + k] = rest_root[k];
             }
             inline for (0..6) |k| {
-                data.vel[root_v + k] = 0;
+                data.joint_velocities[root_v + k] = 0;
             }
             // ** `forward` AFTER PINNING, OR THE MASS MATRIX IS STALE. Writing qpos directly
             // invalidates everything derived from it, and `scale_by_inertia` reads
@@ -2772,7 +2775,7 @@ test "stage 0 debug: can a PD servo hold ONE elbow, with everything else frozen"
 
             // Ignore the first second: a servo is allowed to take time to arrive. What matters
             // is where it ENDS UP, not how it got there.
-            const err: f32 = @abs(data.pos[m.jnt_qpos_adr[elbow]] - goal);
+            const err: f32 = @abs(data.joint_positions[m.joint_first_coordinate[elbow]] - goal);
             if (step >= 16000 and step < 18000) {
                 if (err > earlier_amplitude) {
                     earlier_amplitude = err;
@@ -2791,7 +2794,7 @@ test "stage 0 debug: can a PD servo hold ONE elbow, with everything else frozen"
         // Ending at -1.85 means it overshot and is oscillating. Ending exactly at -2.62 means
         // it is jammed against its limit. **The error alone cannot tell them apart, and three
         // turns have been spent not knowing which.**
-        const final: f32 = data.pos[m.jnt_qpos_adr[elbow]];
+        const final: f32 = data.joint_positions[m.joint_first_coordinate[elbow]];
         report.print(
             "    kp {d:>4.0}  kv {d:>3.0}  {s:<12}  ->  ends {d:>6.3}  amp 8-9s {d:.3}  9-10s {d:.3}  {s}\n",
             .{
@@ -2817,14 +2820,14 @@ test "stage 0 debug: can a PD servo hold ONE elbow, with everything else frozen"
         // the opposite side from where it was asked to go. "Did not reach" and "went the wrong
         // way and through a wall" are different bugs and the error magnitude hides which.
         report.print("         ended at {d:>7.3} rad   (goal {d:.2}, limit [{d:.2} .. {d:.2}])\n", .{
-            data.pos[m.jnt_qpos_adr[elbow]],
+            data.joint_positions[m.joint_first_coordinate[elbow]],
             goal,
-            if (m.jnt_range[elbow]) |r| r[0] else -99,
-            if (m.jnt_range[elbow]) |r| r[1] else 99,
+            if (m.joint_range[elbow]) |r| r[0] else -99,
+            if (m.joint_range[elbow]) |r| r[1] else 99,
         });
     }
 
-    try expect(isFinite(data.pos[m.jnt_qpos_adr[elbow]]));
+    try expect(isFinite(data.joint_positions[m.joint_first_coordinate[elbow]]));
 }
 
 test "stage 0 debug: are excluded body pairs actually colliding" {
@@ -2835,7 +2838,7 @@ test "stage 0 debug: are excluded body pairs actually colliding" {
     // the exclusion they sit in permanent deep penetration - and a solver asked to separate two
     // bodies that are meant to overlap answers with a large force, every step, for ever.
     //
-    // Simon's suggestion, and it is checkable without physics: place the character at rest and
+    // This is checkable without physics: place the character at rest and
     // ask how far the excluded pairs interpenetrate.
     const gpa: Allocator = testing_allocator;
 
@@ -2878,7 +2881,7 @@ test "stage 0 debug: are excluded body pairs actually colliding" {
     for (pairs) |pair| {
         var a_body: ?u32 = null;
         var b_body: ?u32 = null;
-        for (0..m.nbody) |b| {
+        for (0..m.body_count) |b| {
             if (eql(u8, imported.names[b], pair[0])) {
                 a_body = @intCast(b);
             }
@@ -2889,10 +2892,10 @@ test "stage 0 debug: are excluded body pairs actually colliding" {
         if (a_body == null or b_body == null) {
             continue;
         }
-        const gap: f32 = length3(data.body_xpos[a_body.?] - data.body_xpos[b_body.?]);
+        const gap: f32 = length3(data.body_positions[a_body.?] - data.body_positions[b_body.?]);
 
         var radii: f32 = 0;
-        for (0..m.ngeom) |g| {
+        for (0..m.geom_count) |g| {
             if (m.geom_body[g] != a_body.? and m.geom_body[g] != b_body.?) {
                 continue;
             }
@@ -2911,11 +2914,11 @@ test "stage 0 debug: are excluded body pairs actually colliding" {
         });
     }
 
-    try expect(m.nbody > 0);
+    try expect(m.body_count > 0);
 }
 
 test "stage 0 debug: one arm free, everything else frozen, watch the motor" {
-    // ---- THE RIG SIMON ASKED FOR: ONE ARM, AND SEE WHAT THE MOTOR ACTUALLY DOES ----
+    // ---- THE RIG: ONE ARM, AND SEE WHAT THE MOTOR ACTUALLY DOES ----
     //
     // Everything except the right arm is held at its target after every step, and the root is
     // pinned. So the only moving parts are three shoulder hinges and an elbow, and anything that
@@ -2965,11 +2968,11 @@ test "stage 0 debug: one arm free, everything else frozen, watch the motor" {
     // The right arm: everything on `upper_arm_right` and `lower_arm_right`.
     var free_joint: [8]usize = undefined;
     var free_count: usize = 0;
-    for (0..m.njnt) |j| {
-        if (m.jnt_type[j] != .hinge) {
+    for (0..m.joint_count) |j| {
+        if (m.joint_type[j] != .hinge) {
             continue;
         }
-        const body_name: []const u8 = imported.names[m.jnt_body[j]];
+        const body_name: []const u8 = imported.names[m.joint_body[j]];
         if (eql(u8, body_name, "upper_arm_right") or
             eql(u8, body_name, "lower_arm_right"))
         {
@@ -2979,13 +2982,13 @@ test "stage 0 debug: one arm free, everything else frozen, watch the motor" {
     }
     try expect(free_count >= 2);
 
-    const target: []f32 = try gpa.dupe(f32, data.pos);
+    const target: []f32 = try gpa.dupe(f32, data.joint_positions);
     defer gpa.free(target);
     const watched: usize = free_joint[free_count - 1]; // the elbow, last in the chain
     const goal: f32 = -1.0;
-    target[m.jnt_qpos_adr[watched]] = goal;
+    target[m.joint_first_coordinate[watched]] = goal;
 
-    const frozen: []f32 = try gpa.dupe(f32, data.pos);
+    const frozen: []f32 = try gpa.dupe(f32, data.joint_positions);
     defer gpa.free(frozen);
 
     var actuation: Actuation = try .init(gpa, m);
@@ -3016,8 +3019,8 @@ test "stage 0 debug: one arm free, everything else frozen, watch the motor" {
     report.print("\n  unfreezing progressively, elbow -> {d:.2} rad, kp 800 kv 40:\n", .{goal});
 
     for (groups, 0..) |group, round| {
-        @memcpy(data.pos, frozen);
-        @memset(data.vel, 0);
+        @memcpy(data.joint_positions, frozen);
+        @memset(data.joint_velocities, 0);
         rbt.forward(m, &data);
 
         var settled: f32 = 0;
@@ -3031,38 +3034,38 @@ test "stage 0 debug: one arm free, everything else frozen, watch the motor" {
             // ** RESTORING qpos AND ZEROING qvel. The frozen joints still contribute their
             // inertia through the mass matrix but cannot move - so this removes their MOTION as
             // a suspect without removing the mass that coupling acts through.
-            for (0..m.njnt) |j| {
-                if (m.jnt_type[j] != .hinge) {
+            for (0..m.joint_count) |j| {
+                if (m.joint_type[j] != .hinge) {
                     continue;
                 }
                 var in_group: bool = false;
                 for (group) |name| {
-                    if (eql(u8, imported.names[m.jnt_body[j]], name)) {
+                    if (eql(u8, imported.names[m.joint_body[j]], name)) {
                         in_group = true;
                     }
                 }
                 if (in_group) {
                     continue;
                 }
-                data.pos[m.jnt_qpos_adr[j]] = frozen[m.jnt_qpos_adr[j]];
-                data.vel[m.jnt_dof_adr[j]] = 0;
+                data.joint_positions[m.joint_first_coordinate[j]] = frozen[m.joint_first_coordinate[j]];
+                data.joint_velocities[m.joint_first_dof[j]] = 0;
             }
-            const root_q: u32 = m.jnt_qpos_adr[0];
-            const root_v: u32 = m.jnt_dof_adr[0];
+            const root_q: u32 = m.joint_first_coordinate[0];
+            const root_v: u32 = m.joint_first_dof[0];
             inline for (0..7) |k| {
-                data.pos[root_q + k] = frozen[root_q + k];
+                data.joint_positions[root_q + k] = frozen[root_q + k];
             }
             inline for (0..6) |k| {
-                data.vel[root_v + k] = 0;
+                data.joint_velocities[root_v + k] = 0;
             }
             rbt.forward(m, &data);
 
-            const speed: f32 = @abs(data.vel[m.jnt_dof_adr[watched]]);
+            const speed: f32 = @abs(data.joint_velocities[m.joint_first_dof[watched]]);
             if (step >= 2000 and speed > peak_speed) {
                 peak_speed = speed;
             }
             if (step >= 3800) {
-                const err: f32 = @abs(data.pos[m.jnt_qpos_adr[watched]] - goal);
+                const err: f32 = @abs(data.joint_positions[m.joint_first_coordinate[watched]] - goal);
                 settled = @max(settled, err);
             }
         }
@@ -3076,13 +3079,13 @@ test "stage 0 debug: one arm free, everything else frozen, watch the motor" {
         });
     }
 
-    try expect(isFinite(data.pos[m.jnt_qpos_adr[watched]]));
+    try expect(isFinite(data.joint_positions[m.joint_first_coordinate[watched]]));
 }
 
 test "stage 0 debug: can one elbow follow a MOVING target, everything else frozen" {
     // ---- THE WIN WE NEED, OR THE REASON THERE ISN'T ONE ----
     //
-    // Simon: fix every bone except the right arm, servo the elbow, limit velocities, and watch
+    // The rig: fix every bone except the right arm, servo the elbow, limit velocities, and watch
     // what the motor actually does.
     //
     // *** A SINE INSTEAD OF THE CLIP, ON PURPOSE. The dance needs the whole retarget pipeline,
@@ -3132,9 +3135,9 @@ test "stage 0 debug: can one elbow follow a MOVING target, everything else froze
     rbt.forward(m, &data);
 
     var elbow: usize = 0;
-    for (0..m.njnt) |j| {
-        if (m.jnt_type[j] == .hinge and
-            eql(u8, imported.names[m.jnt_body[j]], "lower_arm_right"))
+    for (0..m.joint_count) |j| {
+        if (m.joint_type[j] == .hinge and
+            eql(u8, imported.names[m.joint_body[j]], "lower_arm_right"))
         {
             elbow = j;
             break;
@@ -3142,18 +3145,18 @@ test "stage 0 debug: can one elbow follow a MOVING target, everything else froze
     }
     try expect(elbow != 0);
 
-    const eq: u32 = m.jnt_qpos_adr[elbow];
-    const ev: u32 = m.jnt_dof_adr[elbow];
-    const range: [2]f32 = m.jnt_range[elbow].?;
+    const eq: u32 = m.joint_first_coordinate[elbow];
+    const ev: u32 = m.joint_first_dof[elbow];
+    const range: [2]f32 = m.joint_range[elbow].?;
 
     // A sine that stays comfortably inside the joint's range, so a limit is never the answer.
     const centre: f32 = 0.5 * (range[0] + range[1]);
     const swing: f32 = 0.35 * (range[1] - range[0]);
     const hz: f32 = 0.5;
 
-    const rest: []f32 = try gpa.dupe(f32, data.pos);
+    const rest: []f32 = try gpa.dupe(f32, data.joint_positions);
     defer gpa.free(rest);
-    const target: []f32 = try gpa.dupe(f32, data.pos);
+    const target: []f32 = try gpa.dupe(f32, data.joint_positions);
     defer gpa.free(target);
 
     var actuation: Actuation = try .init(gpa, m);
@@ -3182,9 +3185,9 @@ test "stage 0 debug: can one elbow follow a MOVING target, everything else froze
     );
 
     for (trials) |trial| {
-        @memcpy(data.pos, rest);
-        @memset(data.vel, 0);
-        data.pos[eq] = centre;
+        @memcpy(data.joint_positions, rest);
+        @memset(data.joint_velocities, 0);
+        data.joint_positions[eq] = centre;
         rbt.forward(m, &data);
 
         var peak_err: f32 = 0;
@@ -3200,8 +3203,8 @@ test "stage 0 debug: can one elbow follow a MOVING target, everything else froze
             const hold: PoseHold = .{ .target = target, .kp = trial.kp, .kv = trial.kv };
             hold.apply(m, &data, actuation);
 
-            if (@abs(data.applied_force[ev]) > peak_torque) {
-                peak_torque = @abs(data.applied_force[ev]);
+            if (@abs(data.applied_joint_forces[ev]) > peak_torque) {
+                peak_torque = @abs(data.applied_joint_forces[ev]);
             }
             rbt.step(m, &data);
 
@@ -3210,27 +3213,27 @@ test "stage 0 debug: can one elbow follow a MOVING target, everything else froze
             // The step integrates all of them; this puts every one back except the elbow. It
             // is the same trick as `pinRootInWorld` and for the same reason: an exact
             // constraint cannot be fought, where a stiff spring can.
-            for (0..m.njnt) |j| {
+            for (0..m.joint_count) |j| {
                 if (j == elbow) {
                     continue;
                 }
-                const q: u32 = m.jnt_qpos_adr[j];
-                const v: u32 = m.jnt_dof_adr[j];
-                const nq: usize = switch (m.jnt_type[j]) {
+                const q: u32 = m.joint_first_coordinate[j];
+                const v: u32 = m.joint_first_dof[j];
+                const nq: usize = switch (m.joint_type[j]) {
                     .free => 7,
                     .ball => 4,
                     else => 1,
                 };
-                const nv: usize = switch (m.jnt_type[j]) {
+                const nv: usize = switch (m.joint_type[j]) {
                     .free => 6,
                     .ball => 3,
                     else => 1,
                 };
                 for (0..nq) |k| {
-                    data.pos[q + k] = rest[q + k];
+                    data.joint_positions[q + k] = rest[q + k];
                 }
                 for (0..nv) |k| {
-                    data.vel[v + k] = 0;
+                    data.joint_velocities[v + k] = 0;
                 }
             }
 
@@ -3238,17 +3241,17 @@ test "stage 0 debug: can one elbow follow a MOVING target, everything else froze
             // controller right; it can stop a diverging one from reaching infinity, which makes
             // the difference between a readable number and a NaN.
             if (trial.vlimit > 0) {
-                data.vel[ev] = clamp(data.vel[ev], -trial.vlimit, trial.vlimit);
+                data.joint_velocities[ev] = clamp(data.joint_velocities[ev], -trial.vlimit, trial.vlimit);
             }
             rbt.forward(m, &data);
 
-            if (@abs(data.vel[ev]) > peak_vel) {
-                peak_vel = @abs(data.vel[ev]);
+            if (@abs(data.joint_velocities[ev]) > peak_vel) {
+                peak_vel = @abs(data.joint_velocities[ev]);
             }
             // Ignore the first second: the servo starts at the sine's centre and is allowed to
             // catch up.
             if (t > 1.0) {
-                const err: f32 = @abs(data.pos[eq] - want);
+                const err: f32 = @abs(data.joint_positions[eq] - want);
                 if (err > peak_err) {
                     peak_err = err;
                 }
@@ -3270,7 +3273,7 @@ test "stage 0 debug: can one elbow follow a MOVING target, everything else froze
         );
     }
 
-    try expect(isFinite(data.pos[eq]));
+    try expect(isFinite(data.joint_positions[eq]));
 }
 
 test "rung 2: can the full humanoid hold the pose it is already in" {
@@ -3324,7 +3327,7 @@ test "rung 2: can the full humanoid hold the pose it is already in" {
     defer data.deinit();
     rbt.forward(m, &data);
 
-    const target: []f32 = try gpa.dupe(f32, data.pos);
+    const target: []f32 = try gpa.dupe(f32, data.joint_positions);
     defer gpa.free(target);
 
     var actuation: Actuation = try .init(gpa, m);
@@ -3332,20 +3335,21 @@ test "rung 2: can the full humanoid hold the pose it is already in" {
 
     // ** THE ROOT IS PINNED, so this is purely a question about the joints. A free root would
     // let the character fall and the answer would be about balance again.
-    const root_q: u32 = m.jnt_qpos_adr[0];
-    const root_v: u32 = m.jnt_dof_adr[0];
+    const root_q: u32 = m.joint_first_coordinate[0];
+    const root_v: u32 = m.joint_first_dof[0];
     const rest_root: [7]f32 = .{
-        data.pos[root_q],     data.pos[root_q + 1], data.pos[root_q + 2], data.pos[root_q + 3],
-        data.pos[root_q + 4], data.pos[root_q + 5], data.pos[root_q + 6],
+        data.joint_positions[root_q],     data.joint_positions[root_q + 1], data.joint_positions[root_q + 2],
+        data.joint_positions[root_q + 3], data.joint_positions[root_q + 4], data.joint_positions[root_q + 5],
+        data.joint_positions[root_q + 6],
     };
 
     const gains = [_][2]f32{ .{ 100, 10 }, .{ 400, 20 }, .{ 800, 40 } };
 
-    report.print("\n  rung 2: all {d} joints holding their OWN rest pose, root pinned, 5 s:\n", .{m.njnt});
+    report.print("\n  rung 2: all {d} joints holding their OWN rest pose, root pinned, 5 s:\n", .{m.joint_count});
 
     for (gains) |pair| {
-        @memcpy(data.pos, target);
-        @memset(data.vel, 0);
+        @memcpy(data.joint_positions, target);
+        @memset(data.joint_velocities, 0);
         rbt.forward(m, &data);
 
         const hold: PoseHold = .{ .target = target, .kp = pair[0], .kv = pair[1] };
@@ -3355,27 +3359,27 @@ test "rung 2: can the full humanoid hold the pose it is already in" {
 
         for (0..10000) |_| {
             hold.apply(m, &data, actuation);
-            for (0..m.nv) |v| {
-                if (@abs(data.applied_force[v]) > peak_torque) {
-                    peak_torque = @abs(data.applied_force[v]);
+            for (0..m.dof_count) |v| {
+                if (@abs(data.applied_joint_forces[v]) > peak_torque) {
+                    peak_torque = @abs(data.applied_joint_forces[v]);
                 }
             }
             rbt.step(m, &data);
 
             inline for (0..7) |k| {
-                data.pos[root_q + k] = rest_root[k];
+                data.joint_positions[root_q + k] = rest_root[k];
             }
             inline for (0..6) |k| {
-                data.vel[root_v + k] = 0;
+                data.joint_velocities[root_v + k] = 0;
             }
             rbt.forward(m, &data);
 
-            for (0..m.njnt) |j| {
-                if (m.jnt_type[j] != .hinge) {
+            for (0..m.joint_count) |j| {
+                if (m.joint_type[j] != .hinge) {
                     continue;
                 }
-                const q: u32 = m.jnt_qpos_adr[j];
-                const err: f32 = @abs(data.pos[q] - target[q]);
+                const q: u32 = m.joint_first_coordinate[j];
+                const err: f32 = @abs(data.joint_positions[q] - target[q]);
                 if (err > worst) {
                     worst = err;
                     worst_joint = j;
@@ -3390,12 +3394,12 @@ test "rung 2: can the full humanoid hold the pose it is already in" {
                 pair[1],
                 worst,
                 worst * 57.2957795,
-                imported.names[m.jnt_body[worst_joint]],
+                imported.names[m.joint_body[worst_joint]],
                 peak_torque,
                 if (worst < 0.05) "PASS" else "FAIL",
             },
         );
     }
 
-    try expect(isFinite(data.pos[m.jnt_qpos_adr[1]]));
+    try expect(isFinite(data.joint_positions[m.joint_first_coordinate[1]]));
 }

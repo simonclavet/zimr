@@ -1,5 +1,5 @@
 //! robot_sac_track - SAC on the tracking task: `robot_gym.SacAgent` learning a residual tracking policy from
-//! `TrackEnv`'s decisions. The off-policy half of plan Stage I's mixes - Simon's idea: SAC's sample efficiency to get
+//! `TrackEnv`'s decisions. The off-policy half of plan Stage I's mixes - the idea: SAC's sample efficiency to get
 //! going fast, alongside PPO and SuperTrack.
 //!
 //! PPO uses each decision once and throws it away; SAC keeps every one in a replay and learns from it again and again.

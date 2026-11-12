@@ -324,11 +324,11 @@ fn drawPanel(s: *State, f: *z.Frame) bool {
 fn drawRobot(s: *State, gl: *z.WgpuGl, d: *const rbt.Data, tint: Color) void {
     const m: *const rbt.Model = &s.imported.model;
     const to_y_up: Mat = zm.zUpToYUp();
-    for (0..m.ngeom) |g| {
+    for (0..m.geom_count) |g| {
         const body: u32 = m.geom_body[g];
-        const body_rot: Quat = d.body_xrot[body];
-        const world_pos: Vec = d.body_xpos[body] + zm.rotate(body_rot, m.geom_pos[g]);
-        const world_rot: Mat = quatToMat(qmul(body_rot, m.geom_rot[g]));
+        const body_rot: Quat = d.body_orientations[body];
+        const world_pos: Vec = d.body_positions[body] + zm.rotate(body_rot, m.geom_local_position[g]);
+        const world_rot: Mat = quatToMat(qmul(body_rot, m.geom_local_rotation[g]));
         const place: Mat = mulMat(
             mulMat(to_y_up, translation(world_pos[0], world_pos[1], world_pos[2])),
             world_rot,

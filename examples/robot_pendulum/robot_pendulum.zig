@@ -179,12 +179,12 @@ fn update(f: *z.Frame, s: *State) void {
     // ---- geometry, straight out of the engine ----
     const bi_lower: usize = 2;
     const pivot: Vec2 = vec2(0, 0);
-    const elbow: Vec2 = vec2(s.data.body_xpos[bi_lower][0], s.data.body_xpos[bi_lower][1]);
+    const elbow: Vec2 = vec2(s.data.body_positions[bi_lower][0], s.data.body_positions[bi_lower][1]);
     // The tip is the far end of the lower link, which is its body origin plus its own
     // length along the link's local -Y. Asking the engine where a point on a body is, is
     // exactly what a site would be for; for one point, this is cheaper than a site.
     const tip_local: Vec = vec(0, -2.0 * lower_half, 0);
-    const tip_world: Vec = s.data.body_xpos[bi_lower] + rotate(s.data.body_xrot[bi_lower], tip_local);
+    const tip_world: Vec = s.data.body_positions[bi_lower] + rotate(s.data.body_orientations[bi_lower], tip_local);
     const tip: Vec2 = vec2(tip_world[0], tip_world[1]);
 
     s.trail[s.trail_n % trail_len] = tip;

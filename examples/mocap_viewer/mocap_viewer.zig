@@ -1,6 +1,6 @@
 //! examples/mocap_viewer - a BVH scrubber you can drop files onto.
 //!
-//! Reproduces the core of **BVHView** (and its descendant flomo, Simon's mocap tool): load a
+//! Reproduces the core of **BVHView** (and its descendant flomo, a mocap tool): load a
 //! motion-capture clip, play it, scrub it, and compare several at once in different colours.
 //!
 //! * IT OPENS BOTH `.bvh` AND `.fbx`, and the code below barely notices. FBX is normalised into

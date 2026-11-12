@@ -384,6 +384,7 @@ boundary between WebAssembly and JavaScript:</p>
 const web_host = struct {
     pub const initDevice = js_init_device;
     pub const deviceGetQueue = js_device_get_queue;
+    pub const deviceWorkgroupStorageLimit = js_device_workgroup_storage_limit;
     pub const getSurface = js_get_surface;
     pub const surfaceGetCurrentTexture = js_surface_get_current_texture;
     pub const surfacePresent = js_surface_present;
@@ -1436,6 +1437,7 @@ pub fn convertSpirvToWgslEntry(
     // undecorated interface variable before anything gets auto-numbered.
     try checkGraphicsInterfaceDecorated(&amp;state);
     try markAtomicBindings(&amp;state);
+    markUniformWorkgroupVariables(&amp;state);
     try checkBarrierUniformity(&amp;state);
     try pass3_types_globals(&amp;state);
     try pass4_functions(&amp;state);
@@ -1573,6 +1575,14 @@ load therefore binds no name at all; every use refers to the module-scope variab
     // `kbuf_grid_counts[idx]`; its root var (extra_a) being tainted is the cue.
     if (ptr_info.extra_a != 0 and ptr_info.extra_a &lt; s.atomic_var.len and s.atomic_var[ptr_info.extra_a]) {
         try bprint(out, s.arena, "atomicLoad(&amp;{s});\n", .{ptr});
+        return;
+    }
+    // A UNIFORM workgroup array (`kompute.sharedUniform`): every invocation reads it together, and the read must be
+    // WGSL's `workgroupUniformLoad` for the validators to take what is decided on it as uniform. ptr is an access path
+    // like `zimr_uniform_rounds_left[0]`, whose root variable carries the mark, or the variable itself.
+    const uniform_root: u32 = if (ptr_info.kind == .variable) ops[2] else ptr_info.extra_a;
+    if (uniform_root != 0 and uniform_root &lt; s.uniform_var.len and s.uniform_var[uniform_root]) {
+        try bprint(out, s.arena, "workgroupUniformLoad(&amp;{s});\n", .{ptr});
         return;
     }
     try bprint(out, s.arena, "{s};\n", .{ptr});
@@ -1907,10 +1917,9 @@ pub fn loadDispatch(
     return table;
 }</code></pre>
 
-<details class="src-fold" data-src="src/vk.zig" data-decl="pub const SurfaceDispatch = struct"><summary>A table: <code>SurfaceDispatch</code></summary><pre><code class="zig">/// An instance's window-system commands (VK_KHR_surface, VK_KHR_win32_surface): loaded only by a
+<details class="src-fold" data-src="src/vk.zig" data-decl="pub const SurfaceDispatch = struct"><summary>A table: <code>SurfaceDispatch</code></summary><pre><code class="zig">/// An instance's surface commands, the ones every window system shares (VK_KHR_surface): loaded only by a
 /// host with a window.
 pub const SurfaceDispatch = struct {
-    createWin32SurfaceKHR: PfnCreateWin32SurfaceKHR,
     destroySurfaceKHR: PfnDestroySurfaceKHR,
     getPhysicalDeviceSurfaceSupportKHR: PfnGetPhysicalDeviceSurfaceSupportKHR,
     getPhysicalDeviceSurfaceCapabilitiesKHR: PfnGetPhysicalDeviceSurfaceCapabilitiesKHR,
@@ -2094,7 +2103,7 @@ fn createInstance(self: *Host, get_instance_proc_address: vk.PfnGetInstanceProcA
     var extension_count: u32 = 0;
     if (self.window != null) {
         extensions[0] = vk.khr_surface_extension_name;
-        extensions[1] = vk.khr_win32_surface_extension_name;
+        extensions[1] = native_window.surface_extension_name;
         extension_count = 2;
     }
     if (validate) {
@@ -2494,13 +2503,8 @@ fn bringUp(self: *Host) BringUpError!void {
     const get_instance_proc_address: vk.PfnGetInstanceProcAddr = library.get_instance_proc_address;
     self.global = try vk.loadGlobalDispatch(get_instance_proc_address);
     try createInstance(self, get_instance_proc_address);
-    // The window's surface: Win32's, from the window's module and handle.
     if (self.window) |window| {
-        var surface_info: vk.Win32SurfaceCreateInfoKHR = .{
-            .hinstance = window.module,
-            .hwnd = window.handle,
-        };
-        try vk.check(self.surface_dispatch.createWin32SurfaceKHR(self.instance, &amp;surface_info, null, &amp;self.surface));
+        try createWindowSurface(self, get_instance_proc_address, window);
     }
     self.gpu = try chooseGpu(self);
     // Each bind group is a descriptor set, and a pipeline may use all of them at once.
@@ -2819,7 +2823,7 @@ fn acquireImage(self: *Host) BringUpError!u32 {
     try waitTimeline(self, self.present_serials[self.frame_slot]);
     try retireCompleted(self);
     // A stale swapchain - the window resized, or a present reported a mismatch - is rebuilt before acquiring.
-    const window: *win32.Window = theWindow(self);
+    const window: *native_window.Window = theWindow(self);
     if (window.size_changed) {
         self.swapchain_dirty = true;
         window.size_changed = false;
@@ -4705,7 +4709,7 @@ pub fn run(
         }
         switch (pass) {
             .draw =&gt; update(native_os.monotonicMilliseconds()),
-            .hidden =&gt; win32.Sleep(16),
+            .hidden =&gt; sleepWhileHidden(),
             .closed =&gt; return null,
         }
     }
@@ -6151,14 +6155,15 @@ its own file and replacing its refusals, as from the template.</p>
 
 <p>Each build runs on one platform, chosen from its target when it is compiled:</p>
 
-<pre data-src="src/platform.zig" data-decl="pub const current = "><code class="zig">/// The platform a build runs on, chosen by its host (`host.kind`): the browser's for a page, Windows' for a native
-/// program on Windows, and the headless one for everything without a window - a headless run, whose frame driver and
-/// script talk to that platform (its size, clipboard, gamepads, sound), and the host's tests and tools, which must not
-/// open the user's browser or take their clipboard. A native program for another system - Linux, macOS, Android - is
-/// built on the unwritten platform, which compiles and refuses, until that system has a platform of its own.
+<pre data-src="src/platform.zig" data-decl="pub const current = "><code class="zig">/// The platform a build runs on, chosen by its host (`host.kind`): the browser's for a page, Windows' or Linux's for a
+/// native program on those systems, and the headless one for everything without a window - a headless run, whose frame
+/// driver and script talk to that platform (its size, clipboard, gamepads, sound), and the host's tests and tools,
+/// which must not open the user's browser or take their clipboard. A native program for another system - macOS,
+/// Android - is built on the unwritten platform, which compiles and refuses, until that system has a platform of its
+/// own.
 pub const current = switch (host.kind) {
     .web =&gt; web,
-    .native =&gt; if (builtin.target.os.tag == .windows) windows else unwritten,
+    .native =&gt; if (builtin.target.os.tag == .windows) windows else if (native_window.is_x11) linux else unwritten,
     .headless, .none =&gt; headless,
 };</code></pre>
 
@@ -6633,7 +6638,7 @@ a script moves the same code a mouse and keyboard would; and one command moves t
    .{ .press = .left }                     the left button goes down where the pointer is
    .{ .advance = 1 }                       one frame is drawn - the only command that moves time
    .{ .release = .left }                   ... the button comes up: a click, a frame long
-   .{ .text = "Simon" }                    typed text - a ZON string: "\n" and "\u{e9}" are written so
+   .{ .text = "Ada" }                    typed text - a ZON string: "\n" and "\u{e9}" are written so
    .{ .key_down = .left_control }          a key goes down, by its name in KeyboardKey
    .{ .wheel = .{ .dy = 1 } }              the wheel turns a notch away from the person
    .{ .paste = "12ab34" }                  the system's paste command, with text the app never copied

@@ -154,13 +154,13 @@ fn bendKnees(s: *State) void {
     const m: *const rbt.Model = &s.imported.model;
     @memcpy(s.held, s.stance.targets[0..s.stance.nq]);
     const d: *rbt.Data = &s.reference;
-    @memcpy(d.pos, s.held);
+    @memcpy(d.joint_positions, s.held);
     d.stage = .stale;
     rbt.kinematics(m, d);
     const ankle: u32 = s.imported.bodyIndex("LeftFoot") orelse return;
     const other_ankle: u32 = s.imported.bodyIndex("RightFoot") orelse return;
-    const before: f32 = d.body_xpos[ankle][2];
-    const feet_before: Vec = (d.body_xpos[ankle] + d.body_xpos[other_ankle]) * splat(0.5);
+    const before: f32 = d.body_positions[ankle][2];
+    const feet_before: Vec = (d.body_positions[ankle] + d.body_positions[other_ankle]) * splat(0.5);
     // The lean: the root turns back about the sideways axis, and the ankles turn it back out of the feet.
     // (A turn of +a about +x tips the body forward, toward -y, in the engine's z-up world.)
     const lean: f32 = -radFromDeg(s.lean_back);
@@ -184,16 +184,16 @@ fn bendKnees(s: *State) void {
     }
     for (bends) |bend| {
         const b: u32 = s.imported.bodyIndex(bend.name) orelse continue;
-        const joint: usize = for (m.jnt_body, 0..) |owner, j| {
+        const joint: usize = for (m.joint_body, 0..) |owner, j| {
             if (owner == b) {
                 break j;
             }
         } else continue;
-        const adr: usize = m.jnt_qpos_adr[joint];
+        const adr: usize = m.joint_first_coordinate[joint];
         // The engine keeps a ball's quaternion w-last (measured, R7); the turn, carried into the joint's
         // own frame, goes on the joint's right: joint' = joint * (W^-1 * turn * W).
         const q: []f32 = s.held[adr..][0..4];
-        const world: Quat = d.body_xrot[b];
+        const world: Quat = d.body_orientations[b];
         const turn: Quat = quatFromAxisAngle(vec(1, 0, 0), bend.angle);
         const local: Quat = qmul(qmul(conjugate(world), turn), world);
         const bent: Quat = qmul(.{ q[0], q[1], q[2], q[3] }, local);
@@ -202,14 +202,14 @@ fn bendKnees(s: *State) void {
         q[2] = bent[2];
         q[3] = bent[3];
     }
-    @memcpy(d.pos, s.held);
+    @memcpy(d.joint_positions, s.held);
     d.stage = .stale;
     rbt.kinematics(m, d);
     // Put the feet back where they stood: across the floor from their midpoint, and down from the bend's lift.
-    const feet_after: Vec = (d.body_xpos[ankle] + d.body_xpos[other_ankle]) * splat(0.5);
+    const feet_after: Vec = (d.body_positions[ankle] + d.body_positions[other_ankle]) * splat(0.5);
     s.held[0] += feet_before[0] - feet_after[0];
     s.held[1] += feet_before[1] - feet_after[1];
-    s.held[2] -= d.body_xpos[ankle][2] - before;
+    s.held[2] -= d.body_positions[ankle][2] - before;
     s.held[2] += 0.005;
 }
 
@@ -234,8 +234,8 @@ fn restart(s: *State) void {
     geno.ServoRun.forgetContacts(&s.world);
     if (s.hold_pose) {
         // A pose held still: placed on it, at rest.
-        @memcpy(s.data.pos, target(s));
-        @memset(s.data.vel, 0);
+        @memcpy(s.data.joint_positions, target(s));
+        @memset(s.data.joint_velocities, 0);
         s.data.stage = .stale;
         rbt.forward(&s.imported.model, &s.data);
     } else {
@@ -332,13 +332,13 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .friction = s.floor_friction,
     });
 
-    const nv: usize = m.nv;
+    const nv: usize = m.dof_count;
     s.accel = try gpa.alloc(f32, nv);
     s.scratch = try gpa.alloc(f32, nv);
     s.dense = try gpa.alloc(f32, nv * nv);
     s.full = try gpa.alloc(f32, nv);
     s.torque = try gpa.alloc(f32, nv);
-    s.balanced_goal = try gpa.alloc(f32, m.nq);
+    s.balanced_goal = try gpa.alloc(f32, m.coordinate_count);
     s.reflex = try geno.Reflex.init(&s.imported, s.imported.bodyIndex("Hips") orelse return error.NoHips);
 
     restart(s);
@@ -415,7 +415,7 @@ fn step(s: *State) !void {
         s.full,
         s.torque,
     );
-    @memcpy(s.data.applied_force, s.torque);
+    @memcpy(s.data.applied_joint_forces, s.torque);
     rbt.step(m, &s.data);
     rbt.forward(m, &s.data);
     s.up_frames += 1;
@@ -543,8 +543,8 @@ fn drawBodies(
     for (s.robot.bodies) |body| {
         const b: u32 = s.imported.bodyIndex(body.name) orelse continue;
         for (s.robot.geoms[body.geom_start..][0..body.geom_count]) |geom| {
-            const at: Vec = toYUp(d.body_xpos[b] + rotate(d.body_xrot[b], geom.pos));
-            const turn: Quat = qmul(to_y_up, qmul(d.body_xrot[b], geom.rot));
+            const at: Vec = toYUp(d.body_positions[b] + rotate(d.body_orientations[b], geom.pos));
+            const turn: Quat = qmul(to_y_up, qmul(d.body_orientations[b], geom.rot));
             switch (geom.kind) {
                 .capsule => {
                     const half: Vec = rotate(turn, vec(0, 0, geom.size[1]));
@@ -571,7 +571,7 @@ fn update(f: *z.Frame, s: *State) void {
     placeReference(s);
     // Fallen: the reference LOST, by the one failure criterion (`geno.FailureCheck`: the task's own) - which ends
     // the run, unless the ragdoll is being watched on the floor. The hips' distance is still shown.
-    s.off = length3(s.data.body_xpos[s.hips] - s.reference.body_xpos[s.hips]);
+    s.off = length3(s.data.body_positions[s.hips] - s.reference.body_xpos[s.hips]);
     const clip: *const dance.Clip = &s.clips[s.which];
     if (s.reset_on_fall and s.check.lost(&s.imported.model, &s.data, clip, s.frame)) {
         endRun(s, true);
@@ -583,7 +583,7 @@ fn update(f: *z.Frame, s: *State) void {
     const captured: bool = drawPanel(s, f);
     // The view follows the robot as the clip carries it across the floor.
     if (s.follow_camera) {
-        const hips: Vec = toYUp(s.data.body_xpos[s.hips]);
+        const hips: Vec = toYUp(s.data.body_positions[s.hips]);
         s.cam.target = vec(hips[0], 0.9, hips[2]);
     }
     const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.0, .max_distance = 10.0 });

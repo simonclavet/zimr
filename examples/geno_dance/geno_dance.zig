@@ -366,7 +366,7 @@ const State = struct {
     robot_spec: mjcf.Robot,
     robot: z.robot_mjcf.Imported,
     robot_data: z.robot.Data,
-    /// The robot's rest orientations, from its own `qpos0` - which is measurably a T-POSE.
+    /// The robot's rest orientations, from its own `reference_joint_positions` - which is measurably a T-POSE.
     robot_reference: []Quat,
     /// Which capture joint drives each robot body, from `robot.lafan_to_humanoid`.
     human_of_body: []i32,
@@ -409,7 +409,7 @@ const State = struct {
     /// of `b`'s parent, undone so a chain does not accumulate it.
     robot_rest_world: []Vec,
     robot_rest_rotations: []Quat,
-    /// The robot's body positions at `qpos0`, kept for the rest-pose comparison.
+    /// The robot's body positions at `reference_joint_positions`, kept for the rest-pose comparison.
     robot_rest_xpos: []Vec,
     /// The solved T-pose configuration, so it can be restored without re-solving.
     robot_tpose_qpos: []f32,
@@ -1764,7 +1764,7 @@ fn initRobot(gpa: Allocator, s: *State) !void {
     s.robot = try z.robot_mjcf.build(gpa, &s.robot_spec, .{});
     s.robot_data = try z.robot.Data.init(gpa, &s.robot.model);
 
-    const body_count: usize = s.robot.model.nbody;
+    const body_count: usize = s.robot.model.body_count;
     s.robot_reference = try gpa.alloc(Quat, body_count);
     s.human_of_body = try gpa.alloc(i32, body_count);
     s.robot_parents = try gpa.alloc(i32, body_count);
@@ -1788,13 +1788,13 @@ fn initRobot(gpa: Allocator, s: *State) !void {
     s.robot_rest_world = try gpa.alloc(Vec, 128);
     s.robot_rest_rotations = try gpa.alloc(Quat, 128);
     s.robot_rest_xpos = try gpa.alloc(Vec, body_count);
-    s.robot_tpose_qpos = try gpa.alloc(f32, s.robot.model.nq);
+    s.robot_tpose_qpos = try gpa.alloc(f32, s.robot.model.coordinate_count);
     s.robot_rest_xrot = try gpa.alloc(Quat, body_count);
     s.robot_rest_body_pos = try gpa.alloc(Vec, body_count);
     s.robot_rest_flexion = try gpa.alloc(f32, body_count);
     @memset(s.robot_rest_flexion, 0);
     s.robot_samples = try gpa.alloc(z.robot.PointSample, 256);
-    s.robot_previous_qpos = try gpa.alloc(f32, s.robot.model.nq);
+    s.robot_previous_qpos = try gpa.alloc(f32, s.robot.model.coordinate_count);
     s.robot_twist = try gpa.alloc(Quat, body_count);
     s.robot_parent_twist = try gpa.alloc(Quat, body_count);
     s.robot_limb_correction = try gpa.alloc(Quat, body_count);
@@ -1806,12 +1806,12 @@ fn initRobot(gpa: Allocator, s: *State) !void {
     // had no targets and simply stayed at rest.** `@min(count, tasks.len)` made it a quiet clamp
     // rather than a crash.
     s.robot_tasks = try gpa.alloc(z.robot.IkTask, 256);
-    s.robot_ik_scratch = try gpa.alloc(f32, z.robot.ikScratchSize(s.robot.model.nv));
+    s.robot_ik_scratch = try gpa.alloc(f32, z.robot.ikScratchSize(s.robot.model.dof_count));
     @memset(s.robot_position_weights, 0);
 
     // -- *** BONE DIRECTIONS, NOT BODY FRAMES --
     //
-    // `referenceOrientationsFromRest` reads `body_xrot` at `qpos0` - the body FRAME. For
+    // `referenceOrientationsFromRest` reads `body_orientations` at `reference_joint_positions` - the body FRAME. For
     // `humanoid.xml` that is IDENTITY FOR EVERY BODY, because the file declares no rotation
     // anywhere; its bone directions live in the POSITION OFFSETS (`lower_arm_left` sits at
     // `.18 .18 -.18`). Aligning that identity against a real human T-pose rotation turned every
@@ -2391,7 +2391,7 @@ fn shoulderAxes(s: *State, rest_world: []const Vec) ?struct { robot: Vec, human:
         return null;
     }
 
-    const robot_axis: Vec = s.robot_data.body_xpos[left] - s.robot_data.body_xpos[right];
+    const robot_axis: Vec = s.robot_data.body_positions[left] - s.robot_data.body_positions[right];
     // * Already in the robot's frame - converted once by the caller.
     const human_y_up: Vec = rest_world[@intCast(hl)] - rest_world[@intCast(hr)];
     const robot_len: f32 = @sqrt(robot_axis[0] * robot_axis[0] +
@@ -2460,12 +2460,12 @@ fn refreshRobotTwists(
 
     // -- *** SOLVE THE ROBOT INTO GENO'S T-POSE, AND USE THAT AS ITS REFERENCE --
     //
-    // **`humanoid.xml`'s `qpos0` IS NOT A T-POSE.** Seen side by side, Geno stands with arms
+    // **`humanoid.xml`'s `reference_joint_positions` IS NOT A T-POSE.** Seen side by side, Geno stands with arms
     // straight out while the robot folds its arms up into a triangle. Every twist offset has
     // been `shortestArc(robot rest bone -> geno rest bone)` between two DIFFERENT POSES - which
     // is the rule this arc has broken four times, and this is its root instance.
     //
-    // ** So stop treating `qpos0` as the reference and BUILD one: IK the robot onto Geno's
+    // ** So stop treating `reference_joint_positions` as the reference and BUILD one: IK the robot onto Geno's
     // T-pose joint positions, and take the resulting configuration as its rest. Both sides then
     // depict the same physical pose because the robot's was DERIVED from the character's.
     //
@@ -2494,17 +2494,17 @@ fn refreshRobotTwists(
 
     solveRobotTPose(s, rest_robot_frame, source.target_parents[0..source_joint_count]);
     s.robot_ready = true;
-    for (0..s.robot.model.nbody) |body| {
-        s.robot_rest_xpos[body] = s.robot_data.body_xpos[body];
-        s.robot_rest_xrot[body] = s.robot_data.body_xrot[body];
+    for (0..s.robot.model.body_count) |body| {
+        s.robot_rest_xpos[body] = s.robot_data.body_positions[body];
+        s.robot_rest_xrot[body] = s.robot_data.body_orientations[body];
         // * The POSITIONS too: the leaf correspondence self-check needs both halves of the rest
         // pose, and keeping only the rotations is why it could not run here.
-        s.robot_rest_body_pos[body] = s.robot_data.body_xpos[body];
+        s.robot_rest_body_pos[body] = s.robot_data.body_positions[body];
     }
     // * Each hinge's bend at THIS rest pose, so a flexion can be written as an offset from it.
     @memset(s.robot_rest_flexion, 0);
-    for (0..s.robot.model.nbody) |body| {
-        if (s.robot.model.body_jnt_num[body] != 1) {
+    for (0..s.robot.model.body_count) |body| {
+        if (s.robot.model.body_joint_count[body] != 1) {
             continue;
         }
         const parent: u32 = s.robot.model.body_parent[body];
@@ -2512,7 +2512,7 @@ fn refreshRobotTwists(
             continue;
         }
         var child: ?usize = null;
-        for (1..s.robot.model.nbody) |candidate| {
+        for (1..s.robot.model.body_count) |candidate| {
             if (s.robot.model.body_parent[candidate] == body) {
                 child = candidate;
                 break;
@@ -2546,7 +2546,7 @@ fn refreshRobotTwists(
         // * OFF: enabling it measures WORSE across six of seven stages - see
         // `src/notes/twist_port_plan.md` section 21.
         null,
-        // * THE SOLVED T-POSE, not `qpos0` - both references now depict the same physical pose.
+        // * THE SOLVED T-POSE, not `reference_joint_positions` - both references now depict the same physical pose.
         s.robot_tpose_qpos,
         s.robot_twist,
         s.robot_parent_twist,
@@ -2561,7 +2561,7 @@ fn refreshRobotTwists(
             s.robot_twist[torso] =
                 z.robot.computeTwistOffset(axes.robot, axes.human, zm.quat_identity);
             // Children of the torso inherit the corrected value.
-            for (0..s.robot.model.nbody) |body| {
+            for (0..s.robot.model.body_count) |body| {
                 if (s.robot.model.body_parent[body] == torso) {
                     s.robot_parent_twist[body] = s.robot_twist[torso];
                 }
@@ -2616,7 +2616,7 @@ fn refreshRobotMap(s: *State) !void {
     //
     // * Derived, not authored. This is GMR's `rot_offset` column, and the reason theirs varies
     // per limb GROUP is exactly this: a robot's arm convention and its leg convention differ.
-    for (0..s.robot.model.nbody) |body| {
+    for (0..s.robot.model.body_count) |body| {
         s.robot_limb_correction[body] = zm.quat_identity;
         const human_joint: i32 = s.human_of_body[body];
         if (human_joint < 0) {
@@ -2624,17 +2624,17 @@ fn refreshRobotMap(s: *State) !void {
         }
         const joint: usize = @intCast(human_joint);
 
-        // The robot's rest bone: its first child's offset, which at `qpos0` is also its world
+        // The robot's rest bone: its first child's offset, which at `reference_joint_positions` is also its world
         // direction because `humanoid.xml` declares no body rotations.
         var robot_child: ?usize = null;
-        for (0..s.robot.model.nbody) |candidate| {
+        for (0..s.robot.model.body_count) |candidate| {
             if (candidate != 0 and s.robot.model.body_parent[candidate] == body) {
                 robot_child = candidate;
                 break;
             }
         }
         const robot_tip: usize = robot_child orelse continue;
-        const robot_dir: Vec = normalize3(s.robot.model.body_pos[robot_tip]);
+        const robot_dir: Vec = normalize3(s.robot.model.body_rest_position[robot_tip]);
 
         // The human's rest bone, from its own rest offsets, through the position conversion.
         var human_child: ?usize = null;
@@ -2683,17 +2683,17 @@ fn refreshPointSamples(s: *State, source: *const Character) void {
         .human_parents = source.target_parents[0..joints],
         .rest_positions = s.robot_rest_world[0..joints],
         .rest_rotations = s.robot_rest_rotations[0..joints],
-        .robot_rest_rotations = s.robot_rest_xrot[0..s.robot.model.nbody],
+        .robot_rest_rotations = s.robot_rest_xrot[0..s.robot.model.body_count],
         .body_names = s.robot.names,
         // * The rest POSITIONS as well as the rotations: `buildPointSamples` checks each leaf's
         // correspondence against the rest pose and needs both halves of it.
-        .rest_positions_robot = s.robot_rest_body_pos[0..s.robot.model.nbody],
+        .rest_positions_robot = s.robot_rest_body_pos[0..s.robot.model.body_count],
     }, s.robot_samples);
 
     // * Counted here so the UI reports what the SOLVE uses, not what the table resolved: a body
     // can be mapped and still receive no samples.
     var mapped: usize = 0;
-    for (1..s.robot.model.nbody) |b| {
+    for (1..s.robot.model.body_count) |b| {
         if (s.human_of_body[b] >= 0) {
             mapped += 1;
         }
@@ -2722,15 +2722,15 @@ fn buildRetargetedSkeleton(
     const model: *const z.robot.Model = &s.robot.model;
     // * Checked, not clamped: a robot with more bodies than `out` holds used to lose its last
     // bodies' targets without a word.
-    assertf(model.nbody <= out.len, @src(), "retargeted skeleton: {d} bodies, room for {d}", .{
-        model.nbody,
+    assertf(model.body_count <= out.len, @src(), "retargeted skeleton: {d} bodies, room for {d}", .{
+        model.body_count,
         out.len,
     });
-    const limit: usize = model.nbody;
+    const limit: usize = model.body_count;
     out[0] = .{ 0, 0, 0, 0 };
     for (1..limit) |b| {
         const parent: u32 = model.body_parent[b];
-        const own_length: f32 = boneLength(model.body_pos[b]);
+        const own_length: f32 = boneLength(model.body_rest_position[b]);
         const hb: i32 = s.human_of_body[b];
         if (parent == 0) {
             out[b] = if (hb >= 0 and @as(usize, @intCast(hb)) < positions_robot.len)
@@ -2741,12 +2741,12 @@ fn buildRetargetedSkeleton(
         }
         const hp: i32 = s.human_of_body[parent];
         if (hb < 0 or hp < 0 or own_length < 1.0e-6) {
-            out[b] = out[parent] + model.body_pos[b];
+            out[b] = out[parent] + model.body_rest_position[b];
             continue;
         }
         const bone: Vec = positions_robot[@intCast(hb)] - positions_robot[@intCast(hp)];
         if (boneLength(bone) < 1.0e-6) {
-            out[b] = out[parent] + model.body_pos[b];
+            out[b] = out[parent] + model.body_rest_position[b];
             continue;
         }
         out[b] = out[parent] + normalize3(bone) * splat(own_length);
@@ -2780,7 +2780,7 @@ fn rootBodyWorldPosition(s: *const State, positions: []const Vec) ?Vec {
     // written and the robot stands at the origin for the whole take. **A sentinel that also
     // satisfies the predicate is not a sentinel**, which is the second time body/joint 0 has
     // done this here.
-    for (1..s.robot.model.nbody) |body| {
+    for (1..s.robot.model.body_count) |body| {
         if (s.robot.model.body_parent[body] != 0) {
             continue;
         }
@@ -2822,12 +2822,12 @@ fn recordRobotFit(s: *State, positions_robot: []const Vec) void {
     var count: f32 = 0;
     s.robot_visual_worst = 0;
     s.robot_visual_worst_name = "";
-    for (1..s.robot.model.nbody) |b| {
+    for (1..s.robot.model.body_count) |b| {
         const hb: i32 = s.human_of_body[b];
         if (hb < 0 or @as(usize, @intCast(hb)) >= positions_robot.len) {
             continue;
         }
-        const d: f32 = boneLength(s.robot_data.body_xpos[b] - positions_robot[@intCast(hb)]);
+        const d: f32 = boneLength(s.robot_data.body_positions[b] - positions_robot[@intCast(hb)]);
         sum += d;
         count += 1;
         if (d > s.robot_visual_worst) {
@@ -2906,12 +2906,12 @@ fn poseRobot(s: *State, frame: usize) void {
     // * Start from the REST configuration each frame rather than from the previous frame's
     // answer. A solver warm-started from a pose that was itself wrong inherits the error, and
     // debugging a drifting sequence is far harder than debugging a single frame.
-    @memcpy(s.robot_data.pos, s.robot.model.qpos0);
-    if (s.robot.model.njnt > 0 and s.robot.model.jnt_type[0] == .free) {
-        const root_qpos: usize = s.robot.model.jnt_qpos_adr[0];
-        s.robot_data.pos[root_qpos + 0] = root_z_up[0];
-        s.robot_data.pos[root_qpos + 1] = root_z_up[1];
-        s.robot_data.pos[root_qpos + 2] = root_z_up[2];
+    @memcpy(s.robot_data.joint_positions, s.robot.model.reference_joint_positions);
+    if (s.robot.model.joint_count > 0 and s.robot.model.joint_type[0] == .free) {
+        const root_qpos: usize = s.robot.model.joint_first_coordinate[0];
+        s.robot_data.joint_positions[root_qpos + 0] = root_z_up[0];
+        s.robot_data.joint_positions[root_qpos + 1] = root_z_up[1];
+        s.robot_data.joint_positions[root_qpos + 2] = root_z_up[2];
     }
     z.robot.kinematics(&s.robot.model, &s.robot_data);
     z.robot.comPos(&s.robot.model, &s.robot_data);
@@ -2959,7 +2959,7 @@ fn poseRobot(s: *State, frame: usize) void {
         .{
             .positions = positions_robot[0..joint_count],
             .rotations = rotations_robot[0..joint_count],
-            .retargeted = retargeted[0..s.robot.model.nbody],
+            .retargeted = retargeted[0..s.robot.model.body_count],
             .root_world = rootBodyWorldPosition(s, positions_robot[0..joint_count]),
             .position_pull = s.robot_position_pull,
             .previous_qpos = if (s.robot_has_previous) s.robot_previous_qpos else null,
@@ -2968,7 +2968,7 @@ fn poseRobot(s: *State, frame: usize) void {
             .tasks = s.robot_tasks,
         },
     );
-    @memcpy(s.robot_previous_qpos, s.robot_data.pos[0..s.robot.model.nq]);
+    @memcpy(s.robot_previous_qpos, s.robot_data.joint_positions[0..s.robot.model.coordinate_count]);
     s.robot_has_previous = true;
     recordRobotFit(s, positions_robot[0..joint_count]);
 
@@ -3051,8 +3051,8 @@ fn poseRobot(s: *State, frame: usize) void {
     s.robot_posed_frames +|= 1;
 
     // * Z-UP -> Y-UP for display, once, at the boundary.
-    for (0..s.robot.model.nbody) |body| {
-        const z_up: Vec = s.robot_data.body_xpos[body];
+    for (0..s.robot.model.body_count) |body| {
+        const z_up: Vec = s.robot_data.body_positions[body];
         s.robot_positions_y_up[body] = vec(z_up[0], z_up[2], -z_up[1]);
     }
 }
@@ -3263,7 +3263,7 @@ fn drawJointFrame(gl: *z.WgpuGl, at: Vec, rotation: Quat, size: f32) void {
 /// child, so the tree view drew nothing there and it read as "no feet"**, when the foot exists
 /// perfectly well as a geom.
 ///
-/// * Each geom sits at `geom_pos`/`geom_rot` in its body's LOCAL frame, so its world placement
+/// * Each geom sits at `geom_local_position`/`geom_local_rotation` in its body's LOCAL frame, so its world placement
 /// is the body's transform composed with that.
 fn drawRobotGeoms(
     s: *State,
@@ -3280,9 +3280,9 @@ fn drawRobotGeoms(
         }
         const body_position: Vec = xpos[body];
         const body_rotation: Quat = xrot[body];
-        const local_position: Vec = s.robot.model.geom_pos[geom];
+        const local_position: Vec = s.robot.model.geom_local_position[geom];
         const world_z_up: Vec = body_position + zm.rotate(body_rotation, local_position);
-        const world_rotation: Quat = zm.qmul(body_rotation, s.robot.model.geom_rot[geom]);
+        const world_rotation: Quat = zm.qmul(body_rotation, s.robot.model.geom_local_rotation[geom]);
 
         // * Z-up to Y-up for display, the same conversion the rest of the view uses.
         const at: Vec = vec(world_z_up[0], world_z_up[2], -world_z_up[1]) + shift;
@@ -3366,7 +3366,7 @@ fn drawTposeComparison(s: *State, gl: *z.WgpuGl) void {
     }
 
     // -- The ROBOT's rest pose, in Y-up for display --
-    for (1..s.robot.model.nbody) |body| {
+    for (1..s.robot.model.body_count) |body| {
         const parent: u32 = s.robot.model.body_parent[body];
         if (parent == 0) {
             continue;
@@ -3392,7 +3392,7 @@ fn drawTposeComparison(s: *State, gl: *z.WgpuGl) void {
         );
     }
 
-    for (1..s.robot.model.nbody) |body| {
+    for (1..s.robot.model.body_count) |body| {
         const p_z: Vec = s.robot_rest_xpos[body];
         // * `humanoid.xml` declares no body rotations, so every rest frame is IDENTITY - the
         // triads all point the same way, and seeing that is itself the point: it is why the
@@ -3445,8 +3445,8 @@ fn drawRobotCapsules(s: *State, gl: *z.WgpuGl, color: Color, radius: f32) void {
     // bodies. **Drawn in the same Y-up display frame as the capsules**, so the two skeletons'
     // axes can be compared directly.
     if (s.show_transforms) {
-        for (1..s.robot.model.nbody) |body| {
-            const z_up: Quat = s.robot_data.body_xrot[body];
+        for (1..s.robot.model.body_count) |body| {
+            const z_up: Quat = s.robot_data.body_orientations[body];
             drawTransformAxes(
                 gl,
                 s.robot_positions_y_up[body] + stand,
@@ -3459,7 +3459,7 @@ fn drawRobotCapsules(s: *State, gl: *z.WgpuGl, color: Color, radius: f32) void {
         }
     }
 
-    for (1..s.robot.model.nbody) |body| {
+    for (1..s.robot.model.body_count) |body| {
         const position: Vec = s.robot_positions_y_up[body] + stand;
         const parent: u32 = s.robot.model.body_parent[body];
         if (parent == 0) {
@@ -3499,8 +3499,8 @@ fn drawRobot(s: *State, gl: *z.WgpuGl) void {
             drawRobotGeoms(
                 s,
                 gl,
-                s.robot_data.body_xpos[0..s.robot.model.nbody],
-                s.robot_data.body_xrot[0..s.robot.model.nbody],
+                s.robot_data.body_positions[0..s.robot.model.body_count],
+                s.robot_data.body_orientations[0..s.robot.model.body_count],
                 // * The same placement `drawRobotCapsules` uses, so the two views agree.
                 if (s.robot_overlay) s.characters[s.robot_source].offset else vec(2.1, 0, 0),
                 .{ .r = 180, .g = 255, .b = 160, .a = 255 },
@@ -3870,14 +3870,14 @@ fn tabMotion(s: *State, u: ui.Ui) void {
         {
             var lo: Vec = .{ 1.0e9, 1.0e9, 1.0e9, 0 };
             var hi: Vec = .{ -1.0e9, -1.0e9, -1.0e9, 0 };
-            for (1..s.robot.model.nbody) |b| {
-                const p: Vec = s.robot_data.body_xpos[b];
+            for (1..s.robot.model.body_count) |b| {
+                const p: Vec = s.robot_data.body_positions[b];
                 lo = @min(lo, p);
                 hi = @max(hi, p);
             }
             const span: Vec = hi - lo;
             u.text("  robot span {d:.2} x {d:.2} x {d:.2} m", .{ span[0], span[1], span[2] });
-            const root: Vec = s.robot_data.body_xpos[1];
+            const root: Vec = s.robot_data.body_positions[1];
             u.text("  root at {d:.2},{d:.2},{d:.2}", .{ root[0], root[1], root[2] });
         }
 
@@ -3887,7 +3887,7 @@ fn tabMotion(s: *State, u: ui.Ui) void {
         });
         u.text("  bodies {d}/{d}  samples {d}  posed {d}", .{
             s.robot_mapped_count,
-            s.robot.model.nbody -| 1,
+            s.robot.model.body_count -| 1,
             s.robot_sample_count,
             s.robot_posed_frames,
         });

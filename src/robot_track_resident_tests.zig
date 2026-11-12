@@ -61,7 +61,7 @@ test "robot_track_resident: the loop runs, the world model learns, and the simul
     try setup.init(gpa);
     defer setup.deinit();
     const fleet: *track.Fleet = setup.fleet;
-    const f: usize = track.localSize(fleet.m.nbody);
+    const f: usize = track.localSize(fleet.m.body_count);
     const mean: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(mean);
     const spread: []f32 = try gpa.alloc(f32, f);
@@ -112,6 +112,70 @@ test "robot_track_resident: the loop runs, the world model learns, and the simul
     try expect(moved > 0.0);
 }
 
+test "robot_track_resident: a window starts from the action given before it, or from rest opening its episode" {
+    // The windows' starting actions (`lat_gather_start_actions`): real windows gathered from a fleet that has run a
+    // few rounds - episodes ended among them - and each row's starting action read back. A window that continues its
+    // segment starts from the replay's action at the record before it; one that opens its segment (or whose record
+    // before the ring no longer holds) starts from rest. Bit for bit: the same numbers, copied.
+    const gpa: Allocator = testing_allocator;
+    var setup: kit_tests.FleetSetup = undefined;
+    try setup.init(gpa);
+    defer setup.deinit();
+    const fleet: *track.Fleet = setup.fleet;
+    const f: usize = track.localSize(fleet.m.body_count);
+    const mean: []f32 = try gpa.alloc(f32, f);
+    defer gpa.free(mean);
+    const spread: []f32 = try gpa.alloc(f32, f);
+    defer gpa.free(spread);
+    @memset(mean, 0.0);
+    @memset(spread, 1.0);
+    var host: compute_host.Compute(zn_mlp) = .initCpu();
+    const learner: *Resident(zn_mlp) = try .init(gpa, &host, fleet, .{ .mean = mean, .spread = spread }, .{
+        .rows = 8,
+        .window = 8,
+        .hidden = 32,
+        .policy_hidden = 32,
+        .collect = 32,
+        .filter = 0.5,
+    });
+    defer learner.deinit();
+    host.element_count = @max(host.element_count, learner.data.end);
+    for (0..4) |_| {
+        learner.simulateAndTrain();
+    }
+    const kit: *kit_mod.LatentKit(zn_mlp) = &learner.kit;
+    const actions: usize = learner.host.raw.len;
+    var continuing_rows: usize = 0;
+    var opening_rows: usize = 0;
+    for (0..6) |_| {
+        try expect(learner.drawWindows(0, .anywhere));
+        learner.data.gather(kit, 0);
+        const acts: []const f32 = host.readLatest(.acts) orelse return error.NoReadback;
+        const held: kit_mod.Resident(zn_mlp).HeldSteps = learner.data.held() orelse return error.NothingHeld;
+        for (learner.starts, 0..) |start, row| {
+            const gathered: []const f32 = acts[kit.start_actions_at + row * actions ..][0..actions];
+            const previous_held: bool = start.index > held.first;
+            const continues: bool = start.continues_segment and previous_held;
+            if (continues) {
+                continuing_rows += 1;
+                const given_before: []const f32 = fleet.replay.actionAt(start.env, start.index - 1);
+                try expectEqualSlices(f32, given_before, gathered);
+            } else {
+                opening_rows += 1;
+                for (gathered) |number| {
+                    try expectEqual(@as(f32, 0.0), number);
+                }
+            }
+        }
+    }
+    // Windows that continue their episode were met: the test checked the gather, not only rest.
+    try expect(continuing_rows > 0);
+    report.print("\n  starting actions: {d} windows continuing their episode, {d} opening it\n", .{
+        continuing_rows,
+        opening_rows,
+    });
+}
+
 test "robot_track_resident: the mirror acts as the GPU's policy would" {
     // The one thing the mirror must get right. The simulation chooses its actions from a host copy of
     // the policy's weights; training assumes those are the actions the policy chose. If the two ever
@@ -128,7 +192,7 @@ test "robot_track_resident: the mirror acts as the GPU's policy would" {
     try setup.init(gpa);
     defer setup.deinit();
     const fleet: *track.Fleet = setup.fleet;
-    const f: usize = track.localSize(fleet.m.nbody);
+    const f: usize = track.localSize(fleet.m.body_count);
     const mean: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(mean);
     const spread: []f32 = try gpa.alloc(f32, f);
@@ -169,6 +233,8 @@ test "robot_track_resident: the mirror acts as the GPU's policy would" {
         const at: usize = kit.blockX(0) + row * kit.width;
         @memcpy(learner.host.goal, acts[at..][0..f]);
         @memcpy(learner.host.z, acts[at + kit.lead ..][0..f]);
+        // And the action applied before the window's first decision, which the GPU's policy read: its starting action.
+        learner.host.applied = acts[kit.start_actions_at + row * actions ..][0..actions];
         learner.host.policyRow();
         const theirs: []const f32 = acts[kit.raw_at + row * actions ..][0..actions];
         for (theirs, learner.host.raw) |gpu, mirrored| {
@@ -201,7 +267,7 @@ test "robot_track_resident: the judge's actor - zero weights ARE the servo, trai
     try setup.init(gpa);
     defer setup.deinit();
     const fleet: *track.Fleet = setup.fleet;
-    const f: usize = track.localSize(fleet.m.nbody);
+    const f: usize = track.localSize(fleet.m.body_count);
     const mean: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(mean);
     const spread: []f32 = try gpa.alloc(f32, f);
@@ -267,7 +333,7 @@ test "robot_track_resident: a saved state resumes the same learner; another lear
     try setup.init(gpa);
     defer setup.deinit();
     const fleet: *track.Fleet = setup.fleet;
-    const feature_count: usize = track.localSize(fleet.m.nbody);
+    const feature_count: usize = track.localSize(fleet.m.body_count);
     const action_count: usize = track.actionSize(fleet.m);
     const means: []f32 = try gpa.alloc(f32, feature_count);
     defer gpa.free(means);
@@ -358,14 +424,14 @@ test "robot_track_resident: a saved state resumes the same learner; another lear
         return error.TestExpectedRefusal;
     try expectEqualStrings("numbers.normalizer_spreads: not finite, or not above zero", spreads_problem);
 
-    // CONTROL: the policy's last parameter - the last action's output bias - with its top exponent bit flipped (a
-    // zero becomes 2.0, anything else changes by orders of magnitude). The file is still well formed, so it loads,
-    // and the action must move.
+    // CONTROL: the last action's output bias - the parameter just before the policy's block for its applied action -
+    // with its top exponent bit flipped (a zero becomes 2.0, anything else changes by orders of magnitude). The file
+    // is still well formed, so it loads, and the action must move.
     const damaged_state: []u8 = try gpa.dupe(u8, saved_state);
     defer gpa.free(damaged_state);
-    const parameter_count: usize = resumed_learner.kit.param_count + resumed_learner.kit.policy_count;
-    const last_parameter_at: usize = header_size + (parameter_count - 1) * @sizeOf(f32);
-    const exponent_byte_at: usize = last_parameter_at + 3;
+    const last_output_bias_index: usize = resumed_learner.kit.policyWeights().applied - 1;
+    const last_output_bias_at: usize = header_size + last_output_bias_index * @sizeOf(f32);
+    const exponent_byte_at: usize = last_output_bias_at + 3;
     damaged_state[exponent_byte_at] ^= 0x40;
     try resumed_learner.importState(gpa, damaged_state);
     resumed_learner.features(0);
@@ -393,7 +459,7 @@ test "robot_track_resident: a SuperTrack policy file acts as the kit's policy bi
     try setup.init(gpa);
     defer setup.deinit();
     const fleet: *track.Fleet = setup.fleet;
-    const feature_count: usize = track.localSize(fleet.m.nbody);
+    const feature_count: usize = track.localSize(fleet.m.body_count);
     const means: []f32 = try gpa.alloc(f32, feature_count);
     defer gpa.free(means);
     const spreads: []f32 = try gpa.alloc(f32, feature_count);
@@ -426,6 +492,7 @@ test "robot_track_resident: a SuperTrack policy file acts as the kit's policy bi
         arena,
         learner.policyParts(),
         fleet.options.action_scale,
+        1,
     );
     const policy_bytes: []u8 = try lab.PolicyFile.encode(arena, &written_policy);
     var policy: lab.GenoPolicy = try lab.PolicyFile.decode(arena, policy_bytes);
@@ -449,7 +516,9 @@ test "robot_track_resident: a SuperTrack policy file acts as the kit's policy bi
         const row_start: usize = kit.blockX(0) + row * kit.width;
         @memcpy(goal_and_state[0..feature_count], activations[row_start..][0..feature_count]);
         @memcpy(goal_and_state[feature_count..], activations[row_start + kit.lead ..][0..feature_count]);
-        lab.policyMeanAction(&policy, goal_and_state, scratch, file_action);
+        // The action applied before the window's first decision, which the kit's policy read: its starting action.
+        const applied: []const f32 = activations[kit.start_actions_at + row * action_count ..][0..action_count];
+        lab.policyMeanAction(&policy, goal_and_state, applied, scratch, file_action);
         const kit_action: []const f32 = activations[kit.raw_at + row * action_count ..][0..action_count];
         if (eql(f32, kit_action, file_action)) {
             rows_matched_exactly += 1;
@@ -471,6 +540,8 @@ test "robot_track_resident: a SuperTrack policy file acts as the kit's policy bi
         decider.decide(&policy, &controller, fleet, character_count, decided_actions);
         for (0..character_count) |character| {
             learner.features(character);
+            // The mirror reads what the file's policy read: the action the controller's filter gave last.
+            learner.host.applied = controller.filtered[character * action_count ..][0..action_count];
             learner.host.policyRow();
             const decided: []const f32 = decided_actions[character * action_count ..][0..action_count];
             for (decided, learner.host.raw) |from_file, from_mirror| {
@@ -478,8 +549,16 @@ test "robot_track_resident: a SuperTrack policy file acts as the kit's policy bi
                 largest_action = @max(largest_action, @abs(from_mirror));
             }
         }
+        // The controller gives each decided action through the policy's filter, as the learner gives its own
+        // (`giveAction`): blended into the action it gave before at the policy's share.
+        const given_before: []const f32 = try arena.dupe(f32, controller.filtered);
         const applied_actions: []const f32 = controller.apply(decided_actions);
-        try expectEqualSlices(f32, decided_actions, applied_actions);
+        const share: f32 = policy.filter_beta;
+        for (decided_actions, given_before, applied_actions) |decided_number, before, applied_number| {
+            const filtered: f32 = rbt.filteredActionNumber(share, decided_number, before);
+            const blended: f32 = if (share == 1.0) decided_number else filtered;
+            try expectEqual(blended, applied_number);
+        }
         _ = fleet.step(applied_actions);
     }
     report.print("\n  SuperTrack policy file vs the mirror, 600 steps x {d} characters: worst {e} (largest {e})\n", .{
@@ -495,7 +574,8 @@ test "robot_track_resident: a SuperTrack policy file acts as the kit's policy bi
     const first_row_start: usize = kit.blockX(0);
     @memcpy(goal_and_state[0..feature_count], activations[first_row_start..][0..feature_count]);
     @memcpy(goal_and_state[feature_count..], activations[first_row_start + kit.lead ..][0..feature_count]);
-    lab.policyMeanAction(&policy, goal_and_state, scratch, file_action);
+    const first_applied: []const f32 = activations[kit.start_actions_at..][0..action_count];
+    lab.policyMeanAction(&policy, goal_and_state, first_applied, scratch, file_action);
     try expect(!eql(f32, activations[kit.raw_at..][0..action_count], file_action));
 }
 
@@ -508,7 +588,7 @@ test "robot_track_resident: a SuperTrack policy of zero weights is judged as the
     try setup.init(gpa);
     defer setup.deinit();
     const m: *rbt.Model = setup.fleet.m;
-    const feature_count: usize = track.localSize(m.nbody);
+    const feature_count: usize = track.localSize(m.body_count);
     var arena_state: ArenaAllocator = .init(gpa);
     defer arena_state.deinit();
     const arena: Allocator = arena_state.allocator();
@@ -517,7 +597,9 @@ test "robot_track_resident: a SuperTrack policy of zero weights is judged as the
     const first_layer: usize = lab.PolicyLayer.parameterCount(.tanh, 2 * feature_count, hidden_width);
     const second_layer: usize = lab.PolicyLayer.parameterCount(.tanh, hidden_width, hidden_width);
     const third_layer: usize = lab.PolicyLayer.parameterCount(.none, hidden_width, action_count);
-    const zero_weights: []f32 = try arena.alloc(f32, first_layer + second_layer + third_layer);
+    // The block for the action applied before a decision, after the layers: zero, as a policy that does not read it.
+    const applied_block: usize = action_count * hidden_width;
+    const zero_weights: []f32 = try arena.alloc(f32, first_layer + second_layer + third_layer + applied_block);
     @memset(zero_weights, 0.0);
     const means: []f32 = try arena.alloc(f32, feature_count);
     const spreads: []f32 = try arena.alloc(f32, feature_count);
@@ -529,8 +611,9 @@ test "robot_track_resident: a SuperTrack policy of zero weights is judged as the
         .hidden_width = hidden_width,
         .action_count = action_count,
         .normalizer = .{ .mean = means, .spread = spreads },
+        .filter = 1.0,
     };
-    const policy: lab.GenoPolicy = try lab.policyOfSuperTrack(arena, parts, setup.fleet.options.action_scale);
+    const policy: lab.GenoPolicy = try lab.policyOfSuperTrack(arena, parts, setup.fleet.options.action_scale, 1);
     const starts: []usize = try track.evenStarts(arena, &setup.clip, 30);
     const settings: lab.PolicyJudgeSettings = .{ .starts = starts };
     const names: []const []const u8 = setup.imported.names;
@@ -557,7 +640,7 @@ test "robot_track_resident: with the critic on, every world-model round trains i
     try setup.init(gpa);
     defer setup.deinit();
     const fleet: *track.Fleet = setup.fleet;
-    const feature_count: usize = track.localSize(fleet.m.nbody);
+    const feature_count: usize = track.localSize(fleet.m.body_count);
     const mean: []f32 = try gpa.alloc(f32, feature_count);
     defer gpa.free(mean);
     const spread: []f32 = try gpa.alloc(f32, feature_count);
@@ -634,7 +717,7 @@ test "robot_track_resident: with a flow acting, a saved state resumes the same l
     try setup.init(gpa);
     defer setup.deinit();
     const fleet: *track.Fleet = setup.fleet;
-    const feature_count: usize = track.localSize(fleet.m.nbody);
+    const feature_count: usize = track.localSize(fleet.m.body_count);
     const action_count: usize = track.actionSize(fleet.m);
     const means: []f32 = try gpa.alloc(f32, feature_count);
     defer gpa.free(means);
@@ -716,7 +799,7 @@ test "robot_track_resident: a flow at rest, judged through the learner's actor, 
     try setup.init(gpa);
     defer setup.deinit();
     const fleet: *track.Fleet = setup.fleet;
-    const f: usize = track.localSize(fleet.m.nbody);
+    const f: usize = track.localSize(fleet.m.body_count);
     const mean: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(mean);
     const spread: []f32 = try gpa.alloc(f32, f);
@@ -895,7 +978,7 @@ test "robot_track_resident: a pushed character is flagged to plan, and its decis
     const fleet: *track.Fleet = setup.fleet;
     // The tests' fleet has no task head; the root's height serves - a fall lowers it as it lowers the head.
     fleet.head = 1;
-    const f: usize = track.localSize(fleet.m.nbody);
+    const f: usize = track.localSize(fleet.m.body_count);
     const mean: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(mean);
     const spread: []f32 = try gpa.alloc(f32, f);
@@ -983,7 +1066,7 @@ test "robot_track_resident: a pushed character's decision leaves its chosen plan
     const fleet: *track.Fleet = setup.fleet;
     // The tests' fleet has no task head; the root's height serves - a fall lowers it as it lowers the head.
     fleet.head = 1;
-    const f: usize = track.localSize(fleet.m.nbody);
+    const f: usize = track.localSize(fleet.m.body_count);
     const mean: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(mean);
     const spread: []f32 = try gpa.alloc(f32, f);
@@ -1072,7 +1155,7 @@ test "robot_track_resident: a planning character acts from its own plan, at the 
     const fleet: *track.Fleet = setup.fleet;
     // The tests' fleet has no task head; the root's height serves - a fall lowers it as it lowers the head.
     fleet.head = 1;
-    const f: usize = track.localSize(fleet.m.nbody);
+    const f: usize = track.localSize(fleet.m.body_count);
     const mean: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(mean);
     const spread: []f32 = try gpa.alloc(f32, f);
@@ -1138,7 +1221,7 @@ test "robot_track_resident: projecting the hazard ahead flags a pushed character
         defer setup.deinit();
         const fleet: *track.Fleet = setup.fleet;
         fleet.head = 1;
-        const f: usize = track.localSize(fleet.m.nbody);
+        const f: usize = track.localSize(fleet.m.body_count);
         const mean: []f32 = try gpa.alloc(f32, f);
         defer gpa.free(mean);
         const spread: []f32 = try gpa.alloc(f32, f);
@@ -1178,7 +1261,7 @@ test "robot_track_resident: planning keeps to its frame - one decision per call,
     defer setup.deinit();
     const fleet: *track.Fleet = setup.fleet;
     fleet.head = 1;
-    const f: usize = track.localSize(fleet.m.nbody);
+    const f: usize = track.localSize(fleet.m.body_count);
     const mean: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(mean);
     const spread: []f32 = try gpa.alloc(f32, f);
@@ -1229,7 +1312,7 @@ test "robot_track_resident: with a flow acting, the steps taken from plans becom
     defer setup.deinit();
     const fleet: *track.Fleet = setup.fleet;
     fleet.head = 1;
-    const f: usize = track.localSize(fleet.m.nbody);
+    const f: usize = track.localSize(fleet.m.body_count);
     const mean: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(mean);
     const spread: []f32 = try gpa.alloc(f32, f);
@@ -1322,7 +1405,7 @@ test "robot_track_resident: the host corrects the policy as the kit does" {
     try setup.init(gpa);
     defer setup.deinit();
     const fleet: *track.Fleet = setup.fleet;
-    const f: usize = track.localSize(fleet.m.nbody);
+    const f: usize = track.localSize(fleet.m.body_count);
     const mean: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(mean);
     const spread: []f32 = try gpa.alloc(f32, f);
@@ -1402,7 +1485,7 @@ test "robot_track_resident: a flow step in recovery becomes teacher 3's example 
     defer setup.deinit();
     const fleet: *track.Fleet = setup.fleet;
     fleet.head = 1;
-    const f: usize = track.localSize(fleet.m.nbody);
+    const f: usize = track.localSize(fleet.m.body_count);
     const mean: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(mean);
     const spread: []f32 = try gpa.alloc(f32, f);
@@ -1499,7 +1582,7 @@ test "robot_track_resident: teacher 3's round start - every draw holds its examp
     defer setup.deinit();
     const fleet: *track.Fleet = setup.fleet;
     fleet.head = 1;
-    const f: usize = track.localSize(fleet.m.nbody);
+    const f: usize = track.localSize(fleet.m.body_count);
     const mean: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(mean);
     const spread: []f32 = try gpa.alloc(f32, f);
@@ -1642,7 +1725,7 @@ test "robot_track_resident: trust in the critic weighs everything that leans on 
     defer setup.deinit();
     const fleet: *track.Fleet = setup.fleet;
     fleet.head = 1;
-    const f: usize = track.localSize(fleet.m.nbody);
+    const f: usize = track.localSize(fleet.m.body_count);
     const mean: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(mean);
     const spread: []f32 = try gpa.alloc(f32, f);
@@ -1700,7 +1783,7 @@ test "robot_track_resident: the planner scores every prefix - its costs and the 
     defer setup.deinit();
     const fleet: *track.Fleet = setup.fleet;
     fleet.head = 1;
-    const f: usize = track.localSize(fleet.m.nbody);
+    const f: usize = track.localSize(fleet.m.body_count);
     const mean: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(mean);
     const spread: []f32 = try gpa.alloc(f32, f);
@@ -1796,7 +1879,7 @@ test "robot_track_resident: the skip model learns beside the world model, and a 
     try setup.init(gpa);
     defer setup.deinit();
     const fleet: *track.Fleet = setup.fleet;
-    const feature_count: usize = track.localSize(fleet.m.nbody);
+    const feature_count: usize = track.localSize(fleet.m.body_count);
     const means: []f32 = try gpa.alloc(f32, feature_count);
     defer gpa.free(means);
     const spreads: []f32 = try gpa.alloc(f32, feature_count);
@@ -1873,7 +1956,7 @@ fn trainedNetworkWeights(
     try setup.init(gpa);
     defer setup.deinit();
     const fleet: *track.Fleet = setup.fleet;
-    const feature_count: usize = track.localSize(fleet.m.nbody);
+    const feature_count: usize = track.localSize(fleet.m.body_count);
     const means: []f32 = try gpa.alloc(f32, feature_count);
     defer gpa.free(means);
     const spreads: []f32 = try gpa.alloc(f32, feature_count);
@@ -1922,7 +2005,7 @@ test "robot_track_resident: the world model's change in units of the typical cha
     try setup.init(gpa);
     defer setup.deinit();
     const fleet: *track.Fleet = setup.fleet;
-    const feature_count: usize = track.localSize(fleet.m.nbody);
+    const feature_count: usize = track.localSize(fleet.m.body_count);
     const means: []f32 = try gpa.alloc(f32, feature_count);
     defer gpa.free(means);
     const spreads: []f32 = try gpa.alloc(f32, feature_count);
@@ -1978,7 +2061,7 @@ test "robot_track_resident: two clips in one run - every character keeps its own
     try setup.initTwoClips(gpa);
     defer setup.deinit();
     const fleet: *track.Fleet = setup.fleet;
-    const f: usize = track.localSize(fleet.m.nbody);
+    const f: usize = track.localSize(fleet.m.body_count);
     const mean: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(mean);
     const spread: []f32 = try gpa.alloc(f32, f);
@@ -2035,7 +2118,7 @@ test "robot_track_resident: a policy imagining 32 steps, a world model learning 
     setup.fleet = try track.Fleet.init(gpa, &setup.imported.model, &.{&setup.clip}, .{ .envs = 4, .capacity = 256 });
     const fleet: *track.Fleet = setup.fleet;
     fleet.head = 1;
-    const f: usize = track.localSize(fleet.m.nbody);
+    const f: usize = track.localSize(fleet.m.body_count);
     const mean: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(mean);
     const spread: []f32 = try gpa.alloc(f32, f);
@@ -2117,7 +2200,7 @@ test "robot_track_resident: the rates' schedule - every network's rate on its co
     defer setup.deinit();
     const fleet: *track.Fleet = setup.fleet;
     fleet.head = 1;
-    const f: usize = track.localSize(fleet.m.nbody);
+    const f: usize = track.localSize(fleet.m.body_count);
     const mean: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(mean);
     const spread: []f32 = try gpa.alloc(f32, f);
@@ -2175,7 +2258,7 @@ test "robot_track_resident: a planning decision waits for its round's last step 
     defer setup.deinit();
     const fleet: *track.Fleet = setup.fleet;
     fleet.head = 1;
-    const f: usize = track.localSize(fleet.m.nbody);
+    const f: usize = track.localSize(fleet.m.body_count);
     const mean: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(mean);
     const spread: []f32 = try gpa.alloc(f32, f);
@@ -2222,7 +2305,7 @@ test "robot_track_resident: the policy's windows inside returns - all of them at
         .return_steps = 8,
     });
     const fleet: *track.Fleet = setup.fleet;
-    const f: usize = track.localSize(m.nbody);
+    const f: usize = track.localSize(m.body_count);
     const mean: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(mean);
     const spread: []f32 = try gpa.alloc(f32, f);
@@ -2278,7 +2361,7 @@ test "robot_track_resident: steps in an aftermath are not watched - the time to 
         .return_steps = 8,
     });
     const fleet: *track.Fleet = setup.fleet;
-    const f: usize = track.localSize(m.nbody);
+    const f: usize = track.localSize(m.body_count);
     const mean: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(mean);
     const spread: []f32 = try gpa.alloc(f32, f);
@@ -2320,7 +2403,7 @@ test "robot_track_resident: the watchdog names what stopped being finite - a pol
     try setup.init(gpa);
     defer setup.deinit();
     const fleet: *track.Fleet = setup.fleet;
-    const f: usize = track.localSize(fleet.m.nbody);
+    const f: usize = track.localSize(fleet.m.body_count);
     const mean: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(mean);
     const spread: []f32 = try gpa.alloc(f32, f);
@@ -2362,7 +2445,7 @@ test "robot_track_resident: FlowDPG hears the world model - the flow's cost grad
     try setup.init(gpa);
     defer setup.deinit();
     const fleet: *track.Fleet = setup.fleet;
-    const f: usize = track.localSize(fleet.m.nbody);
+    const f: usize = track.localSize(fleet.m.body_count);
     const mean: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(mean);
     const spread: []f32 = try gpa.alloc(f32, f);
@@ -2432,7 +2515,7 @@ test "robot_track_resident: acting on four threads - the same actions and charac
     var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     four_fleet.physics_io = threaded.io();
-    const f: usize = track.localSize(m.nbody);
+    const f: usize = track.localSize(m.body_count);
     const mean: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(mean);
     const spread: []f32 = try gpa.alloc(f32, f);
@@ -2462,8 +2545,63 @@ test "robot_track_resident: acting on four threads - the same actions and charac
         try expectEqualSlices(f32, one_learner.actions, four_learner.actions);
         try expectEqualSlices(f32, one_learner.flow_noise, four_learner.flow_noise);
         for (0..8) |env| {
-            try expectEqualSlices(f32, one_fleet.data[env].pos, four_fleet.data[env].pos);
-            try expectEqualSlices(f32, one_fleet.data[env].vel, four_fleet.data[env].vel);
+            try expectEqualSlices(f32, one_fleet.data[env].joint_positions, four_fleet.data[env].joint_positions);
+            try expectEqualSlices(f32, one_fleet.data[env].joint_velocities, four_fleet.data[env].joint_velocities);
         }
     }
+}
+
+test "robot_track_resident: the action filter gives the fleet a fifth of a first action from rest" {
+    // Two learners alike but for the filter, each on its own fleet from the same seeds. Their first exploring step
+    // chooses the same action - the filter acts only after the choice - and the filtered learner gives the fleet
+    // exactly 0.2 of it: the blend from rest, 0.2 x the action + 0.8 x 0.
+    const gpa: Allocator = testing_allocator;
+    var unfiltered_setup: kit_tests.FleetSetup = undefined;
+    try unfiltered_setup.init(gpa);
+    defer unfiltered_setup.deinit();
+    var filtered_setup: kit_tests.FleetSetup = undefined;
+    try filtered_setup.init(gpa);
+    defer filtered_setup.deinit();
+    const f: usize = track.localSize(unfiltered_setup.fleet.m.body_count);
+    const mean: []f32 = try gpa.alloc(f32, f);
+    defer gpa.free(mean);
+    const spread: []f32 = try gpa.alloc(f32, f);
+    defer gpa.free(spread);
+    @memset(mean, 0.0);
+    @memset(spread, 1.0);
+    const unfiltered_options: resident.Options = .{
+        .rows = 8,
+        .window = 8,
+        .hidden = 32,
+        .policy_hidden = 32,
+        .filter = 1.0,
+    };
+    var filtered_options: resident.Options = unfiltered_options;
+    filtered_options.filter = 0.2;
+    var unfiltered_host: compute_host.Compute(zn_mlp) = .initCpu();
+    var filtered_host: compute_host.Compute(zn_mlp) = .initCpu();
+    const unfiltered: *Resident(zn_mlp) = try .init(
+        gpa,
+        &unfiltered_host,
+        unfiltered_setup.fleet,
+        .{ .mean = mean, .spread = spread },
+        unfiltered_options,
+    );
+    defer unfiltered.deinit();
+    const filtered: *Resident(zn_mlp) = try .init(
+        gpa,
+        &filtered_host,
+        filtered_setup.fleet,
+        .{ .mean = mean, .spread = spread },
+        filtered_options,
+    );
+    defer filtered.deinit();
+    unfiltered.act(1, 1.0);
+    filtered.act(1, 1.0);
+    var moved: bool = false;
+    for (filtered.actions, unfiltered.actions) |given, chosen| {
+        try expectEqual(0.2 * chosen, given);
+        moved = moved or chosen != 0.0;
+    }
+    try expect(moved);
 }

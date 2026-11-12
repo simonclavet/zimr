@@ -48,6 +48,13 @@ pub fn parked() bool {
     return !parked_enabled;
 }
 
+/// A FAILING CHECK's EXPLANATION, printed always - unlike `print`, which is for measurements asked for: a check that
+/// fails says what failed whether or not reports were asked for.
+pub fn failure(comptime format: []const u8, args: anytype) void {
+    // lint:off debug-print: a failing check's explanation, printed when and only when it fails.
+    std.debug.print(format, args);
+}
+
 /// `std.debug.print`, when `enabled`; nothing otherwise.
 pub fn print(comptime format: []const u8, args: anytype) void {
     if (enabled) {

@@ -420,7 +420,7 @@ pub fn Trainer(comptime M: type) type {
                 .advantages = try owned.alloc(f32, transitions),
                 .returns = try owned.alloc(f32, transitions),
                 .order = try owned.alloc(u32, transitions),
-                .reference_state = try track.State.init(owned, m.nbody),
+                .reference_state = try track.State.init(owned, m.body_count),
                 .probe = try rbt.Data.init(owned, m),
                 .obs_scratch = try owned.alloc(f32, n_obs),
                 .observation_normalizer = try zrl.ObsNormalizer.init(owned, n_obs),

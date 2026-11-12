@@ -5237,3 +5237,9 @@ testing details, war stories or development anecdotes (Simon's standing preferen
 - **Oct 31 - review.** One recorded check from T4 was not valid and is corrected; a needless horizon limit is gone.
   Still open before a night: the full gate, a first run of the night files on a GPU that can bind them, and a
   measurement of whether the change statistics help.
+- **Nov 2 - one system, one plan.** Uni-SuperMimic read again, for how its whole loop fits together: the task as
+  differentiable functions of a predicted state, the policy's objective carried past its horizon by the critic,
+  acting as a deterministic policy with noise, the critic fitted on imagination, an environment that ends an episode
+  at a fall, and an evaluation from every clip's first frame. Our night 1's full recipe is already the three methods
+  together; the new plan (v6) gathers what each still lacks and the GPU simulator's stages the tracker needs.
+

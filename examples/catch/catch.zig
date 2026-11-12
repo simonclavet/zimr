@@ -163,10 +163,10 @@ fn makeKeeper(gpa: Allocator, model: *const rbt.Model, planned: bool) !Keeper {
         .data = try rbt.Data.init(gpa, model),
         .plan = plan,
         .planned = planned,
-        .meet_pose = try gpa.alloc(f32, model.nq),
-        .meet_qvel = try gpa.alloc(f32, model.nv),
+        .meet_pose = try gpa.alloc(f32, model.coordinate_count),
+        .meet_qvel = try gpa.alloc(f32, model.dof_count),
         .meet_time = -1,
-        .reference = try gpa.alloc(f32, (max_horizon + 1) * (model.nq + model.nv)),
+        .reference = try gpa.alloc(f32, (max_horizon + 1) * (model.coordinate_count + model.dof_count)),
         .best_gap = 1.0e9,
         .best_relative = 0,
         .best_hand = vec(0, 0, 0),
@@ -183,9 +183,9 @@ const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 fn resetArms(s: *State) void {
     inline for (.{ &s.servo, &s.planner }) |k| {
-        @memcpy(k.data.pos, s.rest);
-        @memset(k.data.vel, 0);
-        @memset(k.data.ctrl, 0);
+        @memcpy(k.data.joint_positions, s.rest);
+        @memset(k.data.joint_velocities, 0);
+        @memset(k.data.controls, 0);
         k.data.stage = .stale;
         rbt.forward(&s.model, &k.data);
         k.best_gap = 1.0e9;
@@ -214,7 +214,7 @@ fn planInterception(s: *State, k: *Keeper) void {
         if (at[2] < 0.3) {
             break;
         }
-        @memcpy(k.data.pos, s.rest);
+        @memcpy(k.data.joint_positions, s.rest);
         k.data.stage = .stale;
         rbt.forward(m, &k.data);
         const r: ctl.Ik.Result = (ctl.Ik{ .max_iterations = 50 }).solve(
@@ -229,11 +229,11 @@ fn planInterception(s: *State, k: *Keeper) void {
         }
     }
     k.meet_time = best;
-    @memcpy(k.data.pos, s.rest);
+    @memcpy(k.data.joint_positions, s.rest);
     k.data.stage = .stale;
     rbt.forward(m, &k.data);
     if (best <= 0) {
-        @memcpy(k.meet_pose, s.rest[0..m.nq]);
+        @memcpy(k.meet_pose, s.rest[0..m.coordinate_count]);
         @memset(k.meet_qvel, 0);
         return;
     }
@@ -245,22 +245,22 @@ fn planInterception(s: *State, k: *Keeper) void {
         .{ .body = s.hand, .offset = vec(0, 0, 0), .goal = ballAt(s.ball_p0, s.ball_v0, best) },
         s.ik_scratch,
     );
-    @memcpy(k.meet_pose, k.data.pos[0..m.nq]);
+    @memcpy(k.meet_pose, k.data.joint_positions[0..m.coordinate_count]);
 
     // Joint velocities that put the hand on the ball's velocity, least-norm through the hand
     // Jacobian. This is what a servo has no way to ask for.
     @memset(k.meet_qvel, 0);
     var jac_buf: [16]Vec = undefined;
-    if (m.nv > jac_buf.len) {
+    if (m.dof_count > jac_buf.len) {
         return;
     }
-    const jac: []Vec = jac_buf[0..m.nv];
-    rbt.jacPoint(m, &k.data, s.hand, k.data.body_xpos[s.hand], jac, null);
+    const jac: []Vec = jac_buf[0..m.dof_count];
+    rbt.jacPoint(m, &k.data, s.hand, k.data.body_positions[s.hand], jac, null);
     var gram: [9]f32 = @splat(0);
     inline for (0..3) |a| {
         inline for (0..3) |b| {
             var sum: f32 = 0;
-            for (0..m.nv) |v| {
+            for (0..m.dof_count) |v| {
                 sum += jac[v][a] * jac[v][b];
             }
             gram[a * 3 + b] = sum;
@@ -273,11 +273,11 @@ fn planInterception(s: *State, k: *Keeper) void {
     const want: Vec = ballVel(s.ball_v0, best);
     var lambda: [3]f32 = .{ want[0], want[1], want[2] };
     if (ctl.solve3Pub(&gram, &lambda)) {
-        for (0..m.nv) |v| {
+        for (0..m.dof_count) |v| {
             k.meet_qvel[v] = lambda[0] * jac[v][0] + lambda[1] * jac[v][1] + lambda[2] * jac[v][2];
         }
     }
-    @memcpy(k.data.pos, s.rest);
+    @memcpy(k.data.joint_positions, s.rest);
     k.data.stage = .stale;
     rbt.forward(m, &k.data);
 }
@@ -308,7 +308,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.servo = try makeKeeper(gpa, &s.model, false);
     s.planner = try makeKeeper(gpa, &s.model, true);
     rbt.forward(&s.model, &s.servo.data);
-    s.rest = try gpa.dupe(f32, s.servo.data.pos);
+    s.rest = try gpa.dupe(f32, s.servo.data.joint_positions);
 
     s.arm_act = try ctl.limbActuation(gpa, &s.model, s.hand);
     s.all_act = try ctl.Actuation.init(gpa, &s.model);
@@ -316,15 +316,15 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
     s.state_w = try gpa.alloc(f32, s.planner.plan.ndx);
     s.term_w = try gpa.alloc(f32, s.planner.plan.ndx);
-    s.ctrl_w = try gpa.alloc(f32, s.model.nu);
+    s.ctrl_w = try gpa.alloc(f32, s.model.actuator_count);
     // * POSITION AND VELOCITY BLOCKS SEPARATELY. `ndx` is nv positions THEN nv velocities, and
     // the joint speeds that match 4.7 m/s of hand travel are large - one number for both lets
     // the velocity term swamp everything else in the problem.
-    for (0..s.model.nv) |i| {
+    for (0..s.model.dof_count) |i| {
         s.state_w[i] = 0.5;
-        s.state_w[s.model.nv + i] = 0.02;
+        s.state_w[s.model.dof_count + i] = 0.02;
         s.term_w[i] = 60.0;
-        s.term_w[s.model.nv + i] = 4.0;
+        s.term_w[s.model.dof_count + i] = 4.0;
     }
     @memset(s.ctrl_w, 1.0e-4);
 
@@ -393,7 +393,7 @@ fn advance(s: *State, k: *Keeper, tick: u32) void {
             //
             // Shrinking the horizon to the time remaining moved that weight onto the catch and
             // was worth **6x in distance and 3x in relative speed**, on its own.
-            const nstate: u32 = m.nq + m.nv;
+            const nstate: u32 = m.coordinate_count + m.dof_count;
             const left: f32 = @max(0.0, k.meet_time - s.flight);
             const arrive: u32 = @min(max_horizon, zm.floori(u32, left / sim_dt));
             k.plan.setHorizon(@max(2, arrive));
@@ -407,13 +407,13 @@ fn advance(s: *State, k: *Keeper, tick: u32) void {
                     float(step) / float(arrive),
                 );
                 const blend: f32 = along * along * (3.0 - 2.0 * along);
-                for (0..m.nq) |q| {
-                    k.reference[step * nstate + q] = k.data.pos[q] +
-                        blend * (k.meet_pose[q] - k.data.pos[q]);
+                for (0..m.coordinate_count) |q| {
+                    k.reference[step * nstate + q] = k.data.joint_positions[q] +
+                        blend * (k.meet_pose[q] - k.data.joint_positions[q]);
                 }
                 const near_end: bool = arrive > 0 and step + 10 >= arrive;
-                for (0..m.nv) |v| {
-                    k.reference[step * nstate + m.nq + v] = if (near_end) k.meet_qvel[v] else 0;
+                for (0..m.dof_count) |v| {
+                    k.reference[step * nstate + m.coordinate_count + v] = if (near_end) k.meet_qvel[v] else 0;
                 }
             }
             // *** THE REFERENCE MUST BE EXACTLY `(horizon + 1) x nstate`, AND THE HORIZON MOVES.
@@ -435,7 +435,7 @@ fn advance(s: *State, k: *Keeper, tick: u32) void {
                 .reference = k.reference[0..wanted],
             }, .{ .iterations = 6 });
         }
-        @memcpy(k.data.ctrl, k.plan.ctrl[0..m.nu]);
+        @memcpy(k.data.controls, k.plan.ctrl[0..m.actuator_count]);
         mpc.shift(&k.plan);
     } else {
         // * THE HONEST BASELINE, AND IT IS NOT A STRAWMAN: it is handed the interception point
@@ -451,15 +451,15 @@ fn advance(s: *State, k: *Keeper, tick: u32) void {
     rbt.step(m, &k.data);
 
     const ball: Vec = ballAt(s.ball_p0, s.ball_v0, s.flight);
-    const gap: f32 = length3(k.data.body_xpos[s.hand] - ball);
+    const gap: f32 = length3(k.data.body_positions[s.hand] - ball);
     if (gap < k.best_gap) {
         k.best_gap = gap;
-        k.best_relative = length3(k.data.cvel[s.hand].lin - ballVel(s.ball_v0, s.flight));
-        k.best_hand = k.data.body_xpos[s.hand];
+        k.best_relative = length3(k.data.body_velocities[s.hand].lin - ballVel(s.ball_v0, s.flight));
+        k.best_hand = k.data.body_positions[s.hand];
         k.best_ball = ball;
     }
     if (k.trail_count < k.trail.len) {
-        k.trail[k.trail_count] = k.data.body_xpos[s.hand];
+        k.trail[k.trail_count] = k.data.body_positions[s.hand];
         k.trail_count += 1;
     }
 }
@@ -545,11 +545,11 @@ fn toRender(at: Vec, depth: f32) Vec {
 
 fn drawKeeper(s: *State, gl: *z.WgpuGl, k: *const Keeper, depth: f32) void {
     const m: *const rbt.Model = &s.model;
-    for (1..m.nbody) |b| {
-        const at: Vec = toRender(k.data.body_xpos[b], depth);
+    for (1..m.body_count) |b| {
+        const at: Vec = toRender(k.data.body_positions[b], depth);
         const parent: u32 = m.body_parent[b];
         if (parent != rbt.world_body) {
-            z.drawLine3D(gl, toRender(k.data.body_xpos[parent], depth), at, link_colour);
+            z.drawLine3D(gl, toRender(k.data.body_positions[parent], depth), at, link_colour);
         }
         const is_hand: bool = b == s.hand;
         const size: f32 = if (is_hand) 0.10 else 0.05;

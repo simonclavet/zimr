@@ -36,7 +36,7 @@
 //!
 //! **A missing `forward` after restoring the live state.** The loop swaps in the commanded pose
 //! to run IK, then swaps the live one back. Marking it stale is not enough: `plantFeet` reads
-//! `body_xpos` to decide where contacts go, so stale kinematics placed them centimetres from
+//! `body_positions` to decide where contacts go, so stale kinematics placed them centimetres from
 //! the actual feet. The robot was held up by contacts that were not under it.
 
 const std = @import("std");
@@ -163,7 +163,7 @@ const State = struct {
 
 fn footAt(model: *const rbt.Model, d: *const rbt.Data, geom: u32) Vec {
     const body: u32 = model.geom_body[geom];
-    return d.body_xpos[body] + zm.rotate(d.body_xrot[body], model.geom_pos[geom]);
+    return d.body_positions[body] + zm.rotate(d.body_orientations[body], model.geom_local_position[geom]);
 }
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -183,12 +183,12 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // * THROUGH `applyKeyframe`, NOT A COPY. See the file header.
     _ = rmj.applyKeyframe(model, &s.data, s.robot.keyframes[0]);
     rbt.forward(model, &s.data);
-    s.home = try gpa.dupe(f32, s.data.pos);
-    s.commanded = try gpa.dupe(f32, s.data.pos);
-    s.scratch_pose = try gpa.alloc(f32, model.nq);
+    s.home = try gpa.dupe(f32, s.data.joint_positions);
+    s.commanded = try gpa.dupe(f32, s.data.joint_positions);
+    s.scratch_pose = try gpa.alloc(f32, model.coordinate_count);
 
     var found: usize = 0;
-    for (0..model.ngeom) |g| {
+    for (0..model.geom_count) |g| {
         if (model.geom_shape[g] == .sphere and found < leg_count) {
             s.foot_geom[found] = @intCast(g);
             found += 1;
@@ -200,8 +200,8 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         s.leg_act[leg] = try ctl.limbActuation(gpa, model, model.geom_body[s.foot_geom[leg]]);
     }
     s.com_home_offset = .{
-        s.data.subtree_com[rbt.world_body][0] - s.home[model.jnt_qpos_adr[0] + 0],
-        s.data.subtree_com[rbt.world_body][1] - s.home[model.jnt_qpos_adr[0] + 1],
+        s.data.subtree_centres_of_mass[rbt.world_body][0] - s.home[model.joint_first_coordinate[0] + 0],
+        s.data.subtree_centres_of_mass[rbt.world_body][1] - s.home[model.joint_first_coordinate[0] + 1],
     };
     s.all_act = try ctl.Actuation.init(gpa, model);
     s.ik_scratch = try gpa.alloc(Vec, ctl.Ik.scratchSize(model));
@@ -325,7 +325,7 @@ fn supportMargin(tri: [3]Vec, point: Vec) f32 {
 /// and the error is what holds it up.
 fn rebuildCommand(s: *State) void {
     const model: *const rbt.Model = &s.imported.model;
-    const root: u32 = model.jnt_qpos_adr[0];
+    const root: u32 = model.joint_first_coordinate[0];
 
     var support: [3]Vec = undefined;
     var goal: [2]f32 = .{ 0, 0 };
@@ -363,7 +363,7 @@ fn rebuildCommand(s: *State) void {
     // measured margin +0.071 for every one of them, which is the loop arriving at the same
     // place regardless of the leg. Too fast and it overshoots into a fall: 0.005 holds, 0.010
     // tips every foot.
-    const live_com: Vec = s.data.subtree_com[rbt.world_body];
+    const live_com: Vec = s.data.subtree_centres_of_mass[rbt.world_body];
     if (s.walking) {
         // -- *** MARCH PLUS SWAY, AT A SPEED THE LEGS CAN FOLLOW --
         //
@@ -395,10 +395,10 @@ fn rebuildCommand(s: *State) void {
         s.torso_offset[1] = clamp(s.torso_offset[1], -0.25, 0.25);
     }
 
-    @memcpy(s.scratch_pose, s.data.pos);
-    @memcpy(s.data.pos, s.home);
-    s.data.pos[root + 0] = s.home[root + 0] + s.torso_offset[0];
-    s.data.pos[root + 1] = s.home[root + 1] + s.torso_offset[1];
+    @memcpy(s.scratch_pose, s.data.joint_positions);
+    @memcpy(s.data.joint_positions, s.home);
+    s.data.joint_positions[root + 0] = s.home[root + 0] + s.torso_offset[0];
+    s.data.joint_positions[root + 1] = s.home[root + 1] + s.torso_offset[1];
     s.data.stage = .stale;
     rbt.forward(model, &s.data);
 
@@ -413,22 +413,22 @@ fn rebuildCommand(s: *State) void {
             s.leg_act[leg],
             .{
                 .body = model.geom_body[s.foot_geom[leg]],
-                .offset = model.geom_pos[s.foot_geom[leg]],
+                .offset = model.geom_local_position[s.foot_geom[leg]],
                 .goal = target,
             },
             s.ik_scratch,
         );
     }
-    @memcpy(s.commanded, s.data.pos);
+    @memcpy(s.commanded, s.data.joint_positions);
 
-    // * BACK TO THE LIVE STATE, AND RECOMPUTE. `plantFeet` reads `body_xpos`; leaving it on the
+    // * BACK TO THE LIVE STATE, AND RECOMPUTE. `plantFeet` reads `body_positions`; leaving it on the
     // IK configuration places contacts centimetres from the real feet, and the robot is held up
     // by contacts that are not under it. This one missing call cost a day.
-    @memcpy(s.data.pos, s.scratch_pose);
+    @memcpy(s.data.joint_positions, s.scratch_pose);
     s.data.stage = .stale;
     rbt.forward(model, &s.data);
 
-    s.margin = supportMargin(support, s.data.subtree_com[rbt.world_body]);
+    s.margin = supportMargin(support, s.data.subtree_centres_of_mass[rbt.world_body]);
 }
 
 fn controlTick(s: *State) void {
@@ -523,8 +523,8 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
     if (u.window("standing on three legs", .{})) |window| {
         defer window.close();
 
-        const trunk_z: f32 = s.data.body_xpos[1][2];
-        const com: Vec = s.data.subtree_com[rbt.world_body];
+        const trunk_z: f32 = s.data.body_positions[1][2];
+        const com: Vec = s.data.subtree_centres_of_mass[rbt.world_body];
         u.text("trunk height {d:>6.3} m", .{trunk_z});
         u.text("CM ({d:>6.3},{d:>6.3})  margin {d:>7.4} m", .{ com[0], com[1], s.margin });
         u.text("  (margin > 0 = CM inside the triangle)", .{});
@@ -612,11 +612,11 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
 fn drawRobot(s: *State, gl: *z.WgpuGl) void {
     const m: *const rbt.Model = &s.imported.model;
     const to_y_up: Mat = zm.zUpToYUp();
-    for (0..m.ngeom) |g| {
+    for (0..m.geom_count) |g| {
         const body: u32 = m.geom_body[g];
-        const body_rot: Quat = s.data.body_xrot[body];
-        const world_pos: Vec = s.data.body_xpos[body] + zm.rotate(body_rot, m.geom_pos[g]);
-        const world_rot: Mat = quatToMat(zm.qmul(body_rot, m.geom_rot[g]));
+        const body_rot: Quat = s.data.body_orientations[body];
+        const world_pos: Vec = s.data.body_positions[body] + zm.rotate(body_rot, m.geom_local_position[g]);
+        const world_rot: Mat = quatToMat(zm.qmul(body_rot, m.geom_local_rotation[g]));
         const place: Mat = mulMat(
             mulMat(to_y_up, translation(world_pos[0], world_pos[1], world_pos[2])),
             world_rot,
@@ -674,7 +674,7 @@ fn drawRobot(s: *State, gl: *z.WgpuGl) void {
         const b: Vec = tri[(i + 1) % 3];
         z.drawLine3D(gl, vec(a[0], 0.002, -a[1]), vec(b[0], 0.002, -b[1]), support_col);
     }
-    const com: Vec = s.data.subtree_com[rbt.world_body];
+    const com: Vec = s.data.subtree_centres_of_mass[rbt.world_body];
     s.transform[0] = mulMat(translation(com[0], 0.004, -com[1]), scaling(0.022, 0.004, 0.022));
     z.drawMeshInstanced(gl, &s.sphere, &s.transform, com_col);
     // And a line from the CM straight down, so its height is readable too.
@@ -708,7 +708,7 @@ fn update(f: *z.Frame, s: *State) void {
     if (!was_frozen) {
         profiler.unfreeze();
     }
-    if (s.data.body_xpos[1][2] < 0.05) {
+    if (s.data.body_positions[1][2] < 0.05) {
         resetRobot(s);
     }
 

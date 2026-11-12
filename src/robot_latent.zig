@@ -17,6 +17,7 @@
 const std = @import("std");
 const report = @import("test_report.zig");
 const zm = @import("zm");
+const isFinite = zm.isFinite;
 const vec = zm.vec;
 const zn = @import("zn");
 const rbt = @import("robot");
@@ -136,9 +137,9 @@ pub fn measureClipNormalizer(
 ) !Normalizer {
     var data: rbt.Data = try .init(owned, m);
     defer data.deinit();
-    var state: track.State = try .init(owned, m.nbody);
+    var state: track.State = try .init(owned, m.body_count);
     defer state.deinit(owned);
-    const f: usize = track.localSize(m.nbody);
+    const f: usize = track.localSize(m.body_count);
     const raw: []f32 = try owned.alloc(f32, f);
     defer owned.free(raw);
     var moments: Moments = try .init(owned, f);
@@ -172,9 +173,9 @@ pub fn measureClipIncrements(
 ) !Normalizer {
     var data: rbt.Data = try .init(owned, m);
     defer data.deinit();
-    var state: track.State = try .init(owned, m.nbody);
+    var state: track.State = try .init(owned, m.body_count);
     defer state.deinit(owned);
-    const f: usize = track.localSize(m.nbody);
+    const f: usize = track.localSize(m.body_count);
     const raw: []f32 = try owned.alloc(f32, f);
     defer owned.free(raw);
     const previous_raw: []f32 = try owned.alloc(f32, f);
@@ -209,9 +210,9 @@ pub fn measureClipIncrements(
 pub fn measureNormalizer(owned: Allocator, fleet: *track.Fleet) !Normalizer {
     var data: rbt.Data = try .init(owned, fleet.m);
     defer data.deinit();
-    var state: track.State = try .init(owned, fleet.m.nbody);
+    var state: track.State = try .init(owned, fleet.m.body_count);
     defer state.deinit(owned);
-    const f: usize = track.localSize(fleet.m.nbody);
+    const f: usize = track.localSize(fleet.m.body_count);
     const raw: []f32 = try owned.alloc(f32, f);
     defer owned.free(raw);
     var moments: Moments = try .init(owned, f);
@@ -356,7 +357,7 @@ pub const LatentWorld = struct {
         errdefer self.arena.deinit();
         const owned: Allocator = self.arena.allocator();
         const m: *rbt.Model = fleet.m;
-        const f: usize = track.localSize(m.nbody);
+        const f: usize = track.localSize(m.body_count);
         const r: usize = track.targetSize(m);
         const a: usize = track.actionSize(m);
         const h: usize = options.hidden;
@@ -366,11 +367,11 @@ pub const LatentWorld = struct {
         self.references = r;
         self.actions = a;
         self.rng = Random.DefaultPrng.init(options.seed);
-        self.state = try track.State.init(owned, m.nbody);
+        self.state = try track.State.init(owned, m.body_count);
         self.data = try rbt.Data.init(owned, m);
         self.raw = try owned.alloc(f32, f);
         self.windows = try owned.alloc(track.Replay.Window, options.batch);
-        self.pose = try owned.alloc(f32, m.nq);
+        self.pose = try owned.alloc(f32, m.coordinate_count);
         self.hidden1 = try owned.alloc(f32, h);
         self.hidden2 = try owned.alloc(f32, h);
         self.norm = if (options.normalize_from_clips)
@@ -533,7 +534,7 @@ pub const LatentWorld = struct {
         out: []f32,
     ) void {
         const aimed: usize = @min(@as(usize, frame) + 1, clip.frame_count - 1);
-        const root_len: usize = clip.nq - self.m.nq;
+        const root_len: usize = clip.nq - self.m.coordinate_count;
         track.encodeTargets(self.m, clip.pose(aimed)[root_len..], out);
     }
 
@@ -586,7 +587,7 @@ pub fn measurePoseDrift(
     random: Random,
 ) !PoseDrift {
     const f: usize = model.features;
-    const bodies: usize = model.m.nbody - 1;
+    const bodies: usize = model.m.body_count - 1;
     var drift: PoseDrift = .{
         .learned = try gpa.alloc(f32, steps),
         .persist = try gpa.alloc(f32, steps),
@@ -665,17 +666,19 @@ pub const LearnerOptions = struct {
     /// The price on the size of the raw output, beside the tracking loss.
     w_action: f32 = 0.01,
     /// THE POLICY'S CLOCK (plan F4e): a new decision every `decide_every` physics steps, held in between - 2 is 30 Hz
-    /// at our 60 Hz physics (DReCon's k = 2; Simon's choice). Everywhere the policy acts - collecting (`act`), its
+    /// at our 60 Hz physics (DReCon's k = 2). Everywhere the policy acts - collecting (`act`), its
     /// training rollouts through the model, `modelLoss`, the judge (`judgeActor`), `diagnose` - decisions fall on the
     /// even steps of an episode, counted from its start. The world model stays per physics step: it learns from the
     /// action actually APPLIED each step, held or not, which is what the replay records. 1: every step (as before).
     decide_every: u32 = 1,
-    /// SIMON'S FILTER (plan F6, `robot_track.filterAction`): each decision blended into the action already applied,
+    /// THE ACTION FILTER (plan F6, `robot_track.filterAction`): each decision blended into the action already applied,
     /// `applied = filter * asked + (1 - filter) * applied` - DReCon's 0.2. Everywhere the policy acts, and inside the
     /// training rollouts through the model, where it is differentiated exactly: a decision's effect on every later
     /// step's applied action reaches its gradient. The world model learns from what was APPLIED - the filtered
     /// action the servo received, which is what the replay records. From rest at an episode's first step.
-    /// 1: no filter (as before; the graph then has no filter ops at all).
+    /// 1: no filter (as before; the graph then has no filter ops at all). This learner's actions are the joints'
+    /// offsets alone (`track.actionSize`), so this is the offsets' share; the limbs' stiffness and its own share live
+    /// on the GPU path (`zn_mlp.lat_stiffness_filter`).
     filter: f32 = 1.0,
     /// THE POLICY SEES WHAT IT IS APPLYING (plan A1). With the filter on, the same ask means different things from
     /// different places: asking for 1.0 while 0.9 is applied is a nudge, the same 1.0 from rest is a shove - so what
@@ -691,7 +694,7 @@ pub const LearnerOptions = struct {
     /// learn outputs that swing wildly with small changes of state - on a character, every freedom lurching each
     /// frame, a body that looks like it is exploding. Zero (off) by default.
     w_smooth: f32 = 0.0,
-    /// TWO WORLD MODELS (plan I1b - Simon's idea). A second model is trained on the same replay from a different
+    /// TWO WORLD MODELS (plan I1b). A second model is trained on the same replay from a different
     /// initialisation (and, through its own random stream, on different batches), and the policy's rollouts step
     /// through the AVERAGE of the two. Where the data pins them down the two agree; where the policy wanders off
     /// the data nothing pins them, so they drift apart - which makes their disagreement a map of exactly where the
@@ -993,8 +996,8 @@ pub const Learner = struct {
         // Set here, not by a field default: the learner is made by `gpa.create`, whose memory is
         // uninitialised - a default on the field would never be applied.
         self.updates = 0;
-        self.state = try track.State.init(owned, m.nbody);
-        self.reference = try track.State.init(owned, m.nbody);
+        self.state = try track.State.init(owned, m.body_count);
+        self.reference = try track.State.init(owned, m.body_count);
         self.ref_data = try rbt.Data.init(owned, m);
         self.raw = try owned.alloc(f32, f);
         self.z_sim = try owned.alloc(f32, f);
@@ -1432,7 +1435,7 @@ pub const Learner = struct {
     }
 
     /// ONE DECISION for `env` of `fleet` (the clock, F4e, says when): the policy's action for its live state, plus
-    /// `noise_scale * sigma` exploration, blended by Simon's filter (F6) into `slot` - the action this environment
+    /// `noise_scale * sigma` exploration, blended by the action filter (F6) into `slot` - the action this environment
     /// has been applying, and will apply until the next decision; from REST at an episode's first step. When the
     /// policy sees what it applies (A1), `slot` as it stands is also its third input. Collecting, the judge and
     /// `diagnose` all decide through here, so they cannot disagree about what a decision is.
@@ -1461,7 +1464,7 @@ pub const Learner = struct {
         }
         // Never a non-finite action into the physics: NaN targets make NaN bodies, never "terminated".
         for (self.out) |*o| {
-            if (!(o.* == o.* and @abs(o.*) < 1.0e30)) {
+            if (!isFinite(o.*)) {
                 o.* = 0.0;
             }
         }
@@ -2178,10 +2181,10 @@ test "robot_latent: the clip's own normaliser makes its frames mean 0, spread 1"
     defer gpa.free(again.spread);
     try expect(eql(f32, norm.mean, again.mean) and eql(f32, norm.spread, again.spread));
 
-    const f: usize = track.localSize(m.nbody);
+    const f: usize = track.localSize(m.body_count);
     var data: rbt.Data = try .init(gpa, m);
     defer data.deinit();
-    var state: track.State = try .init(gpa, m.nbody);
+    var state: track.State = try .init(gpa, m.body_count);
     defer state.deinit(gpa);
     const raw: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(raw);

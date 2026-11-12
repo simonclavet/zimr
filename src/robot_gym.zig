@@ -176,44 +176,49 @@ pub const HumanoidEnv = struct {
         env.imported = try robot_mjcf.build(gpa, &env.robot, model_options);
         errdefer env.imported.deinit();
         const m: *rbt.Model = &env.imported.model;
-        assertf(m.jnt_type[0] == .free and m.jnt_qpos_adr[0] == 0, @src(), "the root must be a free joint 0", .{});
+        assertf(
+            m.joint_type[0] == .free and m.joint_first_coordinate[0] == 0,
+            @src(),
+            "the root must be a free joint 0",
+            .{},
+        );
         // Limp: no joint springs, damping or tendon springs - the controller is the only actuator.
-        @memset(m.jnt_stiffness, 0.0);
-        @memset(m.jnt_damping, 0.0);
+        @memset(m.joint_stiffness, 0.0);
+        @memset(m.joint_damping, 0.0);
         m.has_dof_damping = false;
         @memset(m.tendon_stiffness, 0.0);
         @memset(m.tendon_damping, 0.0);
 
         env.data = try rbt.Data.init(gpa, m);
         errdefer env.data.deinit();
-        env.tracker = try dance.Tracker.init(gpa, m.nv);
+        env.tracker = try dance.Tracker.init(gpa, m.dof_count);
         errdefer env.tracker.deinit();
 
         var hinges: usize = 0;
-        for (0..m.njnt) |j| {
-            if (m.jnt_type[j] == .hinge) {
+        for (0..m.joint_count) |j| {
+            if (m.joint_type[j] == .hinge) {
                 hinges += 1;
             }
         }
         env.hinge_qpos = try gpa.alloc(u32, hinges);
         env.hinge_dof = try gpa.alloc(u32, hinges);
         var h: usize = 0;
-        for (0..m.njnt) |j| {
-            if (m.jnt_type[j] == .hinge) {
-                env.hinge_qpos[h] = m.jnt_qpos_adr[j];
-                env.hinge_dof[h] = m.jnt_dof_adr[j];
+        for (0..m.joint_count) |j| {
+            if (m.joint_type[j] == .hinge) {
+                env.hinge_qpos[h] = m.joint_first_coordinate[j];
+                env.hinge_dof[h] = m.joint_first_dof[j];
                 h += 1;
             }
         }
-        env.base = try gpa.dupe(f32, m.qpos0);
-        env.target = try gpa.dupe(f32, m.qpos0);
+        env.base = try gpa.dupe(f32, m.reference_joint_positions);
+        env.target = try gpa.dupe(f32, m.reference_joint_positions);
         env.previous_action = try gpa.alloc(f32, hinges);
-        env.a_des = try gpa.alloc(f32, m.nv);
-        env.torque = try gpa.alloc(f32, m.nv);
-        env.full = try gpa.alloc(f32, m.nv);
-        env.dense = try gpa.alloc(f32, @as(usize, m.nv) * m.nv);
+        env.a_des = try gpa.alloc(f32, m.dof_count);
+        env.torque = try gpa.alloc(f32, m.dof_count);
+        env.full = try gpa.alloc(f32, m.dof_count);
+        env.dense = try gpa.alloc(f32, @as(usize, m.dof_count) * m.dof_count);
         // The base pose, its lowest foot point on the floor.
-        @memcpy(env.data.pos, env.base);
+        @memcpy(env.data.joint_positions, env.base);
         env.data.stage = .stale;
         rbt.forward(m, &env.data);
         env.base[2] -= dance.lowestFootPoint(m, &env.data, env.imported.names);
@@ -276,11 +281,11 @@ pub const HumanoidEnv = struct {
         env.bridge.listen(&env.world);
         env.rng = Random.DefaultPrng.init(seed);
         const random: Random = env.rng.random();
-        @memcpy(env.data.pos, env.base);
-        @memset(env.data.vel, 0.0);
+        @memcpy(env.data.joint_positions, env.base);
+        @memset(env.data.joint_velocities, 0.0);
         for (env.hinge_qpos, env.hinge_dof) |q, v| {
-            env.data.pos[q] += env.options.reset_noise * (2.0 * random.float(f32) - 1.0);
-            env.data.vel[v] = env.options.reset_noise * (2.0 * random.float(f32) - 1.0);
+            env.data.joint_positions[q] += env.options.reset_noise * (2.0 * random.float(f32) - 1.0);
+            env.data.joint_velocities[v] = env.options.reset_noise * (2.0 * random.float(f32) - 1.0);
         }
         env.data.stage = .stale;
         rbt.forward(m, &env.data);
@@ -307,7 +312,7 @@ pub const HumanoidEnv = struct {
             env.previous_action[h] = clipped;
             effort += clipped * clipped;
         }
-        const x_before: f32 = d.pos[0];
+        const x_before: f32 = d.joint_positions[0];
         for (0..o.substeps) |_| {
             rbt.forward(m, d);
             try env.bridge.sync(&env.world, m, d);
@@ -317,17 +322,17 @@ pub const HumanoidEnv = struct {
             env.tracker.accelerations(m, d, .{ env.target, env.target, env.target }, o.spring_hz, dt, env.a_des);
             rbt.biasForce(m, d);
             rmx.floatingBaseTorques(m, d, env.a_des, env.dense, env.full, env.torque);
-            @memset(d.applied_force, 0.0);
+            @memset(d.applied_joint_forces, 0.0);
             for (env.hinge_dof) |v| {
-                d.applied_force[v] = env.torque[v];
+                d.applied_joint_forces[v] = env.torque[v];
             }
             rbt.step(m, d);
         }
         rbt.forward(m, d);
         env.steps += 1;
         const elapsed: f32 = float(o.substeps) * dt;
-        const forward_speed: f32 = (d.pos[0] - x_before) / elapsed;
-        const height: f32 = d.pos[2];
+        const forward_speed: f32 = (d.joint_positions[0] - x_before) / elapsed;
+        const height: f32 = d.joint_positions[2];
         const terminated: bool = !zm.isFinite(height) or height < o.healthy_height;
         env.observe(observation);
         return .{
@@ -343,25 +348,28 @@ pub const HumanoidEnv = struct {
             env.observationSize(),
             out.len,
         });
-        const torso: Quat = .{ d.pos[3], d.pos[4], d.pos[5], d.pos[6] };
+        const torso: Quat = .{ d.joint_positions[3], d.joint_positions[4], d.joint_positions[5], d.joint_positions[6] };
         const gravity_local: Vec = rotate(conjugate(torso), vec(0, 0, -1));
         // The heading: the torso's forward axis, flattened onto the floor.
         const forward: Vec = rotate(torso, vec(1, 0, 0));
         const heading: Quat = quatFromAxisAngle(vec(0, 0, 1), atan2Rad(forward[1], forward[0]));
-        const velocity_heading: Vec = rotate(conjugate(heading), vec(d.vel[0], d.vel[1], d.vel[2]));
-        out[0] = d.pos[2];
+        const velocity_heading: Vec = rotate(
+            conjugate(heading),
+            vec(d.joint_velocities[0], d.joint_velocities[1], d.joint_velocities[2]),
+        );
+        out[0] = d.joint_positions[2];
         inline for (0..3) |k| {
             out[1 + k] = gravity_local[k];
             out[4 + k] = velocity_heading[k];
-            out[7 + k] = d.vel[3 + k];
+            out[7 + k] = d.joint_velocities[3 + k];
         }
         out[10] = 0;
         out[11] = 0;
         out[12] = 0;
         const n: usize = env.hinge_qpos.len;
         for (env.hinge_qpos, env.hinge_dof, 0..) |q, v, h| {
-            out[13 + h] = d.pos[q];
-            out[13 + n + h] = d.vel[v];
+            out[13 + h] = d.joint_positions[q];
+            out[13 + n + h] = d.joint_velocities[v];
             out[13 + 2 * n + h] = env.previous_action[h];
         }
     }
@@ -1031,7 +1039,7 @@ test "robot_gym: FOOT SLIP - how far a statue's feet slide while it still stands
         const m: *const rbt.Model = &env.imported.model;
         var feet: [4]u32 = undefined;
         var foot_count: usize = 0;
-        for (1..m.nbody) |b| {
+        for (1..m.body_count) |b| {
             if (indexOf(u8, env.imported.names[b], "foot") != null and foot_count < feet.len) {
                 feet[foot_count] = @intCast(b);
                 foot_count += 1;
@@ -1039,7 +1047,7 @@ test "robot_gym: FOOT SLIP - how far a statue's feet slide while it still stands
         }
         var start: [4]Vec = undefined;
         for (feet[0..foot_count], 0..) |b, i| {
-            start[i] = env.data.body_xpos[b];
+            start[i] = env.data.body_positions[b];
         }
         var worst_slide: f32 = 0.0;
         var steps: u32 = 0;
@@ -1049,7 +1057,7 @@ test "robot_gym: FOOT SLIP - how far a statue's feet slide while it still stands
             steps += 1;
             if (steps <= 15) {
                 for (feet[0..foot_count], 0..) |b, i| {
-                    const now: Vec = env.data.body_xpos[b];
+                    const now: Vec = env.data.body_positions[b];
                     const slide: f32 = length3(vec(now[0] - start[i][0], now[1] - start[i][1], 0));
                     worst_slide = @max(worst_slide, slide);
                 }

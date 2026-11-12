@@ -23,7 +23,8 @@ executes and what memory it has; collects the practices that make a kernel corre
 reason; shows how invocations cooperate inside a workgroup; follows a kernel from Zig to the device and back; explains
 why the GPU's answers differ from the CPU's and how to measure it; and ends with a fluid of 20,000 particles as a
 worked example, from its first kernel to its performance. How the build and each platform turn a kernel into a GPU's
-code is the subject of the <a href="backends-tutorial.html#compute">backends tutorial</a>.</p>
+code is the subject of the <a href="backends-tutorial.html#compute">backends tutorial</a>; a robot simulator built
+from these pieces, the subject of <a href="robots.html#s45">the robot course's last part</a>.</p>
 
 <p>Code is shown in folds, generated from the source files on every build, so it is always the code that ships. A
 closed fold opens with a click; the prose reads straight through without opening any.</p>
@@ -54,7 +55,8 @@ closed fold opens with a click; the prose reads straight through without opening
         <li><a href="#sharedmemory">Shared memory and barriers</a></li>
         <li><a href="#subgroups">Subgroups</a></li>
         <li><a href="#cooptwin">The twin of a cooperative kernel</a></li>
-        <li><a href="#factorisation">A matrix factorisation in a workgroup</a></li></ol></li>
+        <li><a href="#factorisation">A matrix factorisation in a workgroup</a></li>
+        <li><a href="#workgroupdecisions">Decisions a workgroup makes together</a></li></ol></li>
   <li><a href="#toshader">From kernel to shader</a>
     <ol>
         <li><a href="#legaliser">The legaliser and native-only kernels</a></li></ol></li>
@@ -66,6 +68,7 @@ closed fold opens with a click; the prose reads straight through without opening
         <li><a href="#results">Reading results</a></li>
         <li><a href="#large">Large dispatches</a></li>
         <li><a href="#ranges">Reading ranges</a></li>
+        <li><a href="#requests">Reading back without waiting</a></li>
         <li><a href="#capabilities">Device capabilities</a></li>
         <li><a href="#pushconstants">Push constants</a></li>
         <li><a href="#timings">Timing kernels</a></li>
@@ -362,7 +365,8 @@ is guarded, never the call itself.</p>
                                    for ever            if (holds) out[id] = ...;</code></pre>
 
 <p>Loop bounds around a barrier must be uniform too - the same in every invocation - which is why a cooperative kernel
-reads them from <code>Params</code> or from compile-time constants, never from data that differs from lane to lane.</p>
+reads them from <code>Params</code>, from compile-time constants or from a value the workgroup has decided together
+(<a href="#workgroupdecisions">&sect;5.5</a>), never from data that differs from lane to lane.</p>
 
 <h3 id="pointers">4.3 Helpers and storage pointers</h3>
 
@@ -622,23 +626,27 @@ last bit, apart from any multiply the GPU's compiler fuses into its subtraction.
 /// Each a[i][j] loses its products L[i][c] L[j][c] one column at a time, in ascending c - the very order
 /// `choleskyFactor` subtracts them in, row by row - so the device and the twin do the same arithmetic, apart from a
 /// multiply the GPU's compiler may fuse into the subtraction. The loop bounds are uniform (the order comes from
-/// `Params`) and no barrier sits inside a lane-dependent loop, so every invocation reaches every barrier. The twin:
+/// `Params`), no barrier sits inside a lane-dependent loop, and no invocation returns before one - a workgroup past the
+/// matrices only skips its reads and writes - so every invocation reaches every barrier. The twin:
 /// the workgroup's first invocation copies the matrix and factors it with robot.zig's own function.
 pub fn cholesky(invocation: u32) void {
     const workgroup_size: u32 = config.workgroup;
     const lane: u32 = invocation % workgroup_size;
     const matrix_index: u32 = invocation / workgroup_size;
-    // The same for the whole workgroup, so a workgroup past the matrices leaves together - uniform control flow.
-    if (matrix_index &gt;= params.matrix_count) {
-        return;
-    }
+    // A workgroup past the matrices still reaches every barrier: only its reads and writes of the buffers are skipped.
+    // A barrier must be reached by the whole workgroup, and one after an early return is in non-uniform control flow -
+    // even when every invocation of the workgroup would return together, nothing lets the compiler see it, so WGSL
+    // refuses it and SPIR-V leaves it undefined.
+    const holds_a_matrix: bool = matrix_index &lt; params.matrix_count;
     const order: u32 = params.matrix_order;
     const element_count: u32 = order * order;
     const matrix_start: u32 = matrix_index * element_count;
     if (k.is_gpu) {
         var element: u32 = lane;
-        while (element &lt; element_count) : (element += workgroup_size) {
-            shared_matrix[element] = values[matrix_start + element];
+        if (holds_a_matrix) {
+            while (element &lt; element_count) : (element += workgroup_size) {
+                shared_matrix[element] = values[matrix_start + element];
+            }
         }
         k.workgroupBarrier();
         var column: u32 = 0;
@@ -667,14 +675,95 @@ pub fn cholesky(invocation: u32) void {
             }
             k.workgroupBarrier();
         }
-        element = lane;
-        while (element &lt; element_count) : (element += workgroup_size) {
-            sums[matrix_start + element] = shared_matrix[element];
+        if (holds_a_matrix) {
+            element = lane;
+            while (element &lt; element_count) : (element += workgroup_size) {
+                sums[matrix_start + element] = shared_matrix[element];
+            }
         }
-    } else if (lane == 0) {
+    } else if (lane == 0 and holds_a_matrix) {
         const factored: []f32 = sums[matrix_start..][0..element_count];
         @memcpy(factored, values[matrix_start..][0..element_count]);
         _ = robot.choleskyFactor(factored, order);
+    }
+}</code></pre></details>
+
+<h3 id="workgroupdecisions">5.5 Decisions a workgroup makes together</h3>
+
+<p>Some cooperative kernels go round until something they have computed together says stop: a solver that repeats
+its rounds until its answer no longer improves, a search that ends once any invocation has found what all were
+looking for. One invocation makes the decision, from what the workgroup has computed, and puts it in workgroup
+memory - and then every invocation must decide alike, because the loop has barriers inside.</p>
+
+<p>At run time that is uniform control flow: read after a barrier, the value is the same in every invocation. But
+WGSL's validators judge uniformity from the source alone, and take any read of workgroup memory to be possibly
+different from one invocation to the next. A barrier behind a decision made on such a read is refused - by Chrome,
+for the whole shader. WGSL's answer is <code>workgroupUniformLoad</code>, a read the validators know returns the same
+value everywhere.</p>
+
+<p>kompute gives it to a kernel as an array of its own kind, a UNIFORM workgroup array: declared with
+<code>k.sharedUniform</code>, read with <code>k.workgroupUniformLoad</code>. It is a BROADCAST. Whoever decides
+writes it, with plain stores; every invocation reads it together, through the uniform load and nothing else. The
+uniform read must be reached by every invocation, as a barrier must, so an invocation that needs the value for
+arithmetic of its own keeps a copy of its own, and writes the shared value without reading it back:</p>
+
+<pre class="sketch"><code>   const rounds_left = k.sharedUniform(u32, 1, "rounds_left");      at module scope
+
+   if (lane == 0) rounds_left[0] = count;                           decided by one
+   while (k.workgroupUniformLoad(u32, 1, rounds_left, 0) != 0) {    read by all, together
+       ... the round's work, its barriers ...
+       count -= 1;                                                  a private copy
+       if (lane == 0) rounds_left[0] = count;                       written again, never read back
+   }</code></pre>
+
+<p>Through Vulkan the uniform read is a barrier, the read and a barrier - the builtin's own meaning, written out.
+Translated for the web, the read becomes <code>workgroupUniformLoad</code> itself. A loop of this shape, counting
+down rounds held in a uniform value:</p>
+
+<details class="src-fold" data-src="src/gpu/robotgpu_probe.zig" data-decl="pub fn uniform_loop("><summary><code>uniform_loop</code></summary><pre><code class="zig">/// A LOOP WITH BARRIERS INSIDE THAT EXITS ON A VALUE IN WORKGROUP MEMORY - the shape of a solver run by a whole
+/// workgroup, which goes round until something it has computed together says stop. Each workgroup counts down
+/// `Params.uniform_rounds` rounds: its first invocation writes the count, and writes it again, one lower, after every
+/// round; every invocation reads it at the top of each round through `k.workgroupUniformLoad`, so all decide alike
+/// whether to go round again - uniform control flow for WGSL's validators, which take a plain read of workgroup memory
+/// as possibly different in different invocations, as it is at run time for Vulkan. Each round, every invocation adds
+/// its lane number and the round's number to a sum of its own, and writes it to `sums`:
+///
+///     rounds x lane + (0 + 1 + ... + (rounds - 1))
+///
+/// The twin computes the same sum directly, one invocation at a time.
+pub fn uniform_loop(invocation: u32) void {
+    const workgroup_size: u32 = config.workgroup;
+    const lane: u32 = invocation % workgroup_size;
+    const holds_a_value: bool = invocation &lt; params.value_count;
+    var lane_sum: f32 = 0.0;
+    if (k.is_gpu) {
+        // The count is a broadcast: the first invocation decides it, from a copy of its own, and only ever WRITES the
+        // shared value; every invocation reads it together, through the uniform load. (Reading it back to lower it -
+        // `-= 1` - would be a read by one invocation alone, which WGSL refuses for the uniform load.)
+        var rounds_left: u32 = params.uniform_rounds;
+        if (lane == 0) {
+            uniform_rounds_left[0] = rounds_left;
+        }
+        var rounds_run: u32 = 0;
+        while (k.workgroupUniformLoad(u32, 1, uniform_rounds_left, 0) != 0) {
+            const round_value: f32 = @floatFromInt(lane + rounds_run);
+            lane_sum += round_value;
+            rounds_run += 1;
+            rounds_left -= 1;
+            k.workgroupBarrier();
+            if (lane == 0) {
+                uniform_rounds_left[0] = rounds_left;
+            }
+        }
+    } else {
+        var round_index: u32 = 0;
+        while (round_index &lt; params.uniform_rounds) : (round_index += 1) {
+            const round_value: f32 = @floatFromInt(lane + round_index);
+            lane_sum += round_value;
+        }
+    }
+    if (holds_a_value) {
+        sums[invocation] = lane_sum;
     }
 }</code></pre></details>
 
@@ -1089,7 +1178,93 @@ pub fn readRange(
 <p>Reading ranges is native only: the wait is a poll of the device's timeline, and a browser build that calls
 <code>readRange</code> fails to compile, saying why.</p>
 
-<h3 id="capabilities">7.7 Device capabilities</h3>
+
+<h3 id="requests">7.7 Reading back without waiting</h3>
+
+<p>A range read with <code>readRange</code> waits for the GPU: every dispatch before it must finish, then the copy. A
+program with other work to do - the next frame, the next batch of worlds - can instead REQUEST the range and COLLECT it
+later. The request records a copy into a staging buffer of its own and submits it; collecting asks whether the copy
+has finished and, if so, takes the data, and otherwise returns at once:</p>
+
+<pre class="sketch"><code>   host:   request   ----- other work, other dispatches -----   collect? no   ...   collect? yes -> data
+   GPU:              [ earlier dispatches ][ the copy ]  [ later dispatches ]
+
+   the copy runs after every dispatch submitted before the request, and before any submitted after it:
+   the range is as it was when requested</code></pre>
+
+<p>A request is collected, waited for, or discarded exactly once. On the CPU twin it is a snapshot taken when
+requested, so both backends answer the same question. This is also the only form of readback a browser allows, which
+cannot block on the GPU at all.</p>
+
+<details class="src-fold" data-src="src/compute_host.zig" data-decl="pub fn requestRange("><summary><code>requestRange</code></summary><pre><code class="zig">/// REQUEST A RANGE of `field` - `count` elements from element `first` - to collect later (`RangeRequest`). On
+/// the GPU, a copy into a staging buffer of the range's own size, submitted after every dispatch so far, so the
+/// range holds what they wrote and nothing a later dispatch writes; on the CPU twin, a snapshot in memory from
+/// `gpa`. Not inside an open batch or recording, whose dispatches are not yet submitted. The same on the web,
+/// where the read is the browser's asynchronous map, finished once control returns to the browser - so a page
+/// requests in one frame and collects in a later one.
+pub fn requestRange(
+    self: *Self,
+    gpa: Allocator,
+    comptime field: Field,
+    first: u32,
+    count: u32,
+) Allocator.Error!RangeRequest(field) {
+    const Element: type = ElemOf(field);
+    const Request: type = RangeRequest(field);
+    const field_length: usize = @field(M.g.B, @tagName(field)).len;
+    const end: usize = @as(usize, first) + count;
+    assertf(count &gt; 0 and end &lt;= field_length, @src(), "requestRange: elements {d}..{d} of a field of {d}", .{
+        first,
+        end,
+        field_length,
+    });
+    switch (self.backend) {
+        .cpu =&gt; {
+            const snapshot: []Element = try gpa.alloc(Element, count);
+            @memcpy(snapshot, @field(M.g.B, @tagName(field))[first..end]);
+            const request: Request = .{ .count = count, .snapshot = snapshot, .snapshot_owner = gpa };
+            return request;
+        },
+        .worker =&gt; {
+            panicf(@src(), "requestRange: a worker pipe reads through readLatest", .{});
+        },
+        .gpu =&gt; {
+            if (comptime @sizeOf(Element) % 4 != 0) {
+                @compileError("requestRange: the GPU copies whole 4-byte words, and `" ++ @tagName(field) ++
+                    "` holds " ++ @typeName(Element));
+            }
+            const gp: *Gpu = &amp;self.gpu.?;
+            const outside_batch: bool = gp.batch_enc == .invalid and gp.rec_enc == .invalid;
+            assertf(outside_batch, @src(), "requestRange inside an open batch or recording", .{});
+            // The copy's offsets are 32-bit: the range must end within the field's first 4 GB.
+            const first_byte_wide: u64 = @as(u64, first) * @sizeOf(Element);
+            const range_bytes_wide: u64 = @as(u64, count) * @sizeOf(Element);
+            const end_byte_wide: u64 = first_byte_wide + range_bytes_wide;
+            const within_32_bits: bool = end_byte_wide &lt;= zm.maxInt(u32);
+            assertf(within_32_bits, @src(), "requestRange: bytes up to {d}, past a copy's 32-bit offsets", .{
+                end_byte_wide,
+            });
+            const first_byte: u32 = @intCast(first_byte_wide);
+            const range_bytes: u32 = @intCast(range_bytes_wide);
+            const staging: wgpu.BufferHandle = wgpu.createBuffer(gp.dev, .{
+                .size = range_bytes,
+                .usage = .{ .map_read = true, .copy_dst = true },
+                .label = "range_request",
+            });
+            const field_buffer: wgpu.BufferHandle = gp.field_bufs[fieldIndex(@tagName(field))];
+            const encoder: wgpu.CommandEncoderHandle = wgpu.createCommandEncoder(gp.dev);
+            wgpu.copyBufferToBuffer(encoder, field_buffer, first_byte, staging, 0, range_bytes);
+            const commands: wgpu.CommandBufferHandle = wgpu.finishCommandEncoder(encoder);
+            wgpu.queueSubmit(gp.queue, commands);
+            // Started after the submission, so the read waits for the copy and for every dispatch before it.
+            const read: wgpu.BufferRead = wgpu.bufferReadStart(staging, range_bytes);
+            const request: Request = .{ .count = count, .staging = staging, .read = read };
+            return request;
+        },
+    }
+}</code></pre></details>
+
+<h3 id="capabilities">7.8 Device capabilities</h3>
 
 <p>What a kernel may count on differs by device: how much workgroup memory, how wide a subgroup, which subgroup
 operations. The Vulkan host reads them when it chooses the GPU and reports them in one line at start-up; a program
@@ -1136,7 +1311,7 @@ lavapipe, typically 48 to 64 KB on a desktop GPU - and a kernel that uses subgro
 <code>hasSubgroupOperations</code> and reads the subgroup's size from here.</p>
 
 
-<h3 id="pushconstants">7.8 Push constants</h3>
+<h3 id="pushconstants">7.9 Push constants</h3>
 
 <p>Every dispatch of a batch shares one <code>Params</code>: the uniform is written once, when the batch begins. Some
 kernels need a value that changes from one dispatch to the next within the batch - the level of a tree processed one
@@ -1215,7 +1390,7 @@ pub fn runPushed(
 }</code></pre></details>
 
 
-<h3 id="timings">7.9 Timing kernels</h3>
+<h3 id="timings">7.10 Timing kernels</h3>
 
 <p>A kernel's speed is best measured where it runs. The GPU keeps a clock of its own, and a command in the stream can
 write its value into a slot of a timestamp pool: at the top of the pipeline before a dispatch, and at its bottom after
@@ -1304,7 +1479,7 @@ pub fn kernelTimings(self: *Self, timings: *[M.kernels.len]KernelTiming) void {
 }</code></pre></details>
 
 
-<h3 id="lending">7.10 Sharing buffers between pipes</h3>
+<h3 id="lending">7.11 Sharing buffers between pipes</h3>
 
 <p>Two kernel modules sometimes work on the same data: one writes it, the other reads it, dispatch after dispatch. A
 copy between their buffers would cost a trip through memory every time. Instead, one pipe LENDS a field's buffer and

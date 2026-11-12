@@ -222,6 +222,11 @@ pub const Params = extern struct {
     /// `cholesky`'s matrices: their order (at most `max_matrix_order`) and how many.
     matrix_order: u32 = 0,
     matrix_count: u32 = 0,
+    /// The rounds each workgroup of `uniform_loop` counts down. Padded to a whole 16-byte row.
+    uniform_rounds: u32 = 0,
+    _padding_0: u32 = 0,
+    _padding_1: u32 = 0,
+    _padding_2: u32 = 0,
 };
 
 pub const g = k.Globals(@This());
@@ -511,23 +516,27 @@ const shared_matrix = k.shared(f32, max_matrix_order * max_matrix_order, "robotg
 /// Each a[i][j] loses its products L[i][c] L[j][c] one column at a time, in ascending c - the very order
 /// `choleskyFactor` subtracts them in, row by row - so the device and the twin do the same arithmetic, apart from a
 /// multiply the GPU's compiler may fuse into the subtraction. The loop bounds are uniform (the order comes from
-/// `Params`) and no barrier sits inside a lane-dependent loop, so every invocation reaches every barrier. The twin:
+/// `Params`), no barrier sits inside a lane-dependent loop, and no invocation returns before one - a workgroup past the
+/// matrices only skips its reads and writes - so every invocation reaches every barrier. The twin:
 /// the workgroup's first invocation copies the matrix and factors it with robot.zig's own function.
 pub fn cholesky(invocation: u32) void {
     const workgroup_size: u32 = config.workgroup;
     const lane: u32 = invocation % workgroup_size;
     const matrix_index: u32 = invocation / workgroup_size;
-    // The same for the whole workgroup, so a workgroup past the matrices leaves together - uniform control flow.
-    if (matrix_index >= params.matrix_count) {
-        return;
-    }
+    // A workgroup past the matrices still reaches every barrier: only its reads and writes of the buffers are skipped.
+    // A barrier must be reached by the whole workgroup, and one after an early return is in non-uniform control flow -
+    // even when every invocation of the workgroup would return together, nothing lets the compiler see it, so WGSL
+    // refuses it and SPIR-V leaves it undefined.
+    const holds_a_matrix: bool = matrix_index < params.matrix_count;
     const order: u32 = params.matrix_order;
     const element_count: u32 = order * order;
     const matrix_start: u32 = matrix_index * element_count;
     if (k.is_gpu) {
         var element: u32 = lane;
-        while (element < element_count) : (element += workgroup_size) {
-            shared_matrix[element] = values[matrix_start + element];
+        if (holds_a_matrix) {
+            while (element < element_count) : (element += workgroup_size) {
+                shared_matrix[element] = values[matrix_start + element];
+            }
         }
         k.workgroupBarrier();
         var column: u32 = 0;
@@ -556,11 +565,13 @@ pub fn cholesky(invocation: u32) void {
             }
             k.workgroupBarrier();
         }
-        element = lane;
-        while (element < element_count) : (element += workgroup_size) {
-            sums[matrix_start + element] = shared_matrix[element];
+        if (holds_a_matrix) {
+            element = lane;
+            while (element < element_count) : (element += workgroup_size) {
+                sums[matrix_start + element] = shared_matrix[element];
+            }
         }
-    } else if (lane == 0) {
+    } else if (lane == 0 and holds_a_matrix) {
         const factored: []f32 = sums[matrix_start..][0..element_count];
         @memcpy(factored, values[matrix_start..][0..element_count]);
         _ = robot.choleskyFactor(factored, order);
@@ -577,10 +588,62 @@ pub const kernels = [_][:0]const u8{
     "write_pushed",
     "busy_work",
     "cholesky",
+    "uniform_loop",
 };
 
 comptime {
     for (kernels) |name| {
         k.installKernelLean(@This(), name);
+    }
+}
+
+/// How many rounds `uniform_loop`'s workgroup still has to run: a UNIFORM workgroup array (`k.sharedUniform`), read
+/// only through `k.workgroupUniformLoad`.
+const uniform_rounds_left = k.sharedUniform(u32, 1, "robotgpu_probe_rounds_left");
+
+/// A LOOP WITH BARRIERS INSIDE THAT EXITS ON A VALUE IN WORKGROUP MEMORY - the shape of a solver run by a whole
+/// workgroup, which goes round until something it has computed together says stop. Each workgroup counts down
+/// `Params.uniform_rounds` rounds: its first invocation writes the count, and writes it again, one lower, after every
+/// round; every invocation reads it at the top of each round through `k.workgroupUniformLoad`, so all decide alike
+/// whether to go round again - uniform control flow for WGSL's validators, which take a plain read of workgroup memory
+/// as possibly different in different invocations, as it is at run time for Vulkan. Each round, every invocation adds
+/// its lane number and the round's number to a sum of its own, and writes it to `sums`:
+///
+///     rounds x lane + (0 + 1 + ... + (rounds - 1))
+///
+/// The twin computes the same sum directly, one invocation at a time.
+pub fn uniform_loop(invocation: u32) void {
+    const workgroup_size: u32 = config.workgroup;
+    const lane: u32 = invocation % workgroup_size;
+    const holds_a_value: bool = invocation < params.value_count;
+    var lane_sum: f32 = 0.0;
+    if (k.is_gpu) {
+        // The count is a broadcast: the first invocation decides it, from a copy of its own, and only ever WRITES the
+        // shared value; every invocation reads it together, through the uniform load. (Reading it back to lower it -
+        // `-= 1` - would be a read by one invocation alone, which WGSL refuses for the uniform load.)
+        var rounds_left: u32 = params.uniform_rounds;
+        if (lane == 0) {
+            uniform_rounds_left[0] = rounds_left;
+        }
+        var rounds_run: u32 = 0;
+        while (k.workgroupUniformLoad(u32, 1, uniform_rounds_left, 0) != 0) {
+            const round_value: f32 = @floatFromInt(lane + rounds_run);
+            lane_sum += round_value;
+            rounds_run += 1;
+            rounds_left -= 1;
+            k.workgroupBarrier();
+            if (lane == 0) {
+                uniform_rounds_left[0] = rounds_left;
+            }
+        }
+    } else {
+        var round_index: u32 = 0;
+        while (round_index < params.uniform_rounds) : (round_index += 1) {
+            const round_value: f32 = @floatFromInt(lane + round_index);
+            lane_sum += round_value;
+        }
+    }
+    if (holds_a_value) {
+        sums[invocation] = lane_sum;
     }
 }

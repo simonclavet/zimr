@@ -162,13 +162,13 @@ fn floorWorld(gpa: Allocator) !zp.World {
 fn dropPose(s: *State) void {
     const m: *const rbt.Model = &s.imported.model;
     _ = rmj.applyKeyframe(m, &s.data, s.robot.keyframes[0]);
-    s.data.pos[2] = 1.2;
+    s.data.joint_positions[2] = 1.2;
     const tipped: Quat = quatFromAxisAngle(normalize3(vec(1, 0.3, 0)), 1.4);
-    s.data.pos[3] = tipped[0];
-    s.data.pos[4] = tipped[1];
-    s.data.pos[5] = tipped[2];
-    s.data.pos[6] = tipped[3];
-    @memset(s.data.vel, 0);
+    s.data.joint_positions[3] = tipped[0];
+    s.data.joint_positions[4] = tipped[1];
+    s.data.joint_positions[5] = tipped[2];
+    s.data.joint_positions[6] = tipped[3];
+    @memset(s.data.joint_velocities, 0);
     s.data.stage = .stale;
     rbt.forward(m, &s.data);
 }
@@ -178,8 +178,8 @@ fn buildWorlds(gpa: Allocator, s: *State) !void {
     const m: *rbt.Model = &s.imported.model;
     m.opt.timestep = 1.0 / float(s.rate_hz);
     // The maximal ragdoll is built at qpos0: its joint limits are measured from there.
-    @memcpy(s.data.pos, m.qpos0);
-    @memset(s.data.vel, 0);
+    @memcpy(s.data.joint_positions, m.reference_joint_positions);
+    @memset(s.data.joint_velocities, 0);
     s.data.stage = .stale;
     rbt.forward(m, &s.data);
     s.world_maximal = try floorWorld(gpa);
@@ -231,11 +231,11 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.paused = false;
     s.want_reset = false;
     s.target = try rbt.Data.init(gpa, &s.imported.model);
-    @memcpy(s.target.pos, s.imported.model.qpos0);
+    @memcpy(s.target.pos, s.imported.model.reference_joint_positions);
     _ = rmj.applyKeyframe(&s.imported.model, &s.target, s.robot.keyframes[0]);
     s.target.stage = .stale;
     rbt.forward(&s.imported.model, &s.target);
-    const nv: usize = s.imported.model.nv;
+    const nv: usize = s.imported.model.dof_count;
     s.a_des = try gpa.alloc(f32, nv);
     s.torque = try gpa.alloc(f32, nv);
     s.full_accel = try gpa.alloc(f32, nv);
@@ -277,15 +277,15 @@ fn deinit(gpa: Allocator, s: *State) void {
 fn holdTorques(s: *State) void {
     const m: *const rbt.Model = &s.imported.model;
     @memset(s.a_des, 0);
-    for (0..m.njnt) |j| {
-        if (m.jnt_type[j] != .hinge) {
+    for (0..m.joint_count) |j| {
+        if (m.joint_type[j] != .hinge) {
             continue;
         }
-        const q: u32 = m.jnt_qpos_adr[j];
-        const v: u32 = m.jnt_dof_adr[j];
+        const q: u32 = m.joint_first_coordinate[j];
+        const v: u32 = m.joint_first_dof[j];
         s.a_des[v] = rmx.stableSpringAccel(
-            s.target.pos[q] - s.data.pos[q],
-            s.data.vel[v],
+            s.target.pos[q] - s.data.joint_positions[q],
+            s.data.joint_velocities[v],
             hold_frequency_reduced,
             1.0,
             m.opt.timestep,
@@ -293,10 +293,10 @@ fn holdTorques(s: *State) void {
     }
     rbt.biasForce(m, &s.data);
     rmx.floatingBaseTorques(m, &s.data, s.a_des, s.dense_mass, s.full_accel, s.torque);
-    for (0..m.njnt) |j| {
-        if (m.jnt_type[j] == .hinge) {
-            const v: u32 = m.jnt_dof_adr[j];
-            s.data.applied_force[v] = s.torque[v];
+    for (0..m.joint_count) |j| {
+        if (m.joint_type[j] == .hinge) {
+            const v: u32 = m.joint_first_dof[j];
+            s.data.applied_joint_forces[v] = s.torque[v];
         }
     }
 }
@@ -314,7 +314,7 @@ fn stepBoth(s: *State) void {
         assertUnreachable(@src(), "reduced-side collision step failed: {t}", .{err});
     };
     s.bridge.harvest(&s.data);
-    @memset(s.data.applied_force, 0);
+    @memset(s.data.applied_joint_forces, 0);
     if (s.hold_pose) {
         holdTorques(s);
     }
@@ -342,8 +342,8 @@ fn setRate(s: *State, rate: u32) void {
 
 fn reducedSpeed(s: *const State) f32 {
     var fastest: f32 = 0;
-    for (0..s.imported.model.nv) |i| {
-        fastest = @max(fastest, @abs(s.data.vel[i]));
+    for (0..s.imported.model.dof_count) |i| {
+        fastest = @max(fastest, @abs(s.data.joint_velocities[i]));
     }
     return fastest;
 }
@@ -420,8 +420,8 @@ fn drawGeom(
     offset_x: f32,
 ) void {
     const m: *const rbt.Model = &s.imported.model;
-    const world_pos: Vec = body_pos + rotate(body_rot, m.geom_pos[g]) + vec(offset_x, 0, 0);
-    const world_rot: Mat = quatToMat(qmul(body_rot, m.geom_rot[g]));
+    const world_pos: Vec = body_pos + rotate(body_rot, m.geom_local_position[g]) + vec(offset_x, 0, 0);
+    const world_rot: Mat = quatToMat(qmul(body_rot, m.geom_local_rotation[g]));
     const place: Mat = mulMat(
         mulMat(zUpToYUp(), translation(world_pos[0], world_pos[1], world_pos[2])),
         world_rot,
@@ -504,9 +504,9 @@ fn update(f: *z.Frame, s: *State) void {
     z.beginMode3D(gl, cam);
     z.drawGrid(gl, 24, 0.25);
     const m: *const rbt.Model = &s.imported.model;
-    for (0..m.ngeom) |g| {
+    for (0..m.geom_count) |g| {
         const body: u32 = m.geom_body[g];
-        drawGeom(s, gl, g, s.data.body_xpos[body], s.data.body_xrot[body], reduced_col, -side_offset);
+        drawGeom(s, gl, g, s.data.body_positions[body], s.data.body_orientations[body], reduced_col, -side_offset);
         const frame: rmx.Frame = s.ragdoll.robotBodyFrame(&s.world_maximal, body);
         drawGeom(s, gl, g, frame.pos, frame.rot, maximal_col, side_offset);
     }

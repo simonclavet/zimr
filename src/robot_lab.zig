@@ -102,8 +102,8 @@ pub const SuperTrackRecipe = struct {
 /// below hold each one against its REASON rather than against its number:
 ///   * 0.6 rad a unit (`supertrack_action_scale`) - C1 weighs it against the paper's 2.09;
 ///   * exploration noise of 0.1 of a unit - C1 again (the paper's sigma, in its units);
-///   * a decision every 2 physics steps: 30 Hz over Geno's 60 Hz physics (Simon; F4e) - DReCon's clock;
-///   * Simon's filter at 0.2, inside training too (F6a) - DReCon's filter;
+///   * a decision every 2 physics steps: 30 Hz over Geno's 60 Hz physics (F4e) - DReCon's clock;
+///   * the action filter at 0.2, inside training too (F6a) - DReCon's filter;
 ///   * the policy sees what it is applying (A1) - with a filter, the filter's state is half of the control state;
 ///   * the world model's normaliser from the reference clips (F4a) - the paper's way, fixed before the first step;
 ///   * a training grace of 48 steps - the paper's minimum episode (F3b), a window when that is longer.
@@ -514,7 +514,7 @@ pub const GenoRunTask = struct {
 
 /// PPO's recipe in a `GenoRun`: every field of `PpoRecipe`, its decision interval and DReCon's filter included - PPO
 /// decides every `decimation` physics steps (DReCon's 30 Hz over Geno's 60 Hz physics), and each decision a joint's
-/// target moves the share `beta` of the way to the new action (Simon: always 0.2). Defaulted to `PpoRecipe`'s values.
+/// target moves the share `beta` of the way to the new action (always 0.2). Defaulted to `PpoRecipe`'s values.
 pub const PpoLearner = struct {
     envs: u32 = (PpoRecipe{}).envs,
     horizon: u32 = (PpoRecipe{}).horizon,
@@ -580,6 +580,11 @@ pub const SuperTrackLearner = struct {
     characters: u32 = 4,
     /// Simulation steps each character's replay keeps: what windows are drawn from. The training page's 256.
     replay_steps: u32 = 256,
+    /// THE CLOCK (`robot_track.Fleet.Options.decide_every`): physics steps per decision - 2 for the policy and the
+    /// world model at 30 Hz over 60 Hz physics. Every count of steps in a recipe then counts decisions.
+    decide_every: u32 = (robot_track.Fleet.Options{}).decide_every,
+    /// The longest episode, in decisions (`robot_track.Fleet.Options.max_steps`): 300 at 30 Hz is 10 s.
+    max_steps: u32 = (robot_track.Fleet.Options{}).max_steps,
     /// Windows per update, the world model's window, and the policy's horizon (0: the world model's window) - as the
     /// learner's own options say (`resident.Options`).
     rows: u32 = 16,
@@ -618,6 +623,14 @@ pub const SuperTrackLearner = struct {
     /// Exploration noise, in units of the policy's raw output: in the simulator while collecting, and inside every
     /// training rollout through the world model.
     sigma: f32 = (resident.Options{}).sigma,
+    /// The action filter: the share of the chosen action in the action the fleet is given at each decision, the rest
+    /// the action given before (`robot_track_resident.Options.filter`). 1 is no filter.
+    filter: f32 = (resident.Options{}).filter,
+    /// The action filter's share for the limbs' stiffnesses, as `filter` is the joints' offsets'
+    /// (`robot_track_resident.Options.stiffness_filter`). 1 is no filter.
+    stiffness_filter: f32 = (resident.Options{}).stiffness_filter,
+    /// Whether the policy sees the action applied before its decision (`robot_track_resident.Options.sees_applied`).
+    sees_applied: bool = (resident.Options{}).sees_applied,
     /// The price on the raw action's size, and the smoothness price along a window (CAPS): without it the policy's
     /// actions jump by most of their size from one step to the next.
     w_action: f32 = (resident.Options{}).w_action,
@@ -704,7 +717,8 @@ comptime {
         const is_fleets: bool = eql(u8, field_name, "action_scale") or eql(u8, field_name, "characters") or
             eql(u8, field_name, "replay_steps") or eql(u8, field_name, "pushes") or
             eql(u8, field_name, "aftermath_steps") or eql(u8, field_name, "aftermath_share") or
-            eql(u8, field_name, "return_steps") or
+            eql(u8, field_name, "return_steps") or eql(u8, field_name, "decide_every") or
+            eql(u8, field_name, "max_steps") or
             eql(u8, field_name, "curriculum") or eql(u8, field_name, "physics_threads");
         if (!is_fleets and !@hasField(resident.Options, field_name)) {
             @compileError("SuperTrackLearner." ++ field_name ++ " is no option of the GPU learner");
@@ -859,6 +873,16 @@ fn superTrackProblem(comptime prefix: []const u8, learner: SuperTrackLearner) ?[
     // A window is drawn from one character's replay, so the replay must hold more than a window.
     if (learner.replay_steps <= learner.window) {
         return prefix ++ "replay_steps: more than window";
+    }
+    // The action filter's shares - the joints' offsets' and the limbs' stiffnesses' - each a share of the new action;
+    // imagination passes its actions through the same filter (the kit's `filter`), so any share trains.
+    const filter_in_range: bool = learner.filter > 0.0 and learner.filter <= 1.0;
+    if (!filter_in_range) {
+        return prefix ++ "filter: above 0, at most 1";
+    }
+    const stiffness_filter_in_range: bool = learner.stiffness_filter > 0.0 and learner.stiffness_filter <= 1.0;
+    if (!stiffness_filter_in_range) {
+        return prefix ++ "stiffness_filter: above 0, at most 1";
     }
     // The skip head learns from the world model's windows: a jump must fit in one, and span more than one step.
     if (learner.skip_span > learner.window) {
@@ -1127,6 +1151,9 @@ pub const GenoRun = struct {
 
     /// The run as ZON text, every field written: what a run folder's `run.zon` reads back as this run.
     pub fn write(run: GenoRun, writer: *Io.Writer) Io.Writer.Error!void {
+        // The serializer checks at compile time that every field can be written, walking every learner's options
+        // through their nested structs - more than the default thousand branches for a run of three learners.
+        @setEvalBranchQuota(10_000);
         try std.zon.stringify.serialize(run, .{}, writer);
     }
 };
@@ -1180,6 +1207,7 @@ test "GenoRun: a run of any learner with its defaults can be trained; a setting 
         .{ .learner = .{ .ppo = .{ .beta = 0 } } },
         .{ .learner = .{ .ppo = .{ .envs = 0 } } },
         .{ .learner = .{ .supertrack = .{ .rows = 0 } } },
+        .{ .learner = .{ .supertrack = .{ .filter = 0.0 } } },
         .{ .learner = .{ .efficient_tdmpc = .{ .dynamics_heads = 0 } } },
         .{ .learner = .{ .efficient_tdmpc = .{ .pessimism = -1 } } },
         .{ .learner = .{ .efficient_tdmpc = .{ .characters = 0 } } },
@@ -1194,6 +1222,7 @@ test "GenoRun: a run of any learner with its defaults can be trained; a setting 
         "learner.ppo.beta: above 0, at most 1",
         "learner.ppo.envs: at least 1 character",
         "learner.supertrack.rows: at least 1 window",
+        "learner.supertrack.filter: above 0, at most 1",
         "learner.efficient_tdmpc.dynamics_heads: at least 1 head",
         "learner.efficient_tdmpc.pessimism: 0 or more",
         "learner.efficient_tdmpc.characters: at least 1",
@@ -1796,7 +1825,7 @@ pub const SuperTrackLog = struct {
 pub const RecoveryLog = struct {
     /// The file's first line: its columns.
     pub const header: []const u8 = "batch,training_minutes,clip,push_speed,pushes,survived,recovered," ++
-        "recovery_steps_sum,lost,returned,return_steps_sum,not_returned,frame_time\n";
+        "recovery_steps_sum,lost,returned,return_steps_sum,not_returned,step_seconds\n";
 
     /// Appends one line per band of a probe of clip `clip` - its label, "dance" or "get-up" - made after `batches`
     /// batches and `training_minutes` minutes of training (both zero for the servo's). Memory: `log` grows with `gpa`,
@@ -1808,7 +1837,6 @@ pub const RecoveryLog = struct {
         training_minutes: f32,
         clip: []const u8,
         bands: []const robot_track.RecoveryBand,
-        frame_time: f32,
     ) !void {
         for (bands) |band| {
             var line_buffer: [240]u8 = undefined;
@@ -1826,7 +1854,7 @@ pub const RecoveryLog = struct {
                 band.returned,
                 band.return_steps_sum,
                 band.not_returned,
-                frame_time,
+                band.step_seconds,
             });
             try log.appendSlice(gpa, line);
         }
@@ -1836,7 +1864,8 @@ pub const RecoveryLog = struct {
 pub const JudgeLog = struct {
     /// The file's first line: its columns.
     pub const header: []const u8 = "batch,training_minutes,clip,starts,failures,reached_end,watched_steps," ++
-        "reward_sum,tracked_steps_squares,failed_starts_steps,tracked_share_sum,tracked_share_squares,frame_time\n";
+        "reward_sum,tracked_steps_squares,failed_starts_steps,tracked_share_sum,tracked_share_squares,frame_time," ++
+        "super_mimic_return_sum,super_mimic_available_steps\n";
 
     /// Appends the line of one judgement of clip `clip` - its label, "dance" or "get-up" - made after `batches`
     /// batches and `training_minutes` minutes of training (both zero for the servo's). Every number written as the
@@ -1850,8 +1879,9 @@ pub const JudgeLog = struct {
         clip: []const u8,
         judgement: robot_track.Judgement,
     ) !void {
-        var line_buffer: [400]u8 = undefined;
-        const line: []const u8 = try bufPrint(&line_buffer, "{d},{d},{s},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d}\n", .{
+        var line_buffer: [480]u8 = undefined;
+        const line_format: []const u8 = "{d},{d},{s},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d}\n";
+        const line: []const u8 = try bufPrint(&line_buffer, line_format, .{
             batches,
             training_minutes,
             clip,
@@ -1865,10 +1895,11 @@ pub const JudgeLog = struct {
             judgement.tracked_share_sum,
             judgement.tracked_share_squares,
             judgement.frame_time,
+            judgement.super_mimic_return_sum,
+            judgement.super_mimic_available_steps,
         });
         try log.appendSlice(gpa, line);
     }
-
     /// One judgement's line, read back: when it was made, of which clip (a slice of the line's own text), and the
     /// judgement.
     pub const Line = struct {
@@ -1895,6 +1926,8 @@ pub const JudgeLog = struct {
             .tracked_share_sum = nextFloat64(&columns) orelse return null,
             .tracked_share_squares = nextFloat64(&columns) orelse return null,
             .frame_time = RunLog.nextFloat(&columns) orelse return null,
+            .super_mimic_return_sum = nextFloat64(&columns) orelse return null,
+            .super_mimic_available_steps = RunLog.nextInteger(usize, &columns) orelse return null,
         };
         const has_extra_column: bool = columns.next() != null;
         if (has_extra_column) {
@@ -2499,6 +2532,12 @@ pub const PolicyLayer = struct {
     }
 };
 
+/// The action applied before a decision, and the block that reads it (`GenoPolicy.applied_block`).
+const AppliedReading = struct {
+    action: []const f32,
+    block: []const f32,
+};
+
 /// A policy as the lab plays it, whichever learner made it - the deployable part of a run (see this section's head):
 /// the layers that turn an observation into an action, the observation's normaliser frozen at the moment the policy
 /// was written, and what the controller does with the action.
@@ -2529,6 +2568,10 @@ pub const GenoPolicy = struct {
     /// Physics steps a decision is held for: the policy decides at the first of them, and its action stands for the
     /// rest. PPO's actor on Geno decides every 2 (30 Hz over 60 Hz physics), SuperTrack's policy every step.
     decimation: u32,
+    /// THE BLOCK READING THE ACTION APPLIED BEFORE EACH DECISION, a row per action number, a column per first-layer
+    /// unit (a SuperTrack policy trained with `sees_applied`): its terms join the first layer's sum after the
+    /// observation's, before the activation - the kit's order. Null: the policy reads no applied action.
+    applied_block: ?[]f32 = null,
 
     /// The observation's size: the first width.
     pub fn observationSize(policy: *const GenoPolicy) usize {
@@ -2552,6 +2595,9 @@ pub const GenoPolicy = struct {
     /// Frees the policy's arrays, allocated with `gpa` (`policyOfPpo`, `PolicyFile.decode`). A policy made in an
     /// arena needs no `deinit`: the arena frees it.
     pub fn deinit(policy: *GenoPolicy, gpa: Allocator) void {
+        if (policy.applied_block) |block| {
+            gpa.free(block);
+        }
         for (policy.layers) |layer| {
             gpa.free(layer.weights_and_biases);
         }
@@ -2568,6 +2614,18 @@ pub const GenoPolicy = struct {
                 gpa.free(feature_normalizer.spread);
             },
         }
+    }
+
+    /// The first layer's reading of `applied`, the action applied before this decision - none for a policy without
+    /// the block. A policy with one is given the whole action.
+    pub fn appliedReading(policy: *const GenoPolicy, applied: []const f32) ?AppliedReading {
+        const block: []const f32 = policy.applied_block orelse return null;
+        const whole_action: bool = applied.len == policy.actionSize();
+        assertf(whole_action, @src(), "a policy reading its applied action given {d} numbers, wants {d}", .{
+            applied.len,
+            policy.actionSize(),
+        });
+        return .{ .action = applied, .block = block };
     }
 };
 
@@ -2632,6 +2690,7 @@ fn applyNorm(
 fn applyPolicyLayer(
     layer: PolicyLayer,
     layer_input: []const f32,
+    applied: ?AppliedReading,
     layer_output: []f32,
 ) void {
     const input_count: usize = layer_input.len;
@@ -2643,6 +2702,13 @@ fn applyPolicyLayer(
         for (layer_input, 0..) |input_value, input_index| {
             const weight: f32 = layer.weights_and_biases[input_index * output_count + output_index];
             pre_activation += input_value * weight;
+        }
+        // The applied action's terms, after the inputs' and before the activation, in the kit's order.
+        if (applied) |reading| {
+            for (reading.action, 0..) |applied_value, applied_index| {
+                const weight: f32 = reading.block[applied_index * output_count + output_index];
+                pre_activation += applied_value * weight;
+            }
         }
         layer_output[output_index] = switch (layer.activation) {
             .none => pre_activation,
@@ -2663,6 +2729,7 @@ fn applyPolicyLayer(
 pub fn policyMeanAction(
     policy: *const GenoPolicy,
     observation: []const f32,
+    applied: []const f32,
     scratch: PolicyScratch,
     action: []f32,
 ) void {
@@ -2701,7 +2768,9 @@ pub fn policyMeanAction(
         const output_count: usize = policy.widths[layer_index + 1];
         const other_buffer: []f32 = if (input_is_in_ping) scratch.pong else scratch.ping;
         const layer_output: []f32 = if (is_last_layer) action else other_buffer[0..output_count];
-        applyPolicyLayer(layer, layer_input, layer_output);
+        const is_first_layer: bool = layer_index == 0;
+        const reading: ?AppliedReading = if (is_first_layer) policy.appliedReading(applied) else null;
+        applyPolicyLayer(layer, layer_input, reading, layer_output);
         layer_input = layer_output;
         input_is_in_ping = !input_is_in_ping;
     }
@@ -2797,17 +2866,20 @@ pub fn policyOfPpo(gpa: Allocator, parts: PpoPolicyParts) !GenoPolicy {
 
 /// The policy of a SuperTrack learner (`robot_track_resident.PolicyParts`): its three layers - tanh, tanh and linear -
 /// copied out of the packed weights acting uses, reading SuperTrack's features (the goal then the state, normalised by
-/// a frozen copy of the learner's feature statistics), deciding at every physics step with no limit and no filter -
-/// exactly as the learner acts on the fleet, whose action scale is `action_scale`.
+/// a frozen copy of the learner's feature statistics), deciding with no limit and through the learner's action filter
+/// (`PolicyParts.filter`) - exactly as the learner acts on the fleet, whose action scale is `action_scale`.
 ///
 /// The packed first layer is already a dense layer over `[goal | state]` in `PolicyLayer`'s layout: a row of weights
 /// per input, the goal's inputs first, then its biases. So each layer is one slice of the packed weights, in order.
 /// Memory: the policy's arrays are allocated with `gpa` and are the caller's - `deinit(gpa)` frees them, or, when
 /// `gpa` is an arena, the arena does.
+/// `decimation` is the learner's clock (`robot_track.Fleet.Options.decide_every`): the player decides as often as the
+/// policy was trained to.
 pub fn policyOfSuperTrack(
     gpa: Allocator,
     parts: resident.PolicyParts,
     action_scale: f32,
+    decimation: u32,
 ) !GenoPolicy {
     const observation_size: usize = 2 * parts.feature_count;
     const widths: []u32 = try gpa.alloc(u32, 4);
@@ -2837,6 +2909,19 @@ pub fn policyOfSuperTrack(
         layers_made += 1;
         layer_start += parameter_count;
     }
+    // The block through which a policy reads the action applied before its decision, after the layers: kept when any
+    // weight in it is not zero (a policy trained with `sees_applied`); an all-zero block adds exactly nothing, so it is
+    // left out and the policy plays as one that reads no applied action.
+    const applied_block_size: usize = parts.action_count * parts.hidden_width;
+    const packed_block: []const f32 = parts.packed_weights[layer_start..][0..applied_block_size];
+    const reads_applied_action: bool = for (packed_block) |weight| {
+        if (weight != 0) {
+            break true;
+        }
+    } else false;
+    const applied_block: ?[]f32 = if (reads_applied_action) try gpa.dupe(f32, packed_block) else null;
+    errdefer if (applied_block) |block| gpa.free(block);
+    layer_start += applied_block_size;
     const every_weight_used: bool = layer_start == parts.packed_weights.len;
     assertf(every_weight_used, @src(), "policyOfSuperTrack: the layers hold {d} of {d} packed weights", .{
         layer_start,
@@ -2848,17 +2933,16 @@ pub fn policyOfSuperTrack(
     errdefer gpa.free(frozen_means);
     const frozen_spreads: []f32 = try gpa.dupe(f32, parts.normalizer.spread);
     const no_limit: f32 = inf(f32);
-    const every_action_unfiltered: f32 = 1.0;
-    const every_physics_step: u32 = 1;
     const policy: GenoPolicy = .{
         .widths = widths,
         .layers = layers,
         .normalization = null,
         .action_limit = no_limit,
         .action_scale = action_scale,
-        .filter_beta = every_action_unfiltered,
+        .filter_beta = parts.filter,
         .observation = .{ .supertrack_features = .{ .mean = frozen_means, .spread = frozen_spreads } },
-        .decimation = every_physics_step,
+        .decimation = decimation,
+        .applied_block = applied_block,
     };
     return policy;
 }
@@ -3050,7 +3134,8 @@ pub const PolicyFile = struct {
         kind: u32,
         decimation: u32,
         feature_count: u32,
-        reserved: u32 = 0,
+        /// The numbers of the block reading the applied action (`GenoPolicy.applied_block`), written last: 0 for none.
+        applied_block_count: u32 = 0,
     };
 
     /// What precedes each layer's weights and biases: its output count (its input count is the width before it), its
@@ -3169,6 +3254,7 @@ pub const PolicyFile = struct {
             .kind = @backingInt(observation_kind),
             .decimation = policy.decimation,
             .feature_count = @intCast(feature_count),
+            .applied_block_count = if (policy.applied_block) |block| @intCast(block.len) else 0,
         };
         var bytes: ArrayList(u8) = .empty;
         errdefer bytes.deinit(gpa);
@@ -3194,6 +3280,9 @@ pub const PolicyFile = struct {
                 try bytes.appendSlice(gpa, sliceAsBytes(feature_normalizer.mean));
                 try bytes.appendSlice(gpa, sliceAsBytes(feature_normalizer.spread));
             },
+        }
+        if (policy.applied_block) |block| {
+            try bytes.appendSlice(gpa, sliceAsBytes(block));
         }
         return bytes.toOwnedSlice(gpa);
     }
@@ -3343,6 +3432,13 @@ pub const PolicyFile = struct {
                 },
             }
         }
+        // The block reading the applied action, last, when the policy has one.
+        const block_count: usize = observation_header.applied_block_count;
+        const applied_block: ?[]f32 = if (block_count == 0) null else try gpa.alloc(f32, block_count);
+        errdefer if (applied_block) |block| gpa.free(block);
+        if (applied_block) |block| {
+            @memcpy(sliceAsBytes(block), try reader.take(block_count * @sizeOf(f32)));
+        }
         if (reader.left() != 0) {
             return error.PolicyHasTrailingBytes;
         }
@@ -3355,6 +3451,7 @@ pub const PolicyFile = struct {
             .filter_beta = header.filter_beta,
             .observation = observation,
             .decimation = observation_header.decimation,
+            .applied_block = applied_block,
         };
         return policy;
     }
@@ -3558,7 +3655,7 @@ pub const PolicyDecider = struct {
             .supertrack_features => try robot_policy.everyActuatedJoint(arena, model),
         };
         // The policy must fit the task: an observation of the size it names, an action per joint the subset nudges.
-        const feature_count: usize = robot_track.localSize(model.nbody);
+        const feature_count: usize = robot_track.localSize(model.body_count);
         const observation_size: usize = switch (policy.observation) {
             .drecon => robot_policy.observationSize(subset),
             .supertrack_features => 2 * feature_count,
@@ -3574,8 +3671,8 @@ pub const PolicyDecider = struct {
             policy.actionSize(),
         });
         const reference_views: robot_policy.Views = try .init(arena, model);
-        const simulated_state: robot_track.State = try .init(arena, model.nbody);
-        const reference_state: robot_track.State = try .init(arena, model.nbody);
+        const simulated_state: robot_track.State = try .init(arena, model.body_count);
+        const reference_state: robot_track.State = try .init(arena, model.body_count);
         const reference_probe: rbt.Data = try .init(arena, model);
         const raw_features: []f32 = try arena.alloc(f32, feature_count);
         const scratch: PolicyScratch = try .init(arena, policy);
@@ -3616,7 +3713,10 @@ pub const PolicyDecider = struct {
                     character,
                 ),
             }
-            policyMeanAction(policy, decider.observation, decider.scratch, character_action);
+            // The action the controller's filter gave this character at its previous decision: the action applied
+            // before this one, which a policy trained to see it reads.
+            const applied: []const f32 = controller.filtered[character * action_size ..][0..action_size];
+            policyMeanAction(policy, decider.observation, applied, decider.scratch, character_action);
         }
     }
 
@@ -3998,7 +4098,7 @@ test "policyOfTdmpc: the file acts as the agent's policy means to act - to round
     try expect(read_back.normalization == null);
     const scratch: PolicyScratch = try .init(arena, &read_back);
     var file_mean: [action_width]f32 = undefined;
-    policyMeanAction(&read_back, &observation, scratch, &file_mean);
+    policyMeanAction(&read_back, &observation, &.{}, scratch, &file_mean);
     var spread_seen: f32 = 0;
     for (agent_mean, file_mean) |expected, played| {
         try expectApproxEqAbs(expected, played, 1e-5);
@@ -4009,7 +4109,7 @@ test "policyOfTdmpc: the file acts as the agent's policy means to act - to round
     // CONTROL: one weight of the encoder's first layer changed in the file moves the action.
     read_back.layers[0].weights_and_biases[3] += 0.5;
     var moved_mean: [action_width]f32 = undefined;
-    policyMeanAction(&read_back, &observation, scratch, &moved_mean);
+    policyMeanAction(&read_back, &observation, &.{}, scratch, &moved_mean);
     try expect(!eql(f32, &file_mean, &moved_mean));
 }
 
@@ -4055,7 +4155,7 @@ test "PolicyLayer: a normed layer computes what zimrnum's NormedDense computes -
         try expectEqualSlices(f32, graph_output, normed_here);
         // The whole layer, from the input: to rounding.
         const whole_layer: []f32 = try arena.alloc(f32, 16);
-        applyPolicyLayer(layer, &input_values, whole_layer);
+        applyPolicyLayer(layer, &input_values, null, whole_layer);
         for (graph_output, whole_layer) |expected, played| {
             try expectApproxEqAbs(expected, played, 1e-5);
         }
@@ -4101,8 +4201,8 @@ test "GenoPolicy: its file reads back as itself and acts the same; a file that i
     const observation = [3]f32{ 1.25, -0.5, 9.0 };
     var action: [2]f32 = undefined;
     var action_read_back: [2]f32 = undefined;
-    policyMeanAction(&policy, &observation, scratch, &action);
-    policyMeanAction(&read_back, &observation, scratch, &action_read_back);
+    policyMeanAction(&policy, &observation, &.{}, scratch, &action);
+    policyMeanAction(&read_back, &observation, &.{}, scratch, &action_read_back);
     try expectEqualSlices(f32, &action, &action_read_back);
     // Not a policy; cut short; and a file of the first version.
     var not_a_policy: [64]u8 = @splat(0);
@@ -4206,8 +4306,8 @@ test "GenoPolicy: a normed policy's file reads back and acts the same; norm sett
     var read_action: [2]f32 = undefined;
     const written_scratch: PolicyScratch = try .init(arena, &policy);
     const read_scratch: PolicyScratch = try .init(arena, &read_back);
-    policyMeanAction(&policy, &observation, written_scratch, &written_action);
-    policyMeanAction(&read_back, &observation, read_scratch, &read_action);
+    policyMeanAction(&policy, &observation, &.{}, written_scratch, &written_action);
+    policyMeanAction(&read_back, &observation, &.{}, read_scratch, &read_action);
     try expectEqualSlices(f32, &written_action, &read_action);
     try expect(written_action[0] != written_action[1]);
 
@@ -4351,14 +4451,14 @@ test "GenoPolicy: an action past its limit is held at it; an input past its clip
     var pong: [4]f32 = undefined;
     const scratch: PolicyScratch = .{ .ping = &ping, .pong = &pong };
     var action: [2]f32 = undefined;
-    policyMeanAction(&policy, &.{ 0.0, 0.0, 0.0 }, scratch, &action);
+    policyMeanAction(&policy, &.{ 0.0, 0.0, 0.0 }, &.{}, scratch, &action);
     try expectEqualSlices(f32, &.{ 1.0, -1.0 }, &action);
     // An input 100 deviations from its mean is held at 5, as one 6 deviations away is: the same action.
     policy.layers[1].weights_and_biases[0] = 1.0;
     var far_action: [2]f32 = undefined;
     var near_action: [2]f32 = undefined;
-    policyMeanAction(&policy, &.{ 0.5 + 100.0 * 2.0, -1.0, 2.0 }, scratch, &far_action);
-    policyMeanAction(&policy, &.{ 0.5 + 6.0 * 2.0, -1.0, 2.0 }, scratch, &near_action);
+    policyMeanAction(&policy, &.{ 0.5 + 100.0 * 2.0, -1.0, 2.0 }, &.{}, scratch, &far_action);
+    policyMeanAction(&policy, &.{ 0.5 + 6.0 * 2.0, -1.0, 2.0 }, &.{}, scratch, &near_action);
     try expectEqualSlices(f32, &near_action, &far_action);
 }
 

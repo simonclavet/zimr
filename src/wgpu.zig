@@ -119,6 +119,7 @@ pub const ColorF32 = gpu_abi.ColorF32;
 // --- Device / Queue / Surface ---
 extern "wgpu" fn js_init_device() u32;
 extern "wgpu" fn js_device_get_queue(device: u32) u32;
+extern "wgpu" fn js_device_workgroup_storage_limit(device: u32) u32;
 extern "wgpu" fn js_get_surface() u32;
 extern "wgpu" fn js_surface_get_current_texture(surface: u32) u32;
 extern "wgpu" fn js_surface_present(surface: u32) void;
@@ -276,6 +277,18 @@ extern "wgpu" fn js_device_create_compute_pipeline(
     label_len: usize,
 ) u32;
 
+extern "wgpu" fn js_device_create_compute_pipeline_async(
+    device: u32,
+    layout: u32,
+    shader_module: u32,
+    entry_point_ptr: [*]const u8,
+    entry_point_len: usize,
+    label_ptr: [*]const u8,
+    label_len: usize,
+) u32;
+extern "wgpu" fn js_compute_pipeline_state(pipeline: u32) u32;
+extern "wgpu" fn js_compute_pipeline_milliseconds(pipeline: u32) f64;
+
 // --- Command encoder ---
 extern "wgpu" fn js_device_create_command_encoder(device: u32) u32;
 extern "wgpu" fn js_command_encoder_finish(encoder: u32) u32;
@@ -406,6 +419,7 @@ extern "wgpu" fn js_compute_pass_end(pass: u32) void;
 const web_host = struct {
     pub const initDevice = js_init_device;
     pub const deviceGetQueue = js_device_get_queue;
+    pub const deviceWorkgroupStorageLimit = js_device_workgroup_storage_limit;
     pub const getSurface = js_get_surface;
     pub const surfaceGetCurrentTexture = js_surface_get_current_texture;
     pub const surfacePresent = js_surface_present;
@@ -526,6 +540,16 @@ pub fn getQueue(device: DeviceHandle) QueueHandle {
         return .invalid;
     }
     return @fromBackingInt(@intCast(gpu_host.deviceGetQueue(@backingInt(device))));
+}
+
+/// The most workgroup memory one compute kernel may declare on `device`, in bytes: WebGPU's
+/// `maxComputeWorkgroupStorageSize` as the device was granted it (the boot asks for the adapter's own), Vulkan's
+/// `maxComputeSharedMemorySize`. Zero without a GPU.
+pub fn workgroupStorageLimit(device: DeviceHandle) u32 {
+    if (comptime !host.has_gpu) {
+        return 0;
+    }
+    return gpu_host.deviceWorkgroupStorageLimit(@backingInt(device));
 }
 
 pub fn getSurface() SurfaceHandle {
@@ -1032,6 +1056,64 @@ pub fn createComputePipeline(
         label.ptr,
         label.len,
     )));
+}
+
+/// How far a compute pipeline made in the background has come (`createComputePipelineInBackground`).
+pub const PipelineState = enum(u32) {
+    /// The browser is still compiling it: the handle may not be used yet.
+    pending,
+    /// The pipeline stands behind its handle.
+    ready,
+    /// The browser refused it; its console says why.
+    failed,
+};
+
+/// CREATE A COMPUTE PIPELINE IN THE BACKGROUND. A browser compiles a pipeline when it is created, and created the
+/// plain way (`createComputePipeline`) it compiles them one after another while the page draws nothing; asked this
+/// way (`createComputePipelineAsync`) it compiles off the page's thread, several at once where it can, and the page
+/// goes on drawing. The handle is returned at once and may be used only once `computePipelineState` says `.ready`.
+/// A native host compiles in the call, so there the pipeline is ready when this returns.
+pub fn createComputePipelineInBackground(
+    device: DeviceHandle,
+    layout: PipelineLayoutHandle,
+    shader_module: ShaderModuleHandle,
+    entry_point: []const u8,
+    label: []const u8,
+) ComputePipelineHandle {
+    if (comptime !host.has_gpu) {
+        return .invalid;
+    }
+    if (comptime !host.is_browser) {
+        return createComputePipeline(device, layout, shader_module, entry_point, label);
+    }
+    bumpHandle(.compute_pipeline, 1);
+    return @fromBackingInt(@intCast(js_device_create_compute_pipeline_async(
+        @backingInt(device),
+        @backingInt(layout),
+        @backingInt(shader_module),
+        entry_point.ptr,
+        entry_point.len,
+        label.ptr,
+        label.len,
+    )));
+}
+
+/// How far `pipeline` has come: always `.ready` for a pipeline made in the call, and on a native host.
+pub fn computePipelineState(pipeline: ComputePipelineHandle) PipelineState {
+    if (comptime !host.is_browser) {
+        return .ready;
+    }
+    const state: u32 = js_compute_pipeline_state(@backingInt(pipeline));
+    return @fromBackingInt(@intCast(state));
+}
+
+/// The milliseconds the browser took to make `pipeline` in the background: 0 while it is pending, for a pipeline made
+/// in the call, and on a native host.
+pub fn computePipelineMilliseconds(pipeline: ComputePipelineHandle) f64 {
+    if (comptime !host.is_browser) {
+        return 0;
+    }
+    return js_compute_pipeline_milliseconds(@backingInt(pipeline));
 }
 
 // --- Texture / Sampler ---

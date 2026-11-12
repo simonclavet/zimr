@@ -57,19 +57,23 @@ const zn_mlp = @import("zn_mlp");
 const zn_matmul = @import("zn_matmul");
 const robotgpu_probe = @import("robotgpu_probe");
 const robotgpu = @import("robotgpu");
+const robotgpu_host = @import("robotgpu_host");
 const zn = @import("zn");
 const zn_unary = @import("zn_unary");
 const zrl_binary = @import("zrl_binary");
 const z = @import("zimr");
 const zm = @import("zm");
+const isFinite = zm.isFinite;
 
 const eql = std.mem.eql;
 const print = std.debug.print;
+const test_options = @import("vk_host_test_options");
 const writeInt = std.mem.writeInt;
 const Allocator = std.mem.Allocator;
-const DebugAllocator = std.heap.DebugAllocator;
 const asBytes = std.mem.asBytes;
-const indexOf = std.mem.indexOf;
+const testing = std.testing;
+const expect = std.testing.expect;
+const expectEqual = std.testing.expectEqual;
 const fieldNames = std.meta.fieldNames;
 const FieldEnum = std.meta.FieldEnum;
 const float = zm.float;
@@ -157,8 +161,76 @@ fn writeWords(bytes: []u8, values: []const u32) void {
     }
 }
 
-/// The most times `readBack` polls before calling the read lost: far more than a 16-byte copy takes on any driver.
-const read_poll_limit: u32 = 50_000_000;
+/// The headless screen's size, in pixels: a row of `screen_width` texels fits one copy row (`copy_row_pitch`).
+const screen_width: u32 = 16;
+const screen_height: u32 = 8;
+
+/// THE DEVICE THE TESTS SHARE: the engine's headless Vulkan host - one per process, as an engine's is - started by
+/// the first test that asks, and its device and queue (`initDevice` gives every later caller the device already made).
+/// An error without the validation layer: every check counts on it to see what the driver would not say.
+const TestDevice = struct {
+    device: wgpu.DeviceHandle,
+    queue: wgpu.QueueHandle,
+    /// The validation layer's errors so far when the test opened the device: a test's own calls must add none.
+    errors_at_open: u32,
+
+    fn open() !TestDevice {
+        if (!vulkan_host.isStarted()) {
+            try vulkan_host.startHeadlessWithScreen(screen_width, screen_height);
+        }
+        const device: wgpu.DeviceHandle = wgpu.initDevice();
+        if (!vulkan_host.isValidating()) {
+            return error.ValidationLayerMissing;
+        }
+        const queue: wgpu.QueueHandle = wgpu.getQueue(device);
+        const errors_at_open: u32 = vulkan_host.messageCounts().errors;
+        const opened: TestDevice = .{ .device = device, .queue = queue, .errors_at_open = errors_at_open };
+        return opened;
+    }
+
+    /// The validation layer reported no error since the test opened the device: what a call that returns nothing -
+    /// a clear, a view, a pipeline made - is judged by, and what every other call must also keep.
+    fn expectNoNewValidationErrors(opened: TestDevice) !void {
+        const errors_now: u32 = vulkan_host.messageCounts().errors;
+        try testing.expectEqual(opened.errors_at_open, errors_now);
+    }
+};
+
+/// A TEST's OWN SECONDS, printed when it ends: the build records every test's time too, but shows it only in its web
+/// interface (`--webui`), and a run in a terminal or a sandbox has none.
+const TestTimer = struct {
+    name: []const u8,
+    started_ms: f64,
+
+    fn start(name: []const u8) TestTimer {
+        const timer: TestTimer = .{ .name = name, .started_ms = z.native_os.monotonicMilliseconds() };
+        return timer;
+    }
+
+    fn report(timer: TestTimer) void {
+        const seconds: f64 = (z.native_os.monotonicMilliseconds() - timer.started_ms) / 1000.0;
+        std.debug.print("vk-host-test: [{d:6.1} s] {s}\n", .{ seconds, timer.name });
+    }
+};
+
+/// HOW LONG A READ MAY TAKE TO HOLD WHAT IT WAITS FOR, by the wall clock - a read polled in a loop gives up only once
+/// this has passed. A count of polls would be a window set by how fast the CPU spins, and on lavapipe the "GPU" is that
+/// same CPU: a slow moment reported a read that never came (zimrnum's cases, "the read never held the dispatch", in
+/// about one device run of three). Every read here takes milliseconds; the deadline is there for one that never ends.
+const ReadDeadline = struct {
+    started_ms: f64,
+    limit_ms: f64 = 10_000,
+
+    fn start() ReadDeadline {
+        const deadline: ReadDeadline = .{ .started_ms = z.native_os.monotonicMilliseconds() };
+        return deadline;
+    }
+
+    fn hasPassed(deadline: ReadDeadline) bool {
+        const elapsed_ms: f64 = z.native_os.monotonicMilliseconds() - deadline.started_ms;
+        return elapsed_ms >= deadline.limit_ms;
+    }
+};
 
 /// Copies a buffer's first `bytes.len` bytes into `bytes`, through a `map_read` buffer: a copy in an encoder, a
 /// submit, then the read, polled until it is ready as the engine polls. False when it never becomes ready.
@@ -180,10 +252,9 @@ fn readBufferInto(
     wgpu.queueSubmit(queue, wgpu.finishCommandEncoder(encoder));
     const read: wgpu.BufferRead = wgpu.bufferReadStart(staging, size);
     defer wgpu.bufferReadRelease(read);
-    var polls: u32 = 0;
+    const deadline: ReadDeadline = .start();
     while (!wgpu.bufferReadPoll(read)) {
-        polls += 1;
-        if (polls == read_poll_limit) {
+        if (deadline.hasPassed()) {
             print("vk-host-test: a read never became ready\n", .{});
             return false;
         }
@@ -459,10 +530,6 @@ fn runKernel(device: wgpu.DeviceHandle, queue: wgpu.QueueHandle) bool {
     return true;
 }
 
-/// How many times `readLatest` is polled before the check gives up: each poll is one frame's worth of waiting in an
-/// app, and lavapipe finishes this work in a few.
-const engine_poll_limit: u32 = 1_000_000;
-
 /// Runs `double_it` through the engine's own compute path, as an app does: `Compute(double_it).initGpu` builds the
 /// pipelines and bind groups from the kernel's SPIR-V (`compute_host`'s native path - the SPIR-V recognised by its
 /// first word, kompute's declared binding numbers, every field in each layout); the data is uploaded; one batch runs
@@ -489,8 +556,8 @@ fn runEngineCompute(
     compute.endBatch();
     const dispatched: u64 = compute.readGeneration().submitted;
 
-    var polls: u32 = 0;
-    while (polls < engine_poll_limit) : (polls += 1) {
+    const deadline: ReadDeadline = .start();
+    while (!deadline.hasPassed()) {
         const latest: ?[]const f32 = compute.readLatest(.data);
         const holds_this_batch: bool = compute.readGeneration().mirrored >= dispatched;
         const output: []const f32 = latest orelse continue;
@@ -522,6 +589,8 @@ const zn_matmul_spirv: []const u8 = @embedFile("zn_matmul_spv");
 const zn_unary_spirv: []const u8 = @embedFile("zn_unary_spv");
 const zrl_binary_spirv: []const u8 = @embedFile("zrl_binary_spv");
 const robotgpu_probe_spirv: []const u8 = @embedFile("robotgpu_probe_spv");
+/// Geno's get-up clip, baked (`examples/geno_ppo/getup.zclip`): the tracking check's reference.
+const getup_zclip: []const u8 = @embedFile("geno_getup_zclip");
 const robotgpu_spirv: []const u8 = @embedFile("robotgpu_spv");
 
 /// A kernel file's entry table for `Compute.initGpu`: every entry the file declares (`kernels`), each with the file's
@@ -542,8 +611,8 @@ fn deviceReadback(
     comptime field: FieldEnum(Kernel.Buffers),
 ) ?[]const Element {
     const dispatched: u64 = pipe.readGeneration().submitted;
-    var polls: u32 = 0;
-    while (polls < engine_poll_limit) : (polls += 1) {
+    const deadline: ReadDeadline = .start();
+    while (!deadline.hasPassed()) {
         const latest: ?[]const Element = pipe.readLatest(field);
         const holds_every_dispatch: bool = pipe.readGeneration().mirrored >= dispatched;
         if (latest != null and holds_every_dispatch) {
@@ -588,6 +657,48 @@ fn reductionGap(
 ///     values --> device: workgroup_sum --> sums --- the same two comparisons
 ///
 /// A device without subgroup arithmetic in compute shaders skips the subgroup sum (its gap null).
+/// A LOOP ON A UNIFORM WORKGROUP VALUE, barriers inside (`robotgpu_probe.uniform_loop`): five workgroups count down
+/// seven rounds, the loop's exit read by every invocation together. Every invocation's sum - seven times its lane plus
+/// 0 + 1 + ... + 6 - must be the same on the device, on the twin and from the closed form, exactly: small whole
+/// numbers, which floats hold exactly.
+fn runUniformLoop(
+    gpa: Allocator,
+    device: wgpu.DeviceHandle,
+    queue: wgpu.QueueHandle,
+) !bool {
+    const ProbeCompute: type = z.Compute(robotgpu_probe);
+    const entries: [robotgpu_probe.kernels.len]ProbeCompute.KernelWgsl =
+        spirvEntries(robotgpu_probe, robotgpu_probe_spirv);
+    var on_device: ProbeCompute = try .initGpu(gpa, device, queue, &entries);
+    defer on_device.deinit();
+    var twin: ProbeCompute = .initCpu();
+    defer twin.deinit();
+    const workgroup_size: u32 = robotgpu_probe.config.workgroup;
+    const invocation_count: u32 = 5 * workgroup_size;
+    const rounds: u32 = 7;
+    const pipes = [2]*ProbeCompute{ &on_device, &twin };
+    for (pipes) |pipe| {
+        pipe.element_count = invocation_count;
+        pipe.params = .{ .value_count = invocation_count, .subgroup_size = 1, .uniform_rounds = rounds };
+        pipe.run("uniform_loop", invocation_count);
+    }
+    const device_sums: []f32 = try gpa.alloc(f32, invocation_count);
+    defer gpa.free(device_sums);
+    on_device.readRange(.sums, 0, device_sums);
+    const twin_sums: []f32 = try gpa.alloc(f32, invocation_count);
+    defer gpa.free(twin_sums);
+    twin.readRange(.sums, 0, twin_sums);
+    const rounds_triangle: u32 = rounds * (rounds - 1) / 2;
+    for (device_sums, twin_sums, 0..) |device_sum, twin_sum, invocation| {
+        const lane: u32 = @as(u32, @intCast(invocation)) % workgroup_size;
+        const expected: f32 = @floatFromInt(rounds * lane + rounds_triangle);
+        if (device_sum != expected or twin_sum != expected) {
+            return false;
+        }
+    }
+    return true;
+}
+
 fn runRobotgpuProbe(
     gpa: Allocator,
     device: wgpu.DeviceHandle,
@@ -828,6 +939,1506 @@ fn runProbeTable(
     return true;
 }
 
+/// RANGES REQUESTED, THEN COLLECTED: on the device and on the CPU twin, four requests - two ranges of `values`, one
+/// of `pushed_words` made BEFORE a kernel writes 77 into it, and one given up - then other work, then the collecting.
+/// A request holds its range as it was when requested, so the words come back zero though the write has happened:
+///
+///     request values[100..600], values[30000..33000], pushed_words[0..1000], values[0..16]
+///     run write_pushed (77 into pushed_words)          discard the last request
+///     collect the first by polling, wait for the second and third    ->  the upload, the upload, zeros
+///     readRange pushed_words now                                     ->  77s: the write did happen
+fn runRangeRequests(
+    gpa: Allocator,
+    device: wgpu.DeviceHandle,
+    queue: wgpu.QueueHandle,
+) !bool {
+    const ProbeCompute: type = z.Compute(robotgpu_probe);
+    const entries: [robotgpu_probe.kernels.len]ProbeCompute.KernelWgsl =
+        spirvEntries(robotgpu_probe, robotgpu_probe_spirv);
+    var on_device: ProbeCompute = try .initGpu(gpa, device, queue, &entries);
+    defer on_device.deinit();
+    var twin: ProbeCompute = .initCpu();
+    defer twin.deinit();
+    const value_count: u32 = robotgpu_probe.table_capacity;
+    const uploaded: []f32 = try gpa.alloc(f32, value_count);
+    defer gpa.free(uploaded);
+    for (uploaded, 0..) |*value, index| {
+        value.* = float(index) * 0.25;
+    }
+    const word_count: u32 = 1000;
+    const zero_words: []u32 = try gpa.alloc(u32, word_count);
+    defer gpa.free(zero_words);
+    @memset(zero_words, 0);
+    const early_values: []f32 = try gpa.alloc(f32, 500);
+    defer gpa.free(early_values);
+    const late_values: []f32 = try gpa.alloc(f32, 3000);
+    defer gpa.free(late_values);
+    const words_as_requested: []u32 = try gpa.alloc(u32, word_count);
+    defer gpa.free(words_as_requested);
+    const words_now: []u32 = try gpa.alloc(u32, word_count);
+    defer gpa.free(words_now);
+    const pipes = [2]*ProbeCompute{ &on_device, &twin };
+    for (pipes) |pipe| {
+        pipe.upload(.values, uploaded);
+        pipe.upload(.pushed_words, zero_words);
+        pipe.params = .{ .value_count = 0, .subgroup_size = 1, .pushed_region_size = word_count };
+        var early_request: ProbeCompute.RangeRequest(.values) = try pipe.requestRange(gpa, .values, 100, 500);
+        var late_request: ProbeCompute.RangeRequest(.values) = try pipe.requestRange(gpa, .values, 30000, 3000);
+        var words_request: ProbeCompute.RangeRequest(.pushed_words) =
+            try pipe.requestRange(gpa, .pushed_words, 0, word_count);
+        var dropped_request: ProbeCompute.RangeRequest(.values) = try pipe.requestRange(gpa, .values, 0, 16);
+        const write: robotgpu_probe.PushConstants = .{ .region_start = 0, .value = 77 };
+        pipe.runPushed("write_pushed", word_count, write);
+        dropped_request.discard();
+        while (!early_request.collect(early_values)) {
+            std.atomic.spinLoopHint();
+        }
+        late_request.wait(late_values);
+        words_request.wait(words_as_requested);
+        pipe.readRange(.pushed_words, 0, words_now);
+        const values_match: bool = eql(f32, early_values, uploaded[100..600]) and
+            eql(f32, late_values, uploaded[30000..33000]);
+        var words_as_they_were: bool = true;
+        var words_written_since: bool = true;
+        for (words_as_requested, words_now) |as_requested, now| {
+            words_as_they_were = words_as_they_were and as_requested == 0;
+            words_written_since = words_written_since and now == 77;
+        }
+        if (!(values_match and words_as_they_were and words_written_since)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// What stepping the device and the twin side by side found (`runRobotgpuSteps`): the comparison of every array the
+/// step writes, and each world's ENERGY - robot.zig's own `energy`, computed on the CPU from the device's state and
+/// from the twin's. Over many steps the device's last-bit roundings carry the two trajectories apart, so their arrays
+/// drift apart too; the energy is a physical quantity they should still agree on. WHAT DRIVES THE WORLDS over the
+/// steps: `driven` - applied joint forces, controls and the model's dampers as well as gravity, every force path of the
+/// step exercised; `conservative` - gravity alone, no applied force, no control, the dampers taken out, so each world's
+/// energy can change only by the integrator's own error, the scale the device's energy is judged against.
+const StepInputs = enum { driven, conservative };
+
+const SteppedOutcome = struct {
+    verdict: robotgpu_host.StepVerdict,
+    /// The floor slots holding a contact on the twin after the steps, over every world - so a comparison of the
+    /// floor's arrays is known to have compared contacts, not empty slots.
+    floor_contacts: u32 = 0,
+    /// The largest difference between a world's energy on the device and on the twin after the steps, relative to the
+    /// energy the world began with.
+    largest_energy_gap: f32,
+    /// The largest change of a world's energy on the twin over the steps, relative to the energy it began with - with
+    /// `conservative` inputs, the integrator's own error, the scale the device's gap is read against.
+    largest_energy_drift: f32,
+};
+
+/// `count` numbers of `sim`'s `world_f` arena from `offset`, read back into `out` - waiting for the copy, as only a
+/// test may.
+fn readWorldFloats(
+    gpa: Allocator,
+    sim: *robotgpu_host.Sim,
+    offset: u32,
+    out: []f32,
+) !void {
+    const count: u32 = @intCast(out.len);
+    var request: robotgpu_host.Pipe.RangeRequest(.world_f) = try sim.pipe.requestRange(gpa, .world_f, offset, count);
+    while (!request.collect(out)) {
+        std.atomic.spinLoopHint();
+    }
+}
+
+/// `out.len` integers of `sim`'s `world_u` arena from `offset`, read back into `out` - waiting for the copy, as only
+/// a test may.
+fn readWorldIntegers(
+    gpa: Allocator,
+    sim: *robotgpu_host.Sim,
+    offset: u32,
+    out: []u32,
+) !void {
+    const count: u32 = @intCast(out.len);
+    var request: robotgpu_host.Pipe.RangeRequest(.world_u) = try sim.pipe.requestRange(gpa, .world_u, offset, count);
+    while (!request.collect(out)) {
+        std.atomic.spinLoopHint();
+    }
+}
+
+/// The coordinates and velocities of every world of `sim`, read back into `positions` and `velocities` (each a world's
+/// block after another, as the arena holds them) - waiting for the copies, as only a test may.
+fn readWorldArrays(
+    gpa: Allocator,
+    sim: *robotgpu_host.Sim,
+    state: robotgpu.WorldStateLayout,
+    positions: []f32,
+    velocities: []f32,
+) !void {
+    try readWorldFloats(gpa, sim, state.joint_positions.offset, positions);
+    try readWorldFloats(gpa, sim, state.joint_velocities.offset, velocities);
+}
+
+/// The energy of a world of `model` whose coordinates and velocities are `positions` and `velocities`: robot.zig's
+/// `energy`, after its kinematics, centre-of-mass frame and composite inertias have been computed in `data`.
+fn worldEnergy(
+    model: *const z.robot.Model,
+    data: *z.robot.Data,
+    positions: []const f32,
+    velocities: []const f32,
+) f32 {
+    @memcpy(data.joint_positions, positions);
+    @memcpy(data.joint_velocities, velocities);
+    z.robot.kinematics(model, data);
+    z.robot.comPos(model, data);
+    z.robot.crb(model, data);
+    return z.robot.energy(model, data);
+}
+
+/// THE KERNELS NO MODEL OF THIS TEST HAS WORK FOR - a dispatch with no invocations is left out
+/// (`Sim.runDispatches`) - each with what a model would need for it. Every other kernel must reach the device.
+const kernels_without_work_here = [_][]const u8{
+    // No model simulated here has a site.
+    "site_poses",
+    // No model simulated here has an actuator with an activation state.
+    "next_activations",
+};
+
+/// Whether `kernel` is one no model of this test has work for (`kernels_without_work_here`).
+fn hasNoWorkInTheTestModels(kernel: []const u8) bool {
+    for (kernels_without_work_here) |workless| {
+        if (eql(u8, kernel, workless)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// WHICH OF ROBOTGPU's KERNELS THIS RUN DISPATCHED ON THE DEVICE: every GPU simulator's dispatch counts
+/// (`Compute.dispatch_counts`) added up as the simulator is freed, so the run can name every kernel it never sent to a
+/// GPU - a check on the CPU twin alone proves nothing about the device.
+const DeviceCoverage = struct {
+    dispatches: [robotgpu.kernels.len]u64 = @splat(0),
+
+    /// One simulator's dispatches added to the run's.
+    fn add(coverage: *DeviceCoverage, sim: *const robotgpu_host.Sim) void {
+        for (&coverage.dispatches, sim.pipe.dispatch_counts) |*total, count| {
+            total.* += count;
+        }
+    }
+};
+
+/// THE CONSTRAINT PROGRAM ON THE DEVICE AGAINST THE TWIN: MuJoCo's humanoid - its hinges with ranges, a 0.05 margin
+/// on each - in 64 worlds posed around their limits and moving, the step program up to the free acceleration, then
+/// the constraint program (the rows, their projection, Newton) on both. Every world's rows - how many, which joint's
+/// end, the Jacobian's dofs - and Newton's rounds must be the same; every quantity's gap is measured against its bar.
+fn runRobotgpuConstraints(
+    gpa: Allocator,
+    device: wgpu.DeviceHandle,
+    queue: wgpu.QueueHandle,
+    coverage: *DeviceCoverage,
+    inertia: z.robot.ConstraintInertia,
+) !robotgpu_host.ConstraintVerdict {
+    const entries: [robotgpu.kernels.len]robotgpu_host.Pipe.KernelWgsl = spirvEntries(robotgpu, robotgpu_spirv);
+    var humanoid: z.robot_mjcf.Imported = try z.robot_mjcf.importSource(gpa, z.robot_humanoid_model, .{});
+    defer humanoid.deinit();
+    // Its rows are its joint limits' and its floor's contacts': the step makes them, projects them and solves them.
+    // Which inertia the rows' softness reads: the exact one solves J M^-1 J^T on the device, MuJoCo's default takes
+    // each row's from the reference pose and solves nothing.
+    humanoid.model.opt.constraint_inertia = inertia;
+    for (humanoid.model.joint_range, humanoid.model.joint_limit_margin) |range, *margin| {
+        if (range != null) {
+            margin.* = 0.05;
+        }
+    }
+    const model: *const z.robot.Model = &humanoid.model;
+    const world_count: u32 = 64;
+    var on_device: robotgpu_host.Sim = try .initGpu(gpa, device, queue, &entries, model, world_count);
+    defer on_device.deinit();
+    defer coverage.add(&on_device);
+    var twin: robotgpu_host.Sim = try .initTwin(gpa, model, world_count);
+    defer twin.deinit();
+    const coordinates: []f32 = try gpa.alloc(f32, model.coordinate_count);
+    defer gpa.free(coordinates);
+    const rates: []f32 = try gpa.alloc(f32, model.dof_count);
+    defer gpa.free(rates);
+    // A floor 2 cm above the lowest point of the first world's pose: its lowest geoms in it, and the other worlds,
+    // posed apart, some deeper and some clear.
+    robotgpu_host.poseAroundLimits(model, 0, coordinates, rates);
+    const ground: z.robot.Floor = try robotgpu_host.floorUnderLowestPoint(gpa, model, coordinates, 0.02);
+    const sims = [2]*robotgpu_host.Sim{ &on_device, &twin };
+    for (sims) |sim| {
+        try sim.setFloor(ground);
+        var world: u32 = 0;
+        while (world < world_count) : (world += 1) {
+            robotgpu_host.poseAroundLimits(model, world, coordinates, rates);
+            sim.uploadWorldPositions(world, coordinates);
+            sim.uploadWorldArray("joint_velocities", world, rates);
+        }
+        sim.submitStep();
+    }
+    var comparison: robotgpu_host.ConstraintComparison = try .request(gpa, &on_device, &twin);
+    defer comparison.deinit(gpa);
+    // Counted now, from the twin's arrays, before the next check's twin shares them.
+    const contact_rows: u32 = robotgpu_host.countRowsOfKind(&twin, .contact);
+    print("vk-host-test: robotgpu constraints at {s} - {d} of the rows the floor's contacts'\n", .{
+        @tagName(inertia),
+        contact_rows,
+    });
+    while (!comparison.collect()) {
+        std.atomic.spinLoopHint();
+    }
+    return comparison.verdict;
+}
+
+/// What the steps on the floor found: the largest gap between a world's energy on the device and on the twin, relative
+/// to the energy it began with; the deepest any geom ended in the floor, on each; whether every number stayed finite;
+/// and the twin's rows of the floor's contacts after the first step.
+const FloorStepsOutcome = struct {
+    largest_energy_gap: f32 = 0,
+    deepest_device_penetration: f32 = 0,
+    deepest_twin_penetration: f32 = 0,
+    all_finite: bool = true,
+    first_step_contact_rows: u32 = 0,
+};
+
+/// How deep the deepest geom of `model` posed at `positions` lies in `ground` - robot.zig's floor contacts' smallest
+/// distance, negated; zero when no geom is in it.
+fn deepestPenetration(
+    model: *const z.robot.Model,
+    data: *z.robot.Data,
+    positions: []const f32,
+    ground: z.robot.Floor,
+) !f32 {
+    @memcpy(data.joint_positions, positions);
+    z.robot.kinematics(model, data);
+    data.clearContacts();
+    try z.robot.pushFloorContacts(model, data, ground);
+    var deepest: f32 = 0;
+    for (data.contacts[0..data.contact_count]) |contact| {
+        deepest = @max(deepest, -contact.distance);
+    }
+    return deepest;
+}
+
+/// Whether every number of `numbers` is finite.
+fn allFinite(numbers: []const f32) bool {
+    for (numbers) |number| {
+        if (!zm.isFinite(number)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// THE STEP ON THE FLOOR, MANY TIMES, DEVICE AGAINST TWIN: Geno with his training physics
+/// (`robot_geno.physicsOptions`: 60 Hz, Newton at 3 rounds and 5 line-search iterations, the reference pose's
+/// inertia, the warm start) in 64 worlds - the even ones standing in his reference pose, the odd ones lying, turned a
+/// quarter about x and lowered so their lowest point lies as deep - on one floor 5 mm into the standing pose's lowest
+/// point, with no servo: the standing ones fall, the lying ones settle. Stepped `step_count` times on both.
+/// Trajectories drift apart in rounding, so what is compared must hold whatever the drift: each world's energy, how
+/// deep any geom ends in the floor, and every number finite.
+fn runRobotgpuFloorSteps(
+    gpa: Allocator,
+    device: wgpu.DeviceHandle,
+    queue: wgpu.QueueHandle,
+    coverage: *DeviceCoverage,
+    world_count: u32,
+    step_count: u32,
+) !FloorStepsOutcome {
+    const entries: [robotgpu.kernels.len]robotgpu_host.Pipe.KernelWgsl = spirvEntries(robotgpu, robotgpu_spirv);
+    const training_physics: z.robot.Options = z.robot_geno.physicsOptions();
+    var geno: z.robot_mjcf.Imported = try z.robot_mjcf.importSource(gpa, z.robot_geno_model, training_physics);
+    defer geno.deinit();
+    const model: *const z.robot.Model = &geno.model;
+    // The two poses. Standing: the reference. Lying: the free root's orientation (coordinates 3 to 6, x y z w) turned
+    // a quarter about x, then its height (coordinate 2) moved so its lowest point lies where the standing pose's does.
+    const standing: []f32 = try gpa.dupe(f32, model.reference_joint_positions);
+    defer gpa.free(standing);
+    const lying: []f32 = try gpa.dupe(f32, model.reference_joint_positions);
+    defer gpa.free(lying);
+    const half_turn_sine: f32 = @sqrt(0.5);
+    lying[3] = half_turn_sine;
+    lying[4] = 0;
+    lying[5] = 0;
+    lying[6] = half_turn_sine;
+    const depth: f32 = 0.005;
+    const ground: z.robot.Floor = try robotgpu_host.floorUnderLowestPoint(gpa, model, standing, depth);
+    const standing_lowest: f32 = ground.plane.point[2] - depth;
+    const lying_probe: z.robot.Floor = try robotgpu_host.floorUnderLowestPoint(gpa, model, lying, 0);
+    const lying_lowest: f32 = lying_probe.plane.point[2];
+    lying[2] += standing_lowest - lying_lowest;
+    var on_device: robotgpu_host.Sim = try .initGpu(gpa, device, queue, &entries, model, world_count);
+    defer on_device.deinit();
+    defer coverage.add(&on_device);
+    var twin: robotgpu_host.Sim = try .initTwin(gpa, model, world_count);
+    defer twin.deinit();
+    const sims = [2]*robotgpu_host.Sim{ &on_device, &twin };
+    for (sims) |sim| {
+        try sim.setFloor(ground);
+        var world: u32 = 0;
+        while (world < world_count) : (world += 1) {
+            const pose: []const f32 = if (world % 2 == 0) standing else lying;
+            sim.uploadWorldPositions(world, pose);
+        }
+    }
+    var data: z.robot.Data = try .init(gpa, model);
+    defer data.deinit();
+    const state: robotgpu.WorldStateLayout = twin.layout.world_f;
+    const positions_stride: u32 = state.joint_positions.stride;
+    const velocities_stride: u32 = state.joint_velocities.stride;
+    const twin_positions: []f32 = try gpa.alloc(f32, positions_stride * world_count);
+    defer gpa.free(twin_positions);
+    const twin_velocities: []f32 = try gpa.alloc(f32, velocities_stride * world_count);
+    defer gpa.free(twin_velocities);
+    const device_positions: []f32 = try gpa.alloc(f32, positions_stride * world_count);
+    defer gpa.free(device_positions);
+    const device_velocities: []f32 = try gpa.alloc(f32, velocities_stride * world_count);
+    defer gpa.free(device_velocities);
+    const energies_before: []f32 = try gpa.alloc(f32, world_count);
+    defer gpa.free(energies_before);
+    try readWorldArrays(gpa, &twin, state, twin_positions, twin_velocities);
+    var world_before: u32 = 0;
+    while (world_before < world_count) : (world_before += 1) {
+        const positions: []const f32 = twin_positions[world_before * positions_stride ..][0..model.coordinate_count];
+        const velocities: []const f32 = twin_velocities[world_before * velocities_stride ..][0..model.dof_count];
+        energies_before[world_before] = worldEnergy(model, &data, positions, velocities);
+    }
+    var outcome: FloorStepsOutcome = .{};
+    var step: u32 = 0;
+    while (step < step_count) : (step += 1) {
+        on_device.submitStep();
+        twin.submitStep();
+        if (step == 0) {
+            outcome.first_step_contact_rows = robotgpu_host.countRowsOfKind(&twin, .contact);
+        }
+    }
+    try readWorldArrays(gpa, &on_device, state, device_positions, device_velocities);
+    try readWorldArrays(gpa, &twin, state, twin_positions, twin_velocities);
+    outcome.all_finite = allFinite(device_positions) and allFinite(device_velocities) and
+        allFinite(twin_positions) and allFinite(twin_velocities);
+    var world: u32 = 0;
+    while (world < world_count) : (world += 1) {
+        const twin_world_positions: []const f32 =
+            twin_positions[world * positions_stride ..][0..model.coordinate_count];
+        const device_world_positions: []const f32 =
+            device_positions[world * positions_stride ..][0..model.coordinate_count];
+        const twin_world_velocities: []const f32 = twin_velocities[world * velocities_stride ..][0..model.dof_count];
+        const device_world_velocities: []const f32 =
+            device_velocities[world * velocities_stride ..][0..model.dof_count];
+        const twin_energy: f32 = worldEnergy(model, &data, twin_world_positions, twin_world_velocities);
+        const device_energy: f32 = worldEnergy(model, &data, device_world_positions, device_world_velocities);
+        const scale: f32 = @max(@abs(energies_before[world]), 1.0e-6);
+        outcome.largest_energy_gap = @max(outcome.largest_energy_gap, @abs(device_energy - twin_energy) / scale);
+        const device_depth: f32 = try deepestPenetration(model, &data, device_world_positions, ground);
+        const twin_depth: f32 = try deepestPenetration(model, &data, twin_world_positions, ground);
+        outcome.deepest_device_penetration = @max(outcome.deepest_device_penetration, device_depth);
+        outcome.deepest_twin_penetration = @max(outcome.deepest_twin_penetration, twin_depth);
+    }
+    return outcome;
+}
+
+/// What the constrained steps found: the largest gap between a world's energy on the device and on the twin after the
+/// steps, relative to the energy it began with; and how far past its range any limited joint ended up, on each.
+const LimitStepsOutcome = struct {
+    largest_energy_gap: f32 = 0,
+    deepest_device_violation: f32 = 0,
+    deepest_twin_violation: f32 = 0,
+};
+
+/// How far past its range world `positions`' deepest limited joint is - zero when every joint is inside.
+fn deepestLimitViolation(model: *const z.robot.Model, positions: []const f32) f32 {
+    var deepest: f32 = 0;
+    for (model.joint_range, model.joint_first_coordinate) |range_or_none, first_coordinate| {
+        const range: [2]f32 = range_or_none orelse continue;
+        const position: f32 = positions[first_coordinate];
+        const below: f32 = range[0] - position;
+        const above: f32 = position - range[1];
+        deepest = @max(deepest, @max(below, above));
+    }
+    return deepest;
+}
+
+/// THE CONSTRAINED STEP, MANY TIMES, DEVICE AGAINST TWIN: MuJoCo's humanoid in 64 worlds posed around its joint limits
+/// and moving (`robotgpu_host.poseAroundLimits`), its contacts off and its rows at the reference pose's inertia (Geno's
+/// training setting), stepped `step_count` times on both. Trajectories that start alike drift apart in rounding, so
+/// what is compared is what must hold whatever the drift: each world's energy - which only the limits' and the joints'
+/// dissipation changes - and how far past its range any joint ended, on each.
+fn runRobotgpuLimitSteps(
+    gpa: Allocator,
+    device: wgpu.DeviceHandle,
+    queue: wgpu.QueueHandle,
+    coverage: *DeviceCoverage,
+    step_count: u32,
+) !LimitStepsOutcome {
+    const entries: [robotgpu.kernels.len]robotgpu_host.Pipe.KernelWgsl = spirvEntries(robotgpu, robotgpu_spirv);
+    var humanoid: z.robot_mjcf.Imported = try z.robot_mjcf.importSource(gpa, z.robot_humanoid_model, .{});
+    defer humanoid.deinit();
+    humanoid.model.opt.constraint_inertia = .reference_pose;
+    for (humanoid.model.joint_range, humanoid.model.joint_limit_margin) |range, *margin| {
+        if (range != null) {
+            margin.* = 0.05;
+        }
+    }
+    const model: *const z.robot.Model = &humanoid.model;
+    const world_count: u32 = 64;
+    var on_device: robotgpu_host.Sim = try .initGpu(gpa, device, queue, &entries, model, world_count);
+    defer on_device.deinit();
+    defer coverage.add(&on_device);
+    var twin: robotgpu_host.Sim = try .initTwin(gpa, model, world_count);
+    defer twin.deinit();
+    const coordinates: []f32 = try gpa.alloc(f32, model.coordinate_count);
+    defer gpa.free(coordinates);
+    const rates: []f32 = try gpa.alloc(f32, model.dof_count);
+    defer gpa.free(rates);
+    const sims = [2]*robotgpu_host.Sim{ &on_device, &twin };
+    for (sims) |sim| {
+        var world: u32 = 0;
+        while (world < world_count) : (world += 1) {
+            robotgpu_host.poseAroundLimits(model, world, coordinates, rates);
+            sim.uploadWorldPositions(world, coordinates);
+            sim.uploadWorldArray("joint_velocities", world, rates);
+        }
+    }
+    var data: z.robot.Data = try .init(gpa, model);
+    defer data.deinit();
+    const state: robotgpu.WorldStateLayout = twin.layout.world_f;
+    const positions_stride: u32 = state.joint_positions.stride;
+    const velocities_stride: u32 = state.joint_velocities.stride;
+    const twin_positions: []f32 = try gpa.alloc(f32, positions_stride * world_count);
+    defer gpa.free(twin_positions);
+    const twin_velocities: []f32 = try gpa.alloc(f32, velocities_stride * world_count);
+    defer gpa.free(twin_velocities);
+    const device_positions: []f32 = try gpa.alloc(f32, positions_stride * world_count);
+    defer gpa.free(device_positions);
+    const device_velocities: []f32 = try gpa.alloc(f32, velocities_stride * world_count);
+    defer gpa.free(device_velocities);
+    const energies_before: []f32 = try gpa.alloc(f32, world_count);
+    defer gpa.free(energies_before);
+    try readWorldArrays(gpa, &twin, state, twin_positions, twin_velocities);
+    var world_before: u32 = 0;
+    while (world_before < world_count) : (world_before += 1) {
+        const positions: []const f32 = twin_positions[world_before * positions_stride ..][0..model.coordinate_count];
+        const velocities: []const f32 = twin_velocities[world_before * velocities_stride ..][0..model.dof_count];
+        energies_before[world_before] = worldEnergy(model, &data, positions, velocities);
+    }
+    var step: u32 = 0;
+    while (step < step_count) : (step += 1) {
+        on_device.submitStep();
+        twin.submitStep();
+    }
+    try readWorldArrays(gpa, &on_device, state, device_positions, device_velocities);
+    try readWorldArrays(gpa, &twin, state, twin_positions, twin_velocities);
+    var outcome: LimitStepsOutcome = .{};
+    var world: u32 = 0;
+    while (world < world_count) : (world += 1) {
+        const twin_world_positions: []const f32 =
+            twin_positions[world * positions_stride ..][0..model.coordinate_count];
+        const device_world_positions: []const f32 =
+            device_positions[world * positions_stride ..][0..model.coordinate_count];
+        const twin_world_velocities: []const f32 = twin_velocities[world * velocities_stride ..][0..model.dof_count];
+        const device_world_velocities: []const f32 =
+            device_velocities[world * velocities_stride ..][0..model.dof_count];
+        const twin_energy: f32 = worldEnergy(model, &data, twin_world_positions, twin_world_velocities);
+        const device_energy: f32 = worldEnergy(model, &data, device_world_positions, device_world_velocities);
+        const scale: f32 = @max(@abs(energies_before[world]), 1.0e-6);
+        outcome.largest_energy_gap = @max(outcome.largest_energy_gap, @abs(device_energy - twin_energy) / scale);
+        const device_violation: f32 = deepestLimitViolation(model, device_world_positions);
+        const twin_violation: f32 = deepestLimitViolation(model, twin_world_positions);
+        outcome.deepest_device_violation = @max(outcome.deepest_device_violation, device_violation);
+        outcome.deepest_twin_violation = @max(outcome.deepest_twin_violation, twin_violation);
+    }
+    return outcome;
+}
+
+fn runRobotgpuSteps(
+    gpa: Allocator,
+    device: wgpu.DeviceHandle,
+    queue: wgpu.QueueHandle,
+    coverage: *DeviceCoverage,
+    step_count: u32,
+    inputs: StepInputs,
+) !SteppedOutcome {
+    const entries: [robotgpu.kernels.len]robotgpu_host.Pipe.KernelWgsl = spirvEntries(robotgpu, robotgpu_spirv);
+    var geno: z.robot_mjcf.Imported = try z.robot_mjcf.importSource(gpa, z.robot_geno_model, .{});
+    defer geno.deinit();
+    // Stepped without its constraints: this check measures the smooth step and the integrator against the twin, and
+    // the floor it is given is for its contacts' slots alone - with the constraints disabled, no row is made.
+    geno.model.opt.disable_constraints = true;
+    // With conservative inputs the dampers are taken out, on a copy of the model.
+    const no_damping: []f32 = try gpa.alloc(f32, geno.model.joint_count);
+    defer gpa.free(no_damping);
+    @memset(no_damping, 0);
+    var stepped_model: z.robot.Model = geno.model;
+    if (inputs == .conservative) {
+        stepped_model.joint_damping = no_damping;
+        stepped_model.has_dof_damping = false;
+    }
+    const model: *const z.robot.Model = &stepped_model;
+    const world_count: u32 = 64;
+    var on_device: robotgpu_host.Sim = try .initGpu(gpa, device, queue, &entries, model, world_count);
+    defer on_device.deinit();
+    defer coverage.add(&on_device);
+    var twin: robotgpu_host.Sim = try .initTwin(gpa, model, world_count);
+    defer twin.deinit();
+    // A floor at the middle world's root height. The inputs below raise each world's root 0.15 m above the last's
+    // (its z, the free root's third coordinate, `reference + 0.05 x 3 x (world + 1)`), so the worlds below the middle
+    // are deep in the floor, every geom touching; the middle world's legs reach under it; the worlds above make no
+    // contact - filled slots and empty ones, compared with the twin's among the step's arrays (`step_array_bars`).
+    // The floor makes no row yet, so the dynamics are as before.
+    const middle_world: f32 = @floatFromInt(world_count / 2 + 1);
+    const floor_height: f32 = model.reference_joint_positions[2] + 0.05 * 3.0 * middle_world;
+    const ground: z.robot.Floor = .{ .plane = .{ .point = .{ 0, 0, floor_height, 0 }, .normal = .{ 0, 0, 1, 0 } } };
+    try on_device.setFloor(ground);
+    try twin.setFloor(ground);
+    const coordinates: []f32 = try gpa.alloc(f32, model.coordinate_count);
+    defer gpa.free(coordinates);
+    const forces: []f32 = try gpa.alloc(f32, model.dof_count);
+    defer gpa.free(forces);
+    const rates: []f32 = try gpa.alloc(f32, model.dof_count);
+    defer gpa.free(rates);
+    const controls: []f32 = try gpa.alloc(f32, model.actuator_count);
+    defer gpa.free(controls);
+    const sims = [2]*robotgpu_host.Sim{ &on_device, &twin };
+    for (sims) |sim| {
+        var world: u32 = 0;
+        while (world < world_count) : (world += 1) {
+            for (coordinates, 0..) |*coordinate, index| {
+                const coordinate_index: u32 = @intCast(index);
+                const world_factor: f32 = @floatFromInt(world + 1);
+                const coordinate_factor: f32 = @floatFromInt(coordinate_index % 7 + 1);
+                coordinate.* = model.reference_joint_positions[index] + 0.05 * coordinate_factor * world_factor;
+            }
+            sim.uploadWorldPositions(world, coordinates);
+            for (forces, 0..) |*force, index| {
+                const dof_factor: f32 = @floatFromInt(index % 5 + 1);
+                const world_factor: f32 = @floatFromInt(world + 1);
+                force.* = switch (inputs) {
+                    .driven => 0.05 * dof_factor * world_factor,
+                    .conservative => 0,
+                };
+            }
+            sim.uploadWorldArray("applied_joint_forces", world, forces);
+            for (rates, 0..) |*rate, index| {
+                const dof_factor: f32 = @floatFromInt(index % 7 + 1);
+                const world_factor: f32 = @floatFromInt(world % 4 + 1);
+                rate.* = 0.05 * dof_factor * world_factor;
+            }
+            sim.uploadWorldArray("joint_velocities", world, rates);
+            for (controls, 0..) |*control, index| {
+                const world_factor: f32 = @floatFromInt(world % 5 + 1);
+                const actuator_factor: f32 = @floatFromInt(@as(i32, @intCast(index % 7)) - 3);
+                control.* = switch (inputs) {
+                    .driven => 0.05 * actuator_factor * world_factor,
+                    .conservative => 0,
+                };
+            }
+            sim.uploadWorldArray("controls", world, controls);
+        }
+    }
+    // Each world's energy before the steps, from the state both were given.
+    var data: z.robot.Data = try .init(gpa, model);
+    defer data.deinit();
+    const energies_before: []f32 = try gpa.alloc(f32, world_count);
+    defer gpa.free(energies_before);
+    const state: robotgpu.WorldStateLayout = twin.layout.world_f;
+    const positions_stride: u32 = state.joint_positions.stride;
+    const velocities_stride: u32 = state.joint_velocities.stride;
+    const twin_positions: []f32 = try gpa.alloc(f32, positions_stride * world_count);
+    defer gpa.free(twin_positions);
+    const twin_velocities: []f32 = try gpa.alloc(f32, velocities_stride * world_count);
+    defer gpa.free(twin_velocities);
+    const device_positions: []f32 = try gpa.alloc(f32, positions_stride * world_count);
+    defer gpa.free(device_positions);
+    const device_velocities: []f32 = try gpa.alloc(f32, velocities_stride * world_count);
+    defer gpa.free(device_velocities);
+    try readWorldArrays(gpa, &twin, state, twin_positions, twin_velocities);
+    var world_before: u32 = 0;
+    while (world_before < world_count) : (world_before += 1) {
+        const positions: []const f32 = twin_positions[world_before * positions_stride ..][0..model.coordinate_count];
+        const velocities: []const f32 = twin_velocities[world_before * velocities_stride ..][0..model.dof_count];
+        energies_before[world_before] = worldEnergy(model, &data, positions, velocities);
+    }
+    var step: u32 = 0;
+    while (step < step_count) : (step += 1) {
+        on_device.submitStep();
+        twin.submitStep();
+    }
+    var comparison: robotgpu_host.StepComparison = try .request(gpa, &on_device, &twin);
+    defer comparison.deinit(gpa);
+    while (!comparison.collect()) {
+        std.atomic.spinLoopHint();
+    }
+    // Each world's energy after the steps, on the device and on the twin.
+    try readWorldArrays(gpa, &on_device, state, device_positions, device_velocities);
+    try readWorldArrays(gpa, &twin, state, twin_positions, twin_velocities);
+    var outcome: SteppedOutcome = .{
+        .verdict = comparison.verdict,
+        .largest_energy_gap = 0,
+        .largest_energy_drift = 0,
+    };
+    // The twin's filled floor slots, read from its own arrays - the twin's arenas are this process's memory.
+    const filled: robotgpu.WorldArray(.world_u, .floor_slots) = twin.layout.world_u.floor_slot_filled;
+    var counted_world: u32 = 0;
+    while (counted_world < world_count) : (counted_world += 1) {
+        var slot: u32 = 0;
+        while (slot < twin.counts.floor_slot_count) : (slot += 1) {
+            outcome.floor_contacts += filled.load(counted_world, slot);
+        }
+    }
+    var world: u32 = 0;
+    while (world < world_count) : (world += 1) {
+        const positions_start: u32 = world * positions_stride;
+        const velocities_start: u32 = world * velocities_stride;
+        const twin_energy: f32 = worldEnergy(
+            model,
+            &data,
+            twin_positions[positions_start..][0..model.coordinate_count],
+            twin_velocities[velocities_start..][0..model.dof_count],
+        );
+        const device_energy: f32 = worldEnergy(
+            model,
+            &data,
+            device_positions[positions_start..][0..model.coordinate_count],
+            device_velocities[velocities_start..][0..model.dof_count],
+        );
+        const energy_scale: f32 = @max(@abs(energies_before[world]), 1e-6);
+        const gap: f32 = @abs(device_energy - twin_energy) / energy_scale;
+        const drift: f32 = @abs(twin_energy - energies_before[world]) / energy_scale;
+        outcome.largest_energy_gap = @max(outcome.largest_energy_gap, gap);
+        outcome.largest_energy_drift = @max(outcome.largest_energy_drift, drift);
+    }
+    return outcome;
+}
+
+/// What a decision on the device left, against the twin's: every step array (`StepComparison`), and the decision's own
+/// two - each world's applied action (the filter's) and its servo's targets (the clip's pose with the action on it) -
+/// in epsilons, each world's block at its own scale.
+const DecisionOutcome = struct {
+    verdict: robotgpu_host.StepVerdict,
+    applied_actions_gap_epsilons: f32,
+    servo_targets_gap_epsilons: f32,
+};
+
+/// The largest gap of a world array between the device and the twin, in epsilons, each world's block at its own scale
+/// (`largestGapEpsilons`).
+fn worldArrayGap(
+    gpa: Allocator,
+    on_device: *robotgpu_host.Sim,
+    twin: *robotgpu_host.Sim,
+    offset: u32,
+    stride: u32,
+    world_count: u32,
+) !f32 {
+    const device_numbers: []f32 = try gpa.alloc(f32, stride * world_count);
+    defer gpa.free(device_numbers);
+    const twin_numbers: []f32 = try gpa.alloc(f32, stride * world_count);
+    defer gpa.free(twin_numbers);
+    try readWorldFloats(gpa, on_device, offset, device_numbers);
+    try readWorldFloats(gpa, twin, offset, twin_numbers);
+    return robotgpu_host.largestGapEpsilons(device_numbers, twin_numbers, stride);
+}
+
+/// One step array's gap in a verdict, and its bar (`step_array_bars`).
+const StepArrayGap = struct {
+    gap_epsilons: f32,
+    bar_epsilons: f32,
+};
+
+/// Array `name`'s gap in `verdict`, with its bar.
+fn stepArrayGap(verdict: robotgpu_host.StepVerdict, comptime name: []const u8) StepArrayGap {
+    inline for (robotgpu_host.step_array_bars, 0..) |array_bar, index| {
+        if (comptime eql(u8, array_bar.name, name)) {
+            const found: StepArrayGap = .{
+                .gap_epsilons = verdict.gaps_epsilons[index],
+                .bar_epsilons = array_bar.bar_epsilons,
+            };
+            return found;
+        }
+    }
+    @compileError("stepArrayGap: no step array named " ++ name);
+}
+
+/// THE DECISION, DEVICE AGAINST TWIN: Geno at his training physics, 64 worlds tracking one clip on both - his
+/// reference pose carried a little further each frame - each world at its own frame with its own action, on the floor,
+/// its servo driven by `reference_targets` through the filter at 0.5. One decision of two physics steps
+/// submitted to each (`Sim.submitDecision`), then every step array compared (`StepComparison`), and the decision's own
+/// two arrays read back from both.
+fn runRobotgpuDecision(
+    gpa: Allocator,
+    device: wgpu.DeviceHandle,
+    queue: wgpu.QueueHandle,
+    coverage: *DeviceCoverage,
+) !DecisionOutcome {
+    const entries: [robotgpu.kernels.len]robotgpu_host.Pipe.KernelWgsl = spirvEntries(robotgpu, robotgpu_spirv);
+    const training_physics: z.robot.Options = z.robot_geno.physicsOptions();
+    var geno: z.robot_mjcf.Imported = try z.robot_mjcf.importSource(gpa, z.robot_geno_model, training_physics);
+    defer geno.deinit();
+    const model: *const z.robot.Model = &geno.model;
+    const coordinate_count: usize = model.coordinate_count;
+    // The clip: the reference pose carried along a fixed velocity a little further each frame - every frame a valid
+    // pose, standing on the floor.
+    const frame_count: u32 = 20;
+    const poses: []f32 = try gpa.alloc(f32, frame_count * coordinate_count);
+    defer gpa.free(poses);
+    const carried: []f32 = try gpa.alloc(f32, model.dof_count);
+    defer gpa.free(carried);
+    for (carried, 0..) |*rate, dof| {
+        const dof_factor: f32 = @floatFromInt(@as(i32, @intCast(dof % 7)) - 3);
+        rate.* = if (dof < z.robot.rootDofCount(model)) 0 else 0.2 * dof_factor;
+    }
+    for (0..frame_count) |frame| {
+        const pose: []f32 = poses[frame * coordinate_count ..][0..coordinate_count];
+        @memcpy(pose, model.reference_joint_positions);
+        const elapsed: f32 = 0.05 * float(frame);
+        z.robot.integratePos(model, pose, carried, elapsed);
+    }
+    const clips = [_]robotgpu.ClipPoses{.{ .poses = poses, .frame_count = frame_count, .frame_time = 0.05 }};
+    const world_count: u32 = 64;
+    var on_device: robotgpu_host.Sim = try .initGpuTracking(gpa, device, queue, &entries, model, world_count, &clips);
+    defer on_device.deinit();
+    // This simulator's dispatches counted for the run's coverage, before it is freed.
+    defer coverage.add(&on_device);
+    var twin: robotgpu_host.Sim = try .initTwinTracking(gpa, model, world_count, &clips);
+    defer twin.deinit();
+    const ground: z.robot.Floor = .{ .friction = 1.0 };
+    const law: z.robot.ServoLaw = .{ .frequency = 20.0, .damping = 1.0, .max_acceleration = 3000.0 };
+    const action_count: usize = z.robot.actionSize(model);
+    const actions: []f32 = try gpa.alloc(f32, action_count);
+    defer gpa.free(actions);
+    const still: []f32 = try gpa.alloc(f32, model.dof_count);
+    defer gpa.free(still);
+    @memset(still, 0);
+    const sims = [2]*robotgpu_host.Sim{ &on_device, &twin };
+    for (sims) |sim| {
+        try sim.setFloor(ground);
+        sim.setServo(law, .toward_rest);
+        sim.setActionScale(0.2);
+        sim.setActionFilter(0.5, 0.5);
+        var world: u32 = 0;
+        while (world < world_count) : (world += 1) {
+            const frame: u32 = world % (frame_count - 1);
+            sim.uploadWorldPositions(world, poses[frame * coordinate_count ..][0..coordinate_count]);
+            sim.uploadWorldArray("joint_velocities", world, still);
+            sim.setWorldClip(world, 0, frame);
+            for (actions, 0..) |*action, number| {
+                // In [-1, 1], different in every world and number.
+                const phase: f32 = 0.7 * float(number + 1) + float(world);
+                action.* = @sin(phase);
+            }
+            sim.uploadWorldArray("actions", world, actions);
+        }
+    }
+    const physics_steps: u32 = 2;
+    on_device.submitDecision(physics_steps);
+    twin.submitDecision(physics_steps);
+    var comparison: robotgpu_host.StepComparison = try .request(gpa, &on_device, &twin);
+    defer comparison.deinit(gpa);
+    while (!comparison.collect()) {
+        std.atomic.spinLoopHint();
+    }
+    const state: robotgpu.WorldStateLayout = twin.layout.world_f;
+    const applied_offset: u32 = state.applied_actions.offset;
+    const applied_stride: u32 = state.applied_actions.stride;
+    const targets_offset: u32 = state.servo_targets.offset;
+    const targets_stride: u32 = state.servo_targets.stride;
+    const applied_gap: f32 = try worldArrayGap(gpa, &on_device, &twin, applied_offset, applied_stride, world_count);
+    const targets_gap: f32 = try worldArrayGap(gpa, &on_device, &twin, targets_offset, targets_stride, world_count);
+    const outcome: DecisionOutcome = .{
+        .verdict = comparison.verdict,
+        .applied_actions_gap_epsilons = applied_gap,
+        .servo_targets_gap_epsilons = targets_gap,
+    };
+    return outcome;
+}
+
+/// One float array of the tracking task, and how far the device's may be from the twin's: its bar, in epsilons of
+/// the largest number of each world's block (`robotgpu_host.largestGapEpsilons`).
+const TrackedFloatArray = struct {
+    name: [:0]const u8,
+    bar_epsilons: f32,
+};
+
+/// THE TRACKING TASK's FLOAT ARRAYS A WHOLE DECISION LEAVES: what each world carries to its next decision - its pose
+/// and velocities, its warm start, its actions as chosen, given, applied and previous, its episode's sums - and the
+/// decision's results - the servo's last targets, each body's lowest point, the observation, the tracking terms, the
+/// rewards and the effort. EACH BAR is several times the gaps measured (in brackets: the largest of its kind over
+/// the check's three decisions, on lavapipe and then on an RTX 5070), as the step's bars are: every GPU rounds its
+/// own way - fused multiply-adds, its own sine, cosine and logarithm - and the two measured so far differ by little.
+const tracking_float_arrays = [_]TrackedFloatArray{
+    // Poses, targets and heights [8.2, 7.4]: the positions' kind, as the step's.
+    .{ .name = "joint_positions", .bar_epsilons = 256 },
+    .{ .name = "servo_targets", .bar_epsilons = 256 },
+    .{ .name = "body_lowest_points", .bar_epsilons = 256 },
+    // Velocities after two contact steps, a push's direction and a start's noise - each drawn through a cosine or a
+    // logarithm - and the observation that reads them [350, 367].
+    .{ .name = "joint_velocities", .bar_epsilons = 4096 },
+    .{ .name = "observations", .bar_epsilons = 4096 },
+    // Newton's accelerations, kept as the next step's start: the solve's own conditioning [1,849, 1,895].
+    .{ .name = "warmstart_accelerations", .bar_epsilons = 16384 },
+    // The actions: numbers the kernels copy or blend from what was uploaded [0, 0.5].
+    .{ .name = "chosen_actions", .bar_epsilons = 4 },
+    .{ .name = "actions", .bar_epsilons = 4 },
+    .{ .name = "applied_actions", .bar_epsilons = 4 },
+    .{ .name = "previous_actions", .bar_epsilons = 4 },
+    // The judgement's measures and the episode's sums [37, 28].
+    .{ .name = "tracking_errors", .bar_epsilons = 1024 },
+    .{ .name = "super_mimic_tracking", .bar_epsilons = 1024 },
+    .{ .name = "termination_rule", .bar_epsilons = 1024 },
+    .{ .name = "rewards", .bar_epsilons = 1024 },
+    .{ .name = "super_mimic_rewards", .bar_epsilons = 1024 },
+    .{ .name = "episode_discounted_returns", .bar_epsilons = 1024 },
+    .{ .name = "episode_discount_powers", .bar_epsilons = 1024 },
+    .{ .name = "episode_reward_sums", .bar_epsilons = 1024 },
+    // The effort's sums over the decision's physics steps: torques times velocities [155, 177].
+    .{ .name = "effort_energy", .bar_epsilons = 4096 },
+    .{ .name = "effort_torque_squares", .bar_epsilons = 4096 },
+};
+
+/// THE TRACKING TASK's INTEGER ARRAYS A WHOLE DECISION LEAVES: each world's clip and frame, its episode's number,
+/// counters and flags, its start's bin. The device's must be the twin's EXACTLY: an integer that differs is a kernel
+/// translated wrong or a draw made at another number - never rounding.
+const tracking_integer_arrays = [_][:0]const u8{
+    "world_clip",
+    "world_frame",
+    "episode_numbers",
+    "episode_steps",
+    "episode_decisions",
+    "episode_flags",
+    "aftermath_steps_left",
+    "return_streaks",
+    "steps_since_loss",
+    "start_bins",
+    "return_lengths",
+};
+
+/// What the tracking check measured, over its compared decisions.
+const TrackingOutcome = struct {
+    /// Each float array's largest gap between the device and the twin, in epsilons (`tracking_float_arrays`' order).
+    float_gaps_epsilons: [tracking_float_arrays.len]f32,
+    /// How many of each integer array's numbers differed (`tracking_integer_arrays`' order).
+    integer_differences: [tracking_integer_arrays.len]u32,
+    /// What happened on the twin, so the worlds compared were worlds in these situations: episodes that ended and
+    /// began again, aftermaths begun, returns, and worlds pushed during their episode.
+    episodes_restarted: u32,
+    aftermaths_begun: u32,
+    returns: u32,
+    worlds_pushed: u32,
+    /// THE DEVICE ALONE, AFTER THE COMPARISON: how many more whole decisions it ran back to back, and the wall
+    /// seconds they took - with the size they ran at, so the cost of a decision can be read by its worlds.
+    timed_decisions: u32,
+    timed_seconds: f64,
+    /// How many dispatches the timed decisions sent to the device, every kernel's together.
+    timed_dispatches: u64,
+    reads_flags_every_decision: bool,
+    /// What every world holds, all worlds together: its state's floats, its integers, its constraint rows' floats -
+    /// what an arena must hold for this many worlds.
+    state_floats: u32,
+    state_integers: u32,
+    constraint_floats: u32,
+    world_count: u32,
+    physics_steps: u32,
+};
+
+/// HOW LARGE A TRACKING CHECK RUNS: its worlds (eight at least: the check's two knocked characters are among them),
+/// and how many more decisions the device then runs alone, timed.
+const TrackingSize = struct {
+    world_count: u32,
+    timed_decisions: u32,
+    /// Decisions the device runs before the clock starts, so the timed ones find worlds in the middle of their
+    /// episodes - on the floor, in contact - at every size alike.
+    warmup_decisions: u32 = 0,
+    /// Whether the worlds are first compared with the twin's over the check's three decisions. Not at the largest
+    /// sizes: the twin's own steps there would take longer than everything else, and its verdict is the small sizes'.
+    compares_with_the_twin: bool = true,
+    /// Whether the host reads every world's flags after each timed decision, as a trainer's round does, or only once
+    /// after the last: the difference is what waiting for the GPU at every decision costs.
+    reads_flags_every_decision: bool = true,
+    /// Whether one more decision is then run with the GPU's timestamps on, and its kernels' times printed
+    /// (`reportKernelTimes`): where a decision's time goes at this many worlds.
+    profiles_kernels: bool = false,
+};
+
+/// THE CHECK's ACTIONS FOR ONE DECISION, INTO THE TWIN: for every world the joints' offsets, then a stiffness per limb
+/// - different in every world, number and decision. `actions` is one world's row, used as scratch.
+fn uploadTrackingActions(
+    twin: *robotgpu_host.Sim,
+    world_count: u32,
+    decision: u32,
+    actions: []f32,
+) void {
+    var world: u32 = 0;
+    while (world < world_count) : (world += 1) {
+        for (actions, 0..) |*action, number| {
+            const phase: f32 = 0.7 * float(number + 1) + float(world) + 0.3 * float(decision);
+            action.* = 0.5 * @sin(phase);
+        }
+        twin.uploadWorldArray("actions", world, actions);
+    }
+}
+
+/// THE DEVICE GIVEN THE TWIN's WORLDS, WHOLE: both world arenas read from the twin and uploaded to the device, so the
+/// two hold one state - every array, numbers and integers. `twin_floats` and `twin_integers` are the arenas' lengths
+/// (`Sim.worldArenaEnd`), and hold the twin's state afterwards.
+fn giveDeviceTheTwinsWorlds(
+    gpa: Allocator,
+    twin: *robotgpu_host.Sim,
+    on_device: *robotgpu_host.Sim,
+    twin_floats: []f32,
+    twin_integers: []u32,
+) !void {
+    try readWorldFloats(gpa, twin, 0, twin_floats);
+    try readWorldIntegers(gpa, twin, 0, twin_integers);
+    on_device.pipe.uploadAt(.world_f, 0, twin_floats);
+    on_device.pipe.uploadAt(.world_u, 0, twin_integers);
+}
+
+/// How many dispatches `sim` has sent to its device so far, every kernel's together.
+fn dispatchesSoFar(sim: *const robotgpu_host.Sim) u64 {
+    var total: u64 = 0;
+    for (sim.pipe.dispatch_counts) |count| {
+        total += count;
+    }
+    return total;
+}
+
+/// WHERE A DECISION's TIME GOES ON THE DEVICE, PRINTED: the pipe's GPU timestamps switched on, one more whole decision
+/// run and waited for, then each kernel's time in that decision - its last duration on the GPU times how often the
+/// decision dispatched it - the twelve largest first, with their sum. A kernel dispatched several times a decision
+/// (Newton's rounds, a step's kinematics) is counted at its last duration, so the table says where to look, not the
+/// decision's exact cost: that is the wall clock's, measured before the timestamps were on.
+fn reportKernelTimes(
+    gpa: Allocator,
+    on_device: *robotgpu_host.Sim,
+    physics_steps: u32,
+    clock: robotgpu.DecisionClock,
+    flags_read: []u32,
+) !void {
+    try on_device.pipe.enableTimings();
+    const kernel_count: usize = robotgpu.kernels.len;
+    var dispatches_before: [kernel_count]u32 = undefined;
+    @memcpy(&dispatches_before, &on_device.pipe.dispatch_counts);
+    on_device.stepDecision(physics_steps, clock);
+    const flags_offset: u32 = on_device.layout.world_u.episode_flags.offset;
+    try readWorldIntegers(gpa, on_device, flags_offset, flags_read);
+    var timings: [kernel_count]robotgpu_host.Pipe.KernelTiming = undefined;
+    on_device.pipe.kernelTimings(&timings);
+    var decision_microseconds: [kernel_count]f64 = undefined;
+    var dispatches_in_decision: [kernel_count]u32 = undefined;
+    var all_kernels_microseconds: f64 = 0;
+    for (0..kernel_count) |kernel| {
+        dispatches_in_decision[kernel] = on_device.pipe.dispatch_counts[kernel] - dispatches_before[kernel];
+        const dispatches: f64 = @floatFromInt(dispatches_in_decision[kernel]);
+        decision_microseconds[kernel] = timings[kernel].microseconds * dispatches;
+        all_kernels_microseconds += decision_microseconds[kernel];
+    }
+    print("vk-host-test: robotgpu kernel times at {d} worlds - {d:.0} microseconds on the GPU a decision, its " ++
+        "largest:\n", .{ on_device.counts.world_count, all_kernels_microseconds });
+    const kernels_listed: usize = 12;
+    for (0..kernels_listed) |_| {
+        // The largest not yet printed; printed, it is struck out.
+        var largest: usize = 0;
+        for (decision_microseconds, 0..) |microseconds, kernel| {
+            if (microseconds > decision_microseconds[largest]) {
+                largest = kernel;
+            }
+        }
+        const nothing_left: bool = decision_microseconds[largest] <= 0;
+        if (nothing_left) {
+            break;
+        }
+        print("vk-host-test:     {s}: {d:.0} microseconds ({d} dispatches of {d:.0})\n", .{
+            robotgpu.kernels[largest],
+            decision_microseconds[largest],
+            dispatches_in_decision[largest],
+            timings[largest].microseconds,
+        });
+        decision_microseconds[largest] = 0;
+    }
+}
+
+/// THE TRACKING TASK, DEVICE AGAINST TWIN, BY WHOLE DECISIONS: Geno at his training physics on his get-up clip, eight
+/// worlds - a fleet of them for the clip's reference tables, its curriculum's mixture and its settings
+/// (`Fleet.trackingSettings`), as a trainer would set a device. A GPU's numbers are the twin's only within rounding,
+/// and a world whose error sits at a limit can end on one and go on on the other, so NO TRAJECTORY IS COMPARED: before
+/// each decision the device is given the twin's worlds whole (both world arenas), each runs the one decision
+/// (`Sim.stepDecision`), and every array of the tracking task is compared - numbers by their gap in epsilons,
+/// integers exactly. THE EVENTS, on worlds far from any limit: one character knocked a metre off lives on (a loss, an
+/// aftermath), is then held on its reference (a return); another knocked off has no aftermath - its episode ends and
+/// it starts again at the frame the curriculum draws, resting on the floor, with its noise, in trouble; every world
+/// still in its episode is pushed each decision. THEN THE DEVICE ALONE, TIMED (`size.timed_decisions`): more whole
+/// decisions back to back, each followed by the readback of every world's flags that a trainer's host makes before
+/// the next - what a decision costs on this device at this many worlds, the learner's work apart.
+fn runRobotgpuTracking(
+    gpa: Allocator,
+    device: wgpu.DeviceHandle,
+    queue: wgpu.QueueHandle,
+    coverage: *DeviceCoverage,
+    size: TrackingSize,
+) !TrackingOutcome {
+    const entries: [robotgpu.kernels.len]robotgpu_host.Pipe.KernelWgsl = spirvEntries(robotgpu, robotgpu_spirv);
+    const training_physics: z.robot.Options = z.robot_geno.physicsOptions();
+    var geno: z.robot_mjcf.Imported = try z.robot_mjcf.importSource(gpa, z.robot_geno_model, training_physics);
+    defer geno.deinit();
+    const model: *z.robot.Model = &geno.model;
+    var clip: z.robot_dance.Clip = try .fromBytes(gpa, getup_zclip);
+    defer clip.deinit();
+    // The device's servo steps at the model's timestep, the fleet's at its clip's frame time: the two made one.
+    clip.frame_time = model.opt.timestep;
+    // The clip's first two seconds: every frame carries about a thousand numbers of tables (its coordinates, its
+    // reference's features and bodies), and the test build's model arena holds a few hundred frames of them
+    // (`robotgpu_sizes_test.zig`). The clip's storage is unchanged; only its length is.
+    const compared_frames: usize = 120;
+    clip.frame_count = @min(clip.frame_count, compared_frames);
+    const world_count: u32 = size.world_count;
+    try expect(world_count >= 8);
+    const physics_steps: u32 = 2;
+    const fleet: *z.robot_track.Fleet = try z.robot_track.Fleet.init(gpa, model, &.{&clip}, .{
+        .envs = world_count,
+        .capacity = 32,
+        .decide_every = physics_steps,
+        .action_filter = 0.5,
+        .stiffness_filter = 0.25,
+        .limb_stiffness = true,
+        // The first half of the characters live on through a loss; the others' episodes end at it.
+        .aftermath_steps = 30,
+        .return_steps = 2,
+        .aftermath_share = 0.5,
+        // Every character still in its episode pushed each decision, and every start in trouble.
+        .pushes = .{ .every = 1, .rate_per_second = 4.0, .speed_min = 0.3, .speed_max = 0.6, .start_share = 1.0 },
+        .start_noise = .{ .pose = 0.05, .velocity = 0.2 },
+        .curriculum = .{ .bin_seconds = 0.5 },
+    });
+    defer fleet.deinit();
+    fleet.options.task.rest_on_floor = true;
+    // The clip as the device takes it: each frame the model's coordinates, the reference's features and bodies.
+    const coordinate_count: usize = model.coordinate_count;
+    const root_len: usize = clip.nq - coordinate_count;
+    const poses: []f32 = try gpa.alloc(f32, clip.frame_count * coordinate_count);
+    defer gpa.free(poses);
+    for (0..clip.frame_count) |frame| {
+        @memcpy(poses[frame * coordinate_count ..][0..coordinate_count], clip.pose(frame)[root_len..]);
+    }
+    const features: []f32 = try gpa.alloc(f32, clip.frame_count * z.robot_track.localSize(model.body_count));
+    defer gpa.free(features);
+    var scratch_data: z.robot.Data = try .init(gpa, model);
+    defer scratch_data.deinit();
+    var scratch_state: z.robot_track.State = try .init(gpa, model.body_count);
+    defer scratch_state.deinit(gpa);
+    fleet.clipReferenceFeatures(&clip, &scratch_data, &scratch_state, features);
+    const reference_body_count: usize = clip.frame_count * model.body_count * z.robot.reference_body_numbers;
+    const reference_bodies: []f32 = try gpa.alloc(f32, reference_body_count);
+    defer gpa.free(reference_bodies);
+    fleet.clipReferenceBodies(&clip, &scratch_data, &scratch_state, reference_bodies);
+    const bin_count: usize = fleet.bins_start[1] - fleet.bins_start[0];
+    const clips = [_]robotgpu.ClipPoses{.{
+        .poses = poses,
+        .frame_count = @intCast(clip.frame_count),
+        .frame_time = clip.frame_time,
+        .curriculum_bins = @intCast(bin_count),
+        .bin_frames = @intCast(z.robot_track.binFrames(&clip, fleet.options.curriculum)),
+        .reference_features = features,
+        .reference_bodies = reference_bodies,
+    }};
+    var on_device: robotgpu_host.Sim = try .initGpuTracking(gpa, device, queue, &entries, model, world_count, &clips);
+    defer on_device.deinit();
+    // This simulator's dispatches counted for the run's coverage, before it is freed.
+    defer coverage.add(&on_device);
+    var twin: robotgpu_host.Sim = try .initTwinTracking(gpa, model, world_count, &clips);
+    defer twin.deinit();
+    // The fleet's task on both, as a trainer mirrors it: one value, one call each.
+    const settings: z.robot.TrackingSettings = fleet.trackingSettings(.{});
+    try on_device.setTracking(gpa, settings);
+    try twin.setTracking(gpa, settings);
+    // The curriculum's round as a trainer's host makes it: the fleet's start-bin mixture, summed in order into each
+    // simulator's running sums, which a new episode's start is drawn from.
+    const mixture: []f32 = try gpa.alloc(f32, bin_count);
+    defer gpa.free(mixture);
+    const softmax: []const f32 = fleet.bin_softmax[0..bin_count];
+    const long_run: []const f32 = fleet.bin_history_weights[0..bin_count];
+    z.robot.startBinMixture(fleet.options.curriculum.rule, softmax, long_run, mixture);
+    var running_sum: f32 = 0;
+    for (mixture, 0..) |probability, bin| {
+        running_sum += probability;
+        const sum_at: u32 = twin.layout.model_f.bin_running_sums.at(@intCast(bin));
+        const sum = [1]f32{running_sum};
+        on_device.pipe.uploadAt(.model_f, sum_at, &sum);
+        twin.pipe.uploadAt(.model_f, sum_at, &sum);
+    }
+    // THE WORLDS' STARTS, given to the twin alone (the device takes the twin's worlds before each decision): each on
+    // the clip at a frame of its own, at rest; two of them knocked a metre off - one that lives on through its loss,
+    // one whose episode ends at it.
+    // The second character is in the half that lives on; the third from the last is in the half that does not.
+    const knocked_and_living_on: u32 = 1;
+    const knocked_to_its_end: u32 = world_count - 3;
+    // Start frames nine apart from the tenth, coming round again after nine worlds: every start leaves the compared
+    // decisions' frames before the clip's end.
+    const first_start_frame: u32 = 10;
+    const start_frame_step: u32 = 9;
+    const start_frame_span: u32 = 81;
+    const last_frame_reached: u32 = first_start_frame + start_frame_span + 16;
+    try expect(clip.frame_count > last_frame_reached);
+    const still: []f32 = try gpa.alloc(f32, model.dof_count);
+    defer gpa.free(still);
+    @memset(still, 0);
+    const pose: []f32 = try gpa.alloc(f32, coordinate_count);
+    defer gpa.free(pose);
+    var starting_world: u32 = 0;
+    while (starting_world < world_count) : (starting_world += 1) {
+        const frame: u32 = first_start_frame + (start_frame_step * starting_world) % start_frame_span;
+        @memcpy(pose, poses[frame * coordinate_count ..][0..coordinate_count]);
+        const is_knocked: bool = starting_world == knocked_and_living_on or starting_world == knocked_to_its_end;
+        if (is_knocked) {
+            pose[0] += 1.0;
+        }
+        twin.uploadWorldPositions(starting_world, pose);
+        twin.uploadWorldArray("joint_velocities", starting_world, still);
+        twin.setWorldClip(starting_world, 0, frame);
+    }
+    // Every world's state, both arenas whole, as read from each simulator.
+    const float_count: u32 = twin.worldArenaEnd(.world_f);
+    const integer_count: u32 = twin.worldArenaEnd(.world_u);
+    const twin_floats: []f32 = try gpa.alloc(f32, float_count);
+    defer gpa.free(twin_floats);
+    const device_floats: []f32 = try gpa.alloc(f32, float_count);
+    defer gpa.free(device_floats);
+    const twin_integers: []u32 = try gpa.alloc(u32, integer_count);
+    defer gpa.free(twin_integers);
+    const device_integers: []u32 = try gpa.alloc(u32, integer_count);
+    defer gpa.free(device_integers);
+    const world_arrays: robotgpu.WorldStateLayout = twin.layout.world_f;
+    const world_integers: robotgpu.WorldIntegersLayout = twin.layout.world_u;
+    const velocities: robotgpu.WorldArray(.world_f, .dofs) = world_arrays.joint_velocities;
+    const flags: robotgpu.WorldArray(.world_u, .single) = world_integers.episode_flags;
+    const velocities_before_resets: []f32 = try gpa.alloc(f32, velocities.stride * world_count);
+    defer gpa.free(velocities_before_resets);
+    const action_count: usize = twin.counts.action_count;
+    const actions: []f32 = try gpa.alloc(f32, action_count);
+    defer gpa.free(actions);
+    var outcome: TrackingOutcome = .{
+        .float_gaps_epsilons = @splat(0),
+        .integer_differences = @splat(0),
+        .episodes_restarted = 0,
+        .aftermaths_begun = 0,
+        .returns = 0,
+        .worlds_pushed = 0,
+        .timed_decisions = 0,
+        .timed_seconds = 0,
+        .timed_dispatches = 0,
+        .reads_flags_every_decision = size.reads_flags_every_decision,
+        .state_floats = float_count,
+        .state_integers = integer_count,
+        .constraint_floats = twin.worldArenaEnd(.efc_f),
+        .world_count = world_count,
+        .physics_steps = physics_steps,
+    };
+    const decision_count: u32 = if (size.compares_with_the_twin) 3 else 0;
+    var decision: u32 = 0;
+    while (decision < decision_count) : (decision += 1) {
+        uploadTrackingActions(&twin, world_count, decision, actions);
+        // From the second decision the character in its aftermath is held on its reference, at rest: after two such
+        // decisions it has returned.
+        const holds_now: bool = decision >= 1;
+        if (holds_now) {
+            const start_frame: u32 = first_start_frame + start_frame_step * knocked_and_living_on;
+            const frame_now: u32 = start_frame + physics_steps * decision;
+            const reference_pose: []const f32 = poses[frame_now * coordinate_count ..][0..coordinate_count];
+            twin.uploadWorldPositions(knocked_and_living_on, reference_pose);
+            twin.uploadWorldArray("joint_velocities", knocked_and_living_on, still);
+        }
+        // The device takes the twin's worlds whole, so the decision starts from one state on both.
+        try giveDeviceTheTwinsWorlds(gpa, &twin, &on_device, twin_floats, twin_integers);
+        const clock: robotgpu.DecisionClock = .{ .number = decision + 1, .push_schedule_share = 1.0 };
+        on_device.stepDecision(physics_steps, clock);
+        // The twin's decision in its parts, its velocities read before its resets: a world whose velocities the resets
+        // changed without starting it again was pushed.
+        twin.submitDecision(physics_steps);
+        twin.submitDecisionEnd();
+        try readWorldFloats(gpa, &twin, velocities.offset, velocities_before_resets);
+        twin.runResets(clock);
+        try readWorldFloats(gpa, &twin, 0, twin_floats);
+        try readWorldIntegers(gpa, &twin, 0, twin_integers);
+        try readWorldFloats(gpa, &on_device, 0, device_floats);
+        try readWorldIntegers(gpa, &on_device, 0, device_integers);
+        inline for (tracking_float_arrays, 0..) |tracked, index| {
+            const array: @FieldType(robotgpu.WorldStateLayout, tracked.name) = @field(world_arrays, tracked.name);
+            const array_length: usize = array.stride * world_count;
+            const device_numbers: []const f32 = device_floats[array.offset..][0..array_length];
+            const twin_numbers: []const f32 = twin_floats[array.offset..][0..array_length];
+            const gap: f32 = robotgpu_host.largestGapEpsilons(device_numbers, twin_numbers, array.stride);
+            outcome.float_gaps_epsilons[index] = @max(outcome.float_gaps_epsilons[index], gap);
+        }
+        inline for (tracking_integer_arrays, 0..) |array_name, index| {
+            const array: @FieldType(robotgpu.WorldIntegersLayout, array_name) = @field(world_integers, array_name);
+            const array_length: usize = array.stride * world_count;
+            const device_numbers: []const u32 = device_integers[array.offset..][0..array_length];
+            const twin_numbers: []const u32 = twin_integers[array.offset..][0..array_length];
+            for (device_numbers, twin_numbers) |device_number, twin_number| {
+                if (device_number != twin_number) {
+                    outcome.integer_differences[index] += 1;
+                }
+            }
+        }
+        // What happened on the twin this decision.
+        var judged_world: u32 = 0;
+        while (judged_world < world_count) : (judged_world += 1) {
+            const world_flags: u32 = twin_integers[flags.at(judged_world, 0)];
+            const finished: bool = world_flags & robotgpu.episodeFlagBit(.finished) != 0;
+            const aftermath_begins: bool = world_flags & robotgpu.episodeFlagBit(.aftermath_begins) != 0;
+            const returned: bool = world_flags & robotgpu.episodeFlagBit(.returned) != 0;
+            const first_before: usize = judged_world * velocities.stride;
+            const before: []const f32 = velocities_before_resets[first_before..][0..velocities.stride];
+            const after: []const f32 = twin_floats[velocities.at(judged_world, 0)..][0..velocities.stride];
+            const resets_changed_velocities: bool = !eql(f32, before, after);
+            if (finished) {
+                outcome.episodes_restarted += 1;
+            } else if (resets_changed_velocities) {
+                outcome.worlds_pushed += 1;
+            }
+            if (aftermath_begins) {
+                outcome.aftermaths_begun += 1;
+            }
+            if (returned) {
+                outcome.returns += 1;
+            }
+        }
+    }
+    if (!size.compares_with_the_twin) {
+        // No decision was compared, so the device has not been given its worlds yet: the twin's starts, with actions.
+        uploadTrackingActions(&twin, world_count, 0, actions);
+        try giveDeviceTheTwinsWorlds(gpa, &twin, &on_device, twin_floats, twin_integers);
+    }
+    // THE DEVICE ALONE, TIMED - FIRST ITS WORLD, AS A NIGHT's: a push every three seconds of a character's episode and
+    // none at random, in place of the check's push at every decision, which fells most characters within a second.
+    // The fleet's settings are built again from its changed options and given to the device.
+    fleet.options.pushes.every = 90;
+    fleet.options.pushes.rate_per_second = 0;
+    try on_device.setTracking(gpa, fleet.trackingSettings(.{}));
+    const flags_read: []u32 = try gpa.alloc(u32, flags.stride * world_count);
+    defer gpa.free(flags_read);
+    // THE WARM-UP: decisions that are not timed, then a read that waits for them. The clock then starts on worlds in
+    // the middle of their episodes, at every size alike - a first decision from a pose at rest has no contact yet,
+    // and costs a fraction of the ones that follow.
+    var warmup_decision: u32 = 0;
+    while (warmup_decision < size.warmup_decisions) : (warmup_decision += 1) {
+        const warmup_clock: robotgpu.DecisionClock = .{
+            .number = decision_count + 1 + warmup_decision,
+            .push_schedule_share = 1.0,
+        };
+        on_device.stepDecision(physics_steps, warmup_clock);
+    }
+    try readWorldIntegers(gpa, &on_device, flags.offset, flags_read);
+    // THE TIMED DECISIONS. The worlds keep their last actions and live through whatever comes - losses, ends, new
+    // starts, pushes. After every decision the host reads every world's flags, as a trainer's round does before the
+    // next - or, when the size says so, only once after the last decision, which shows what waiting for the GPU at
+    // every decision costs. The last read waits for everything: the wall clock around the loop is the cost of the
+    // decisions and nothing else.
+    const first_timed_number: u32 = decision_count + 1 + size.warmup_decisions;
+    const dispatches_before: u64 = dispatchesSoFar(&on_device);
+    const timed_started_ms: f64 = z.native_os.monotonicMilliseconds();
+    var timed_decision: u32 = 0;
+    while (timed_decision < size.timed_decisions) : (timed_decision += 1) {
+        const timed_clock: robotgpu.DecisionClock = .{
+            .number = first_timed_number + timed_decision,
+            .push_schedule_share = 1.0,
+        };
+        on_device.stepDecision(physics_steps, timed_clock);
+        if (size.reads_flags_every_decision) {
+            try readWorldIntegers(gpa, &on_device, flags.offset, flags_read);
+        }
+    }
+    try readWorldIntegers(gpa, &on_device, flags.offset, flags_read);
+    const timed_ms: f64 = z.native_os.monotonicMilliseconds() - timed_started_ms;
+    outcome.timed_decisions = size.timed_decisions;
+    outcome.timed_seconds = timed_ms / 1000.0;
+    outcome.timed_dispatches = dispatchesSoFar(&on_device) - dispatches_before;
+    if (size.profiles_kernels) {
+        const profiled_clock: robotgpu.DecisionClock = .{
+            .number = first_timed_number + size.timed_decisions,
+            .push_schedule_share = 1.0,
+        };
+        try reportKernelTimes(gpa, &on_device, physics_steps, profiled_clock, flags_read);
+    }
+    return outcome;
+}
+
+/// ONE DEVICE, TWO PIPELINES, ONE COPY - the learner's device spike: numbers uploaded to a learning kit's pipeline
+/// (`params`) are copied by `copyFieldInto` into a robotgpu simulator's `world_f` on the same device and queue,
+/// then read back from the simulator - the very numbers. So experience can go from the physics to the learner (and
+/// back) without leaving the GPU.
+fn runCopyBetweenPipelines(kit_pipe: *z.Compute(zn_mlp), sim: *robotgpu_host.Sim) !bool {
+    // Numbers no buffer holds by chance, uploaded to the kit's parameters.
+    var numbers: [64]f32 = undefined;
+    for (&numbers, 0..) |*number, index| {
+        number.* = 0.25 * float(index) - 3.5;
+    }
+    kit_pipe.uploadAt(.params, 0, &numbers);
+    // The copy, from the kit's field into the simulator's, on their shared queue.
+    const destination: z.DeviceField = sim.pipe.deviceField(.world_f);
+    const byte_count: u32 = @intCast(numbers.len * @sizeOf(f32));
+    kit_pipe.copyFieldInto(.params, 0, destination, 0, byte_count);
+    var read_back: [64]f32 = undefined;
+    sim.pipe.readRange(.world_f, 0, &read_back);
+    return eql(f32, &numbers, &read_back);
+}
+
+/// One dense layer on the CPU in `dense_fwd`'s order: each output its bias, then every input times its weight in
+/// order, activated - the weights at `w` with their bias after them, `x.len x y.len`.
+fn denseLayerOnCpu(
+    params: []const f32,
+    w: u32,
+    x: []const f32,
+    y: []f32,
+    act: u32,
+) void {
+    for (y, 0..) |*out, o| {
+        var sum: f32 = params[w + x.len * y.len + o];
+        for (x, 0..) |value, i| {
+            sum += value * params[w + i * y.len + o];
+        }
+        out.* = zn_mlp.activate(sum, act);
+    }
+}
+
+/// THE POLICY ACTING FOR THE SIMULATOR ON ONE DEVICE: a kit with a policy - its features one of Geno's body states
+/// wide, its actions the simulator's - acting on one row per world (`actWithSimulator`): rows of known numbers in the
+/// simulator's `policy_inputs`, copied in, the three layers run on the GPU, the raw actions copied into the
+/// simulator's `actions` and read back. Every action must be the CPU's forward pass within a GPU's rounding of tanh.
+fn runActingOnTheDevice(
+    gpa: Allocator,
+    kit_pipe: *z.Compute(zn_mlp),
+    sim: *robotgpu_host.Sim,
+    model: *const z.robot.Model,
+) !bool {
+    const LatentKit: type = z.robot_latent_kit.LatentKit(zn_mlp);
+    const world_count: u32 = sim.counts.world_count;
+    const features: u32 = @intCast(z.robot.localSize(model.body_count));
+    const actions: u32 = sim.counts.action_count;
+    const policy_hidden: u32 = 16;
+    const kit: LatentKit = try .init(kit_pipe, features, 2, actions, 8, 4, 1, features, policy_hidden);
+    var layout: z.kit_mlp.KitLayout = .{
+        .acts_floats = kit.total,
+        .params_floats = kit.p_at + kit.policy_count,
+        .dacts_floats = kit.dtotal,
+    };
+    const input_stride: u32 = sim.layout.world_f.policy_inputs.stride;
+    const action_stride: u32 = sim.layout.world_f.actions.stride;
+    const acting: LatentKit.PolicyRows = kit.reservePolicyRows(&layout, world_count, input_stride, action_stride);
+    layout.requireFitsKit(zn_mlp);
+    // Weights and inputs no buffer holds by chance, small enough that tanh stays in its curved range.
+    const params: []f32 = try gpa.alloc(f32, layout.params_floats);
+    defer gpa.free(params);
+    for (params, 0..) |*number, index| {
+        number.* = 0.02 * @sin(0.7 * float(index));
+    }
+    kit_pipe.upload(.params, params);
+    const width: u32 = 2 * features;
+    // Every world's row of inputs at its stride, the padding between rows zero.
+    const inputs: []f32 = try gpa.alloc(f32, world_count * input_stride);
+    defer gpa.free(inputs);
+    @memset(inputs, 0);
+    for (0..world_count) |row| {
+        for (inputs[row * input_stride ..][0..width], 0..) |*number, column| {
+            number.* = @cos(0.3 * float(row * width + column));
+        }
+    }
+    const inputs_at: u32 = sim.layout.world_f.policy_inputs.at(0, 0);
+    const given_at: u32 = sim.layout.world_f.actions.at(0, 0);
+    const chosen_at: u32 = sim.layout.world_f.chosen_actions.at(0, 0);
+    sim.pipe.uploadAt(.world_f, inputs_at, inputs);
+    kit.actWithSimulator(acting, sim.pipe.deviceField(.world_f), inputs_at, given_at, chosen_at);
+    const read_back: []f32 = try gpa.alloc(f32, world_count * action_stride);
+    defer gpa.free(read_back);
+    sim.pipe.readRange(.world_f, chosen_at, read_back);
+    // And acting as one call (`Sim.actWithKit`): the policy's inputs, the policy, then the decision's action - with no
+    // filter and no exploration, each action its choice exactly, or nothing where the choice was not finite.
+    const quiet_clock: robotgpu.DecisionClock = .{ .number = 1, .push_schedule_share = 0, .exploration_spread = 0 };
+    sim.actWithKit(zn_mlp, kit, acting, quiet_clock);
+    const chosen_back: []f32 = try gpa.alloc(f32, world_count * action_stride);
+    defer gpa.free(chosen_back);
+    const actions_back: []f32 = try gpa.alloc(f32, world_count * action_stride);
+    defer gpa.free(actions_back);
+    sim.pipe.readRange(.world_f, chosen_at, chosen_back);
+    sim.pipe.readRange(.world_f, given_at, actions_back);
+    for (chosen_back, actions_back) |choice, action| {
+        const usable: bool = isFinite(choice);
+        const expected: f32 = if (usable) choice else 0.0;
+        try expectEqual(expected, action);
+    }
+    // The CPU's forward pass, in the kernel's order.
+    const weights: LatentKit.PolicyWeights = kit.policyWeights();
+    const hidden1: []f32 = try gpa.alloc(f32, policy_hidden);
+    defer gpa.free(hidden1);
+    const hidden2: []f32 = try gpa.alloc(f32, policy_hidden);
+    defer gpa.free(hidden2);
+    const raw: []f32 = try gpa.alloc(f32, actions);
+    defer gpa.free(raw);
+    const tanh: u32 = @backingInt(zn_mlp.Act.tanh);
+    const linear: u32 = @backingInt(zn_mlp.Act.linear);
+    var largest_difference: f32 = 0;
+    for (0..world_count) |row| {
+        const x: []const f32 = inputs[row * input_stride ..][0..width];
+        denseLayerOnCpu(params, weights.first, x, hidden1, tanh);
+        denseLayerOnCpu(params, weights.second, hidden1, hidden2, tanh);
+        denseLayerOnCpu(params, weights.third, hidden2, raw, linear);
+        for (raw, 0..) |expected, action| {
+            const difference: f32 = @abs(expected - read_back[row * action_stride + action]);
+            largest_difference = @max(largest_difference, difference);
+        }
+    }
+    const tolerance: f32 = 1.0e-5;
+    if (largest_difference > tolerance) {
+        print("vk-host-test: acting: largest difference {e}; first actions GPU {d:.6} {d:.6}, CPU row 7 {d:.6}\n", .{
+            largest_difference,
+            read_back[0],
+            read_back[1],
+            raw[0],
+        });
+    }
+    return largest_difference <= tolerance;
+}
+
+/// THE SIMULATOR'S HOST: a `Sim` of Geno at 64 worlds on the device and one on the CPU twin, each made from the model
+/// itself - counted, laid out, packed and uploaded. `world_u` is poisoned, a step submitted, every world's overflow
+/// word requested and collected: each must be zero, the step's first dispatch having cleared it.
+fn runRobotgpuSim(
+    gpa: Allocator,
+    device: wgpu.DeviceHandle,
+    queue: wgpu.QueueHandle,
+    coverage: *DeviceCoverage,
+) !bool {
+    const entries: [robotgpu.kernels.len]robotgpu_host.Pipe.KernelWgsl = spirvEntries(robotgpu, robotgpu_spirv);
+    var geno: z.robot_mjcf.Imported = try z.robot_mjcf.importSource(gpa, z.robot_geno_model, .{});
+    defer geno.deinit();
+    // Stepped without its constraints: this check measures the smooth step and the integrator against the twin, and
+    // the floor it is given is for its contacts' slots alone - with the constraints disabled, no row is made.
+    geno.model.opt.disable_constraints = true;
+    const world_count: u32 = 64;
+    var on_device: robotgpu_host.Sim = try .initGpu(gpa, device, queue, &entries, &geno.model, world_count);
+    defer on_device.deinit();
+    defer coverage.add(&on_device);
+    var twin: robotgpu_host.Sim = try .initTwin(gpa, &geno.model, world_count);
+    defer twin.deinit();
+    const poison: u32 = 0xdead_beef;
+    const world_u_length: usize = @typeInfo(@FieldType(robotgpu.Buffers, "world_u")).array.len;
+    const poisoned: []u32 = try gpa.alloc(u32, world_u_length);
+    defer gpa.free(poisoned);
+    @memset(poisoned, poison);
+    const sims = [2]*robotgpu_host.Sim{ &on_device, &twin };
+    for (sims) |sim| {
+        sim.pipe.upload(.world_u, poisoned);
+        sim.submitStep();
+        var request: robotgpu_host.Pipe.RangeRequest(.world_u) = try sim.requestOverflow(gpa);
+        const collected: []u32 = try gpa.alloc(u32, sim.overflowWordCount());
+        defer gpa.free(collected);
+        request.wait(collected);
+        var world: u32 = 0;
+        while (world < world_count) : (world += 1) {
+            if (sim.overflowOf(collected, world) != 0) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 /// THE SIMULATOR'S FIRST KERNEL: `clear_overflow` over 64 worlds of Geno (the engine's own model), on the device and on
 /// its CPU twin. `world_u` starts full of a poison word; afterwards every world's overflow word must be zero and every
 /// other word still the poison - the kernel found each world's word through the layout, and wrote nothing else:
@@ -861,13 +2472,13 @@ fn runRobotgpuOverflow(
     for (pipes) |pipe| {
         pipe.upload(.world_u, poisoned);
         pipe.params = .{ .counts = counts, .layout = layout };
-        pipe.run("clear_overflow", counts.nworld);
+        pipe.run("clear_overflow", counts.world_count);
         pipe.readRange(.world_u, 0, read_back);
         for (read_back, 0..) |word, index| {
             const word_index: u32 = @intCast(index);
             const relative: u32 = word_index -% overflow.offset;
             const in_overflow: bool = word_index >= overflow.offset and
-                relative < overflow.stride * counts.nworld and relative % overflow.stride == 0;
+                relative < overflow.stride * counts.world_count and relative % overflow.stride == 0;
             const expected: u32 = if (in_overflow) 0 else poison;
             if (word != expected) {
                 return false;
@@ -1368,27 +2979,30 @@ fn probeResult(
     return result;
 }
 
-/// THE MATHS PROBE'S TABLE: every zimrmath function robot.zig's arithmetic calls, in
-/// `robotgpu_probe.MathsResults`' order. The bars were set from the first measurement on lavapipe, 1,024 rows, with
-/// headroom for the fused multiply-adds and square roots of other devices:
+/// THE MATHS PROBE'S TABLE: every zimrmath function robot.zig's arithmetic calls, in `robotgpu_probe.MathsResults`'
+/// order, 1,024 rows. Each bar is two to four times the largest gap any device has shown, in epsilons at the result's
+/// scale: lavapipe computes on the CPU and rounds as the twin does; an NVIDIA GPU fuses a multiply into an add (one
+/// rounding where the twin rounds twice) and does not round its square root correctly, and each shows here:
 ///
-///     result                   measured    bar    what is behind it
-///     conjugate, rotate,       0           4      plain arithmetic and square roots - exact on lavapipe; a device
-///     normalize3, cross,                          may fuse a multiply into an add, or round a square root once more
-///     dot3, length3
-///     qmul                     1.14        4      the same, one fused multiply-add showing
-///     the two axis-angle       1.00        8      zimrmath's GPU sine and cosine (polynomials) against the CPU's
-///     forms                                       library: within one epsilon
-///     acosRad                  1.91        8      zimrmath's GPU acos
-///     atan2Rad                 28          64     zimrmath's GPU atan2 - the least precise, about 1e-5 radian
-///                                                 near pi, far below what the physics resolves
+///     result                   lavapipe   RTX 5070   bar    what is behind it
+///     conjugate, normalize3,   0          0 - 1      4      plain arithmetic and square roots
+///     cross, dot3, length3
+///     qmul                     1.14       1.74       4      one fused multiply-add showing
+///     rotate                   0          3.33       8      a rotation's products, fused on NVIDIA
+///     the two axis-angle       1.00       1.50       8      zimrmath's GPU sine and cosine (polynomials) against
+///     forms                                                 the CPU's library
+///     acosRad                  1.91       11.44      32     zimrmath's GPU acos: a polynomial with a square root,
+///                                                           steep near +-1, where an input's last bit moves the
+///                                                           angle most
+///     atan2Rad                 28         28.50      64     zimrmath's GPU atan2 - the least precise, about 1e-5
+///                                                           radian near pi, far below what the physics resolves
 const MathsCheck = struct {
     const row_count: u32 = 1024;
 
     const results = [_]ProbeResult{
         probeResult(MathsResults, .product, "qmul", 4),
         probeResult(MathsResults, .conjugated, "conjugate", 4),
-        probeResult(MathsResults, .rotated, "rotate", 4),
+        probeResult(MathsResults, .rotated, "rotate", 8),
         probeResult(MathsResults, .from_unit_axis, "quatFromNormAxisAngle", 8),
         probeResult(MathsResults, .from_axis, "quatFromAxisAngle", 8),
         probeResult(MathsResults, .normalized, "normalize3", 4),
@@ -1396,7 +3010,7 @@ const MathsCheck = struct {
         probeResult(MathsResults, .dot_product, "dot3", 4),
         probeResult(MathsResults, .vector_length, "length3", 4),
         probeResult(MathsResults, .heading, "atan2Rad", 64),
-        probeResult(MathsResults, .angle_between, "acosRad", 8),
+        probeResult(MathsResults, .angle_between, "acosRad", 32),
     };
 
     /// Per row: a unit rotation; a quaternion and a vector whose three-dimensional parts stay away from zero; an angle
@@ -1431,18 +3045,23 @@ const MathsCheck = struct {
     };
 };
 
-/// THE SPATIAL PROBE'S TABLE: robot.zig's spatial algebra in `robotgpu_probe.SpatialResults`'
-/// order - plain arithmetic throughout, no transcendental function. The bars were set from the first measurement on
-/// lavapipe, 1,024 rows:
+/// THE SPATIAL PROBE'S TABLE: robot.zig's spatial algebra in `robotgpu_probe.SpatialResults`' order - plain
+/// arithmetic throughout, no transcendental function - 1,024 rows. Each bar is two to four times the largest gap any
+/// device has shown, in epsilons at the result's scale (an NVIDIA GPU fuses a multiply into an add, rounding once where
+/// the twin rounds twice):
 ///
-///     result                   measured    bar    what is behind it
-///     Inertia.rotated, dot6    0           4      exact on lavapipe
-///     Inertia.mul,             1.00        4      one fused multiply-add showing
+///     result                   lavapipe   RTX 5070   bar    what is behind it
+///     Inertia.rotated          0          2.00       4      products fused on NVIDIA
+///     Inertia.mul,             1.00       1.41-1.91  4      one fused multiply-add showing
 ///     Inertia.translate
-///     crossMotion              1.62        4      the same, a little cancellation (velocities up to 3: terms to 9)
-///     crossForce               8.61        16     CANCELLATION: forces up to 20 against velocities up to 3 make
-///                                                 terms near 60; where they cancel, the result is far smaller than
-///                                                 what was rounded, and the gap is measured at the result's scale
+///     crossMotion              1.62       2.93       8      the same, with a little cancellation (velocities up to 3:
+///                                                           terms to 9)
+///     crossForce               8.61       8.61       16     CANCELLATION: forces up to 20 against velocities up to 3
+///                                                           make terms near 60; where they cancel, the result is far
+///                                                           smaller than what was rounded, and the gap is measured
+///                                                           at the result's scale
+///     dot6                     0          16.00      64     the same cancellation - six products near 60 summed into
+///                                                           a small power - with every product fused on NVIDIA
 /// The inputs are physically plausible: velocities
 /// and forces whose parts stay away from zero, a mass in [0.5, 5], a centre of mass within 0.3 of the origin (so
 /// `h` = mass x centre of mass), positive principal moments with small products of inertia, a unit rotation and an
@@ -1451,12 +3070,12 @@ const SpatialCheck = struct {
     const row_count: u32 = 1024;
 
     const results = [_]ProbeResult{
-        probeResult(SpatialResults, .motion_cross, "crossMotion", 4),
+        probeResult(SpatialResults, .motion_cross, "crossMotion", 8),
         probeResult(SpatialResults, .force_cross, "crossForce", 16),
         probeResult(SpatialResults, .inertia_times_motion, "Inertia.mul", 4),
         probeResult(SpatialResults, .translated, "Inertia.translate", 4),
         probeResult(SpatialResults, .rotated, "Inertia.rotated", 4),
-        probeResult(SpatialResults, .power, "dot6", 4),
+        probeResult(SpatialResults, .power, "dot6", 64),
     };
 
     /// A Motion's or a Force's two parts into `inputs` at `at`, each a vector of a length in [min_length, max_length).
@@ -2109,8 +3728,8 @@ fn runConstantIndex(
     compute.run("writeConstantElements", one_thread);
     const dispatched: u64 = compute.readGeneration().submitted;
 
-    var polls: u32 = 0;
-    while (polls < engine_poll_limit) : (polls += 1) {
+    const deadline: ReadDeadline = .start();
+    while (!deadline.hasPassed()) {
         const latest_values: ?[]const f32 = compute.readLatest(.values);
         const latest_rows: ?[]const [3]f32 = compute.readLatest(.grid);
         if (compute.readGeneration().mirrored < dispatched) {
@@ -2146,7 +3765,8 @@ fn runConstantIndex(
     return false;
 }
 
-/// Runs one entry of a pipeline, then polls `readLatest(.out)` until the mirror holds that dispatch. Null when it
+/// Runs one entry of a pipeline, then polls `readLatest(.out)` until the mirror holds that dispatch (`ReadDeadline`).
+/// Null when it
 /// never does.
 fn runAndRead(
     comptime Kernel: type,
@@ -2156,8 +3776,8 @@ fn runAndRead(
 ) ?[]const f32 {
     pipeline.run(entry, threads);
     const dispatched: u64 = pipeline.readGeneration().submitted;
-    var polls: u32 = 0;
-    while (polls < engine_poll_limit) : (polls += 1) {
+    const deadline: ReadDeadline = .start();
+    while (!deadline.hasPassed()) {
         const latest: ?[]const f32 = pipeline.readLatest(.out);
         if (pipeline.readGeneration().mirrored < dispatched) {
             continue;
@@ -2498,10 +4118,6 @@ fn churnLargeWrites(device: wgpu.DeviceHandle, queue: wgpu.QueueHandle) !bool {
     return statistics.staging_chunks <= vulkan_host.staging_chunk_budget + 1;
 }
 
-/// The headless screen's size, in pixels: a row of `screen_width` texels fits one copy row (`copy_row_pitch`).
-const screen_width: u32 = 16;
-const screen_height: u32 = 8;
-
 /// Copies the screen's texture into a buffer and reads it back: every texel must hold `expected`.
 fn screenReadsAs(
     device: wgpu.DeviceHandle,
@@ -2570,214 +4186,738 @@ fn drawOnScreen(device: wgpu.DeviceHandle, queue: wgpu.QueueHandle) bool {
     return is_cleared;
 }
 
-pub fn main() !u8 {
-    try vulkan_host.startHeadlessWithScreen(screen_width, screen_height);
-    const device: wgpu.DeviceHandle = wgpu.initDevice();
-    const queue: wgpu.QueueHandle = wgpu.getQueue(device);
-    if (!vulkan_host.isValidating()) {
-        print("vk-host-test: the validation layer is not on - install it (`vulkan-validationlayers`)\n", .{});
-        _ = vulkan_host.shutdown();
-        return 2;
-    }
+/// THE DEVICE's COVERAGE ACROSS THE TESTS: every robotgpu dispatch any test sends to the GPU, added up here. The one
+/// piece of state the tests share - tests can share nothing else - and Zig runs a file's tests in the order they are
+/// declared, so the last test, the report, sees the whole run.
+// lint:off module-var: the one state the tests share - test blocks can share nothing else - for the coverage report
+var tests_device_coverage: DeviceCoverage = .{};
 
-    clearTexture(device, queue);
-    clearTwoTargets(device, queue);
-    const read_matches: bool = readBack(device, queue);
-    const copy_matches: bool = copyTexture(device, queue);
-    const screen_matches: bool = drawOnScreen(device, queue);
-    mipAndArrayViews(device, queue);
-    var adapter_buffer: [256]u8 = undefined;
-    const adapter: []const u8 = wgpu.adapterInfo(&adapter_buffer);
-    print("vk-host-test: adapter: {s}\n", .{adapter});
-    const names_vulkan: bool = indexOf(u8, adapter, "Vulkan") != null;
-    const kernel_doubles: bool = runKernel(device, queue);
-    var debug_allocator: DebugAllocator(.{}) = .init;
-    const engine_doubles: bool = try runEngineCompute(debug_allocator.allocator(), device, queue);
-    const zimrnum_failures: u32 = try runZimrnumSweep(debug_allocator.allocator(), device, queue);
-    try makeTrainingPipelines(debug_allocator.allocator(), device, queue);
-    const kit_gap: ?f32 = try runKitKernels(debug_allocator.allocator(), device, queue);
-    const probe: ProbeOutcome = try runRobotgpuProbe(debug_allocator.allocator(), device, queue);
-    const tally_holds: bool = try runDispatchTally(debug_allocator.allocator(), device, queue);
-    const ranges_match: bool = try runRangedReadback(debug_allocator.allocator(), device, queue);
-    const pushes_hold: bool = try runPushedBatch(debug_allocator.allocator(), device, queue);
-    const timing: TimingOutcome = try runTimings(debug_allocator.allocator(), device, queue);
-    const lending_holds: bool = try runBorrowing(debug_allocator.allocator(), device, queue);
-    const factorisation: CholeskyOutcome = try runCholesky(debug_allocator.allocator(), device, queue);
-    const envelope_bytes: ?u64 = try runMemoryEnvelope(debug_allocator.allocator(), device, queue);
-    const overflow_cleared: bool = try runRobotgpuOverflow(debug_allocator.allocator(), device, queue);
-    var maths_gaps: [MathsCheck.results.len]f32 = undefined;
-    const maths_read: bool =
-        try runProbeTable(debug_allocator.allocator(), device, queue, MathsCheck.table, &maths_gaps);
-    var spatial_gaps: [SpatialCheck.results.len]f32 = undefined;
-    const spatial_read: bool =
-        try runProbeTable(debug_allocator.allocator(), device, queue, SpatialCheck.table, &spatial_gaps);
-    const constants_land: bool = try runConstantIndex(debug_allocator.allocator(), device, queue);
-    const engine_leaked: bool = debug_allocator.deinit() == .leak;
-    const sort_matches: bool = runCountingSort(device, queue);
-    releaseWhileHeld(device);
-    const bounded: bool = churnBindGroups(device, queue) and try churnLargeWrites(device, queue);
+/// THE FLOOR CHECK's SIZE: by default sized for llvmpipe, a GPU emulated on the CPU - at Geno's 64 worlds it took three
+/// quarters of the test's six minutes - and at full size with `-Dlong-checks=true`. Fewer worlds, not fewer steps: a
+/// lying world starts overlapping the floor, and its contacts need the 100 steps to push it within the depth bar (after
+/// 25 it was still 3.5 cm in); each world's dynamics are its own, and the worlds alternate standing and lying, so 8
+/// hold both and meet the same bars.
+const FloorSize = struct {
+    world_count: u32,
+    step_count: u32,
+};
 
-    const counts: vulkan_host.MessageCounts = vulkan_host.shutdown();
-    if (!read_matches) {
-        print("vk-host-test: FAILED - the bytes read back differ from those written\n", .{});
-        return 1;
+fn floorSize() FloorSize {
+    const world_count: u32 = if (test_options.long_checks) 64 else 8;
+    const size: FloorSize = .{ .world_count = world_count, .step_count = 100 };
+    return size;
+}
+
+/// Geno's worlds on the floor over their steps. The bars, from lavapipe's 0.0085% and 0.5 mm with room for other GPUs'
+/// rounding: the energies may differ by a little as the trajectories drift; a floor that let a geom sink, or a number
+/// that left the finite, would not; and rows of the floor's contacts were made, or the check would pass on a floor
+/// nothing touched.
+fn floorStepsHold(floor_steps: FloorStepsOutcome) bool {
+    const energy_within_bar: bool = floor_steps.largest_energy_gap <= 0.01;
+    const device_held_by_floor: bool = floor_steps.deepest_device_penetration <= 0.02;
+    const twin_held_by_floor: bool = floor_steps.deepest_twin_penetration <= 0.02;
+    const floor_was_touched: bool = floor_steps.first_step_contact_rows > 0;
+    const held: bool = device_held_by_floor and twin_held_by_floor;
+    return energy_within_bar and held and floor_steps.all_finite and floor_was_touched;
+}
+
+/// The humanoid's worlds on their joint limits over their steps. The bars, from lavapipe's 0.0104% and 0 rad with room
+/// for other GPUs' rounding: trajectories drift apart, so the energy may differ by a little; a limit that let a joint
+/// stay past its end would not.
+fn limitStepsHold(limit_steps: LimitStepsOutcome) bool {
+    const energy_within_bar: bool = limit_steps.largest_energy_gap <= 0.01;
+    const device_limits_held: bool = limit_steps.deepest_device_violation <= 0.01;
+    const twin_limits_held: bool = limit_steps.deepest_twin_violation <= 0.01;
+    return energy_within_bar and device_limits_held and twin_limits_held;
+}
+
+/// The constraint program on the device against the twin, at one inertia: the rows' integers equal, and every array
+/// within its bar in epsilons (`robotgpu_host.constraint_array_bars`). A miss is named, with its numbers.
+fn constraintsHold(constraints: robotgpu_host.ConstraintVerdict) bool {
+    var holds: bool = true;
+    if (!constraints.integers_agree) {
+        print("vk-host-test: constraints: the rows' integers are not the twin's - a world's row count, a row's " ++
+            "candidate, its Jacobian's dofs or their count\n", .{});
+        holds = false;
     }
-    if (!copy_matches) {
-        print("vk-host-test: FAILED - the copied texture differs from its clear color\n", .{});
-        return 1;
+    inline for (robotgpu_host.constraint_array_bars, 0..) |array_bar, index| {
+        const gap_epsilons: f32 = constraints.gaps_epsilons[index];
+        // Written so a gap that is not a number misses its bar too.
+        const within_its_bar: bool = gap_epsilons <= array_bar.bar_epsilons;
+        if (!within_its_bar) {
+            print("vk-host-test: constraints: {s} is {d:.1} epsilons from the twin's, its bar {d:.0}\n", .{
+                array_bar.name,
+                gap_epsilons,
+                array_bar.bar_epsilons,
+            });
+            holds = false;
+        }
     }
-    if (!screen_matches) {
-        print("vk-host-test: FAILED - the headless screen's frames read back wrong\n", .{});
-        return 1;
-    }
-    if (!names_vulkan) {
-        print("vk-host-test: FAILED - the adapter info names no Vulkan version\n", .{});
-        return 1;
-    }
-    if (!kernel_doubles) {
-        print("vk-host-test: FAILED - the kernel's output differs from four times its input\n", .{});
-        return 1;
-    }
-    if (!engine_doubles) {
-        print("vk-host-test: FAILED - the engine's compute path gave a wrong result\n", .{});
-        return 1;
-    }
-    if (zimrnum_failures > 0) {
-        print("vk-host-test: FAILED - {d} of zimrnum's {d} cases differ from the CPU\n", .{
-            zimrnum_failures,
-            conf.cases.len,
+    return holds;
+}
+
+/// THE CONSTRAINT CHECK's MEASURES, PRINTED: every array's gap beside its bar, how many rows were compared, and
+/// Newton's rounds on each side. A run on another GPU is read for these, as the tracking check's gaps are.
+fn reportConstraintGaps(constraints: robotgpu_host.ConstraintVerdict) void {
+    inline for (robotgpu_host.constraint_array_bars, 0..) |array_bar, index| {
+        print("vk-host-test: robotgpu constraints: {s} {d:.2} epsilons from the twin (bar {d:.0})\n", .{
+            array_bar.name,
+            constraints.gaps_epsilons[index],
+            array_bar.bar_epsilons,
         });
-        return 1;
     }
-    const kit_gap_limit: f32 = 1.0e-5;
-    const kit_matches: bool = if (kit_gap) |gap| gap <= kit_gap_limit else false;
-    if (kit_gap) |gap| {
-        print("vk-host-test: the kit's learning kernels: largest relative gap {e} from the CPU twin\n", .{gap});
-    }
-    if (!kit_matches) {
-        print("vk-host-test: FAILED - the kit's learning kernels differ from their CPU twin\n", .{});
-        return 1;
-    }
-    // The robotgpu probe: within the reordering's rounding of the twin, and exactly itself run after run.
-    const probe_gap_limit: f32 = 1.0e-5;
-    if (probe.subgroup_gap) |gap| {
-        print("vk-host-test: robotgpu probe: subgroup sum {e} of its magnitudes from the twin\n", .{gap});
-    } else {
-        print("vk-host-test: robotgpu probe: subgroup sum not applicable - no subgroup arithmetic in compute\n", .{});
-    }
-    const two_runs: []const u8 = if (probe.repeats_exactly) "identical" else "DIFFERENT";
-    print("vk-host-test: robotgpu probe: workgroup sum {e} of its magnitudes from the twin; two device runs {s}\n", .{
-        probe.workgroup_gap,
-        two_runs,
+    const integers: []const u8 = if (constraints.integers_agree) "the twin's" else "NOT the twin's";
+    print("vk-host-test: robotgpu constraints: {d} rows compared, their integers {s}; Newton's rounds {d} on the " ++
+        "device and {d} on the twin, differing in {d} worlds by at most {d}\n", .{
+        constraints.rows_compared,
+        integers,
+        constraints.device_rounds,
+        constraints.twin_rounds,
+        constraints.worlds_rounds_differ,
+        constraints.largest_rounds_difference,
     });
+}
+
+/// One driven step of Geno's worlds: the floor made contacts to compare, and the device's step is the twin's within
+/// the step's bars (`StepVerdict.agrees`).
+fn oneStepHolds(one_step: SteppedOutcome) bool {
+    return one_step.floor_contacts > 0 and one_step.verdict.agrees();
+}
+
+/// A DECISION's VERDICT judges what a decision adds to the steps it takes. Measured on lavapipe: its own arithmetic
+/// - the filter's applied actions 0 epsilons from the twin's, the servo's targets 1 (a ball's target turned through
+/// the device's own sine and cosine) - and the poses it leaves 79.6; its last physics step's velocities up to 977
+/// and accelerations up to 8574. A 20 Hz servo multiplies a target's last-bit difference by its stiffness, omega^2
+/// about 16000, so over two physics steps the velocities and accelerations part further than one free step's bars
+/// allow: those are reported, not judged, and the step's own arithmetic is judged by the one-step comparison above.
+/// What is judged: the decision's own two arrays within a few epsilons, and the poses within the step's bar - a
+/// decision composed wrongly (a dispatch missed, out of order, the wrong frame or action read) misses both by far.
+fn decisionHolds(decision: DecisionOutcome) bool {
+    const own_arrays_bar_epsilons: f32 = 16;
+    const positions_bar: StepArrayGap = stepArrayGap(decision.verdict, "joint_positions");
+    const actions_within: bool = decision.applied_actions_gap_epsilons <= own_arrays_bar_epsilons;
+    const targets_within: bool = decision.servo_targets_gap_epsilons <= own_arrays_bar_epsilons;
+    const poses_within: bool = positions_bar.gap_epsilons <= positions_bar.bar_epsilons;
+    return actions_within and targets_within and poses_within;
+}
+
+/// THE TRACKING CHECK's GAPS, PRINTED as the probes print theirs - each float array's gap beside its bar. A run on
+/// another GPU is read for these: its rounding is not lavapipe's, and the bars are refined from what it shows.
+fn reportTrackingGaps(tracking: TrackingOutcome) void {
+    inline for (tracking_float_arrays, 0..) |tracked, index| {
+        std.debug.print("vk-host-test: robotgpu tracking: {s} {d:.2} epsilons from the twin (bar {d:.0})\n", .{
+            tracked.name,
+            tracking.float_gaps_epsilons[index],
+            tracked.bar_epsilons,
+        });
+    }
+}
+
+/// WHAT A WHOLE DECISION COSTS ON THE DEVICE, PRINTED: the timed decisions' wall seconds as decisions a second and as
+/// world-decisions a second - the worlds' count times that, the number a night's budget is made of - and the
+/// decision's dispatches with the microseconds each one took on average: where a decision's cost is its dispatches'
+/// own overhead, that number stays the same as the worlds grow.
+fn reportTrackingThroughput(tracking: TrackingOutcome) void {
+    const decisions: f64 = @floatFromInt(tracking.timed_decisions);
+    const worlds: f64 = @floatFromInt(tracking.world_count);
+    const dispatches: f64 = @floatFromInt(tracking.timed_dispatches);
+    const decisions_per_second: f64 = decisions / tracking.timed_seconds;
+    const world_decisions_per_second: f64 = worlds * decisions_per_second;
+    const dispatches_per_decision: f64 = dispatches / decisions;
+    const microseconds_per_dispatch: f64 = tracking.timed_seconds * 1_000_000.0 / dispatches;
+    const flags_read: []const u8 = if (tracking.reads_flags_every_decision) "every decision" else "at the end";
+    print("vk-host-test: robotgpu tracking throughput: {d} worlds, flags read {s} - {d} decisions of {d} physics " ++
+        "steps in {d:.3} s: {d:.1} decisions a second, {d:.0} world-decisions a second; {d:.0} dispatches a " ++
+        "decision, {d:.1} microseconds each\n", .{
+        tracking.world_count,
+        flags_read,
+        tracking.timed_decisions,
+        tracking.physics_steps,
+        tracking.timed_seconds,
+        decisions_per_second,
+        world_decisions_per_second,
+        dispatches_per_decision,
+        microseconds_per_dispatch,
+    });
+    const floats_a_world: u32 = tracking.state_floats / tracking.world_count;
+    const integers_a_world: u32 = tracking.state_integers / tracking.world_count;
+    const constraint_floats_a_world: u32 = tracking.constraint_floats / tracking.world_count;
+    print("vk-host-test:     a world holds {d} floats of state, {d} integers and {d} floats of constraint rows\n", .{
+        floats_a_world,
+        integers_a_world,
+        constraint_floats_a_world,
+    });
+}
+
+/// Whether `failure` is a simulator refused for its size: some arena of this build holds fewer worlds than were asked
+/// for (`robotgpu.LayoutError`).
+fn isArenaTooSmall(failure: anyerror) bool {
+    return switch (failure) {
+        error.WorldStateTooSmall,
+        error.WorldIntegersTooSmall,
+        error.ConstraintRowsTooSmall,
+        error.ModelTablesTooSmall,
+        error.ModelConstantsTooSmall,
+        => true,
+        else => false,
+    };
+}
+
+/// WHETHER THE TRACKING CHECK HOLDS: every float array within its bar, every integer array the twin's exactly, and
+/// the events the check is built around all there - an episode that ended and began again, an aftermath begun, a
+/// return, worlds pushed during their episode. A miss is named, with its numbers.
+fn trackingHolds(tracking: TrackingOutcome) bool {
+    var holds: bool = true;
+    inline for (tracking_float_arrays, 0..) |tracked, index| {
+        const gap_epsilons: f32 = tracking.float_gaps_epsilons[index];
+        // Written so a gap that is not a number misses its bar too.
+        const within_its_bar: bool = gap_epsilons <= tracked.bar_epsilons;
+        if (!within_its_bar) {
+            std.debug.print("vk-host-test: tracking: {s} is {d:.1} epsilons from the twin's, its bar {d:.0}\n", .{
+                tracked.name,
+                gap_epsilons,
+                tracked.bar_epsilons,
+            });
+            holds = false;
+        }
+    }
+    inline for (tracking_integer_arrays, 0..) |array_name, index| {
+        const differing: u32 = tracking.integer_differences[index];
+        if (differing != 0) {
+            std.debug.print("vk-host-test: tracking: {d} of {s}'s integers are not the twin's\n", .{
+                differing,
+                array_name,
+            });
+            holds = false;
+        }
+    }
+    const an_episode_began_again: bool = tracking.episodes_restarted >= 1;
+    const an_aftermath_began: bool = tracking.aftermaths_begun >= 1;
+    const a_character_returned: bool = tracking.returns >= 1;
+    const worlds_were_pushed: bool = tracking.worlds_pushed >= 1;
+    const events_happened: bool = an_episode_began_again and an_aftermath_began and a_character_returned and
+        worlds_were_pushed;
+    if (!events_happened) {
+        std.debug.print("vk-host-test: tracking: {d} restarts, {d} aftermaths, {d} returns, {d} pushes - " ++
+            "each must happen at least once\n", .{
+            tracking.episodes_restarted,
+            tracking.aftermaths_begun,
+            tracking.returns,
+            tracking.worlds_pushed,
+        });
+        holds = false;
+    }
+    return holds;
+}
+
+/// Over many steps the trajectories part, so the device is held to a physical quantity: under gravity alone each
+/// world's energy can change only by the integrator's own error, and the device's must differ from the twin's by
+/// less than a hundredth of that. Over Geno's 64 worlds and 100 steps, the twin's drift is 7.08e-2 of the starting
+/// energy, and the device's energy differs from the twin's by 2.15e-6 on lavapipe and 2.40e-6 on an RTX 5070.
+fn hundredStepsHold(hundred_steps: SteppedOutcome) bool {
+    const energy_bar: f32 = hundred_steps.largest_energy_drift / 100;
+    return hundred_steps.largest_energy_gap < energy_bar;
+}
+
+/// The kit's learning kernels against their CPU twin: the largest relative gap within float rounding; none measured
+/// is a failure.
+fn kitMatches(kit_gap: ?f32) bool {
+    const kit_gap_limit: f32 = 1.0e-5;
+    const gap: f32 = kit_gap orelse return false;
+    return gap <= kit_gap_limit;
+}
+
+/// The robotgpu probe's reductions: within the reordering's rounding of the twin, and exactly themselves run after
+/// run (a device without subgroup arithmetic has no subgroup sum to judge).
+fn probeHolds(probe: ProbeOutcome) bool {
+    const probe_gap_limit: f32 = 1.0e-5;
     const subgroup_holds: bool = if (probe.subgroup_gap) |gap| gap <= probe_gap_limit else true;
     const workgroup_holds: bool = probe.workgroup_gap <= probe_gap_limit;
-    const probe_holds: bool = subgroup_holds and workgroup_holds and probe.repeats_exactly;
-    if (!probe_holds) {
-        print("vk-host-test: FAILED - the robotgpu probe's reductions\n", .{});
-        return 1;
+    return subgroup_holds and workgroup_holds and probe.repeats_exactly;
+}
+
+/// The workgroup Cholesky: a true factorisation (L L^T within float rounding of A), the twin's arithmetic and
+/// zimrnum's within 128 epsilons, and the same bits every run.
+fn factorisationHolds(factorisation: CholeskyOutcome) bool {
+    const reconstructs: bool = factorisation.reconstruction_relative <= 1.0e-5;
+    const near_twin: bool = factorisation.device_twin_epsilons <= 128;
+    const twin_near_zimrnum: bool = factorisation.twin_zimrnum_epsilons <= 128;
+    return reconstructs and near_twin and twin_near_zimrnum and factorisation.repeats_exactly;
+}
+
+/// The timings: four times the work takes longer than once, and a pipe without timings reports none.
+fn timingsHold(timing: TimingOutcome) bool {
+    const measured: bool = timing.one_times_microseconds > 0;
+    const longer: bool = timing.four_times_microseconds > timing.one_times_microseconds;
+    return measured and longer and timing.untimed_reports_none;
+}
+
+test "robotgpu clear_overflow clears every world's overflow word and writes nothing else" {
+    const timer: TestTimer = .start("robotgpu clear_overflow");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    try expect(try runRobotgpuOverflow(testing.allocator, opened.device, opened.queue));
+}
+
+test "robotgpu large dispatch runs every index exactly once" {
+    const timer: TestTimer = .start("robotgpu large dispatch");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    try expect(try runDispatchTally(testing.allocator, opened.device, opened.queue));
+}
+
+test "robotgpu ranged readback returns each range as it was uploaded" {
+    const timer: TestTimer = .start("robotgpu ranged readback");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    try expect(try runRangedReadback(testing.allocator, opened.device, opened.queue));
+}
+
+test "robotgpu pushed dispatches each write their own pushed value" {
+    const timer: TestTimer = .start("robotgpu pushed dispatches");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    try expect(try runPushedBatch(testing.allocator, opened.device, opened.queue));
+}
+
+test "a borrowing pipe's writes are in the owner's buffer" {
+    const timer: TestTimer = .start("buffer lending");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    try expect(try runBorrowing(testing.allocator, opened.device, opened.queue));
+}
+
+test "robotgpu range requests are collected as they were when requested" {
+    const timer: TestTimer = .start("robotgpu range requests");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    try expect(try runRangeRequests(testing.allocator, opened.device, opened.queue));
+}
+
+test "zimrnum's kernels give the CPU's answers on the device, every case" {
+    const timer: TestTimer = .start("zimrnum's conformance sweep");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    const failures: u32 = try runZimrnumSweep(testing.allocator, opened.device, opened.queue);
+    try testing.expectEqual(@as(u32, 0), failures);
+}
+
+test "the kit's learning kernels match their CPU twin" {
+    const timer: TestTimer = .start("the kit's learning kernels");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    try expect(kitMatches(try runKitKernels(testing.allocator, opened.device, opened.queue)));
+}
+
+test "robotgpu probe's reductions are the twin's within rounding, and repeat exactly" {
+    const timer: TestTimer = .start("robotgpu probe");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    try expect(probeHolds(try runRobotgpuProbe(testing.allocator, opened.device, opened.queue)));
+}
+
+test "robotgpu workgroup Cholesky factorises, as the twin does, the same every run" {
+    const timer: TestTimer = .start("robotgpu Cholesky");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    try expect(factorisationHolds(try runCholesky(testing.allocator, opened.device, opened.queue)));
+}
+
+test "robotgpu timings: four times the work takes longer, and an untimed pipe reports none" {
+    const timer: TestTimer = .start("robotgpu timings");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    try expect(timingsHold(try runTimings(testing.allocator, opened.device, opened.queue)));
+}
+
+test "robotgpu on the floor: Geno's worlds standing and lying stay out of the floor, energy kept" {
+    const timer: TestTimer = .start("robotgpu on the floor");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    const size: FloorSize = floorSize();
+    const outcome: FloorStepsOutcome = try runRobotgpuFloorSteps(
+        testing.allocator,
+        opened.device,
+        opened.queue,
+        &tests_device_coverage,
+        size.world_count,
+        size.step_count,
+    );
+    try expect(floorStepsHold(outcome));
+}
+
+test "robotgpu constrained steps: the humanoid's worlds on their limits stay within them, energy kept" {
+    const timer: TestTimer = .start("robotgpu constrained steps");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    const outcome: LimitStepsOutcome = try runRobotgpuLimitSteps(
+        testing.allocator,
+        opened.device,
+        opened.queue,
+        &tests_device_coverage,
+        100,
+    );
+    try expect(limitStepsHold(outcome));
+}
+
+test "robotgpu's Sim: a step clears every world's overflow word" {
+    const timer: TestTimer = .start("robotgpu Sim");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    try expect(try runRobotgpuSim(testing.allocator, opened.device, opened.queue, &tests_device_coverage));
+}
+
+test "robotgpu constraints at the exact inertia: the device's rows and solve are the twin's" {
+    const timer: TestTimer = .start("robotgpu constraints at the exact inertia");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    const coverage: *DeviceCoverage = &tests_device_coverage;
+    const verdict: robotgpu_host.ConstraintVerdict =
+        try runRobotgpuConstraints(testing.allocator, opened.device, opened.queue, coverage, .exact);
+    // At full size the run is on a real GPU, whose gaps the bars are refined from: printed, pass or not.
+    if (test_options.long_checks) {
+        reportConstraintGaps(verdict);
     }
-    // The simulator's first kernel: every world's overflow word cleared, nothing else touched, device and twin alike.
-    if (!overflow_cleared) {
-        print("vk-host-test: FAILED - robotgpu's clear_overflow\n", .{});
-        return 1;
+    try expect(constraintsHold(verdict));
+}
+
+test "robotgpu constraints at the reference pose's inertia: the device's rows and solve are the twin's" {
+    const timer: TestTimer = .start("robotgpu constraints at the reference pose's inertia");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    const coverage: *DeviceCoverage = &tests_device_coverage;
+    const verdict: robotgpu_host.ConstraintVerdict =
+        try runRobotgpuConstraints(testing.allocator, opened.device, opened.queue, coverage, .reference_pose);
+    if (test_options.long_checks) {
+        reportConstraintGaps(verdict);
     }
-    print("vk-host-test: robotgpu clear_overflow: 64 worlds' overflow words cleared, nothing else written\n", .{});
-    // The memory envelope: an arena as large as a binding may span, its first and last pages written and read back.
-    const arena_bytes: u64 = envelope_bytes orelse {
-        print("vk-host-test: FAILED - an arena as large as a binding came back wrong at its start or end\n", .{});
-        return 1;
+    try expect(constraintsHold(verdict));
+}
+
+test "robotgpu step: one driven step on the device is the twin's within the step's bars, the floor touched" {
+    const timer: TestTimer = .start("robotgpu step");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    const coverage: *DeviceCoverage = &tests_device_coverage;
+    const outcome: SteppedOutcome =
+        try runRobotgpuSteps(testing.allocator, opened.device, opened.queue, coverage, 1, .driven);
+    try expect(oneStepHolds(outcome));
+}
+
+test "robotgpu over 100 steps under gravity: the device's energy within a hundredth of the integrator's drift" {
+    const timer: TestTimer = .start("robotgpu over 100 steps");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    const coverage: *DeviceCoverage = &tests_device_coverage;
+    const outcome: SteppedOutcome =
+        try runRobotgpuSteps(testing.allocator, opened.device, opened.queue, coverage, 100, .conservative);
+    try expect(hundredStepsHold(outcome));
+}
+
+test "robotgpu decision: the filter, the clip's targets and two physics steps are the twin's" {
+    const timer: TestTimer = .start("robotgpu decision");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    const coverage: *DeviceCoverage = &tests_device_coverage;
+    const decision: DecisionOutcome = try runRobotgpuDecision(testing.allocator, opened.device, opened.queue, coverage);
+    try expect(decisionHolds(decision));
+}
+
+test "robotgpu tracking: whole decisions on the device are the twin's - a loss, an end and a new start, pushes" {
+    const timer: TestTimer = .start("robotgpu tracking");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    const coverage: *DeviceCoverage = &tests_device_coverage;
+    const size: TrackingSize = .{ .world_count = 8, .timed_decisions = 0 };
+    const tracking: TrackingOutcome = try runRobotgpuTracking(
+        testing.allocator,
+        opened.device,
+        opened.queue,
+        coverage,
+        size,
+    );
+    // At full size the run is on a real GPU, whose gaps the bars are refined from: printed, pass or not.
+    if (test_options.long_checks) {
+        reportTrackingGaps(tracking);
+    }
+    try expect(trackingHolds(tracking));
+    try opened.expectNoNewValidationErrors();
+}
+
+test "robotgpu tracking throughput: what a whole decision costs on the device, by its worlds" {
+    const timer: TestTimer = .start("robotgpu tracking throughput");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    const coverage: *DeviceCoverage = &tests_device_coverage;
+    // By default a few decisions of a few worlds, sized for lavapipe. At full size (`-Dlong-checks`, a real GPU) a
+    // hundred decisions at each size: how the cost of a decision grows with its worlds says how far the GPU is from
+    // full, and the same size with the flags read once says what waiting for the GPU at every decision costs.
+    const full_sizes = [_]TrackingSize{
+        .{ .world_count = 8, .timed_decisions = 100, .warmup_decisions = 30 },
+        .{ .world_count = 32, .timed_decisions = 100, .warmup_decisions = 30 },
+        .{ .world_count = 64, .timed_decisions = 100, .warmup_decisions = 30, .profiles_kernels = true },
+        .{ .world_count = 64, .timed_decisions = 100, .warmup_decisions = 30, .reads_flags_every_decision = false },
+        // Sizes only a build with larger arenas holds (`-Dhost-test-sizes`); the twin's comparison is the small sizes'.
+        .{ .world_count = 256, .timed_decisions = 100, .warmup_decisions = 30, .compares_with_the_twin = false },
+        .{
+            .world_count = 1024,
+            .timed_decisions = 100,
+            .warmup_decisions = 30,
+            .compares_with_the_twin = false,
+            .profiles_kernels = true,
+        },
+        .{
+            .world_count = 1024,
+            .timed_decisions = 100,
+            .warmup_decisions = 30,
+            .compares_with_the_twin = false,
+            .reads_flags_every_decision = false,
+        },
     };
-    print("vk-host-test: robotgpu memory envelope: a {d} MB arena, its first and last pages written and read back\n", .{
-        arena_bytes >> 20,
+    const small_sizes = [_]TrackingSize{
+        .{ .world_count = 8, .timed_decisions = 4, .warmup_decisions = 1 },
+    };
+    const sizes: []const TrackingSize = if (test_options.long_checks) &full_sizes else &small_sizes;
+    // Every size is run and reported before any verdict: a miss at one size does not cost the others' numbers.
+    var every_size_holds: bool = true;
+    for (sizes) |size| {
+        const tracking: TrackingOutcome = runRobotgpuTracking(
+            testing.allocator,
+            opened.device,
+            opened.queue,
+            coverage,
+            size,
+        ) catch |failure| {
+            if (!isArenaTooSmall(failure)) {
+                return failure;
+            }
+            const not_run: []const u8 = "vk-host-test: robotgpu tracking throughput: {d} worlds do not fit this " ++
+                "build's arenas ({s}) - not run\n";
+            print(not_run, .{ size.world_count, @errorName(failure) });
+            continue;
+        };
+        reportTrackingThroughput(tracking);
+        if (!size.compares_with_the_twin) {
+            continue;
+        }
+        const holds: bool = trackingHolds(tracking);
+        if (!holds) {
+            every_size_holds = false;
+        }
+    }
+    try expect(every_size_holds);
+    try opened.expectNoNewValidationErrors();
+}
+
+test "a loop on a uniform workgroup value runs on the device as on the CPU" {
+    const timer: TestTimer = .start("uniform loop");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    try expect(try runUniformLoop(testing.allocator, opened.device, opened.queue));
+}
+
+test "an arena as large as a binding comes back right at its start and its end" {
+    const timer: TestTimer = .start("memory envelope");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    const arena_bytes: ?u64 = try runMemoryEnvelope(testing.allocator, opened.device, opened.queue);
+    try expect(arena_bytes != null);
+}
+
+test "robotgpu maths probe: every result within its bar of the twin" {
+    const timer: TestTimer = .start("robotgpu maths probe");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    var maths_gaps: [MathsCheck.results.len]f32 = undefined;
+    try expect(try runProbeTable(testing.allocator, opened.device, opened.queue, MathsCheck.table, &maths_gaps));
+    try expect(reportProbeResults("robotgpu maths probe", &MathsCheck.results, &maths_gaps));
+}
+
+test "robotgpu spatial probe: every result within its bar of the twin" {
+    const timer: TestTimer = .start("robotgpu spatial probe");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    var spatial_gaps: [SpatialCheck.results.len]f32 = undefined;
+    try expect(try runProbeTable(testing.allocator, opened.device, opened.queue, SpatialCheck.table, &spatial_gaps));
+    try expect(reportProbeResults("robotgpu spatial probe", &SpatialCheck.results, &spatial_gaps));
+}
+
+test "an element written by a constant index comes back as written" {
+    const timer: TestTimer = .start("constant index");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    try expect(try runConstantIndex(testing.allocator, opened.device, opened.queue));
+}
+
+test "the counting sort on the device is the CPU's" {
+    const timer: TestTimer = .start("counting sort");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    try expect(runCountingSort(opened.device, opened.queue));
+}
+
+test "a kernel's output is four times its input" {
+    const timer: TestTimer = .start("a kernel");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    try expect(runKernel(opened.device, opened.queue));
+}
+
+test "a texture clears without a validation error" {
+    const timer: TestTimer = .start("clear a texture");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    clearTexture(opened.device, opened.queue);
+    try opened.expectNoNewValidationErrors();
+}
+
+test "two render targets clear in one pass without a validation error" {
+    const timer: TestTimer = .start("clear two targets");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    clearTwoTargets(opened.device, opened.queue);
+    try opened.expectNoNewValidationErrors();
+}
+
+test "a texture reads back as it was written" {
+    const timer: TestTimer = .start("read back");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    try expect(readBack(opened.device, opened.queue));
+    try opened.expectNoNewValidationErrors();
+}
+
+test "a texture copies to another unchanged" {
+    const timer: TestTimer = .start("copy a texture");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    try expect(copyTexture(opened.device, opened.queue));
+    try opened.expectNoNewValidationErrors();
+}
+
+test "a draw lands on the headless screen as expected" {
+    const timer: TestTimer = .start("draw on the screen");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    try expect(drawOnScreen(opened.device, opened.queue));
+    try opened.expectNoNewValidationErrors();
+}
+
+test "mip levels and array layers are viewed without a validation error" {
+    const timer: TestTimer = .start("mip and array views");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    mipAndArrayViews(opened.device, opened.queue);
+    try opened.expectNoNewValidationErrors();
+}
+
+test "the engine's compute doubles its input on the device" {
+    const timer: TestTimer = .start("the engine's compute");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    try expect(try runEngineCompute(testing.allocator, opened.device, opened.queue));
+    try opened.expectNoNewValidationErrors();
+}
+
+test "the training pipelines are made without a validation error" {
+    const timer: TestTimer = .start("training pipelines");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    try makeTrainingPipelines(testing.allocator, opened.device, opened.queue);
+    try opened.expectNoNewValidationErrors();
+}
+
+test "one device, two pipelines: a kit's field reaches a simulator's exactly, and the policy acts for the simulator" {
+    // The learning kit's pipeline (zn_mlp) and the simulator's (robotgpu) on Geno's model, shared by the two checks:
+    // llvmpipe keeps the memory of a simulator after it is freed, so each simulator a run makes adds to its peak.
+    const timer: TestTimer = .start("one device, two pipelines");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    const KitKernelEntry: type = z.Compute(zn_mlp).KernelWgsl;
+    const kit_kernel_entries: [zn_mlp.kernels.len]KitKernelEntry = spirvEntries(zn_mlp, zn_mlp_spirv);
+    var kit_pipe: z.Compute(zn_mlp) = try .initGpu(testing.allocator, opened.device, opened.queue, &kit_kernel_entries);
+    defer kit_pipe.deinit();
+    const SimulatorKernelEntry: type = robotgpu_host.Pipe.KernelWgsl;
+    const simulator_kernel_entries: [robotgpu.kernels.len]SimulatorKernelEntry = spirvEntries(robotgpu, robotgpu_spirv);
+    var geno: z.robot_mjcf.Imported = try z.robot_mjcf.importSource(testing.allocator, z.robot_geno_model, .{});
+    defer geno.deinit();
+    const geno_model: *const z.robot.Model = &geno.model;
+    const simulated_world_count: u32 = 8;
+    const simulator_entries: []const SimulatorKernelEntry = &simulator_kernel_entries;
+    var simulator: robotgpu_host.Sim = try .initGpu(
+        testing.allocator,
+        opened.device,
+        opened.queue,
+        simulator_entries,
+        geno_model,
+        simulated_world_count,
+    );
+    defer simulator.deinit();
+    defer tests_device_coverage.add(&simulator);
+    try expect(try runCopyBetweenPipelines(&kit_pipe, &simulator));
+    try expect(try runActingOnTheDevice(testing.allocator, &kit_pipe, &simulator, geno_model));
+    try opened.expectNoNewValidationErrors();
+}
+
+test "a view and a sampler released while a bind group holds them are destroyed once, after the group" {
+    const timer: TestTimer = .start("release while held");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    releaseWhileHeld(opened.device);
+    try opened.expectNoNewValidationErrors();
+}
+
+test "bind groups made and destroyed round after round keep the host's descriptor pages and staging bounded" {
+    const timer: TestTimer = .start("bind group churn");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    try expect(churnBindGroups(opened.device, opened.queue));
+    try opened.expectNoNewValidationErrors();
+}
+
+test "large writes round after round keep the staging within its budget and one large chunk" {
+    const timer: TestTimer = .start("large write churn");
+    defer timer.report();
+    const opened: TestDevice = try .open();
+    try expect(try churnLargeWrites(opened.device, opened.queue));
+    try opened.expectNoNewValidationErrors();
+}
+
+test "the validation layer reported no error over the whole run" {
+    // No call of any test made the layer complain - judged at the host's shutdown, since an object never destroyed is
+    // reported only when the device is. Declared next to last: every device test before it has run, and the coverage
+    // report after it needs no device.
+    if (!vulkan_host.isStarted()) {
+        return error.SkipZigTest;
+    }
+    const counts: vulkan_host.MessageCounts = vulkan_host.shutdown();
+    try testing.expectEqual(@as(u32, 0), counts.errors);
+}
+
+test "the device's coverage: which robotgpu kernels the tests dispatched on the GPU" {
+    // A run limited by `-Dtest-filter` dispatches only its part: nothing to report.
+    if (test_options.filtered) {
+        return error.SkipZigTest;
+    }
+    var never_dispatched: usize = 0;
+    var missing_from_the_device: usize = 0;
+    for (robotgpu.kernels, tests_device_coverage.dispatches) |kernel, dispatched| {
+        if (dispatched != 0) {
+            continue;
+        }
+        never_dispatched += 1;
+        if (hasNoWorkInTheTestModels(kernel)) {
+            std.debug.print("vk-host-test: robotgpu kernel '{s}' has no work in this test's models\n", .{kernel});
+        } else {
+            std.debug.print("vk-host-test: robotgpu kernel '{s}' never dispatched on the device\n", .{kernel});
+            missing_from_the_device += 1;
+        }
+    }
+    const dispatched_kernels: usize = robotgpu.kernels.len - never_dispatched;
+    std.debug.print("vk-host-test: robotgpu device coverage - {d} of {d} kernels dispatched on the device\n", .{
+        dispatched_kernels,
+        robotgpu.kernels.len,
     });
-    // The workgroup Cholesky: a true factorisation, the twin's arithmetic, and the same bits every run.
-    print("vk-host-test: robotgpu Cholesky: L L^T within {e} of A; device {d:.2} epsilons from the twin; " ++
-        "twin {d:.2} from zimrnum's; two device runs {s}\n", .{
-        factorisation.reconstruction_relative,
-        factorisation.device_twin_epsilons,
-        factorisation.twin_zimrnum_epsilons,
-        if (factorisation.repeats_exactly) "identical" else "DIFFERENT",
-    });
-    const factorisation_holds: bool = factorisation.reconstruction_relative <= 1.0e-5 and
-        factorisation.device_twin_epsilons <= 128 and factorisation.twin_zimrnum_epsilons <= 128 and
-        factorisation.repeats_exactly;
-    if (!factorisation_holds) {
-        print("vk-host-test: FAILED - the robotgpu Cholesky\n", .{});
-        return 1;
-    }
-    // Lending: a borrower's writes are in the owner's buffer, with nothing copied between them.
-    if (!lending_holds) {
-        print("vk-host-test: FAILED - a borrowing pipe's writes are not in the owner's buffer\n", .{});
-        return 1;
-    }
-    print("vk-host-test: robotgpu buffer lending: the borrower's writes read back from the owner's buffer\n", .{});
-    // Timings: four times the work takes longer; a pipe without timings reports none.
-    const timing_ratio: f64 = timing.four_times_microseconds / @max(timing.one_times_microseconds, 1.0e-9);
-    print("vk-host-test: robotgpu timings: busy_work {d:.0} us, four times the rounds {d:.0} us ({d:.2}x)\n", .{
-        timing.one_times_microseconds,
-        timing.four_times_microseconds,
-        timing_ratio,
-    });
-    const timings_hold: bool = timing.one_times_microseconds > 0 and
-        timing.four_times_microseconds > timing.one_times_microseconds and timing.untimed_reports_none;
-    if (!timings_hold) {
-        print("vk-host-test: FAILED - the robotgpu timings\n", .{});
-        return 1;
-    }
-    // Push constants: three dispatches of one batch, each with its own push, each region its own value.
-    if (!pushes_hold) {
-        print("vk-host-test: FAILED - a robotgpu pushed dispatch wrote another dispatch's value\n", .{});
-        return 1;
-    }
-    print("vk-host-test: robotgpu push constants: one batch, three dispatches, each region its own value\n", .{});
-    // Ranged readback: three ranges of one field, through chunks of the staging buffer, equal to what was uploaded.
-    if (!ranges_match) {
-        print("vk-host-test: FAILED - a robotgpu ranged readback differs from what was uploaded\n", .{});
-        return 1;
-    }
-    print("vk-host-test: robotgpu ranged readback: three ranges, one across three chunks, equal to the upload\n", .{});
-    // The large dispatch: every index below the count run exactly once, across two rows of workgroups.
-    if (!tally_holds) {
-        print("vk-host-test: FAILED - the robotgpu large dispatch did not run every index exactly once\n", .{});
-        return 1;
-    }
-    // The maths and spatial probes: each result within its bar of the twin, in epsilons at the result's scale.
-    if (!maths_read or !spatial_read) {
-        print("vk-host-test: FAILED - a robotgpu probe table's readback never came\n", .{});
-        return 1;
-    }
-    const maths_holds: bool = reportProbeResults("robotgpu maths probe", &MathsCheck.results, &maths_gaps);
-    const spatial_holds: bool = reportProbeResults("robotgpu spatial probe", &SpatialCheck.results, &spatial_gaps);
-    if (!maths_holds or !spatial_holds) {
-        print("vk-host-test: FAILED - a robotgpu probe table\n", .{});
-        return 1;
-    }
-    if (!constants_land) {
-        print("vk-host-test: FAILED - an element written by a constant index came back wrong\n", .{});
-        return 1;
-    }
-    if (engine_leaked) {
-        print("vk-host-test: FAILED - the engine's compute path leaked memory\n", .{});
-        return 1;
-    }
-    if (!sort_matches) {
-        print("vk-host-test: FAILED - the counting sort differs from the CPU's\n", .{});
-        return 1;
-    }
-    if (!bounded) {
-        print("vk-host-test: FAILED - descriptor pages or staging chunks grew without bound\n", .{});
-        return 1;
-    }
-    if (counts.errors == 0 and counts.warnings == 0) {
-        print(
-            "vk-host-test: clear, targets, read, copy, screen, views, compute, engine, zimrnum, pipelines, kit, " ++
-                "constant, lifetimes, sort, churn and large writes" ++
-                " - no validation errors, no warnings\n",
-            .{},
-        );
-        return 0;
-    }
-    print("vk-host-test: FAILED - {d} validation errors, {d} warnings\n", .{ counts.errors, counts.warnings });
-    return 1;
+    // A kernel no test sends to a GPU is checked on the CPU twin alone, which proves nothing about the device.
+    try expectEqual(@as(usize, 0), missing_from_the_device);
 }

@@ -1,0 +1,4 @@
+// robotgpu lab: every check run to its verdict - a step, and the constraint program, submitted on the GPU and on the
+// CPU twin, all collected and compared - then the page captured. No input; 640 x 420.
+.{ .advance = 30 }
+.{ .capture_to = "robotgpu_lab_checks.png" }

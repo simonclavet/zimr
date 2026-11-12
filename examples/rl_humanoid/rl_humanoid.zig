@@ -116,7 +116,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     try s.watch_env.reset(s.watch_seed, s.watch_obs);
     s.watch_accumulator = 0;
     s.watch_steps = 0;
-    s.watch_start_x = s.watch_env.data.pos[0];
+    s.watch_start_x = s.watch_env.data.joint_positions[0];
     s.last_watch_steps = 0;
     s.last_watch_distance = 0;
     s.show_training = false;
@@ -204,13 +204,13 @@ fn watch(f: *z.Frame, s: *State) void {
         s.watch_steps += 1;
         if (result.terminated or result.truncated) {
             s.last_watch_steps = s.watch_steps;
-            s.last_watch_distance = s.watch_env.data.pos[0] - s.watch_start_x;
+            s.last_watch_distance = s.watch_env.data.joint_positions[0] - s.watch_start_x;
             s.watch_steps = 0;
             s.watch_seed += 1;
             s.watch_env.reset(s.watch_seed, s.watch_obs) catch |err| {
                 assertUnreachable(@src(), "resetting the watched episode failed: {t}", .{err});
             };
-            s.watch_start_x = s.watch_env.data.pos[0];
+            s.watch_start_x = s.watch_env.data.joint_positions[0];
         }
     }
     if (steps == 4) {
@@ -269,8 +269,8 @@ fn drawGeom(
     tint: Color,
 ) void {
     const m: *const rbt.Model = &s.env.imported.model;
-    const world_pos: Vec = body_pos + rotate(body_rot, m.geom_pos[g]);
-    const world_rot: Mat = quatToMat(qmul(body_rot, m.geom_rot[g]));
+    const world_pos: Vec = body_pos + rotate(body_rot, m.geom_local_position[g]);
+    const world_rot: Mat = quatToMat(qmul(body_rot, m.geom_local_rotation[g]));
     const place: Mat = mulMat(
         mulMat(zUpToYUp(), translation(world_pos[0], world_pos[1], world_pos[2])),
         world_rot,
@@ -332,10 +332,10 @@ fn update(f: *z.Frame, s: *State) void {
     const m: *const rbt.Model = &shown.imported.model;
     const d: *const rbt.Data = &shown.data;
     // Follow the character: it walks away from the origin as it learns.
-    const follow: Vec = vec(-d.pos[0], -d.pos[1], 0);
-    for (0..m.ngeom) |g| {
+    const follow: Vec = vec(-d.joint_positions[0], -d.joint_positions[1], 0);
+    for (0..m.geom_count) |g| {
         const body: u32 = m.geom_body[g];
-        drawGeom(s, gl, g, d.body_xpos[body] + follow, d.body_xrot[body], body_col);
+        drawGeom(s, gl, g, d.body_positions[body] + follow, d.body_orientations[body], body_col);
     }
     z.endMode3D(gl);
 }

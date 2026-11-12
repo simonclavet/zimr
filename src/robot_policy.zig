@@ -112,7 +112,7 @@ fn indexOfName(names: []const []const u8, want: []const u8) ?usize {
 }
 
 fn dofsOf(m: *const rbt.Model, joint: usize) usize {
-    return switch (m.jnt_type[joint]) {
+    return switch (m.joint_type[joint]) {
         .free => 6,
         .ball => 3,
         .hinge, .slide => 1,
@@ -146,8 +146,8 @@ pub fn subsetFor(
         assertf(maybe != null, @src(), "no body named {s} in this model", .{want});
         const body: usize = maybe.?;
         var found: usize = 0;
-        for (0..m.njnt) |j| {
-            if (m.jnt_body[j] == body and m.jnt_type[j] != .free) {
+        for (0..m.joint_count) |j| {
+            if (m.joint_body[j] == body and m.joint_type[j] != .free) {
                 try joint_list.append(gpa, j);
                 dofs += dofsOf(m, j);
                 found += 1;
@@ -176,8 +176,8 @@ pub fn everyActuatedJoint(gpa: Allocator, m: *const rbt.Model) !Subset {
     var joint_list: ArrayList(usize) = .empty;
     errdefer joint_list.deinit(gpa);
     var dofs: usize = 0;
-    for (0..m.njnt) |joint| {
-        const is_root: bool = m.jnt_type[joint] == .free;
+    for (0..m.joint_count) |joint| {
+        const is_root: bool = m.joint_type[joint] == .free;
         if (!is_root) {
             try joint_list.append(gpa, joint);
             dofs += dofsOf(m, joint);
@@ -272,12 +272,12 @@ pub const Views = struct {
 
     pub fn init(gpa: Allocator, m: *const rbt.Model) !Views {
         var views: Views = .{ .reference = undefined, .ahead = undefined, .probe = undefined };
-        views.reference = try track.State.init(gpa, m.nbody);
+        views.reference = try track.State.init(gpa, m.body_count);
         errdefer views.reference.deinit(gpa);
         var made: usize = 0;
         errdefer for (views.ahead[0..made]) |*state| state.deinit(gpa);
         for (&views.ahead) |*state| {
-            state.* = try track.State.init(gpa, m.nbody);
+            state.* = try track.State.init(gpa, m.body_count);
             made += 1;
         }
         views.probe = try rbt.Data.init(gpa, m);
@@ -336,7 +336,7 @@ pub fn observe(
     // FROM the centre of mass cannot show. Vertical, so no heading changes it.
     out[at] = sim_frame.origin[2];
     at += 1;
-    // WHERE THE REFERENCE IS, from the character (Simon, Sep 26; MimicKit places its targets exactly so): its
+    // WHERE THE REFERENCE IS, from the character (MimicKit places its targets exactly so): its
     // centre of mass in the character's heading frame, and its heading against the character's, as cos and sin.
     // Every other term is a difference taken in each character's OWN frame - drift-free by construction, which
     // also made drift INVISIBLE: a policy rewarded for following the reference's root motion could not see that
@@ -464,7 +464,7 @@ pub const Controller = struct {
         for (0..self.envs) |env| {
             var at: usize = 0;
             for (self.subset.joints) |joint| {
-                const dof: usize = self.m.jnt_dof_adr[joint] - track.rootDofs(self.m);
+                const dof: usize = self.m.joint_first_dof[joint] - track.rootDofs(self.m);
                 const count: usize = dofsOf(self.m, joint);
                 @memcpy(
                     self.expanded[env * action_size + dof ..][0..count],
@@ -541,20 +541,20 @@ test "robot_policy: the observation does not move with the character" {
     defer subset.deinit(gpa);
     var data: rbt.Data = try .init(gpa, m);
     defer data.deinit();
-    var sim: track.State = try .init(gpa, m.nbody);
+    var sim: track.State = try .init(gpa, m.body_count);
     defer sim.deinit(gpa);
-    var reference: track.State = try .init(gpa, m.nbody);
+    var reference: track.State = try .init(gpa, m.body_count);
     defer reference.deinit(gpa);
-    var moved_sim: track.State = try .init(gpa, m.nbody);
+    var moved_sim: track.State = try .init(gpa, m.body_count);
     defer moved_sim.deinit(gpa);
-    var moved_reference: track.State = try .init(gpa, m.nbody);
+    var moved_reference: track.State = try .init(gpa, m.body_count);
     defer moved_reference.deinit(gpa);
     // The reference further ahead: three more poses, each a little further on.
     var ahead: [lookahead_frames.len]track.State = undefined;
     var moved_ahead: [lookahead_frames.len]track.State = undefined;
     for (&ahead, &moved_ahead) |*a, *b| {
-        a.* = try track.State.init(gpa, m.nbody);
-        b.* = try track.State.init(gpa, m.nbody);
+        a.* = try track.State.init(gpa, m.body_count);
+        b.* = try track.State.init(gpa, m.body_count);
     }
     defer for (&ahead, &moved_ahead) |*a, *b| {
         a.deinit(gpa);
@@ -565,28 +565,28 @@ test "robot_policy: the observation does not move with the character" {
     var rng: Random.DefaultPrng = .init(4);
     const random: Random = rng.random();
     data.reset(m);
-    for (data.pos[7..]) |*q| {
+    for (data.joint_positions[7..]) |*q| {
         q.* += 0.3 * random.floatNorm(f32);
     }
-    for (data.vel) |*v| {
+    for (data.joint_velocities) |*v| {
         v.* = 0.2 * random.floatNorm(f32);
     }
     // A tilted, moving character, and a reference a little away from it.
-    data.pos[2] = 1.1;
+    data.joint_positions[2] = 1.1;
     data.stage = .stale;
     rbt.forward(m, &data);
     track.stateOf(m, &data, &sim);
-    for (data.pos[7..]) |*q| {
+    for (data.joint_positions[7..]) |*q| {
         q.* += 0.05;
     }
     data.stage = .stale;
     rbt.forward(m, &data);
     track.stateOf(m, &data, &reference);
     for (&ahead) |*future| {
-        for (data.pos[7..]) |*q| {
+        for (data.joint_positions[7..]) |*q| {
             q.* += 0.03;
         }
-        data.pos[2] += 0.05;
+        data.joint_positions[2] += 0.05;
         data.stage = .stale;
         rbt.forward(m, &data);
         track.stateOf(m, &data, future);
@@ -609,7 +609,7 @@ test "robot_policy: the observation does not move with the character" {
     const froms = [_]*track.State{ &sim, &reference, &ahead[0], &ahead[1], &ahead[2] };
     const tos = [_]*track.State{ &moved_sim, &moved_reference, &moved_ahead[0], &moved_ahead[1], &moved_ahead[2] };
     for (froms, tos) |from, to| {
-        for (0..m.nbody) |b| {
+        for (0..m.body_count) |b| {
             to.positions[b] = rotate(turn, from.positions[b]) + shift;
             to.rotations[b] = zm.qmul(turn, from.rotations[b]);
             to.velocities[b] = rotate(turn, from.velocities[b]);
@@ -630,7 +630,7 @@ test "robot_policy: the observation does not move with the character" {
 
     // And a tilt DOES change it - the control that says the invariance is not simply blindness.
     const lean: Quat = .{ @sin(0.15), 0.0, 0.0, @cos(0.15) };
-    for (0..m.nbody) |b| {
+    for (0..m.body_count) |b| {
         moved_sim.positions[b] = rotate(lean, sim.positions[b]);
         moved_sim.rotations[b] = zm.qmul(lean, sim.rotations[b]);
         moved_sim.velocities[b] = rotate(lean, sim.velocities[b]);
@@ -647,7 +647,7 @@ test "robot_policy: the observation does not move with the character" {
     // exactly that much - then turned ALONE 0.3 rad about its centre of mass - the heading it sees must turn by
     // exactly that. (Right after the height: the reference's place at 10..13, its heading at 13..15.)
     observe(m, subset, sim, reference, &ahead, root, previous, before);
-    for (0..m.nbody) |b| {
+    for (0..m.body_count) |b| {
         moved_reference.positions[b] = reference.positions[b] + vec(0.5, 0.0, 0.0);
         moved_reference.rotations[b] = reference.rotations[b];
         moved_reference.velocities[b] = reference.velocities[b];
@@ -657,7 +657,7 @@ test "robot_policy: the observation does not move with the character" {
     const shifted: f32 = length3(vec(after[10], after[11], after[12]) - vec(before[10], before[11], before[12]));
     const centre: Vec = centreOfMass(m, reference);
     const yaw: Quat = .{ 0.0, 0.0, @sin(0.15), @cos(0.15) };
-    for (0..m.nbody) |b| {
+    for (0..m.body_count) |b| {
         moved_reference.positions[b] = rotate(yaw, reference.positions[b] - centre) + centre;
         moved_reference.rotations[b] = zm.qmul(yaw, reference.rotations[b]);
     }

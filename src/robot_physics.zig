@@ -158,8 +158,8 @@ fn addShape(
 /// poses is exactly what it is for.
 fn geomPose(model: *const rbt.Model, data: *const rbt.Data, geom: u32) rbt.Pose {
     const body: u32 = model.geom_body[geom];
-    const body_pose: rbt.Pose = .{ .pos = data.body_xpos[body], .rot = data.body_xrot[body] };
-    return body_pose.compose(.{ .pos = model.geom_pos[geom], .rot = model.geom_rot[geom] });
+    const body_pose: rbt.Pose = .{ .pos = data.body_positions[body], .rot = data.body_orientations[body] };
+    return body_pose.compose(.{ .pos = model.geom_local_position[geom], .rot = model.geom_local_rotation[geom] });
 }
 
 /// Contacts act from the moment they overlap, with no early-engagement margin.
@@ -381,7 +381,7 @@ pub const Bridge = struct {
         data: *const rbt.Data,
         world_body_capacity: u32,
     ) !Bridge {
-        const count: usize = model.ngeom;
+        const count: usize = model.geom_count;
 
         // ** ALLOCATED ONE AT A TIME WITH `errdefer`, not in a struct literal.
         //
@@ -399,26 +399,26 @@ pub const Bridge = struct {
         errdefer gpa.free(world_to_robot);
         const events: []Event = try gpa.alloc(Event, model.opt.max_contacts);
         errdefer gpa.free(events);
-        const rigid: []bool = try gpa.alloc(bool, model.nbody);
+        const rigid: []bool = try gpa.alloc(bool, model.body_count);
         errdefer gpa.free(rigid);
         // * COMPUTED PARENT-FIRST, so `weld[parent]` is already final when a child reads it.
         // `buildRuntime` guarantees that ordering, which is what makes one pass enough.
-        const weld: []u32 = try gpa.alloc(u32, model.nbody);
+        const weld: []u32 = try gpa.alloc(u32, model.body_count);
         errdefer gpa.free(weld);
         weld[rbt.world_body] = rbt.world_body;
-        for (1..model.nbody) |body| {
-            weld[body] = if (model.body_dof_num[body] > 0)
+        for (1..model.body_count) |body| {
+            weld[body] = if (model.body_dof_count[body] > 0)
                 @intCast(body)
             else
                 weld[model.body_parent[body]];
         }
-        const weld_parent: []u32 = try gpa.alloc(u32, model.nbody);
+        const weld_parent: []u32 = try gpa.alloc(u32, model.body_count);
         errdefer gpa.free(weld_parent);
-        for (0..model.nbody) |body| {
+        for (0..model.body_count) |body| {
             weld_parent[body] = weld[model.body_parent[weld[body]]];
         }
         // One swept hit per geom is the most a single step can produce.
-        const swept: []SweptHit = try gpa.alloc(SweptHit, model.ngeom);
+        const swept: []SweptHit = try gpa.alloc(SweptHit, model.geom_count);
         errdefer gpa.free(swept);
 
         // * WELDED-TO-THE-WORLD, PRECOMPUTED. A body with no articulated DOF between it
@@ -434,7 +434,7 @@ pub const Bridge = struct {
             var dofs: u32 = 0;
             var walk: u32 = @intCast(body);
             while (walk != rbt.world_body) : (walk = model.body_parent[walk]) {
-                dofs += model.body_dof_num[walk];
+                dofs += model.body_dof_count[walk];
             }
             flag.* = dofs == 0;
         }
@@ -694,7 +694,7 @@ pub const Bridge = struct {
         const sweeping: bool = !self.skip_sweep_once and !data.teleported;
         self.skip_sweep_once = false;
         data.teleported = false;
-        for (0..model.ngeom) |geom| {
+        for (0..model.geom_count) |geom| {
             const pose: rbt.Pose = geomPose(model, data, @intCast(geom));
             const handle: zimrphysics.BodyIndex = self.proxy[geom].index();
             // * READ WHERE IT WAS BEFORE MOVING IT. The proxy's current position IS last
@@ -821,7 +821,7 @@ pub const Bridge = struct {
         const other_friction: f32 = world.bodies.data[impact.body].friction;
         // ---- BOUNDED, BECAUSE `swept` IS SIZED BY A GUESS ----
         //
-        // *** `swept` is `alloc(SweptHit, model.ngeom)`, which assumes AT MOST ONE SWEEP PER
+        // *** `swept` is `alloc(SweptHit, model.geom_count)`, which assumes AT MOST ONE SWEEP PER
         // GEOM. A geom that moves far enough in one step can sweep against several others, so
         // the assumption is a heuristic and not a bound - and this write had no check at all.
         //
@@ -946,7 +946,7 @@ pub const Bridge = struct {
                 // * CAPPED, because an unbounded margin is a body that collides with things it
                 // will never reach - and an earlier attempt at a large fixed margin produced
                 // 1.4 GN in the full scene.
-                .margin = speculativeMargin(data.cvel[event.robot_body].lin, self.timestep),
+                .margin = speculativeMargin(data.body_velocities[event.robot_body].lin, self.timestep),
                 // * BOTH SIDES AS TREE BODIES where they are. `world_body` on the `a` side
                 // is now the SPECIAL case - static geometry - rather than the only case.
                 // ** THE SAME FLESH SETTINGS AS THE SWEPT PATH. This site had no `softness` or
@@ -1217,7 +1217,7 @@ test "bridge: the contact actually holds the link up" {
     });
 
     // Start displaced so gravity swings the link down onto the floor.
-    data.pos[0] = 0.9;
+    data.joint_positions[0] = 0.9;
     rbt.forward(&model, &data);
 
     var bridge: Bridge = try .init(gpa, &world, &model, &data, 64);
@@ -1240,9 +1240,9 @@ test "bridge: the contact actually holds the link up" {
     // A contact really did happen - otherwise this test proves nothing about contacts.
     try expect(saw_contact);
     // And the state stayed finite, which a badly-signed normal would not.
-    try expect(data.pos[0] == data.pos[0]); // NaN check without std.math
-    try expect(@abs(data.pos[0]) < 10.0);
-    try expect(@abs(data.vel[0]) < 50.0);
+    try expect(data.joint_positions[0] == data.joint_positions[0]); // NaN check without std.math
+    try expect(@abs(data.joint_positions[0]) < 10.0);
+    try expect(@abs(data.joint_velocities[0]) < 50.0);
 }
 
 test "bridge: a settled crate keeps reporting contacts after the sleep timer elapses" {
@@ -1310,7 +1310,7 @@ test "bridge: a settled crate keeps reporting contacts after the sleep timer ela
             contacts_late += data.contact_count;
         }
         rbt.forward(&model, &data);
-        @memcpy(data.applied_force, data.bias_force); // hold the arm still
+        @memcpy(data.applied_joint_forces, data.bias_joint_forces); // hold the arm still
         rbt.step(&model, &data);
     }
 
@@ -1339,7 +1339,7 @@ test "bridge: pairs with no robot in them are ignored" {
     defer world.deinit(gpa);
 
     // Put the robot far away from everything.
-    data.pos[0] = 0;
+    data.joint_positions[0] = 0;
     rbt.forward(&model, &data);
     var bridge: Bridge = try .init(gpa, &world, &model, &data, 64);
     defer bridge.deinit(&world);
@@ -1456,8 +1456,8 @@ test "hull geoms collide, so an imported robot can touch the world" {
     // body centre near -0.3 - checked loosely, since the exact penetration is a function of
     // both engines' softness.
     try expect(touched);
-    try expect(data.pos[0] > -0.45);
-    try expect(data.pos[0] < -0.15);
+    try expect(data.joint_positions[0] > -0.45);
+    try expect(data.joint_positions[0] < -0.15);
 }
 
 test "bridge: a failed allocation partway through init leaks nothing" {
@@ -1543,21 +1543,21 @@ test "* a fast projectile is stopped, not passed through" {
 
     // 100 m/s is 0.2 m per step - four times the ball's diameter, and twice the wall's
     // thickness. Nothing discrete can see this.
-    data.vel[2] = 100.0;
+    data.joint_velocities[2] = 100.0;
     data.stage = .stale;
     for (0..600) |_| {
         rbt.forward(&model, &data);
         try bridge.sync(&world, &model, &data);
         try zimrphysics.step(&world, 1.0 / 500.0);
         bridge.harvest(&data);
-        @memset(data.applied_force, 0);
+        @memset(data.applied_joint_forces, 0);
         rbt.step(&model, &data);
     }
     rbt.forward(&model, &data);
 
     // * IT IS ON THE NEAR SIDE. Where exactly does not matter - it bounces and falls - but
     // which side of the wall it ended up on is the whole question.
-    try expect(data.body_xpos[1][2] < 0.0);
+    try expect(data.body_positions[1][2] < 0.0);
 }
 
 test "* a keyframe teleport is detected without being announced" {
@@ -1598,14 +1598,14 @@ test "* a keyframe teleport is detected without being announced" {
         try bridge.sync(&world, &model, &data);
         try zimrphysics.step(&world, 1.0 / 500.0);
         bridge.harvest(&data);
-        @memset(data.applied_force, 0);
+        @memset(data.applied_joint_forces, 0);
         rbt.step(&model, &data);
     }
 
     // * `reset` MOVES EVERYTHING AND SETS THE FLAG ITSELF. No `bridge.teleported()` here.
     data.reset(&model);
-    data.pos[0] = 15.0;
-    data.pos[2] = -9.0;
+    data.joint_positions[0] = 15.0;
+    data.joint_positions[2] = -9.0;
     rbt.forward(&model, &data);
     try expect(data.teleported); // the flag survived `forward`
 
@@ -1614,15 +1614,15 @@ test "* a keyframe teleport is detected without being announced" {
         try bridge.sync(&world, &model, &data);
         try zimrphysics.step(&world, 1.0 / 500.0);
         bridge.harvest(&data);
-        @memset(data.applied_force, 0);
+        @memset(data.applied_joint_forces, 0);
         rbt.step(&model, &data);
     }
     // * AND IT IS CLEARED AFTER ONE SYNC, or continuous collision would be off for good.
     try expect(!data.teleported);
 
     var fastest: f32 = 0;
-    for (0..model.nv) |i| {
-        fastest = @max(fastest, @abs(data.vel[i]));
+    for (0..model.dof_count) |i| {
+        fastest = @max(fastest, @abs(data.joint_velocities[i]));
     }
     try expect(fastest < 2.0);
 }
@@ -1671,15 +1671,15 @@ test "* a teleported body does not explode" {
         try bridge.sync(&world, &model, &data);
         try zimrphysics.step(&world, 1.0 / 500.0);
         bridge.harvest(&data);
-        @memset(data.applied_force, 0);
+        @memset(data.applied_joint_forces, 0);
         rbt.step(&model, &data);
     }
 
     // * NOW TELEPORT IT ACROSS THE WORLD - twelve metres in one step, which is what a reset
     // looks like to the bridge.
-    data.pos[0] = 12.0;
-    data.pos[2] = -8.0;
-    @memset(data.vel, 0);
+    data.joint_positions[0] = 12.0;
+    data.joint_positions[2] = -8.0;
+    @memset(data.joint_velocities, 0);
     data.stage = .stale;
     rbt.forward(&model, &data);
 
@@ -1688,7 +1688,7 @@ test "* a teleported body does not explode" {
         try bridge.sync(&world, &model, &data);
         try zimrphysics.step(&world, 1.0 / 500.0);
         bridge.harvest(&data);
-        @memset(data.applied_force, 0);
+        @memset(data.applied_joint_forces, 0);
         rbt.step(&model, &data);
     }
 
@@ -1697,13 +1697,13 @@ test "* a teleported body does not explode" {
     // Gravity over twenty steps is 0.8 m/s, so anything above a couple of m/s is the sweep
     // inventing a contact rather than physics.
     var fastest: f32 = 0;
-    for (0..model.nv) |i| {
-        fastest = @max(fastest, @abs(data.vel[i]));
+    for (0..model.dof_count) |i| {
+        fastest = @max(fastest, @abs(data.joint_velocities[i]));
     }
     try expect(fastest < 2.0);
     rbt.forward(&model, &data);
-    try expectApproxEqAbs(@as(f32, 12.0), data.body_xpos[1][0], 0.05);
-    try expectApproxEqAbs(@as(f32, -8.0), data.body_xpos[1][2], 0.05);
+    try expectApproxEqAbs(@as(f32, 12.0), data.body_positions[1][0], 0.05);
+    try expectApproxEqAbs(@as(f32, -8.0), data.body_positions[1][2], 0.05);
 }
 
 test "* a limb does not collide with itself across a joint" {
@@ -1757,20 +1757,20 @@ test "* a limb does not collide with itself across a joint" {
 
     // * FOLD THE ELBOW RIGHT BACK, so the two links lie alongside each other and overlap along
     // their whole length - far more than any real joint would, to leave no doubt.
-    data.pos[1] = 2.9;
+    data.joint_positions[1] = 2.9;
     data.stage = .stale;
     for (0..200) |_| {
         rbt.forward(&model, &data);
         try bridge.sync(&world, &model, &data);
         try zimrphysics.step(&world, 1.0 / 500.0);
         bridge.harvest(&data);
-        @memset(data.applied_force, 0);
+        @memset(data.applied_joint_forces, 0);
         rbt.step(&model, &data);
     }
 
     // -- * NOT ONE CONTACT, and the elbow stayed where it was put --
     try expectEqual(@as(u32, 0), data.contact_count);
-    try expectApproxEqAbs(@as(f32, 2.9), data.pos[1], 0.01);
+    try expectApproxEqAbs(@as(f32, 2.9), data.joint_positions[1], 0.01);
 }
 
 test "** Newton holds a stack that PGS drops" {
@@ -1836,7 +1836,7 @@ test "** Newton holds a stack that PGS drops" {
         try bridge.sync(&world, &model, &data);
         try zimrphysics.step(&world, 1.0 / 500.0);
         bridge.harvest(&data);
-        @memset(data.applied_force, 0);
+        @memset(data.applied_joint_forces, 0);
         rbt.step(&model, &data);
     }
     rbt.forward(&model, &data);
@@ -1849,7 +1849,7 @@ test "** Newton holds a stack that PGS drops" {
     // dropped it - PGS puts the top box on the floor well inside that.
     for (0..box_count) |i| {
         const want: f32 = 0.05 + float(i) * 0.1;
-        try expectApproxEqAbs(want, data.body_xpos[i + 1][1], 0.01);
+        try expectApproxEqAbs(want, data.body_positions[i + 1][1], 0.01);
     }
 
     // * AND IT CONVERGED IN A HANDFUL OF ITERATIONS, not by exhausting the cap.
@@ -1900,7 +1900,7 @@ test "* a swept contact uses the real materials, not a constant" {
     bridge.listen(&world);
 
     // Fast enough that the sweep fires: 40 m/s is 0.08 m per step against a 0.05 m radius.
-    data.vel[0] = 40.0;
+    data.joint_velocities[0] = 40.0;
     data.stage = .stale;
     var swept_friction: f32 = -1;
     for (0..200) |_| {
@@ -1913,7 +1913,7 @@ test "* a swept contact uses the real materials, not a constant" {
                 swept_friction = data.contacts[c].friction[0];
             }
         }
-        @memset(data.applied_force, 0);
+        @memset(data.applied_joint_forces, 0);
         rbt.step(&model, &data);
     }
 
@@ -1992,20 +1992,20 @@ test "** the solver's FORCES match MuJoCo, not just its behaviour" {
             try bridge.sync(&world, &model, &data);
             try zimrphysics.step(&world, 1.0 / 500.0);
             bridge.harvest(&data);
-            @memset(data.applied_force, 0);
+            @memset(data.applied_joint_forces, 0);
             rbt.step(&model, &data);
         }
         rbt.forward(&model, &data);
 
         // * THE FORCE IS THE WEIGHT. Not approximately the weight - a resting body is a
         // statically determinate problem and there is one right answer.
-        try expectApproxEqAbs(@as(f32, 19.62), data.constraint_joint_force[1], 0.02);
+        try expectApproxEqAbs(@as(f32, 19.62), data.constraint_joint_forces[1], 0.02);
 
         // * AND NOTHING SIDEWAYS. A friction pyramid that is not symmetric about the normal
         // leaves a residual tangential force, which a resting box would slowly slide under -
         // slowly enough that no behavioural test would see it inside a few seconds.
-        try expectApproxEqAbs(@as(f32, 0), data.constraint_joint_force[0], 0.02);
-        try expectApproxEqAbs(@as(f32, 0), data.constraint_joint_force[2], 0.02);
+        try expectApproxEqAbs(@as(f32, 0), data.constraint_joint_forces[0], 0.02);
+        try expectApproxEqAbs(@as(f32, 0), data.constraint_joint_forces[2], 0.02);
 
         // Sixteen rows: four contact points, four pyramid edges each - the same count MuJoCo
         // reports, so the two are solving the same problem and not merely reaching similar
@@ -2013,7 +2013,7 @@ test "** the solver's FORCES match MuJoCo, not just its behaviour" {
         try expectEqual(@as(u32, 16), data.constraint_count);
 
         // Resting depth, against MuJoCo's 0.099892.
-        try expectApproxEqAbs(@as(f32, 0.09989), data.body_xpos[1][1], 1.0e-4);
+        try expectApproxEqAbs(@as(f32, 0.09989), data.body_positions[1][1], 1.0e-4);
     }
 }
 
@@ -2075,12 +2075,12 @@ test "** a ragdoll comes to rest under Newton, and keeps twitching under PGS" {
     _ = robot_mjcf.applyKeyframe(model, &data, robot.keyframes[0]);
     // Dropped from 1.2 m and tipped, so it lands on its side rather than its feet - a body
     // that lands upright makes far fewer contacts and proves far less.
-    data.pos[2] = 1.2;
+    data.joint_positions[2] = 1.2;
     const tipped: Quat = quatFromAxisAngle(normalize3(vec(1, 0.3, 0)), 1.4);
-    data.pos[3] = tipped[0];
-    data.pos[4] = tipped[1];
-    data.pos[5] = tipped[2];
-    data.pos[6] = tipped[3];
+    data.joint_positions[3] = tipped[0];
+    data.joint_positions[4] = tipped[1];
+    data.joint_positions[5] = tipped[2];
+    data.joint_positions[6] = tipped[3];
     data.stage = .stale;
     rbt.forward(model, &data);
 
@@ -2094,15 +2094,15 @@ test "** a ragdoll comes to rest under Newton, and keeps twitching under PGS" {
         try bridge.sync(&world, model, &data);
         try zimrphysics.step(&world, 1.0 / 500.0);
         bridge.harvest(&data);
-        @memset(data.applied_force, 0);
+        @memset(data.applied_joint_forces, 0);
         rbt.step(model, &data);
         peak_contacts = @max(peak_contacts, data.contact_count);
     }
     rbt.forward(model, &data);
 
     var fastest: f32 = 0;
-    for (0..model.nv) |i| {
-        fastest = @max(fastest, @abs(data.vel[i]));
+    for (0..model.dof_count) |i| {
+        fastest = @max(fastest, @abs(data.joint_velocities[i]));
     }
 
     // -- *** THIS BAR MOVED WHEN FRICTION WAS FIXED, AND THAT IS THE INTERESTING PART --
@@ -2121,8 +2121,8 @@ test "** a ragdoll comes to rest under Newton, and keeps twitching under PGS" {
     try expect(fastest < 4.0);
     // * AND IT LANDED RATHER THAN SANK OR EXPLODED - a body resting on its side puts its
     // pelvis a little above the floor, not at it and not below.
-    try expect(data.body_xpos[1][2] > 0.05);
-    try expect(data.body_xpos[1][2] < 0.5);
+    try expect(data.body_positions[1][2] > 0.05);
+    try expect(data.body_positions[1][2] < 0.5);
     // Enough contacts that the result means something: a limp humanoid on its side touches
     // the ground in several places at once.
     try expect(peak_contacts >= 8);
@@ -2179,7 +2179,7 @@ test "** a model's friction reaches its contacts" {
         .friction = floor_mu,
     });
 
-    data.pos[1] = 0.049;
+    data.joint_positions[1] = 0.049;
     data.stage = .stale;
     rbt.forward(&model, &data);
     var bridge: Bridge = try .init(gpa, &world, &model, &data, 32);
@@ -2191,7 +2191,7 @@ test "** a model's friction reaches its contacts" {
         try bridge.sync(&world, &model, &data);
         try zimrphysics.step(&world, 1.0 / 500.0);
         bridge.harvest(&data);
-        @memset(data.applied_force, 0);
+        @memset(data.applied_joint_forces, 0);
         rbt.step(&model, &data);
     }
 
@@ -2276,19 +2276,19 @@ test "* THE GATE: a Unitree Go1 stands still for 30 seconds" {
         //     accelerations the trunk has no motor to produce; zeroing those rows afterwards
         //     leaves the legs making up a difference they were never asked for, and the robot
         //     folds to a third of its height while looking like a tuning problem.
-        //   * **Gravity compensation on the free joint makes the robot fly.** `bias_force`
+        //   * **Gravity compensation on the free joint makes the robot fly.** `bias_joint_forces`
         //     covers every DOF including the trunk's six; adding all of it cancels the
         //     machine's own weight, and it rises at a steady 2.4 m/s. A trunk has no motor,
         //     so it must feel its weight - the same rule the crates taught.
-        @memset(data.applied_force, 0);
-        for (0..model.njnt) |j| {
-            if (model.jnt_type[j] != .hinge) {
+        @memset(data.applied_joint_forces, 0);
+        for (0..model.joint_count) |j| {
+            if (model.joint_type[j] != .hinge) {
                 continue;
             }
-            const q: u32 = model.jnt_qpos_adr[j];
-            const v: u32 = model.jnt_dof_adr[j];
-            const wanted: f32 = 100.0 * (home[q] - data.pos[q]) - 2.0 * data.vel[v];
-            data.applied_force[v] = clamp(wanted, -35.55, 35.55) + data.bias_force[v];
+            const q: u32 = model.joint_first_coordinate[j];
+            const v: u32 = model.joint_first_dof[j];
+            const wanted: f32 = 100.0 * (home[q] - data.joint_positions[q]) - 2.0 * data.joint_velocities[v];
+            data.applied_joint_forces[v] = clamp(wanted, -35.55, 35.55) + data.bias_joint_forces[v];
         }
         rbt.step(model, &data);
     }
@@ -2311,13 +2311,13 @@ test "* THE GATE: a Unitree Go1 stands still for 30 seconds" {
     //
     // Tightening this again is a genuine to-do: re-derive the settled height from MuJoCo
     // with the assets present, and put the number back.
-    try expect(data.body_xpos[trunk][2] > 0.20);
-    try expect(data.body_xpos[trunk][2] < 0.40);
+    try expect(data.body_positions[trunk][2] > 0.20);
+    try expect(data.body_positions[trunk][2] < 0.40);
     // And nothing is moving: 1 cm/s over half a minute is a machine at rest, not one
     // drifting slowly enough to pass a short test.
     var fastest: f32 = 0;
-    for (0..model.nv) |i| {
-        fastest = @max(fastest, @abs(data.vel[i]));
+    for (0..model.dof_count) |i| {
+        fastest = @max(fastest, @abs(data.joint_velocities[i]));
     }
     try expect(fastest < 0.05);
     // Four feet on the ground.

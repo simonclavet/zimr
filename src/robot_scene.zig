@@ -273,10 +273,10 @@ test "scene: free bodies add six DOFs each and keep the robot's indices" {
 
     // One slide plus two free bodies: 1 + 12 velocities, 1 + 14 positions (a quaternion per
     // free body costs one more coordinate than it does DOFs).
-    try expectEqual(@as(u32, 13), m.nv);
-    try expectEqual(@as(u32, 15), m.nq);
+    try expectEqual(@as(u32, 13), m.dof_count);
+    try expectEqual(@as(u32, 15), m.coordinate_count);
     // World, the robot's link, and two crates.
-    try expectEqual(@as(u32, 4), m.nbody);
+    try expectEqual(@as(u32, 4), m.body_count);
 
     // * The robot keeps index 1 - a scene must not renumber the robot, because a generated
     // model names its joints through an enum whose values ARE these indices.
@@ -303,17 +303,17 @@ test "scene: a robot pushing a scene crate conserves momentum" {
     var d: rbt.Data = try .init(gpa, &m);
     defer d.deinit();
 
-    d.vel[0] = 1.0;
+    d.joint_velocities[0] = 1.0;
     const initial_momentum: f32 = 2.0 * 1.0;
     const box: u32 = scene.freeBodyIndex(0);
 
     for (0..600) |_| {
         rbt.forward(&m, &d);
         d.clearContacts();
-        const gap: f32 = d.body_xpos[box][0] - d.body_xpos[1][0] - 0.10;
+        const gap: f32 = d.body_positions[box][0] - d.body_positions[1][0] - 0.10;
         if (gap < 0.01) {
             d.pushContact(.{
-                .position = (d.body_xpos[1] + d.body_xpos[box]) * splat(@as(f32, 0.5)),
+                .position = (d.body_positions[1] + d.body_positions[box]) * splat(@as(f32, 0.5)),
                 .normal = vec(1, 0, 0),
                 .tangent = .{ vec(0, 1, 0), vec(0, 0, 1) },
                 .distance = gap,
@@ -327,9 +327,9 @@ test "scene: a robot pushing a scene crate conserves momentum" {
     }
     rbt.forward(&m, &d);
 
-    try expect(d.vel[0] < 0.95); // the pusher slowed
-    try expect(d.vel[1] > 0.3); // the crate is moving
-    const final_momentum: f32 = 2.0 * d.vel[0] + 0.5 * d.vel[1];
+    try expect(d.joint_velocities[0] < 0.95); // the pusher slowed
+    try expect(d.joint_velocities[1] > 0.3); // the crate is moving
+    const final_momentum: f32 = 2.0 * d.joint_velocities[0] + 0.5 * d.joint_velocities[1];
     try expectApproxEqAbs(initial_momentum, final_momentum, 0.002);
 }
 
@@ -354,15 +354,15 @@ test "scene: a heavier crate resists more - the property the old seam could not 
         var d: rbt.Data = try .init(gpa, &m);
         defer d.deinit();
 
-        d.vel[0] = 1.0;
+        d.joint_velocities[0] = 1.0;
         const box: u32 = scene.freeBodyIndex(0);
         for (0..600) |_| {
             rbt.forward(&m, &d);
             d.clearContacts();
-            const gap: f32 = d.body_xpos[box][0] - d.body_xpos[1][0] - 0.10;
+            const gap: f32 = d.body_positions[box][0] - d.body_positions[1][0] - 0.10;
             if (gap < 0.01) {
                 d.pushContact(.{
-                    .position = (d.body_xpos[1] + d.body_xpos[box]) * splat(@as(f32, 0.5)),
+                    .position = (d.body_positions[1] + d.body_positions[box]) * splat(@as(f32, 0.5)),
                     .normal = vec(1, 0, 0),
                     .tangent = .{ vec(0, 1, 0), vec(0, 0, 1) },
                     .distance = gap,
@@ -375,7 +375,7 @@ test "scene: a heavier crate resists more - the property the old seam could not 
             rbt.step(&m, &d);
         }
         rbt.forward(&m, &d);
-        speeds[trial] = d.vel[0];
+        speeds[trial] = d.joint_velocities[0];
     }
 
     // Pushing a 50 kg crate barely slows a 2 kg pusher - it bounces back off it. Pushing a
@@ -406,8 +406,8 @@ test "scene: two robots and a crate share one tree, with names kept apart" {
     defer m.deinit();
 
     // Two 1-DOF arms plus one free body.
-    try expectEqual(@as(u32, 8), m.nv);
-    try expectEqual(@as(u32, 4), m.nbody); // world + 2 links + 1 crate
+    try expectEqual(@as(u32, 8), m.dof_count);
+    try expectEqual(@as(u32, 4), m.body_count); // world + 2 links + 1 crate
 
     // * Robot 0 is unshifted, so a generated model's joint enum stays valid when a second
     // robot joins the scene.
@@ -438,7 +438,7 @@ test "scene: two robots can push the same crate, and the books still balance" {
 
     const box: u32 = scene.freeBodyIndex(0);
     // Robot 0 pushes right; robot 1 sits still and gets hit by the crate.
-    d.vel[0] = 1.0;
+    d.joint_velocities[0] = 1.0;
     const initial_momentum: f32 = 2.0 * 1.0;
 
     for (0..900) |_| {
@@ -447,11 +447,11 @@ test "scene: two robots can push the same crate, and the books still balance" {
         // Arm 0 against the crate, then the crate against arm 1 - a chain of two contacts
         // through a free body, which is the shape "robot hands an object to robot" takes.
         inline for ([_]u32{ 1, 2 }) |link| {
-            const gap: f32 = @abs(d.body_xpos[box][0] - d.body_xpos[link][0]) - 0.10;
+            const gap: f32 = @abs(d.body_positions[box][0] - d.body_positions[link][0]) - 0.10;
             if (gap < 0.01) {
-                const toward: f32 = if (d.body_xpos[box][0] > d.body_xpos[link][0]) 1.0 else -1.0;
+                const toward: f32 = if (d.body_positions[box][0] > d.body_positions[link][0]) 1.0 else -1.0;
                 d.pushContact(.{
-                    .position = (d.body_xpos[link] + d.body_xpos[box]) * splat(@as(f32, 0.5)),
+                    .position = (d.body_positions[link] + d.body_positions[box]) * splat(@as(f32, 0.5)),
                     .normal = vec(toward, 0, 0),
                     .tangent = .{ vec(0, 1, 0), vec(0, 0, 1) },
                     .distance = gap,
@@ -467,7 +467,7 @@ test "scene: two robots can push the same crate, and the books still balance" {
     rbt.forward(&m, &d);
 
     // Total momentum across BOTH robots and the crate.
-    const final_momentum: f32 = 2.0 * d.vel[0] + 2.0 * d.vel[1] + 0.5 * d.vel[2];
+    const final_momentum: f32 = 2.0 * d.joint_velocities[0] + 2.0 * d.joint_velocities[1] + 0.5 * d.joint_velocities[2];
     try expectApproxEqAbs(initial_momentum, final_momentum, 0.01);
     // And the push actually propagated. Both robots start at the same place here, so the
     // crate reaches robot 1 only if robot 0 drives it there - a chain of two contacts
@@ -477,7 +477,7 @@ test "scene: two robots can push the same crate, and the books still balance" {
     // all started at the origin and everything was permanently in contact. The PROPERTY is
     // that a system-wide ledger balances, not that a particular body reaches a particular
     // speed.
-    try expect(@abs(d.vel[1]) >= 0.0);
+    try expect(@abs(d.joint_velocities[1]) >= 0.0);
 }
 
 test "scene: the degenerate shapes all build" {
@@ -501,8 +501,8 @@ test "scene: the degenerate shapes all build" {
         const scene: Scene = .{ .robots = &.{}, .free_bodies = &.{lone_box} };
         var m: rbt.Model = try scene.build(gpa);
         defer m.deinit();
-        try expectEqual(@as(u32, 6), m.nv);
-        try expectEqual(@as(u32, 2), m.nbody);
+        try expectEqual(@as(u32, 6), m.dof_count);
+        try expectEqual(@as(u32, 2), m.body_count);
         // * And the free body is at tree index 1, immediately after the world - which is what
         // `bodyOffset` must give when there is nothing to offset past.
         try expectEqual(@as(u32, 1), scene.freeBodyIndex(0));
@@ -512,15 +512,15 @@ test "scene: the degenerate shapes all build" {
     {
         var m: rbt.Model = try (Scene{ .robots = &.{test_arm} }).build(gpa);
         defer m.deinit();
-        try expectEqual(@as(u32, 1), m.nv);
-        try expectEqual(@as(u32, 2), m.nbody);
+        try expectEqual(@as(u32, 1), m.dof_count);
+        try expectEqual(@as(u32, 2), m.body_count);
     }
 
     // Nothing at all: a valid model with just the world.
     {
         var m: rbt.Model = try (Scene{ .robots = &.{} }).build(gpa);
         defer m.deinit();
-        try expectEqual(@as(u32, 0), m.nv);
-        try expectEqual(@as(u32, 1), m.nbody);
+        try expectEqual(@as(u32, 0), m.dof_count);
+        try expectEqual(@as(u32, 1), m.body_count);
     }
 }

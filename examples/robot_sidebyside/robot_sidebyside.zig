@@ -48,6 +48,7 @@ const vec2 = zm.vec2;
 const rotate = zm.rotate;
 const length3 = zm.length3;
 const float = zm.float;
+const assertUnreachable = zm.assertUnreachable;
 
 // ---- One set of numbers, used to build BOTH models ----
 // Shared deliberately: if the two engines were given even slightly different masses or
@@ -140,9 +141,9 @@ const State = struct {
         // The robot's body origin is the link's top; the physics body's shape is centred on
         // its own origin, so offset by half a link down the link's own axis.
         const half: f32 = if (link == 1) upper_half else lower_half;
-        const centre: Vec = self.data.body_xpos[link] +
-            rotate(self.data.body_xrot[link], vec(0, -half, 0));
-        try self.world.setTransform(self.gpa, idx, centre, self.data.body_xrot[link]);
+        const centre: Vec = self.data.body_positions[link] +
+            rotate(self.data.body_orientations[link], vec(0, -half, 0));
+        try self.world.setTransform(self.gpa, idx, centre, self.data.body_orientations[link]);
         try self.world.setLinearVelocity(self.gpa, handle, zm.vec_zero);
         try self.world.setAngularVelocity(self.gpa, handle, zm.vec_zero);
     }
@@ -231,9 +232,9 @@ fn deinit(gpa: Allocator, s: *State) void {
 /// measurement that happens to be zero, and if a future change to `kinematics` ever broke
 /// the property, this readout would say so.
 fn generalizedJointError(s: *const State) f32 {
-    const from_parent: Vec = s.data.body_xpos[1] +
-        rotate(s.data.body_xrot[1], vec(0, -2.0 * upper_half, 0));
-    const from_child: Vec = s.data.body_xpos[2];
+    const from_parent: Vec = s.data.body_positions[1] +
+        rotate(s.data.body_orientations[1], vec(0, -2.0 * upper_half, 0));
+    const from_child: Vec = s.data.body_positions[2];
     return length3(from_parent - from_child);
 }
 
@@ -333,7 +334,7 @@ fn update(f: *z.Frame, s: *State) void {
     s.accumulator += @min(f.time.delta_time, 0.1);
     while (s.accumulator >= timestep) : (s.accumulator -= timestep) {
         zp.step(&s.world, timestep) catch |err| {
-            zm.assertUnreachable(@src(), "zimrphysics step failed: {t}", .{err});
+            assertUnreachable(@src(), "zimrphysics step failed: {t}", .{err});
         };
         rbt.step(&s.model, &s.data);
         s.elapsed += timestep;
@@ -380,8 +381,8 @@ fn update(f: *z.Frame, s: *State) void {
 
     // ---- right: generalized ----
     {
-        const elbow: Vec = s.data.body_xpos[2];
-        const tip: Vec = s.data.body_xpos[2] + rotate(s.data.body_xrot[2], vec(0, -2.0 * lower_half, 0));
+        const elbow: Vec = s.data.body_positions[2];
+        const tip: Vec = s.data.body_positions[2] + rotate(s.data.body_orientations[2], vec(0, -2.0 * lower_half, 0));
         gl.line(
             layout.toScreen(1, vec2(0, 0)),
             layout.toScreen(1, vec2(elbow[0], elbow[1])),
@@ -461,7 +462,7 @@ fn update(f: *z.Frame, s: *State) void {
             p[1] >= reset_box.y and p[1] <= reset_box.y + reset_box.height)
         {
             s.reset() catch |err| {
-                zm.assertUnreachable(@src(), "reset failed: {t}", .{err});
+                assertUnreachable(@src(), "reset failed: {t}", .{err});
             };
         }
     }

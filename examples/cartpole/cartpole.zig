@@ -225,17 +225,17 @@ fn beginEpisode(env: *ctl.Env, seed: u64) void {
     var rng: Random.DefaultPrng = .init(seed);
     const r: Random = rng.random();
     _ = env.reset();
-    env.data.pos[pole_hinge] = (r.float(f32) - 0.5) * start_tilt;
-    env.data.vel[pole_hinge] = (r.float(f32) - 0.5) * start_tilt * 2.0;
+    env.data.joint_positions[pole_hinge] = (r.float(f32) - 0.5) * start_tilt;
+    env.data.joint_velocities[pole_hinge] = (r.float(f32) - 0.5) * start_tilt * 2.0;
     env.data.stage = .stale;
 }
 
 fn actionFor(env: *const ctl.Env, policy: Policy) f32 {
     const observation = [4]f32{
-        env.data.pos[cart_slide],
-        env.data.pos[pole_hinge],
-        env.data.vel[cart_slide],
-        env.data.vel[pole_hinge],
+        env.data.joint_positions[cart_slide],
+        env.data.joint_positions[pole_hinge],
+        env.data.joint_velocities[cart_slide],
+        env.data.joint_velocities[pole_hinge],
     };
     var action: f32 = 0;
     for (observation, policy) |value, weight| {
@@ -245,8 +245,8 @@ fn actionFor(env: *const ctl.Env, policy: Policy) f32 {
 }
 
 fn hasFallen(env: *const ctl.Env) bool {
-    return @abs(env.data.pos[pole_hinge]) > fail_angle or
-        @abs(env.data.pos[cart_slide]) > fail_position;
+    return @abs(env.data.joint_positions[pole_hinge]) > fail_angle or
+        @abs(env.data.joint_positions[cart_slide]) > fail_position;
 }
 
 /// One episode, scored by how long the pole stayed up.
@@ -442,8 +442,8 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
 }
 
 fn drawScene(s: *State, gl: *z.WgpuGl) void {
-    const x: f32 = s.display.data.pos[cart_slide];
-    const angle: f32 = s.display.data.pos[pole_hinge];
+    const x: f32 = s.display.data.joint_positions[cart_slide];
+    const angle: f32 = s.display.data.joint_positions[pole_hinge];
 
     // The rail, and the limits the episode ends at.
     s.transform[0] = mulMat(translation(0, -0.06, 0), scaling(2 * fail_position, 0.01, 0.06));

@@ -159,7 +159,7 @@ fn update(f: *z.Frame, s: *State) void {
         // hook runs against a forward pass and then the step re-runs it. That costs one
         // extra evaluation and keeps the control law honest about what it can see.
         rbt.forward(m, d);
-        @memset(d.applied_force, 0);
+        @memset(d.applied_joint_forces, 0);
         if (scene.control) |hook| {
             hook(&s.live, .{ .target = s.target, .pointing = s.pointing, .elapsed = s.live.elapsed });
         }
@@ -173,7 +173,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     // Trail of the scene's nominated tip.
     if (scene.tip) |tip| {
-        const p: Vec = d.body_xpos[tip.body] + rotate(d.body_xrot[tip.body], tip.local);
+        const p: Vec = d.body_positions[tip.body] + rotate(d.body_orientations[tip.body], tip.local);
         s.trail[s.trail_n % trail_len] = vec2(p[0], p[1]);
         s.trail_n += 1;
         const shown: usize = @min(s.trail_n, trail_len);
@@ -189,10 +189,10 @@ fn update(f: *z.Frame, s: *State) void {
     // The mechanism itself, drawn from the engine's body poses. Body 0 is the world, so
     // each real body's link runs from its parent's origin to its own.
     var bi: u32 = 1;
-    while (bi < m.nbody) : (bi += 1) {
+    while (bi < m.body_count) : (bi += 1) {
         const parent: u32 = m.body_parent[bi];
-        const a: Vec = d.body_xpos[parent];
-        const b: Vec = d.body_xpos[bi];
+        const a: Vec = d.body_positions[parent];
+        const b: Vec = d.body_positions[bi];
         const col: Color = if (bi % 2 == 1) accent else accent2;
         gl.line(
             view.toScreen(vec2(a[0], a[1])),
@@ -203,8 +203,8 @@ fn update(f: *z.Frame, s: *State) void {
     }
     // The far end of the last link, which no body origin marks.
     if (scene.tip) |tip| {
-        const p: Vec = d.body_xpos[tip.body] + rotate(d.body_xrot[tip.body], tip.local);
-        const last: Vec = d.body_xpos[tip.body];
+        const p: Vec = d.body_positions[tip.body] + rotate(d.body_orientations[tip.body], tip.local);
+        const last: Vec = d.body_positions[tip.body];
         const col: Color = if (tip.body % 2 == 1) accent else accent2;
         gl.line(
             view.toScreen(vec2(last[0], last[1])),
@@ -231,7 +231,7 @@ fn update(f: *z.Frame, s: *State) void {
     gl.textf(
         vec2(16 * ui, 70 * ui),
         "nv {d}  nu {d}  constraints {d}  solver {d} it  energy {d:.2} J",
-        .{ m.nv, m.nu, d.constraint_count, d.solver_iterations, rbt.energy(m, d) },
+        .{ m.dof_count, m.actuator_count, d.constraint_count, d.solver_iterations, rbt.energy(m, d) },
         .{ .size = 13 * ui, .color = dim_col, .font = &s.font },
     );
 

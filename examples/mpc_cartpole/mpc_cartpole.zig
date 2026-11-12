@@ -205,7 +205,7 @@ fn costOf(s: *const State) mpc.Cost {
 /// Put the pole at `angle` (0 upright, pi hanging) and throw away the plan.
 fn reset(s: *State, angle: f32) void {
     s.data.reset(&s.model);
-    s.data.pos[pole_hinge] = angle;
+    s.data.joint_positions[pole_hinge] = angle;
     rbt.forward(&s.model, &s.data);
     @memset(s.plan.ctrl, 0);
     @memset(s.plan.feedback, 0);
@@ -227,7 +227,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.plan.readLimits(&s.model);
     s.reference = try gpa.alloc(f32, (horizon + 1) * s.plan.nstate);
     @memset(s.reference, 0); // upright, centred, at rest
-    s.applied = try gpa.alloc(f32, s.model.nu);
+    s.applied = try gpa.alloc(f32, s.model.actuator_count);
     @memset(s.applied, 0);
 
     s.budget = 2;
@@ -369,8 +369,8 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
     if (u.window("model predictive control", .{})) |window| {
         defer window.close();
 
-        const angle: f32 = s.data.pos[pole_hinge];
-        u.text("pole {d:>7.3} rad   cart {d:>6.2} m", .{ angle, s.data.pos[cart_slide] });
+        const angle: f32 = s.data.joint_positions[pole_hinge];
+        u.text("pole {d:>7.3} rad   cart {d:>6.2} m", .{ angle, s.data.joint_positions[cart_slide] });
         u.text("motor {d:>6.2}  (limit +-1)", .{s.applied[0]});
         u.separator();
 
@@ -425,7 +425,7 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
         if (u.button("shove the pole", .{})) {
             // A disturbance the plan did not see coming, which is what the feedback gain is
             // for. Big enough to be alarming, small enough to be recoverable.
-            s.data.vel[pole_hinge] += 3.5;
+            s.data.joint_velocities[pole_hinge] += 3.5;
         }
     }
     return captured;
@@ -469,8 +469,8 @@ fn drawScene(s: *State, gl: *z.WgpuGl) void {
     }
 
     // The robot itself, on top.
-    const x: f32 = s.data.pos[cart_slide];
-    const angle: f32 = s.data.pos[pole_hinge];
+    const x: f32 = s.data.joint_positions[cart_slide];
+    const angle: f32 = s.data.joint_positions[pole_hinge];
     s.transform[0] = mulMat(translation(x, 0, 0), scaling(0.2, 0.1, 0.1));
     z.drawMeshInstanced(gl, &s.cube, &s.transform, cart_col);
     drawPole(s, gl, x, angle, 0.035, pole_col);
@@ -500,7 +500,7 @@ fn update(f: *z.Frame, s: *State) void {
             // and planning at the display rate. `K_0*dx` is the backward pass's own answer to
             // being somewhere else.
             mpc.feedbackControl(&s.model, &s.data, &s.plan, s.applied);
-            @memcpy(s.data.ctrl, s.applied);
+            @memcpy(s.data.controls, s.applied);
             rbt.step(&s.model, &s.data);
             // ** SHIFT AFTER STEPPING, NOT BEFORE. The plan is indexed from "now"; once the
             // robot has advanced a tick, knot 1 is the new now. Shifting before the step

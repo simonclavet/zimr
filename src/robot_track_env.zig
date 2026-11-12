@@ -56,7 +56,7 @@ pub const Options = struct {
     envs: usize = 8,
     /// Physics steps a decision is held for (DReCon's k = 2: 30 decisions a second at 60 Hz physics).
     decimation: u32 = 2,
-    /// Simon's filter (DReCon's 0.2): each decision blended into what the controller is already applying.
+    /// The action filter (DReCon's 0.2): each decision blended into what the controller is already applying.
     beta: f32 = 0.2,
     /// What the clip running out means to a learner: the end of the story (`.terminal`, a `.stop`), or just the end of
     /// the tape while the character was doing fine (`.bootstrap`, a `.cut` - value what comes next as if it went on).
@@ -154,7 +154,7 @@ pub const TrackEnv = struct {
                 .decimation = options.decimation,
             }),
             .views = try policy.Views.init(arena, m),
-            .sim_state = try track.State.init(arena, m.nbody),
+            .sim_state = try track.State.init(arena, m.body_count),
             .applied = try arena.alloc(f32, envs * subset.dofs),
             .episode_steps = try arena.alloc(u32, envs),
             .ended_yet = try arena.alloc(bool, envs),

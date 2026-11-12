@@ -18,8 +18,11 @@ const bmpc_kit = @import("robot_bmpc_kit.zig");
 const zm = @import("zm");
 const vec = zm.vec;
 const float64 = zm.float64;
+const nan = zm.nan;
 const rbt = @import("robot");
 const track = @import("robot_track.zig");
+const track_resident = @import("robot_track_resident.zig");
+const robotgpu = @import("robotgpu.zig");
 const dance = @import("robot_dance.zig");
 const latent = @import("robot_latent.zig");
 const compute_host = @import("compute_host.zig");
@@ -506,7 +509,7 @@ test "robot_latent_kit: the resident tables and ring hold exactly what the CPU w
     }
     const acts: []const f32 = host.readLatest(.acts) orelse return error.NoReadback;
 
-    var state: track.State = try .init(gpa, m.nbody);
+    var state: track.State = try .init(gpa, m.body_count);
     defer state.deinit(gpa);
     var data: rbt.Data = try .init(gpa, m);
     defer data.deinit();
@@ -533,7 +536,7 @@ test "robot_latent_kit: the resident tables and ring hold exactly what the CPU w
         const at: u32 = resident.rowAt(0, frame);
         fleet.referenceStateInto(&clip, @intCast(frame), &data, &state);
         track.local(state, fleet.root, expected[0..resident.features]);
-        track.encodeTargets(m, clip.pose(frame)[clip.nq - m.nq ..], expected[resident.features..]);
+        track.encodeTargets(m, clip.pose(frame)[clip.nq - m.coordinate_count ..], expected[resident.features..]);
         try expect(eql(f32, expected, acts[at..][0..resident.row]));
     }
     try expect(checked == 4 * 32);
@@ -633,7 +636,7 @@ pub const FleetSetup = struct {
         errdefer self.clip.deinit();
         self.fleet = try track.Fleet.init(gpa, m, &.{&self.clip}, .{ .envs = 4, .capacity = 32 });
         errdefer self.fleet.deinit();
-        self.features = @intCast(track.localSize(m.nbody));
+        self.features = @intCast(track.localSize(m.body_count));
         self.references = @intCast(track.targetSize(m));
         self.actions = @intCast(track.actionSize(m));
         self.actions_buffer = try gpa.alloc(f32, 4 * self.actions);
@@ -700,7 +703,7 @@ test "robot_latent_kit: the gather assembles on the GPU exactly the windows the 
     resident.gather(kit, 0);
     const acts: []const f32 = host.readLatest(.acts) orelse return error.NoReadback;
 
-    var state: track.State = try .init(gpa, m.nbody);
+    var state: track.State = try .init(gpa, m.body_count);
     defer state.deinit(gpa);
     var data: rbt.Data = try .init(gpa, m);
     defer data.deinit();
@@ -724,7 +727,7 @@ test "robot_latent_kit: the gather assembles on the GPU exactly the windows the 
                 // The pose the servo aimed at during this step: the next frame, clamped.
                 const next: usize = @as(usize, fleet.replay.frameAt(start.env, index)) + 1;
                 const frame: usize = @min(next, setup.clip.frame_count - 1);
-                const pose: []const f32 = setup.clip.pose(frame)[setup.clip.nq - m.nq ..];
+                const pose: []const f32 = setup.clip.pose(frame)[setup.clip.nq - m.coordinate_count ..];
                 track.encodeTargets(m, pose, expected[0..setup.references]);
                 const ref: []const f32 = acts[block + setup.features ..][0..setup.references];
                 try expect(eql(f32, expected[0..setup.references], ref));
@@ -956,7 +959,7 @@ test "robot_latent_kit: the gather fills each row's goal, and the goal block, fr
     resident.gather(kit, 0);
     const acts: []const f32 = host.readLatest(.acts) orelse return error.NoReadback;
 
-    var state: track.State = try .init(gpa, m.nbody);
+    var state: track.State = try .init(gpa, m.body_count);
     defer state.deinit(gpa);
     var data: rbt.Data = try .init(gpa, m);
     defer data.deinit();
@@ -1031,10 +1034,23 @@ test "robot_latent_kit: the exploration noise is centred, has unit spread, and i
     try expect(largest <= 3.4641017);
 }
 
-test "robot_latent_kit: the policy acts in the rollout, and the kit follows the CPU learner" {
-    // A policy choosing every step's action, the world model predicting the consequence, 8 steps -
-    // against the CPU learner's own `policyWith` feeding the CPU model's `stepWith`. Not bitwise: the
-    // CPU sums the policy's state and goal terms interleaved, the kit goal block then state block.
+/// The variant of a rollout the kit is checked under (`expectPolicyRolloutFollowsCpu`): the action filter - the joints'
+/// offsets' share, the stiffnesses' share for an action's last `stiffness_count` numbers - whether each row's window
+/// starts from staged actions rather than from rest, and whether the policy reads the action applied before its
+/// decision through a block of random weights (zero otherwise). The defaults: no filter, no block.
+const RolloutVariant = struct {
+    offsets: f32 = 1.0,
+    stiffness: f32 = 1.0,
+    stiffness_count: u32 = 0,
+    starting_actions: bool = false,
+    applied_block: bool = false,
+};
+
+/// A policy choosing every step's action, the world model predicting the consequence, 8 steps - against the CPU
+/// learner's own `policyWith` feeding the CPU model's `stepWith`, with the action filter as `rollout_variant` sets it:
+/// each action blended into the one before at its number's share, from the window's starting actions. Not bitwise: the
+/// CPU learner's policy sums its state and goal terms interleaved, the kit goal block then state block.
+fn expectPolicyRolloutFollowsCpu(rollout_variant: RolloutVariant) !void {
     const gpa: Allocator = testing_allocator;
     var arena: ArenaAllocator = .init(gpa);
     defer arena.deinit();
@@ -1065,13 +1081,21 @@ test "robot_latent_kit: the policy acts in the rollout, and the kit follows the 
     var kit: LatentKit(zn_mlp) = try .init(&host, f, r, a, h, rows, steps, f, hp);
     kit.action_scale = 0.3;
     kit.sigma = 0.3;
+    kit.filter = rollout_variant.offsets;
+    kit.stiffness_filter = rollout_variant.stiffness;
+    kit.stiffness_count = rollout_variant.stiffness_count;
     kit.seed = 1234;
     host.element_count = kit.total + kit.param_count + kit.policy_count;
     const packed_world: []f32 = try owned.alloc(f32, kit.param_count);
     kit.packWeights(world, packed_world);
     host.upload(.params, packed_world);
     const packed_policy: []f32 = try owned.alloc(f32, kit.policy_count);
-    kit.packPolicy(policy, packed_policy);
+    // The applied action's block: random weights when the variant reads it, so its terms are really summed.
+    const applied_block_t: Tensor = try .alloc(owned, &.{ a, hp });
+    for (applied_block_t.data) |*weight| {
+        weight.* = if (rollout_variant.applied_block) 0.2 * random.floatNorm(f32) else 0.0;
+    }
+    kit.packPolicyWithApplied(policy, applied_block_t.data, packed_policy);
     host.uploadAt(.params, kit.p_at, packed_policy);
     // Every row's goal and reference; block 0's state. (Actions: the policy's to write.)
     const staging: []f32 = try owned.alloc(f32, kit.total);
@@ -1087,28 +1111,53 @@ test "robot_latent_kit: the policy acts in the rollout, and the kit follows the 
             }
         }
     }
+    // Each row's window from staged actions - what the trainer will hand it from the replay - or from rest.
+    const starting_actions: []f32 = staging[kit.start_actions_at..][0 .. rows * a];
+    if (rollout_variant.starting_actions) {
+        for (starting_actions) |*number| {
+            number.* = 0.5 * random.floatNorm(f32);
+        }
+    }
     host.upload(.acts, staging);
     kit.forward();
     const acts: []const f32 = host.readLatest(.acts) orelse return error.NoReadback;
 
     const z: []f32 = try owned.alloc(f32, f);
     const action: []f32 = try owned.alloc(f32, a);
+    const applied: []f32 = try owned.alloc(f32, a);
     const world_hidden: [2][]f32 = .{ try owned.alloc(f32, h), try owned.alloc(f32, h) };
     const policy_hidden: [2][]f32 = .{ try owned.alloc(f32, hp), try owned.alloc(f32, hp) };
     var worst_state: f32 = 0.0;
     var worst_action: f32 = 0.0;
     for (0..rows) |row| {
         @memcpy(z, staging[kit.blockX(0) + row * kit.width + f ..][0..f]);
+        @memcpy(applied, starting_actions[row * a ..][0..a]);
         for (0..steps) |step| {
             const at: usize = kit.blockX(@intCast(step)) + row * kit.width;
             const goal: []const f32 = staging[at..][0..f];
             // The kit's policy is the seven-tensor one: it does not see what it applies (plan A1; the
             // kit catches up in Stage G), so the CPU side is handed no applied action either.
-            latent.policyWith(policy, policy_hidden[0], policy_hidden[1], z, goal, null, action);
+            // The action applied before this decision, through the block, when the variant reads it.
+            const applied_row: latent.AppliedRow = .{ .weights = applied_block_t, .action = applied };
+            const seen: ?latent.AppliedRow = if (rollout_variant.applied_block) applied_row else null;
+            latent.policyWith(policy, policy_hidden[0], policy_hidden[1], z, goal, seen, action);
             // The noise, from the kit's own function (the kernel's), then the scale.
             const step_seed: u32 = zn_mlp.latStepSeed(1234, @intCast(step));
             for (action, 0..) |*x, j| {
                 x.* = 0.3 * (x.* + 0.3 * zn_mlp.latNoise(step_seed, @intCast(row), @intCast(j)));
+            }
+            // The action filter: each number blended into what was applied before, at its own share (the joints'
+            // offsets first, the stiffnesses last), as `lat_act` writes it.
+            const offset_count: usize = a - rollout_variant.stiffness_count;
+            for (action, applied, 0..) |*x, *before, j| {
+                const share: f32 = if (j < offset_count) rollout_variant.offsets else rollout_variant.stiffness;
+                if (share != 1.0) {
+                    const kept_share: f32 = 1.0 - share;
+                    const new_part: f32 = share * x.*;
+                    const kept_part: f32 = kept_share * before.*;
+                    x.* = new_part + kept_part;
+                }
+                before.* = x.*;
             }
             for (action, acts[at + 2 * f + r ..][0..a]) |cpu, gpu| {
                 worst_action = @max(worst_action, @abs(cpu - gpu));
@@ -1126,11 +1175,41 @@ test "robot_latent_kit: the policy acts in the rollout, and the kit follows the 
     try expect(worst_action <= 1.0e-5 and worst_state <= 1.0e-4);
 }
 
-test "robot_latent_kit: the policy's gradients through the frozen world model match zimrnum" {
-    // The policy's loss - distance from the goal at every step, plus the action price - backpropagated
-    // through a FIXED world model, against zimrnum's graph built from the CPU learner's own
-    // `policyOnGraph` and the CPU model's own `step`, the same noise drawn from the kit's hash. The
-    // kit's loss is the SUM over steps: every policy gradient must be `steps` times the CPU's.
+test "robot_latent_kit: the policy acts in the rollout, and the kit follows the CPU learner" {
+    try expectPolicyRolloutFollowsCpu(.{});
+}
+
+test "robot_latent_kit: the policy reads the action applied before its decision, as the CPU learner's does" {
+    // A random block for the applied action, the action filter on (so what was applied differs from what was asked),
+    // each row's window from staged actions: the kit's first layer adds the block's terms after the goal's and the
+    // state's, as `policyWith` does.
+    try expectPolicyRolloutFollowsCpu(.{
+        .offsets = 0.25,
+        .stiffness = 0.5,
+        .stiffness_count = 2,
+        .starting_actions = true,
+        .applied_block = true,
+    });
+}
+
+test "robot_latent_kit: the action filter in the rollout, offsets and stiffnesses at their own shares" {
+    // The kit follows the CPU learner with the filter on: offsets at 0.25, an action's last two numbers at 0.5, each
+    // row's window starting from staged actions.
+    try expectPolicyRolloutFollowsCpu(.{
+        .offsets = 0.25,
+        .stiffness = 0.5,
+        .stiffness_count = 2,
+        .starting_actions = true,
+    });
+}
+
+/// The policy's loss - distance from the goal at every step, plus the action price - backpropagated through a FIXED
+/// world model, against zimrnum's graph built from the CPU learner's own `policyOnGraph` and the CPU model's own
+/// `step`, the same noise drawn from the kit's hash. The kit's loss is the SUM over steps: every policy gradient must
+/// be `steps` times the CPU's. With the action filter as `rollout_variant` sets it, each scaled action is blended into
+/// the one before at its number's share, from the window's starting actions - the kit's carry against the graph's own
+/// differentiation of the blend.
+fn expectPolicyGradientsMatchZimrnum(rollout_variant: RolloutVariant) !void {
     const gpa: Allocator = testing_allocator;
     var arena: ArenaAllocator = .init(gpa);
     defer arena.deinit();
@@ -1181,14 +1260,24 @@ test "robot_latent_kit: the policy's gradients through the frozen world model ma
     kit.action_scale = scale;
     kit.sigma = sigma;
     kit.seed = seed;
+    kit.filter = rollout_variant.offsets;
+    kit.stiffness_filter = rollout_variant.stiffness;
+    kit.stiffness_count = rollout_variant.stiffness_count;
+    kit.sees_applied = rollout_variant.applied_block;
     kit.w_action = price;
     kit.w_smooth = smooth;
     host.element_count = @max(kit.total, @max(kit.dtotal, kit.param_count + kit.policy_count));
     const packed_world: []f32 = try owned.alloc(f32, kit.param_count);
     kit.packWeights(world, packed_world);
     host.upload(.params, packed_world);
+    // The block reading the action applied before each decision: random weights when the variant has one, zero
+    // otherwise - packed after the layers, as the kit holds it.
+    const applied_block_t: Tensor = try .alloc(owned, &.{ a, hp });
+    for (applied_block_t.data) |*weight| {
+        weight.* = if (rollout_variant.applied_block) 0.2 * random.floatNorm(f32) else 0.0;
+    }
     const packed_policy: []f32 = try owned.alloc(f32, kit.policy_count);
-    kit.packPolicy(policy, packed_policy);
+    kit.packPolicyWithApplied(policy, applied_block_t.data, packed_policy);
     host.uploadAt(.params, kit.p_at, packed_policy);
     const staging: []f32 = try owned.alloc(f32, kit.total);
     @memset(staging, 0.0);
@@ -1204,6 +1293,13 @@ test "robot_latent_kit: the policy's gradients through the frozen world model ma
     }
     for (1..steps + 1) |step| {
         @memcpy(staging[kit.blockG(@intCast(step))..][0 .. rows * f], goals[step].data);
+    }
+    // Each row's window from staged actions, or from rest - the same on the graph's side below.
+    const starting_actions: []f32 = staging[kit.start_actions_at..][0 .. rows * a];
+    if (rollout_variant.starting_actions) {
+        for (starting_actions) |*number| {
+            number.* = 0.5 * random.floatNorm(f32);
+        }
     }
     host.upload(.acts, staging);
     kit.forward();
@@ -1221,6 +1317,7 @@ test "robot_latent_kit: the policy's gradients through the frozen world model ma
     for (&world_vars, world) |*v, p| {
         v.* = try g.parameter(p);
     }
+    const applied_block_var: Var = try g.parameter(applied_block_t);
     const ones_t: Tensor = try .alloc(owned, &.{ rows, 1 });
     @memset(ones_t.data, 1.0);
     const ones: Var = try g.constant(ones_t);
@@ -1230,6 +1327,24 @@ test "robot_latent_kit: the policy's gradients through the frozen world model ma
     var z: Var = try g.constant(start);
     var total: ?Var = null;
     var previous: ?Var = null;
+    // The action filter on the graph: every number's share and the rest, per row, and the action applied before -
+    // the window's starting actions. With no filter, no filter ops at all.
+    const filtering: bool = rollout_variant.offsets != 1.0 or rollout_variant.stiffness != 1.0;
+    const shares_t: Tensor = try .alloc(owned, &.{ rows, a });
+    const kept_t: Tensor = try .alloc(owned, &.{ rows, a });
+    const offset_count: usize = a - rollout_variant.stiffness_count;
+    for (0..rows) |row| {
+        for (0..a) |j| {
+            const share: f32 = if (j < offset_count) rollout_variant.offsets else rollout_variant.stiffness;
+            shares_t.data[row * a + j] = share;
+            kept_t.data[row * a + j] = 1.0 - share;
+        }
+    }
+    const shares: Var = try g.constant(shares_t);
+    const kept: Var = try g.constant(kept_t);
+    const starting_t: Tensor = try .alloc(owned, &.{ rows, a });
+    @memcpy(starting_t.data, starting_actions);
+    var applied: Var = try g.constant(starting_t);
     for (0..steps) |step| {
         const noise_t: Tensor = try .alloc(owned, &.{ rows, a });
         const step_seed: u32 = zn_mlp.latStepSeed(seed, @intCast(step));
@@ -1239,9 +1354,22 @@ test "robot_latent_kit: the policy's gradients through the frozen world model ma
             }
         }
         const goal: Var = try g.constant(goals[step]);
-        const raw: Var = try latent.Learner.policyOnGraph(g, policy_vars, z, goal, null, ones);
+        // The policy reading the action applied before this decision through its block, when the variant has one: the
+        // graph then carries the reading's gradient back into that earlier action, as the kit's backward does.
+        const applied_input: ?latent.Learner.AppliedInput = if (rollout_variant.applied_block)
+            .{ .weights = applied_block_var, .action = applied }
+        else
+            null;
+        const raw: Var = try latent.Learner.policyOnGraph(g, policy_vars, z, goal, applied_input, ones);
         const noisy: Var = try g.add(raw, try g.scale(try g.constant(noise_t), sigma));
-        const action: Var = try g.scale(noisy, scale);
+        const chosen: Var = try g.scale(noisy, scale);
+        // The action filter: each number's share of the new action plus the rest of the one applied before.
+        const action: Var = if (filtering) blended: {
+            const new_part: Var = try g.mul(chosen, shares);
+            const kept_part: Var = try g.mul(applied, kept);
+            break :blended try g.add(new_part, kept_part);
+        } else chosen;
+        applied = action;
         z = try latent.LatentWorld.step(g, world_vars, z, try g.constant(refs[step]), action, ones);
         var term: Var = try g.mseLoss(z, try g.constant(goals[step + 1]));
         term = try g.add(term, try g.scale(try g.mseLoss(raw, no_action), price));
@@ -1267,6 +1395,19 @@ test "robot_latent_kit: the policy's gradients through the frozen world model ma
             at += 1;
         }
     }
+    // The applied action's block, last, in the same order (a row per action number, a column per hidden unit).
+    const applied_block_size: usize = kit.actions * kit.policy_hidden;
+    if (rollout_variant.applied_block) {
+        const cpu_block: Tensor = try g.gradOf(applied_block_var);
+        for (cpu_block.data) |grad| {
+            const expected: f32 = float(steps) * grad;
+            worst = @max(worst, @abs(grads[at] - expected));
+            largest = @max(largest, @abs(expected));
+            at += 1;
+        }
+    } else {
+        at += applied_block_size;
+    }
     try expect(at == kit.p_at + kit.policy_count);
     report.print("\n  policy gradients vs zimrnum, {d} weights: worst difference {e} (largest {e})\n", .{
         kit.policy_count,
@@ -1274,6 +1415,33 @@ test "robot_latent_kit: the policy's gradients through the frozen world model ma
         largest,
     });
     try expect(worst <= 1.0e-4 * largest);
+}
+
+test "robot_latent_kit: the policy's gradients through the frozen world model match zimrnum" {
+    try expectPolicyGradientsMatchZimrnum(.{});
+}
+
+test "robot_latent_kit: the policy's gradients through its reading of the applied action match zimrnum" {
+    // The policy reads the action applied before each decision through a random block, with the action filter on and
+    // windows from staged actions: the block's own gradient, and the reading's gradient carried back into the earlier
+    // decision's action (`lat_act_bwd`'s `lat_applied_gradient`).
+    try expectPolicyGradientsMatchZimrnum(.{
+        .offsets = 0.25,
+        .stiffness = 0.5,
+        .stiffness_count = 2,
+        .starting_actions = true,
+        .applied_block = true,
+    });
+}
+
+test "robot_latent_kit: the policy's gradients through the action filter match zimrnum" {
+    // Offsets at 0.25, an action's last two numbers at 0.5, each row's window from staged actions.
+    try expectPolicyGradientsMatchZimrnum(.{
+        .offsets = 0.25,
+        .stiffness = 0.5,
+        .stiffness_count = 2,
+        .starting_actions = true,
+    });
 }
 
 test "robot_latent_kit: Adam moves only the policy's weights, and takes zimrnum's step" {
@@ -1511,7 +1679,7 @@ test "robot_latent_kit: two updates in one frame keep their own windows" {
     resident.stageStarts(&first_batch, 0, steps);
     resident.stageStarts(&second_batch, 1, steps);
 
-    var state: track.State = try .init(gpa, fleet.m.nbody);
+    var state: track.State = try .init(gpa, fleet.m.body_count);
     defer state.deinit(gpa);
     var data: rbt.Data = try .init(gpa, fleet.m);
     defer data.deinit();
@@ -1813,6 +1981,234 @@ test "robot_latent_kit: the flow takes the policy's gradient projected onto its 
         flow_moved += @intFromBool(before != after);
     }
     try expect(policy_moved > 0 and flow_moved > 0);
+}
+
+test "robot_latent_kit: the action filter in the action kernels, offsets and stiffnesses each at their own share" {
+    // Two rows of five numbers - three joints' offsets, then two limbs' stiffnesses - written by `lat_act` at shares
+    // 0.25 and 0.5 from known previous actions, then carried back by `lat_act_bwd`: every number's action is its
+    // share of the scaled raw output plus the rest of its previous action, and its raw output's gradient its share of
+    // the scaled whole gradient (its own plus the kept share of the carry), the carry left holding that whole.
+    var host: compute_host.Compute(zn_mlp) = .initCpu();
+    const rows: u32 = 2;
+    const count: u32 = 5;
+    const raw_at: u32 = 0;
+    const action_at: u32 = 16;
+    const previous_at: u32 = 32;
+    const carry_at: u32 = 48;
+    const gradient_at: u32 = 64;
+    const raw_gradient_at: u32 = 80;
+    const total: u32 = 96;
+    host.element_count = total;
+    var acts: [total]f32 = @splat(0);
+    var dacts: [total]f32 = @splat(0);
+    for (0..rows * count) |index| {
+        const position: f32 = @floatFromInt(index);
+        acts[raw_at + index] = 0.1 * position - 0.3;
+        acts[previous_at + index] = 0.05 * position + 0.2;
+        dacts[gradient_at + index] = 0.03 * position - 0.1;
+        dacts[carry_at + index] = 0.02 * position + 0.01;
+    }
+    host.upload(.acts, &acts);
+    host.upload(.dacts, &dacts);
+    const scale: f32 = 0.7;
+    host.params = .{
+        .rows = rows,
+        .count = count,
+        .stride = count,
+        .x_off = raw_at,
+        .y_off = action_at,
+        .lat_scale = scale,
+        .lat_filter = 0.25,
+        .lat_stiffness_filter = 0.5,
+        .lat_stiffness_count = 2,
+        .lat_prev_action = previous_at,
+        .lat_prev_action_stride = count,
+    };
+    host.run("lat_act", rows * count);
+    const written: []const f32 = host.readLatest(.acts) orelse return error.NoReadback;
+    for (0..rows * count) |index| {
+        const number: usize = index % count;
+        const share: f32 = if (number < 3) 0.25 else 0.5;
+        const chosen: f32 = scale * acts[raw_at + index];
+        const expected: f32 = share * chosen + (1.0 - share) * acts[previous_at + index];
+        try expectEqual(expected, written[action_at + index]);
+    }
+    // The backward: the smoothness's neighbours the raw output itself (no pull), no action price.
+    host.params = .{
+        .rows = rows,
+        .count = count,
+        .stride = count,
+        .x_off = raw_at,
+        .dx_off = gradient_at,
+        .dy_off = raw_gradient_at,
+        .lat_scale = scale,
+        .lat_filter = 0.25,
+        .lat_stiffness_filter = 0.5,
+        .lat_stiffness_count = 2,
+        .lat_prev = raw_at,
+        .lat_next = raw_at,
+        .lat_carry = carry_at,
+    };
+    host.run("lat_act_bwd", rows * count);
+    const gradients: []const f32 = host.readLatest(.dacts) orelse return error.NoReadback;
+    for (0..rows * count) |index| {
+        const number: usize = index % count;
+        const share: f32 = if (number < 3) 0.25 else 0.5;
+        const whole: f32 = dacts[gradient_at + index] + (1.0 - share) * dacts[carry_at + index];
+        try expectEqual(whole, gradients[carry_at + index]);
+        const expected_raw_gradient: f32 = share * scale * whole;
+        try expectEqual(expected_raw_gradient, gradients[raw_gradient_at + index]);
+    }
+}
+
+/// ACTING ON THE TWIN - one decision for every world of the device's CPU twin, as the device acts on the GPU: the
+/// twin writes each world's policy inputs (`robotgpu.policy_inputs_program`); the kit's CPU pipe acts on them (the
+/// inputs and each world's previous action - its `actions`, given at the decision before - uploaded into the acting
+/// rows, `actOnRows`, the raw actions read back into the twin's choices); then the twin makes the choices the
+/// decision's actions (`giveActions`: the exploration at `clock`, the action filter). The twin's own composition of
+/// the device's acting, against which the device and the trainer are both checked.
+fn actOnTwin(
+    kit: LatentKit(zn_mlp),
+    host: *compute_host.Compute(zn_mlp),
+    acting: LatentKit(zn_mlp).PolicyRows,
+    twin: robotgpu.CpuTwin,
+    clock: robotgpu.DecisionClock,
+) void {
+    // The policy's inputs from the state as it is now (the program observes first).
+    twin.runProgram(&robotgpu.policy_inputs_program);
+    // The twin's world arrays, one block world after world, as the device lays them out.
+    const world_f: []f32 = &robotgpu.g.B.world_f;
+    const arrays: robotgpu.WorldStateLayout = robotgpu.g.P.layout.world_f;
+    const world_count: u32 = twin.counts.world_count;
+    const input_numbers: u32 = world_count * acting.input_stride;
+    const action_numbers: u32 = world_count * acting.raw_stride;
+    const inputs: []const f32 = world_f[arrays.policy_inputs.at(0, 0)..][0..input_numbers];
+    const given: []const f32 = world_f[arrays.actions.at(0, 0)..][0..action_numbers];
+    host.uploadAt(.acts, acting.inputs_at, inputs);
+    host.uploadAt(.acts, acting.applied_at, given);
+    kit.actOnRows(acting);
+    // The CPU pipe's buffers are always readable; the raw actions go into the twin's choices.
+    const kit_acts: []const f32 = host.readLatest(.acts) orelse unreachable;
+    const raw: []const f32 = kit_acts[acting.raw_at..][0..action_numbers];
+    const chosen: []f32 = world_f[arrays.chosen_actions.at(0, 0)..][0..action_numbers];
+    @memcpy(chosen, raw);
+    twin.giveActions(clock);
+}
+
+/// One dense layer on the CPU in `dense_fwd`'s order: each output its bias, then every input times its weight in
+/// order, activated - the weights at `w` with their bias after them, `x.len x y.len`.
+fn denseOnCpu(
+    params: []const f32,
+    w: u32,
+    x: []const f32,
+    y: []f32,
+    act: u32,
+) void {
+    for (y, 0..) |*out, o| {
+        var sum: f32 = params[w + x.len * y.len + o];
+        for (x, 0..) |value, i| {
+            sum += value * params[w + i * y.len + o];
+        }
+        out.* = zn_mlp.activate(sum, act);
+    }
+}
+
+test "robot_latent_kit: the policy acts on rows of its own as a CPU forward pass in the kernel's order" {
+    // A kit with a small policy, acting on five rows of its own (`reservePolicyRows`, `actOnRows`), random weights
+    // and inputs: every raw action must be the CPU's three layers - bias first, the inputs in order, tanh, tanh,
+    // linear - computed in `dense_fwd`'s own order, so the rows, strides and weight offsets are checked exactly.
+    const gpa: Allocator = testing_allocator;
+    var arena: ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const owned: Allocator = arena.allocator();
+    const f: u32 = 6;
+    const r: u32 = 2;
+    const a: u32 = 3;
+    const h: u32 = 4;
+    const policy_hidden: u32 = 5;
+    var rng: Random.DefaultPrng = .init(17);
+    const random: Random = rng.random();
+    var host: compute_host.Compute(zn_mlp) = .initCpu();
+    const kit: LatentKit(zn_mlp) = try .init(&host, f, r, a, h, 4, 1, f, policy_hidden);
+    var layout: kit_mlp.KitLayout = .{
+        .acts_floats = kit.total,
+        .params_floats = kit.p_at + kit.policy_count,
+        .dacts_floats = kit.dtotal,
+    };
+    const acting_rows: u32 = 5;
+    const acting: LatentKit(zn_mlp).PolicyRows = kit.reservePolicyRows(&layout, acting_rows, 2 * f, a);
+    layout.requireFitsKit(zn_mlp);
+    host.element_count = layout.largestBuffer();
+    const params: []f32 = try owned.alloc(f32, layout.params_floats);
+    for (params) |*number| {
+        number.* = random.float(f32) - 0.5;
+    }
+    host.upload(.params, params);
+    const staging: []f32 = try owned.alloc(f32, layout.acts_floats);
+    @memset(staging, 0);
+    const width: u32 = 2 * f;
+    const inputs: []f32 = staging[acting.inputs_at..][0 .. acting_rows * width];
+    for (inputs) |*number| {
+        number.* = 2.0 * random.float(f32) - 1.0;
+    }
+    // Each row's action applied before its decision, which the policy's block (random, as every weight here) reads.
+    const applied_actions: []f32 = staging[acting.applied_at..][0 .. acting_rows * a];
+    for (applied_actions) |*number| {
+        number.* = 2.0 * random.float(f32) - 1.0;
+    }
+    host.upload(.acts, staging);
+    kit.actOnRows(acting);
+    const acts: []const f32 = host.readLatest(.acts) orelse return error.NoReadback;
+    const weights: LatentKit(zn_mlp).PolicyWeights = kit.policyWeights();
+    const tanh: u32 = @backingInt(zn_mlp.Act.tanh);
+    const linear: u32 = @backingInt(zn_mlp.Act.linear);
+    const first_linear: []f32 = try owned.alloc(f32, policy_hidden);
+    const hidden1: []f32 = try owned.alloc(f32, policy_hidden);
+    const hidden2: []f32 = try owned.alloc(f32, policy_hidden);
+    for (0..acting_rows) |row| {
+        const x: []const f32 = inputs[row * width ..][0..width];
+        const applied_row: []const f32 = applied_actions[row * a ..][0..a];
+        // The first layer linear over the goal and the state, then the applied action's terms through the block,
+        // in order, then the tanh - `applied_add_activate`'s order.
+        denseOnCpu(params, weights.first, x, first_linear, linear);
+        for (hidden1, first_linear, 0..) |*unit, linear_sum, o| {
+            var sum: f32 = linear_sum;
+            for (applied_row, 0..) |applied_number, i| {
+                const weight: f32 = params[weights.applied + i * policy_hidden + o];
+                sum += applied_number * weight;
+            }
+            unit.* = zn_mlp.activate(sum, tanh);
+        }
+        denseOnCpu(params, weights.second, hidden1, hidden2, tanh);
+        for (0..a) |action| {
+            const bias_at: usize = weights.third + policy_hidden * a + action;
+            var sum: f32 = params[bias_at];
+            for (hidden2, 0..) |value, i| {
+                sum += value * params[weights.third + i * a + action];
+            }
+            const expected: f32 = zn_mlp.activate(sum, linear);
+            try expectEqual(expected, acts[acting.raw_at + row * a + action]);
+        }
+    }
+    // And the trainer's own CPU policy (`HostPolicy.policyRow`, on the same packed weights) - the same raw actions to
+    // the bit, so a trainer on the CPU and a simulator acting through the kit choose the very same actions.
+    var host_policy: track_resident.HostPolicy(zn_mlp) = .{
+        .mirror = params[kit.p_at..][0..kit.policy_count],
+        .hidden1 = try owned.alloc(f32, policy_hidden),
+        .hidden2 = try owned.alloc(f32, policy_hidden),
+        .goal = try owned.alloc(f32, f),
+        .z = try owned.alloc(f32, f),
+        .raw = try owned.alloc(f32, a),
+    };
+    for (0..acting_rows) |row| {
+        const x: []const f32 = inputs[row * width ..][0..width];
+        @memcpy(host_policy.goal, x[0..f]);
+        @memcpy(host_policy.z, x[f..]);
+        host_policy.applied = applied_actions[row * a ..][0..a];
+        host_policy.policyRow();
+        const kit_raw: []const f32 = acts[acting.raw_at + row * a ..][0..a];
+        try expectEqualSlices(f32, kit_raw, host_policy.raw);
+    }
 }
 
 test "robot_latent_kit: the tracking planner scores a plan as the CPU model rolls and charges it" {
@@ -2874,7 +3270,7 @@ test "robot_latent_kit: the policy's clipped optimiser with nothing to bound - t
     try expect(moved > 0);
 }
 
-test "robot_track: the reset curriculum - starts drawn toward failing bins as its mixture says, the old draws without" {
+test "robot_track: the reset curriculum - starts toward low-return bins by SuperMimic's mixture, uniform without" {
     // The get-up pages' 5 s clip in bins of a second, at 60 Hz. One bin losing its reference once a second (a rate of
     // 1/60 per step), the others never: of 20,000 starts the uniform half lands in it 60 / 298 of the time, the hard
     // draws e^5 / (e^5 + 4) = 0.974 of theirs, and the long-run draws - weights accumulated from the hard draws'
@@ -2888,14 +3284,16 @@ test "robot_track: the reset curriculum - starts drawn toward failing bins as it
     try setup.init(gpa);
     defer setup.deinit();
     const m: *rbt.Model = &setup.imported.model;
-    // Without a curriculum: the old draw, one from the fleet's stream.
+    // Without a curriculum: a frame uniform below the last start, one counter-based draw (`rbt.drawBelow`) for the
+    // character's episode - the same draw however often it is asked, and a new one for each new episode.
     const plain_fleet: *track.Fleet = setup.fleet;
-    var same_stream: Random.DefaultPrng = .init(plain_fleet.options.seed);
-    // The fleet's own stream has already drawn its first starts; follow it from here on both sides.
-    same_stream.s = plain_fleet.rng.s;
-    for (0..50) |_| {
-        const expected: usize = 1 + same_stream.random().uintLessThan(usize, setup.clip.frame_count - 2);
-        try expectEqual(expected, plain_fleet.drawStartFrame(0));
+    const last_start: u32 = @intCast(setup.clip.frame_count - 2);
+    for (0..50) |episode_step| {
+        plain_fleet.episode_numbers[0] = @intCast(episode_step + 1);
+        const episode: u32 = plain_fleet.episode_numbers[0];
+        const expected: usize = 1 + rbt.drawBelow(plain_fleet.draw_seed, 0, episode, .start_frame, 0, last_start);
+        try expectEqual(expected, plain_fleet.drawStartFrame(0, 0));
+        try expectEqual(expected, plain_fleet.drawStartFrame(0, 0));
     }
     // With one.
     setup.fleet.deinit();
@@ -2909,34 +3307,43 @@ test "robot_track: the reset curriculum - starts drawn toward failing bins as it
     const bin_count: usize = fleet.bins_start[1];
     try expectEqual(@as(usize, 5), bin_count);
     const frames_per_bin: usize = 60;
-    @memset(fleet.bin_failure_rates, 0);
+    // Every bin's return estimate high but bin 2's: SuperMimic's mixture draws bin 2 with 0.1 (its uniform half) plus
+    // 0.5 times its softmax share, exp(0) over exp(0) + 4 exp(-25 * 100 / 500) - 0.587 - and each other bin 0.103. The
+    // long-run average follows the softmax exactly here (the returns never change), so its tenth is the softmax's.
+    @memset(fleet.bin_returns, 100.0);
+    fleet.bin_returns[2] = 0.0;
     @memset(fleet.bin_history_weights, 0);
-    fleet.bin_failure_rates[2] = 1.0 / 60.0;
+    // One round of the curriculum, as a step with starts makes it: the softmax of these returns, folded into an empty
+    // history - which then follows the softmax exactly.
+    fleet.refreshStartBins();
     var counts: [5]u32 = @splat(0);
     const draws: u32 = 20000;
-    for (0..draws) |_| {
-        const frame: usize = fleet.drawStartFrame(0);
+    for (0..draws) |draw| {
+        // A new episode for each draw: its own counter-based numbers.
+        fleet.episode_numbers[0] = @intCast(draw + 1);
+        const frame: usize = fleet.drawStartFrame(0, 0);
         counts[@min(frame / frames_per_bin, 4)] += 1;
     }
     const hard_bin_share: f32 = float(counts[2]) / float(draws);
-    try expectApproxEqAbs(@as(f32, 0.588), hard_bin_share, 0.02);
+    try expectApproxEqAbs(@as(f32, 0.587), hard_bin_share, 0.02);
     for (counts, 0..) |count, bin| {
         if (bin == 2) {
             continue;
         }
-        try expectApproxEqAbs((1 - 0.588) / 4.0, float(count) / float(draws), 0.02);
+        try expectApproxEqAbs(@as(f32, 0.103), float(count) / float(draws), 0.02);
     }
-    // Stepping a fleet that falls: the visited bins' rates, within [0, 1], some above 0.
-    @memset(fleet.bin_failure_rates, 0);
+    // Stepping a fleet that falls: its finished episodes fold their returns into their start bins - finite, some moved.
+    @memset(fleet.bin_returns, 0);
     for (0..300) |_| {
         _ = fleet.step(setup.actions_buffer);
     }
-    var failing_bins: usize = 0;
-    for (fleet.bin_failure_rates) |rate| {
-        try expect(rate >= 0 and rate <= 1);
-        failing_bins += @intFromBool(rate > 0);
+    var updated_bins: usize = 0;
+    for (fleet.bin_returns) |bin_return| {
+        const is_finite: bool = bin_return == bin_return and @abs(bin_return) < 1.0e30;
+        try expect(is_finite);
+        updated_bins += @intFromBool(bin_return != 0);
     }
-    try expect(failing_bins > 0);
+    try expect(updated_bins > 0);
 }
 
 test "robot_track: the physics on four threads - the same characters as on one, to the bit" {
@@ -2977,8 +3384,8 @@ test "robot_track: the physics on four threads - the same characters as on one, 
         _ = one_thread.step(actions);
         _ = four_threads.step(actions);
         for (0..8) |env| {
-            try expectEqualSlices(f32, one_thread.data[env].pos, four_threads.data[env].pos);
-            try expectEqualSlices(f32, one_thread.data[env].vel, four_threads.data[env].vel);
+            try expectEqualSlices(f32, one_thread.data[env].joint_positions, four_threads.data[env].joint_positions);
+            try expectEqualSlices(f32, one_thread.data[env].joint_velocities, four_threads.data[env].joint_velocities);
             try expectEqual(one_thread.dones[env], four_threads.dones[env]);
             try expectEqual(one_thread.failures[env], four_threads.failures[env]);
             restarts += @intFromBool(one_thread.dones[env]);
@@ -2994,7 +3401,9 @@ test "robot_track: a return - back on the reference, the episode goes on; never 
     // reference: two failures, two aftermaths, no episode ended. Then, before each step, character 0 is put back on its
     // reference: it holds it 8 steps in a row and has RETURNED - its episode goes on, the fleet counts one return of 8
     // steps. Character 1 is moved a metre off before each step: it never returns, and its episode ends on the step its
-    // aftermath runs out, with no second failure counted.
+    // aftermath runs out, with no second failure counted. Character 0 is held on its reference to the end - after its
+    // return too - so the test reads the rule, never how long the servo alone keeps a character up, which the physics
+    // decides and which can be shorter than the aftermath that remains.
     const gpa: Allocator = testing_allocator;
     var setup: FleetSetup = undefined;
     try setup.init(gpa);
@@ -3017,10 +3426,10 @@ test "robot_track: a return - back on the reference, the episode goes on; never 
         _ = fleet.step(actions);
     }
     try expect(!fleet.failures[0] and !fleet.failures[1]);
-    const root_len: usize = setup.clip.nq - m.nq;
+    const root_len: usize = setup.clip.nq - m.coordinate_count;
     // Both off by a metre: lost.
     for (0..2) |env| {
-        fleet.data[env].pos[0] += 1.0;
+        fleet.data[env].joint_positions[0] += 1.0;
         fleet.data[env].stage = .stale;
     }
     _ = fleet.step(actions);
@@ -3030,17 +3439,15 @@ test "robot_track: a return - back on the reference, the episode goes on; never 
     var ended_at: ?u32 = null;
     var step_after_loss: u32 = 1;
     while (step_after_loss <= aftermath_steps) : (step_after_loss += 1) {
-        // Character 0 onto its reference (until it has returned), character 1 a metre off it.
+        // Character 0 onto its reference, character 1 a metre off it.
         const frame_of_0: usize = fleet.frame[0];
-        if (returned_at == null) {
-            @memcpy(fleet.data[0].pos, setup.clip.pose(frame_of_0)[root_len..]);
-            @memset(fleet.data[0].vel, 0);
-            fleet.data[0].stage = .stale;
-        }
+        @memcpy(fleet.data[0].joint_positions, setup.clip.pose(frame_of_0)[root_len..]);
+        @memset(fleet.data[0].joint_velocities, 0);
+        fleet.data[0].stage = .stale;
         const frame_of_1: usize = fleet.frame[1];
-        @memcpy(fleet.data[1].pos, setup.clip.pose(frame_of_1)[root_len..]);
-        fleet.data[1].pos[0] += 1.0;
-        @memset(fleet.data[1].vel, 0);
+        @memcpy(fleet.data[1].joint_positions, setup.clip.pose(frame_of_1)[root_len..]);
+        fleet.data[1].joint_positions[0] += 1.0;
+        @memset(fleet.data[1].joint_velocities, 0);
         fleet.data[1].stage = .stale;
         _ = fleet.step(actions);
         try expect(!fleet.failures[0] and !fleet.failures[1]);
@@ -3110,4 +3517,1354 @@ test "robot_track: windows inside returns, and starts in trouble" {
     });
     defer not_yet.deinit();
     try expectEqual(@as(u64, 0), not_yet.pushes_given);
+}
+
+/// THE HOST's ROUND OF SUPERMIMIC's CURRICULUM, as a trainer driving the device makes it: the fleet's start-bin mixture
+/// as it stands now - its softmax and long-run weights by the curriculum's rule (`rbt.startBinMixture`) - summed in
+/// order into the twin's running sums, which a reset's start draw reads (`begin_reset`). `mixture` holds the fleet's
+/// bins.
+fn uploadStartBinMixture(
+    fleet: *const track.Fleet,
+    twin: robotgpu.CpuTwin,
+    mixture: []f32,
+) void {
+    const bins_end: usize = fleet.bins_start[1];
+    const softmax: []const f32 = fleet.bin_softmax[0..bins_end];
+    const long_run: []const f32 = fleet.bin_history_weights[0..bins_end];
+    const bin_mixture: []f32 = mixture[0..bins_end];
+    rbt.startBinMixture(fleet.options.curriculum.rule, softmax, long_run, bin_mixture);
+    var running_sum: f32 = 0;
+    for (bin_mixture, 0..) |probability, bin| {
+        running_sum += probability;
+        const sum_at: u32 = twin.layout.model_f.bin_running_sums.at(@intCast(bin));
+        robotgpu.g.B.model_f[sum_at] = running_sum;
+    }
+}
+
+/// WHERE A FLEET AND THE DEVICE's TWIN FIRST DIFFER, named: one quantity of one world, compared number by number by
+/// bit pattern (a negative zero is not a positive one), the first difference printed with the decision, the world, the
+/// quantity's name, the index and both values - so a mismatch says what it is the moment it appears.
+fn expectWorldNumbersAlike(
+    name: []const u8,
+    decision: usize,
+    env: usize,
+    fleet_numbers: []const f32,
+    twin_numbers: []const f32,
+) !void {
+    for (fleet_numbers, twin_numbers, 0..) |fleet_number, twin_number, index| {
+        const fleet_bits: u32 = @bitCast(fleet_number);
+        const twin_bits: u32 = @bitCast(twin_number);
+        if (fleet_bits != twin_bits) {
+            report.failure("\nworlds differ at decision {d}, world {d}: {s}[{d}] fleet {d} twin {d}\n", .{
+                decision,
+                env,
+                name,
+                index,
+                fleet_number,
+                twin_number,
+            });
+            return error.WorldsDiffer;
+        }
+    }
+}
+
+/// `expectWorldNumbersAlike` for one count.
+fn expectWorldCountAlike(
+    name: []const u8,
+    decision: usize,
+    env: usize,
+    fleet_count: u32,
+    twin_count: u32,
+) !void {
+    if (fleet_count != twin_count) {
+        report.failure("\nworlds differ at decision {d}, world {d}: {s} fleet {d} twin {d}\n", .{
+            decision,
+            env,
+            name,
+            fleet_count,
+            twin_count,
+        });
+        return error.WorldsDiffer;
+    }
+}
+
+/// EVERY WORLD ARRAY OF THE DEVICE, CLASSIFIED against the CPU fleet - so none is forgotten by `adoptFleet` and
+/// `expectWorldsAlike`. Each array of `robotgpu.WorldStateLayout` and `robotgpu.WorldIntegersLayout` is named in
+/// exactly one list below; an array in no list, or a name in a list that no layout has, is a compile error - a new
+/// array must be classified when it is added.
+const WorldArrayClasses = struct {
+    /// What a character carries from one decision to the next: copied by `adoptFleet`, compared by
+    /// `expectWorldsAlike`.
+    const carried = [_][]const u8{
+        "joint_positions",
+        "warmstart_accelerations",
+        "activations",
+        "joint_velocities",
+        "applied_actions",
+        "previous_actions",
+        "world_clip",
+        "world_frame",
+        "episode_numbers",
+        "episode_steps",
+        "episode_decisions",
+        "aftermath_steps_left",
+        "return_streaks",
+        "steps_since_loss",
+        "start_bins",
+        "episode_discounted_returns",
+        "episode_discount_powers",
+        "episode_reward_sums",
+    };
+    /// Compared, composed: the episode's flags, which the fleet keeps in several fields of its own (failed,
+    /// returned, in an aftermath, done, how it ended) - `expectWorldsAlike` composes them as the device's judgement
+    /// sets its bits and compares every flag but the aftermath's beginning, which the fleet does not keep.
+    const compared_composed = [_][]const u8{"episode_flags"};
+    /// A decision's results: compared after a whole decision, never copied (`ComparedMoment.after_a_decision`).
+    const decision_results = [_][]const u8{
+        "rewards",              "super_mimic_rewards", "observations",  "tracking_errors",
+        "super_mimic_tracking", "termination_rule",    "effort_energy", "effort_torque_squares",
+    };
+    /// The decision's given action: the fleet keeps no asked action, so its caller compares it (the closed loop,
+    /// against the trainer's slots).
+    const compared_by_caller = [_][]const u8{"actions"};
+    /// The device's own scratch, with no counterpart in the fleet - the return's length among it: the fleet only adds
+    /// each length into a sum for its log, keeping none per character.
+    const twin_scratch = [_][]const u8{ "policy_inputs", "chosen_actions", "body_lowest_points", "return_lengths" };
+    /// Recomputed within every step from the carried state: the physics' intermediates, and the solver's integers.
+    const recomputed_each_step = [_][]const u8{
+        "joint_accelerations",                 "velocity_changes",           "damped_mass_factor",
+        "damped_mass_factor_inverse_diagonal", "smooth_joint_accelerations", "applied_joint_forces",
+        "servo_targets",                       "servo_target_velocities",    "servo_errors",
+        "servo_accelerations",                 "bias_joint_forces",          "passive_joint_forces",
+        "actuator_joint_forces",               "smooth_joint_forces",        "controls",
+        "activation_rates",                    "actuator_forces",            "actuator_lengths",
+        "actuator_velocities",                 "body_positions",             "body_orientations",
+        "body_centres_of_mass",                "joint_anchors",              "joint_axes",
+        "subtree_centres_of_mass",             "body_inertias",              "composite_inertias",
+        "body_velocities",                     "body_bias_accelerations",    "subtree_bias_forces",
+        "dof_axes",                            "dof_axis_rates",             "geom_positions",
+        "geom_orientations",                   "floor_slot_positions",       "floor_slot_distances",
+        "floor_slot_first_tangents",           "floor_slot_second_tangents", "site_positions",
+        "site_orientations",                   "mass_matrix",                "mass_factor",
+        "mass_factor_inverse_diagonal",        "constraint_joint_forces",    "overflow",
+        "limit_candidate_active",              "floor_slot_filled",          "constraint_row_kind",
+        "constraint_row_source",               "constraint_row_count",       "constraint_jacobian_dofs",
+        "constraint_jacobian_nonzero_count",   "newton_iterations",          "newton_line_evaluations",
+    };
+    const all = carried ++ compared_composed ++ decision_results ++ compared_by_caller ++ twin_scratch ++
+        recomputed_each_step;
+
+    /// How many lists name `name`.
+    fn timesNamed(comptime name: []const u8) usize {
+        var count: usize = 0;
+        for (all) |listed| {
+            if (eql(u8, listed, name)) {
+                count += 1;
+            }
+        }
+        return count;
+    }
+
+    /// Whether either world layout has an array called `name`.
+    fn isWorldArray(comptime name: []const u8) bool {
+        return @hasField(robotgpu.WorldStateLayout, name) or @hasField(robotgpu.WorldIntegersLayout, name);
+    }
+};
+
+comptime {
+    @setEvalBranchQuota(200_000);
+    const layouts = [_]type{ robotgpu.WorldStateLayout, robotgpu.WorldIntegersLayout };
+    for (layouts) |Layout| {
+        for (@typeInfo(Layout).@"struct".field_names) |field_name| {
+            const times: usize = WorldArrayClasses.timesNamed(field_name);
+            if (times != 1) {
+                @compileError("world array `" ++ field_name ++ "` must be classified exactly once (WorldArrayClasses)");
+            }
+        }
+    }
+    for (WorldArrayClasses.all) |listed| {
+        if (!WorldArrayClasses.isWorldArray(listed)) {
+            @compileError("WorldArrayClasses names `" ++ listed ++ "`, which no world layout has");
+        }
+    }
+}
+
+/// THE FLEET's CARRIED STATE INTO THE TWIN: what each character carries from one decision to the next - its pose and
+/// velocities, its filters' actions (over the fleet's action width; the twin's room for the limbs left as it is), its
+/// clip and frame, and every counter of its episode, whose numbers key each draw a restart makes.
+fn adoptFleet(fleet: *const track.Fleet, twin: robotgpu.CpuTwin) void {
+    const state: robotgpu.WorldStateLayout = twin.layout.world_f;
+    const integers: robotgpu.WorldIntegersLayout = twin.layout.world_u;
+    const width: usize = fleet.action_width;
+    for (0..fleet.options.envs) |env| {
+        const world: u32 = @intCast(env);
+        state.joint_positions.storeAll(world, fleet.data[env].joint_positions);
+        state.joint_velocities.storeAll(world, fleet.data[env].joint_velocities);
+        state.warmstart_accelerations.storeAll(world, fleet.data[env].warmstart_accelerations);
+        state.activations.storeAll(world, fleet.data[env].activations);
+        for (0..width) |number| {
+            const at: u32 = @intCast(number);
+            state.applied_actions.store(world, at, fleet.applied_actions[env * width + number]);
+            state.previous_actions.store(world, at, fleet.previous_actions[env * width + number]);
+        }
+        integers.world_clip.store(world, 0, @intCast(fleet.clip_of[env]));
+        integers.world_frame.store(world, 0, fleet.frame[env]);
+        integers.episode_numbers.store(world, 0, fleet.episode_numbers[env]);
+        integers.episode_steps.store(world, 0, fleet.steps[env]);
+        integers.episode_decisions.store(world, 0, fleet.episode_decisions[env]);
+        integers.aftermath_steps_left.store(world, 0, fleet.aftermath_steps_left[env]);
+        integers.return_streaks.store(world, 0, fleet.return_streaks[env]);
+        integers.steps_since_loss.store(world, 0, fleet.steps_since_loss[env]);
+        integers.start_bins.store(world, 0, @intCast(fleet.start_bins[env]));
+        state.episode_discounted_returns.store(world, 0, fleet.episode_discounted_returns[env]);
+        state.episode_discount_powers.store(world, 0, fleet.episode_discount_powers[env]);
+        state.episode_reward_sums.store(world, 0, fleet.episode_reward_sums[env]);
+    }
+}
+
+/// When the fleet and the twin are compared: before any decision only what each character carries means anything; after
+/// a decision, its results - the rewards - too.
+const ComparedMoment = enum { before_any_decision, after_a_decision };
+
+/// THE FLEET AND THE TWIN ALIKE, BETWEEN WHOLE DECISIONS: every carried quantity `adoptFleet` copies, and after a
+/// decision its rewards, compared world by world - the first difference named (`expectWorldNumbersAlike`). `decision`
+/// labels the report; `scratch` holds one world's longest row.
+fn expectWorldsAlike(
+    fleet: *const track.Fleet,
+    twin: robotgpu.CpuTwin,
+    moment: ComparedMoment,
+    decision: usize,
+    scratch: []f32,
+) !void {
+    const state: robotgpu.WorldStateLayout = twin.layout.world_f;
+    const integers: robotgpu.WorldIntegersLayout = twin.layout.world_u;
+    const width: usize = fleet.action_width;
+    for (0..fleet.options.envs) |env| {
+        const world: u32 = @intCast(env);
+        const data: *const rbt.Data = &fleet.data[env];
+        const positions: []f32 = scratch[0..data.joint_positions.len];
+        state.joint_positions.loadAll(world, positions);
+        try expectWorldNumbersAlike("joint_positions", decision, env, data.joint_positions, positions);
+        const velocities: []f32 = scratch[0..data.joint_velocities.len];
+        state.joint_velocities.loadAll(world, velocities);
+        try expectWorldNumbersAlike("joint_velocities", decision, env, data.joint_velocities, velocities);
+        const warm_start: []f32 = scratch[0..data.warmstart_accelerations.len];
+        state.warmstart_accelerations.loadAll(world, warm_start);
+        try expectWorldNumbersAlike("warmstart_accelerations", decision, env, data.warmstart_accelerations, warm_start);
+        const activations: []f32 = scratch[0..data.activations.len];
+        state.activations.loadAll(world, activations);
+        try expectWorldNumbersAlike("activations", decision, env, data.activations, activations);
+        const fleet_applied: []const f32 = fleet.applied_actions[env * width ..][0..width];
+        const fleet_previous: []const f32 = fleet.previous_actions[env * width ..][0..width];
+        for (0..width) |number| {
+            const at: u32 = @intCast(number);
+            scratch[number] = state.applied_actions.load(world, at);
+        }
+        try expectWorldNumbersAlike("applied_actions", decision, env, fleet_applied, scratch[0..width]);
+        for (0..width) |number| {
+            const at: u32 = @intCast(number);
+            scratch[number] = state.previous_actions.load(world, at);
+        }
+        try expectWorldNumbersAlike("previous_actions", decision, env, fleet_previous, scratch[0..width]);
+        // Every counter of the character's episode, by name.
+        const count_names = [_][]const u8{
+            "world_clip",
+            "world_frame",
+            "episode_numbers",
+            "episode_steps",
+            "episode_decisions",
+            "aftermath_steps_left",
+            "return_streaks",
+            "steps_since_loss",
+            "start_bins",
+        };
+        const fleet_counts = [_]u32{
+            @intCast(fleet.clip_of[env]),
+            fleet.frame[env],
+            fleet.episode_numbers[env],
+            fleet.steps[env],
+            fleet.episode_decisions[env],
+            fleet.aftermath_steps_left[env],
+            fleet.return_streaks[env],
+            fleet.steps_since_loss[env],
+            @intCast(fleet.start_bins[env]),
+        };
+        const twin_counts = [_]u32{
+            integers.world_clip.load(world, 0),
+            integers.world_frame.load(world, 0),
+            integers.episode_numbers.load(world, 0),
+            integers.episode_steps.load(world, 0),
+            integers.episode_decisions.load(world, 0),
+            integers.aftermath_steps_left.load(world, 0),
+            integers.return_streaks.load(world, 0),
+            integers.steps_since_loss.load(world, 0),
+            integers.start_bins.load(world, 0),
+        };
+        for (count_names, fleet_counts, twin_counts) |name, fleet_count, twin_count| {
+            try expectWorldCountAlike(name, decision, env, fleet_count, twin_count);
+        }
+        // The episode's flags, composed from the fleet's fields as the device's judgement sets them
+        // (`judge_episode`): lost, returned, in an aftermath, finished, and ending at the loss - every flag but the
+        // aftermath's beginning, which the fleet does not keep.
+        var fleet_flags: u32 = 0;
+        if (fleet.failures[env]) {
+            fleet_flags |= robotgpu.episodeFlagBit(.lost);
+        }
+        if (fleet.returned[env]) {
+            fleet_flags |= robotgpu.episodeFlagBit(.returned);
+        }
+        if (fleet.in_aftermath[env]) {
+            fleet_flags |= robotgpu.episodeFlagBit(.in_aftermath);
+        }
+        if (fleet.dones[env]) {
+            fleet_flags |= robotgpu.episodeFlagBit(.finished);
+            if (fleet.ends[env] == .lost) {
+                fleet_flags |= robotgpu.episodeFlagBit(.ends_at_loss);
+            }
+        }
+        const unkept_flags: u32 = robotgpu.episodeFlagBit(.aftermath_begins);
+        const twin_flags: u32 = integers.episode_flags.load(world, 0) & ~unkept_flags;
+        const flags_name: []const u8 = "episode_flags (but the aftermath's beginning)";
+        try expectWorldCountAlike(flags_name, decision, env, fleet_flags, twin_flags);
+        const fleet_episode = [_]f32{
+            fleet.episode_discounted_returns[env],
+            fleet.episode_discount_powers[env],
+            fleet.episode_reward_sums[env],
+        };
+        const twin_episode = [_]f32{
+            state.episode_discounted_returns.load(world, 0),
+            state.episode_discount_powers.load(world, 0),
+            state.episode_reward_sums.load(world, 0),
+        };
+        const episode_names: []const u8 = "the episode's discounted return, discount power, reward sum";
+        try expectWorldNumbersAlike(episode_names, decision, env, &fleet_episode, &twin_episode);
+        if (moment == .before_any_decision) {
+            continue;
+        }
+        const fleet_rewards = [_]f32{ fleet.rewards[env], fleet.super_mimic_rewards[env] };
+        const twin_rewards = [_]f32{ state.rewards.load(world, 0), state.super_mimic_rewards.load(world, 0) };
+        const reward_names: []const u8 = "the decision's reward, SuperMimic reward";
+        try expectWorldNumbersAlike(reward_names, decision, env, &fleet_rewards, &twin_rewards);
+        // The decision's effort, summed over its physics steps - for a character whose episode goes on: the fleet's
+        // restart clears an ended episode's effort at once, the device at the next decision's start, and the
+        // decision's reward has counted it on both sides before either.
+        const restarted: bool = fleet.dones[env];
+        if (restarted) {
+            continue;
+        }
+        const effort: rbt.EffortSums = fleet.effort_sums[env];
+        const fleet_effort = [_]f32{ effort.energy, effort.torque_squares };
+        const twin_effort = [_]f32{ state.effort_energy.load(world, 0), state.effort_torque_squares.load(world, 0) };
+        const effort_names: []const u8 = "the decision's effort: energy, torque squares";
+        try expectWorldNumbersAlike(effort_names, decision, env, &fleet_effort, &twin_effort);
+    }
+}
+
+/// THE DECISION's TRACKING TERMS ALIKE, for a character whose episode goes on: the fleet's own measures at its state
+/// and frame - the tracking error by term (`trackingErrorWithHead`), SuperMimic's tracking, and whether the termination
+/// rule fires - against the device's (`tracking_errors`, `super_mimic_tracking`, `termination_rule`), each difference
+/// named. `judged_state`, `reference_data` and `reference_state` are scratch.
+fn expectTrackingAlike(
+    fleet: *track.Fleet,
+    twin: robotgpu.CpuTwin,
+    env: usize,
+    decision: usize,
+    judged_state: *track.State,
+    reference_data: *rbt.Data,
+    reference_state: *track.State,
+) !void {
+    const world: u32 = @intCast(env);
+    const state: robotgpu.WorldStateLayout = twin.layout.world_f;
+    const task: track.Task = fleet.options.task;
+    const clip: *const dance.Clip = fleet.clips[fleet.clip_of[env]];
+    track.stateOf(fleet.m, &fleet.data[env], judged_state);
+    fleet.referenceStateInto(clip, fleet.frame[env], reference_data, reference_state);
+    const fleet_error: track.TrackingError = track.trackingErrorWithHead(
+        judged_state.*,
+        reference_state.*,
+        fleet.root,
+        fleet.head,
+    );
+    inline for (@typeInfo(track.TrackingError).@"struct".field_names, 0..) |field_name, term| {
+        const fleet_term = [_]f32{@field(fleet_error, field_name)};
+        const twin_term = [_]f32{state.tracking_errors.load(world, term)};
+        try expectWorldNumbersAlike("tracking error: " ++ field_name, decision, env, &fleet_term, &twin_term);
+    }
+    const super_mimic: track.SuperMimicTracking = track.superMimicTracking(
+        judged_state.*,
+        reference_state.*,
+        fleet.root,
+        task.super_mimic,
+    );
+    const rule_fires: bool = track.terminated(fleet_error, task.termination);
+    const fleet_terms = [_]f32{ super_mimic.total, if (rule_fires) 1.0 else 0.0 };
+    const twin_terms = [_]f32{ state.super_mimic_tracking.load(world, 0), state.termination_rule.load(world, 0) };
+    try expectWorldNumbersAlike("SuperMimic tracking, termination rule", decision, env, &fleet_terms, &twin_terms);
+}
+
+/// A CPU FLEET AND THE DEVICE's TWIN MADE ALIKE - the world of every check that compares the two: two characters of
+/// the test clip from frames 10 and 30, two physics steps a decision, the action filter at the physics rate (0.5, the
+/// limbs' stiffnesses at 0.25), aftermaths of 30 decisions returning after 2, restarts in trouble with pushes of 0.3 to
+/// 0.6 m/s and noise at every start, SuperMimic's curriculum over half-second bins; and the twin given the same clip,
+/// the same reference features and bodies, and every setting the fleet's options and task say. `init` works in place,
+/// as the fleet holds pointers into `setup`; `deinit` frees everything it made.
+const MatchedFleetAndTwin = struct {
+    setup: FleetSetup,
+    fleet: *track.Fleet,
+    poses: []f32,
+    features: []f32,
+    reference_bodies: []f32,
+    twin: robotgpu.CpuTwin,
+    world_count: u32,
+    physics_steps: u32,
+
+    fn init(matched: *MatchedFleetAndTwin, gpa: Allocator, limb_stiffness: bool) !void {
+        try matched.setup.init(gpa);
+        errdefer matched.setup.deinit();
+        const setup: *FleetSetup = &matched.setup;
+        const m: *rbt.Model = &setup.imported.model;
+        // The device's servo steps at the model's timestep, the fleet's at its clip's frame time: the two made one.
+        setup.clip.frame_time = m.opt.timestep;
+        const world_count: u32 = 2;
+        const physics_steps: u32 = 2;
+        const fleet: *track.Fleet = try track.Fleet.init(gpa, m, &.{&setup.clip}, .{
+            .envs = world_count,
+            .capacity = 32,
+            .decide_every = physics_steps,
+            .action_filter = 0.5,
+            // The limbs' stiffness at a share of its own: both parts of the filter checked.
+            .stiffness_filter = 0.25,
+            .limb_stiffness = limb_stiffness,
+            // Every character lives on through a loss, 30 decisions, and returns after holding its reference 2.
+            .aftermath_steps = 30,
+            .return_steps = 2,
+            .aftermath_share = 1.0,
+            // Every restart in trouble (pushes at the top speed of 0.3 to 0.6 m/s, none during episodes until the
+            // pushes' own decisions below) and noise at every start: the device's resets checked against the fleet's.
+            .pushes = .{ .speed_min = 0.3, .speed_max = 0.6, .start_share = 1.0 },
+            .start_noise = .{ .pose = 0.05, .velocity = 0.2 },
+            // SuperMimic's curriculum over half-second bins: its accumulators compared at every decision, its draw at
+            // the forced resets.
+            .curriculum = .{ .bin_seconds = 0.5 },
+        });
+        errdefer fleet.deinit();
+        const task: track.Task = fleet.options.task;
+        try expect(task.contacts == .robot_floor);
+        try expect(!task.gains.velocity_feedforward and task.gains.assist == 0.0);
+        const start_frames = [_]usize{ 10, 30 };
+        for (start_frames, 0..) |frame, env| {
+            fleet.startAt(env, 0, frame);
+        }
+        // The clip as the device takes it: each frame the model's coordinates (the pose `applyAction` reads).
+        const clip: *const dance.Clip = &setup.clip;
+        const root_len: usize = clip.nq - m.coordinate_count;
+        const poses: []f32 = try gpa.alloc(f32, clip.frame_count * m.coordinate_count);
+        errdefer gpa.free(poses);
+        for (0..clip.frame_count) |frame| {
+            @memcpy(poses[frame * m.coordinate_count ..][0..m.coordinate_count], clip.pose(frame)[root_len..]);
+        }
+        // The reference's half of the observation at every frame, as the fleet computes it.
+        const features: []f32 = try gpa.alloc(f32, clip.frame_count * track.localSize(m.body_count));
+        errdefer gpa.free(features);
+        var scratch_data: rbt.Data = try .init(gpa, m);
+        defer scratch_data.deinit();
+        var scratch_state: track.State = try .init(gpa, m.body_count);
+        defer scratch_state.deinit(gpa);
+        fleet.clipReferenceFeatures(clip, &scratch_data, &scratch_state, features);
+        // And the reference's bodies at every frame, the judgement's reference.
+        const reference_body_count: usize = clip.frame_count * m.body_count * rbt.reference_body_numbers;
+        const reference_bodies: []f32 = try gpa.alloc(f32, reference_body_count);
+        errdefer gpa.free(reference_bodies);
+        fleet.clipReferenceBodies(clip, &scratch_data, &scratch_state, reference_bodies);
+        const clips = [_]robotgpu.ClipPoses{.{
+            .poses = poses,
+            .frame_count = @intCast(clip.frame_count),
+            .frame_time = clip.frame_time,
+            .curriculum_bins = @intCast(fleet.bins_start[1] - fleet.bins_start[0]),
+            .bin_frames = @intCast(track.binFrames(clip, fleet.options.curriculum)),
+            .reference_features = features,
+            .reference_bodies = reference_bodies,
+        }};
+        const twin: robotgpu.CpuTwin = try .initTracking(m, world_count, &clips);
+        // Every setting the fleet's options and task say, mirrored in one call.
+        try twin.setTracking(fleet.trackingSettings(.{}));
+        // The twin's worlds where the fleet's characters start, everything they carry, and checked so at once - nothing
+        // hidden starts a comparison.
+        adoptFleet(fleet, twin);
+        const scratch: []f32 = try gpa.alloc(f32, @max(m.coordinate_count + 7, fleet.action_width) + 64);
+        defer gpa.free(scratch);
+        try expectWorldsAlike(fleet, twin, .before_any_decision, 0, scratch);
+        matched.* = .{
+            .setup = matched.setup,
+            .fleet = fleet,
+            .poses = poses,
+            .features = features,
+            .reference_bodies = reference_bodies,
+            .twin = twin,
+            .world_count = world_count,
+            .physics_steps = physics_steps,
+        };
+    }
+
+    fn deinit(matched: *MatchedFleetAndTwin, gpa: Allocator) void {
+        gpa.free(matched.reference_bodies);
+        gpa.free(matched.features);
+        gpa.free(matched.poses);
+        matched.fleet.deinit();
+        matched.setup.deinit();
+    }
+};
+
+/// THE SCRATCH OF A COMPARISON: the rows the checks load the two sides into.
+const ComparisonScratch = struct {
+    /// One world's longest carried array, with room to spare (`expectWorldsAlike`).
+    carried_row: []f32,
+    /// Every world's observation as the fleet makes it, one row after another (`Fleet.observe`).
+    fleet_observations: []f32,
+    /// One world's observation as the twin holds it.
+    twin_observation: []f32,
+    /// The fleet's start-bin mixture, one probability per bin (`uploadStartBinMixture`).
+    start_bin_mixture: []f32,
+
+    fn init(gpa: Allocator, matched: *const MatchedFleetAndTwin) !ComparisonScratch {
+        const m: *rbt.Model = matched.fleet.m;
+        const observation_size: usize = track.observationSize(m);
+        const bin_count: usize = matched.fleet.bins_start[1];
+        const carried_row: []f32 = try gpa.alloc(f32, m.coordinate_count + m.dof_count + 64);
+        errdefer gpa.free(carried_row);
+        const fleet_observations: []f32 = try gpa.alloc(f32, matched.world_count * observation_size);
+        errdefer gpa.free(fleet_observations);
+        const twin_observation: []f32 = try gpa.alloc(f32, observation_size);
+        errdefer gpa.free(twin_observation);
+        const start_bin_mixture: []f32 = try gpa.alloc(f32, bin_count);
+        return .{
+            .carried_row = carried_row,
+            .fleet_observations = fleet_observations,
+            .twin_observation = twin_observation,
+            .start_bin_mixture = start_bin_mixture,
+        };
+    }
+
+    fn deinit(scratch: ComparisonScratch, gpa: Allocator) void {
+        gpa.free(scratch.start_bin_mixture);
+        gpa.free(scratch.twin_observation);
+        gpa.free(scratch.fleet_observations);
+        gpa.free(scratch.carried_row);
+    }
+};
+
+/// A character's pose and velocities, as the fleet's data holds them, stored into its world of the twin.
+fn storeCharacterIntoTwin(
+    fleet: *const track.Fleet,
+    twin: robotgpu.CpuTwin,
+    character: usize,
+) void {
+    const world: u32 = @intCast(character);
+    const data: *const rbt.Data = &fleet.data[character];
+    const state: robotgpu.WorldStateLayout = twin.layout.world_f;
+    state.joint_positions.storeAll(world, data.joint_positions);
+    state.joint_velocities.storeAll(world, data.joint_velocities);
+}
+
+/// ONE CHARACTER KNOCKED ASIDE, on both sides alike: its root's first coordinate moved by `distance` metres in the
+/// fleet's data - marked stale, so the fleet's next step recomputes what derives from the pose - and the same pose
+/// and velocities stored into the twin's world. A metre is far past the termination rule: the next judgement finds
+/// the reference lost.
+fn knockCharacterAside(
+    fleet: *track.Fleet,
+    twin: robotgpu.CpuTwin,
+    character: usize,
+    distance: f32,
+) void {
+    const data: *rbt.Data = &fleet.data[character];
+    data.joint_positions[0] += distance;
+    data.stage = .stale;
+    storeCharacterIntoTwin(fleet, twin, character);
+}
+
+/// ONE CHARACTER PUT BACK ON ITS REFERENCE, on both sides alike: the clip's pose at the character's frame, at rest.
+/// Held there for the return's decisions (`Fleet.Options.return_steps`), it counts as back.
+fn holdCharacterOnItsReference(
+    fleet: *track.Fleet,
+    twin: robotgpu.CpuTwin,
+    clip: *const dance.Clip,
+    character: usize,
+) void {
+    const data: *rbt.Data = &fleet.data[character];
+    const root_len: usize = clip.nq - fleet.m.coordinate_count;
+    const reference_pose: []const f32 = clip.pose(fleet.frame[character])[root_len..];
+    @memcpy(data.joint_positions, reference_pose);
+    @memset(data.joint_velocities, 0);
+    data.stage = .stale;
+    storeCharacterIntoTwin(fleet, twin, character);
+}
+
+/// ONE CHARACTER's ACTION FOR A CHECK, the same on both sides: its numbers from one sine - in [-size, size], different
+/// in every character, number and decision - written into its row of `actions` (the fleet's step reads it) and stored
+/// into the twin's world. `actions` holds the fleet's width per character: with the limbs' stiffness off, the twin's
+/// room for the limbs is left as it is.
+fn giveBothTheSameAction(
+    fleet: *const track.Fleet,
+    twin: robotgpu.CpuTwin,
+    character: usize,
+    decision: usize,
+    size: f32,
+    actions: []f32,
+) void {
+    const action_size: usize = fleet.action_width;
+    const world: u32 = @intCast(character);
+    const state: robotgpu.WorldStateLayout = twin.layout.world_f;
+    const row: []f32 = actions[character * action_size ..][0..action_size];
+    for (row, 0..) |*action, number_in_row| {
+        const number_in_fleet: usize = character * action_size + number_in_row;
+        const phase: f32 = 0.7 * float(number_in_fleet + 1) + float(decision);
+        action.* = size * @sin(phase);
+        state.actions.store(world, @intCast(number_in_row), action.*);
+    }
+}
+
+/// ONE WHOLE DECISION ON BOTH SIDES, with the actions each side already holds: the fleet's step, then the twin's
+/// (`stepDecision`) at the fleet's decision number and push-schedule share - the clock its pushes and restarts draw
+/// at. Only after it may the two be compared: within a decision one side may have pushed or restarted and the other
+/// not yet.
+fn stepBothOneDecision(matched: *const MatchedFleetAndTwin, actions: []const f32) void {
+    const fleet: *track.Fleet = matched.fleet;
+    _ = fleet.step(actions);
+    const decided_clock: robotgpu.DecisionClock = .{
+        .number = fleet.decision_number,
+        .push_schedule_share = fleet.pushScheduleShare(),
+    };
+    matched.twin.stepDecision(matched.physics_steps, decided_clock);
+}
+
+/// WHAT EACH POLICY SEES NEXT, ALIKE: every world's observation - its character's half, then its reference's - as the
+/// fleet makes it (`Fleet.observe`) against the twin's row (`observe_program`), the first difference named. After a
+/// decision in which a character started again, its row is its NEW episode's: the twin observes once more after its
+/// resets, as the fleet observes after its restarts.
+fn expectObservationsAlike(
+    fleet: *track.Fleet,
+    twin: robotgpu.CpuTwin,
+    decision: usize,
+    scratch: ComparisonScratch,
+) !void {
+    const observation_size: usize = scratch.twin_observation.len;
+    fleet.observe(scratch.fleet_observations);
+    for (0..fleet.options.envs) |env| {
+        const world: u32 = @intCast(env);
+        twin.layout.world_f.observations.loadAll(world, scratch.twin_observation);
+        const fleet_row: []const f32 = scratch.fleet_observations[env * observation_size ..][0..observation_size];
+        try expectWorldNumbersAlike("observations", decision, env, fleet_row, scratch.twin_observation);
+    }
+}
+
+/// THE FORCED CLAMP ACTED: the character's last physics step aimed its targets with its final applied action on the
+/// reference at its frame - rebuilt here by robot.zig's own `applyAction` - and `clampBalls` must change some ball's
+/// target, or the decision forced nothing and the comparison after it compared unclamped worlds.
+fn expectLastTargetsWereClamped(
+    gpa: Allocator,
+    fleet: *const track.Fleet,
+    clip: *const dance.Clip,
+    character: usize,
+) !void {
+    const m: *rbt.Model = fleet.m;
+    const root_len: usize = clip.nq - m.coordinate_count;
+    const joint_numbers: usize = track.actionSize(m);
+    const applied: []const f32 = fleet.applied_actions[character * fleet.action_width ..][0..joint_numbers];
+    const aimed_frame: usize = @min(@as(usize, fleet.frame[character]), clip.frame_count - 1);
+    const reference_pose: []const f32 = clip.pose(aimed_frame)[root_len..];
+    const targets: []f32 = try gpa.alloc(f32, m.coordinate_count);
+    defer gpa.free(targets);
+    const clamped_targets: []f32 = try gpa.alloc(f32, m.coordinate_count);
+    defer gpa.free(clamped_targets);
+    const turns_scratch: []f32 = try gpa.alloc(f32, m.dof_count);
+    defer gpa.free(turns_scratch);
+    rbt.applyAction(m, reference_pose, applied, fleet.options.action_scale, turns_scratch, targets);
+    @memcpy(clamped_targets, targets);
+    rbt.clampBalls(m, fleet.rotation_boxes, clamped_targets);
+    const clamp_changed_a_target: bool = !eql(f32, targets, clamped_targets);
+    try expect(clamp_changed_a_target);
+}
+
+/// A known choice for a check of how the device gives its actions: a different number for every world and action.
+fn knownChoice(world: u32, action: u32) f32 {
+    return 0.01 * float(action + 7 * world);
+}
+
+/// THE TWIN's DECISIONS AGAINST THE CPU FLEET's: a fleet of two characters on the robot and clip, deciding every second
+/// physics step, its filter at 0.5; the device's CPU twin given the fleet's world - its floor, its servo, its action's
+/// scale and filter, each character's started state and frame (`MatchedFleetAndTwin`). SIX WHOLE DECISIONS on both
+/// with the same actions - one character knocked a metre off (a loss, its aftermath), held on its reference again (a
+/// return), then asking an action large enough that its balls' targets are clamped - and after each, everything a
+/// world carries and the decision's results equal to the bit (`expectWorldsAlike`), what each policy sees next
+/// (`expectObservationsAlike`) and each character's tracking terms (`expectTrackingAlike`). The restarts, the pushes,
+/// the policy's inputs, the exploration and the filter at each decision have checks of their own, each on worlds of
+/// its own. With `limb_stiffness` on both, each action carries a stiffness per limb after its offsets, every one its
+/// own.
+fn expectTwinDecisionsAreTheFleets(gpa: Allocator, limb_stiffness: bool) !void {
+    var matched: MatchedFleetAndTwin = undefined;
+    try matched.init(gpa, limb_stiffness);
+    defer matched.deinit(gpa);
+    const m: *rbt.Model = &matched.setup.imported.model;
+    const clip: *const dance.Clip = &matched.setup.clip;
+    const fleet: *track.Fleet = matched.fleet;
+    const twin: robotgpu.CpuTwin = matched.twin;
+    const world_count: u32 = matched.world_count;
+    // The fleet's action, the device's layout: the offsets, then - with the limbs' stiffness on - one number per limb.
+    if (limb_stiffness) {
+        try expectEqual(@as(usize, twin.counts.action_count), fleet.action_width);
+    }
+    const actions: []f32 = try gpa.alloc(f32, world_count * fleet.action_width);
+    defer gpa.free(actions);
+    const scratch: ComparisonScratch = try .init(gpa, &matched);
+    defer scratch.deinit(gpa);
+    // Scratch for the fleet's own tracking measures (`expectTrackingAlike`).
+    var judged_state: track.State = try .init(gpa, m.body_count);
+    defer judged_state.deinit(gpa);
+    var reference_data: rbt.Data = try .init(gpa, m);
+    defer reference_data.deinit();
+    var reference_state: track.State = try .init(gpa, m.body_count);
+    defer reference_state.deinit(gpa);
+    // THE EPISODE's EVENTS, on the fleet and the twin alike: character 1 knocked a metre off before decision 1 - a
+    // loss, its aftermath - then held on its reference before decisions 2 and 3, so it returns; at decision 5 it asks
+    // an action large enough that its balls' targets leave their boxes, which both engines clamp. Character 0 is left
+    // alone.
+    const knocked: usize = 1;
+    for (0..6) |decision| {
+        const is_knocked_now: bool = decision == 1;
+        const is_held_now: bool = decision == 2 or decision == 3;
+        if (is_knocked_now) {
+            knockCharacterAside(fleet, twin, knocked, 1.0);
+        } else if (is_held_now) {
+            holdCharacterOnItsReference(fleet, twin, clip, knocked);
+        }
+        const clamps_now: bool = decision == 5;
+        for (0..world_count) |character| {
+            const asks_past_its_boxes: bool = clamps_now and character == knocked;
+            const size: f32 = if (asks_past_its_boxes) 6.0 else 0.5;
+            giveBothTheSameAction(fleet, twin, character, decision, size, actions);
+        }
+        stepBothOneDecision(&matched, actions);
+        if (clamps_now) {
+            try expectLastTargetsWereClamped(gpa, fleet, clip, knocked);
+        }
+        // No episode ends in these decisions: every comparison below is of a character in its own episode.
+        for (fleet.dones[0..world_count]) |done| {
+            try expect(!done);
+        }
+        try expectWorldsAlike(fleet, twin, .after_a_decision, decision, scratch.carried_row);
+        try expectObservationsAlike(fleet, twin, decision, scratch);
+        for (0..world_count) |env| {
+            try expectTrackingAlike(fleet, twin, env, decision, &judged_state, &reference_data, &reference_state);
+        }
+    }
+    // The events happened: the knocked character lost its reference and came back.
+    try expect(fleet.returns >= 1);
+}
+
+test "the twin's decision is the CPU fleet's, bit for bit - six decisions through a loss, a return and a clamp" {
+    const gpa: Allocator = testing_allocator;
+    // The offsets alone, and the offsets with a stiffness per limb.
+    try expectTwinDecisionsAreTheFleets(gpa, false);
+    try expectTwinDecisionsAreTheFleets(gpa, true);
+}
+
+/// THE TWIN's RESTARTS AGAINST THE CPU FLEET's, BY WHOLE DECISIONS, on worlds of their own: starts resting on the floor
+/// and a short aftermath (4 decisions), set in the fleet's options and mirrored; one character knocked a metre off -
+/// it loses its reference, lives its aftermath without returning, and its episode ends. Both sides then start it
+/// again: the curriculum's draw of its start (the host's round uploaded before each step, as a trainer driving the
+/// device uploads it), the pose at that frame, the rest on the floor, the start's noise, the start in trouble. After
+/// every decision everything each world carries, the decision's results and what each policy sees next are alike to
+/// the bit - through the restart and three decisions past it, so the new episode steps alike and its first judgement
+/// has cleared the ended one's flags. THE EVENTS ARE ASSERTED: the episode ended when its aftermath ran out
+/// (`track.End.aftermath`), one new episode began, and it began in trouble.
+fn expectTwinRestartsAreTheFleets(gpa: Allocator, limb_stiffness: bool) !void {
+    var matched: MatchedFleetAndTwin = undefined;
+    try matched.init(gpa, limb_stiffness);
+    defer matched.deinit(gpa);
+    const fleet: *track.Fleet = matched.fleet;
+    const twin: robotgpu.CpuTwin = matched.twin;
+    const world_count: u32 = matched.world_count;
+    fleet.options.task.rest_on_floor = true;
+    fleet.options.aftermath_steps = 4;
+    try twin.setTracking(fleet.trackingSettings(.{}));
+    const actions: []f32 = try gpa.alloc(f32, world_count * fleet.action_width);
+    defer gpa.free(actions);
+    const scratch: ComparisonScratch = try .init(gpa, &matched);
+    defer scratch.deinit(gpa);
+    const knocked: usize = 1;
+    knockCharacterAside(fleet, twin, knocked, 1.0);
+    const episode_before: u32 = fleet.episode_numbers[knocked];
+    const pushes_before: u64 = fleet.pushes_given;
+    const decisions_past_the_restart: usize = 3;
+    const decision_limit: usize = 24;
+    var first_episode_end: ?track.End = null;
+    var restart_decision: usize = 0;
+    for (0..decision_limit) |decision| {
+        for (0..world_count) |character| {
+            giveBothTheSameAction(fleet, twin, character, decision, 0.5, actions);
+        }
+        // The curriculum's round on the host, before the step: a restart inside it draws its start from the mixture
+        // as it stands now, on both sides.
+        uploadStartBinMixture(fleet, twin, scratch.start_bin_mixture);
+        stepBothOneDecision(&matched, actions);
+        try expectWorldsAlike(fleet, twin, .after_a_decision, decision, scratch.carried_row);
+        try expectObservationsAlike(fleet, twin, decision, scratch);
+        const first_episode_goes_on: bool = first_episode_end == null;
+        if (first_episode_goes_on) {
+            // Note the decision the knocked character's episode ends at, and how it ended.
+            const ended_now: bool = fleet.dones[knocked];
+            if (ended_now) {
+                first_episode_end = fleet.ends[knocked];
+                restart_decision = decision;
+            }
+            continue;
+        }
+        const decisions_since_the_restart: usize = decision - restart_decision;
+        const went_far_enough_past: bool = decisions_since_the_restart >= decisions_past_the_restart;
+        if (went_far_enough_past) {
+            break;
+        }
+    }
+    // The events happened: the knocked character's episode ended when its aftermath ran out (an episode still going
+    // on at the limit reads as null here), one new episode began, and it began in trouble - the only pushes of this
+    // check are starts in trouble.
+    const aftermath_over: ?track.End = .aftermath;
+    try expectEqual(aftermath_over, first_episode_end);
+    try expectEqual(episode_before + 1, fleet.episode_numbers[knocked]);
+    const starts_in_trouble: u64 = fleet.pushes_given - pushes_before;
+    try expect(starts_in_trouble >= 1);
+}
+
+test "the twin's restarts are the CPU fleet's, bit for bit - a loss, its aftermath run out, a start in trouble" {
+    const gpa: Allocator = testing_allocator;
+    // The offsets alone, and the offsets with a stiffness per limb.
+    try expectTwinRestartsAreTheFleets(gpa, false);
+    try expectTwinRestartsAreTheFleets(gpa, true);
+}
+
+/// THE TWIN's PUSHES AGAINST THE CPU FLEET's, on worlds of their own: pushes switched on in the fleet's options and
+/// mirrored - every second decision by the schedule, and at random at 4 a second - then three whole decisions on each
+/// with the same actions. After every one, everything each world carries and the decision's results are alike to the
+/// bit (`expectWorldsAlike`): the fleet's step pushes after it judges, so the positions and velocities compared are
+/// pushed ones, and the curriculum's sums and counters ride along. THE EVENT IS ASSERTED: by the end the fleet has
+/// given at least one push per character, so the worlds compared were pushed worlds.
+fn expectTwinPushesAreTheFleets(gpa: Allocator, limb_stiffness: bool) !void {
+    var matched: MatchedFleetAndTwin = undefined;
+    try matched.init(gpa, limb_stiffness);
+    defer matched.deinit(gpa);
+    const fleet: *track.Fleet = matched.fleet;
+    const twin: robotgpu.CpuTwin = matched.twin;
+    const world_count: u32 = matched.world_count;
+    fleet.options.pushes.every = 2;
+    fleet.options.pushes.rate_per_second = 4.0;
+    try twin.setTracking(fleet.trackingSettings(.{}));
+    const actions: []f32 = try gpa.alloc(f32, world_count * fleet.action_width);
+    defer gpa.free(actions);
+    const scratch: ComparisonScratch = try .init(gpa, &matched);
+    defer scratch.deinit(gpa);
+    const pushes_before: u64 = fleet.pushes_given;
+    for (0..3) |decision| {
+        for (0..world_count) |character| {
+            giveBothTheSameAction(fleet, twin, character, decision, 0.5, actions);
+        }
+        stepBothOneDecision(&matched, actions);
+        try expectWorldsAlike(fleet, twin, .after_a_decision, decision, scratch.carried_row);
+    }
+    // The pushes were not vacuous: the schedule alone pushes every character once in three decisions.
+    const pushes_given_here: u64 = fleet.pushes_given - pushes_before;
+    try expect(pushes_given_here >= world_count);
+}
+
+test "the twin's pushes are the CPU fleet's, bit for bit - three decisions, on a schedule and at random" {
+    const gpa: Allocator = testing_allocator;
+    // The offsets alone, and the offsets with a stiffness per limb.
+    try expectTwinPushesAreTheFleets(gpa, false);
+    try expectTwinPushesAreTheFleets(gpa, true);
+}
+
+/// THE POLICY's INPUTS ON THE TWIN AGAINST THE TRAINER's, on worlds of their own: one whole decision, so every
+/// character has left its start; then every world's row of goal and state features, normalised
+/// (`policy_inputs_program`), against the learner's own (`track_resident.supertrackFeaturesInto`) - with a normaliser
+/// of distinct numbers for every feature, so a mean or a spread read at the wrong feature shows.
+fn expectTwinPolicyInputsAreTheTrainers(gpa: Allocator, limb_stiffness: bool) !void {
+    var matched: MatchedFleetAndTwin = undefined;
+    try matched.init(gpa, limb_stiffness);
+    defer matched.deinit(gpa);
+    const m: *rbt.Model = &matched.setup.imported.model;
+    const fleet: *track.Fleet = matched.fleet;
+    const twin: robotgpu.CpuTwin = matched.twin;
+    const world_count: u32 = matched.world_count;
+    const actions: []f32 = try gpa.alloc(f32, world_count * fleet.action_width);
+    defer gpa.free(actions);
+    for (0..world_count) |character| {
+        giveBothTheSameAction(fleet, twin, character, 0, 0.5, actions);
+    }
+    stepBothOneDecision(&matched, actions);
+    // The normaliser, distinct numbers for every feature, given to the twin; then the twin's inputs.
+    const feature_count: usize = rbt.localSize(m.body_count);
+    const means: []f32 = try gpa.alloc(f32, feature_count);
+    defer gpa.free(means);
+    const spreads: []f32 = try gpa.alloc(f32, feature_count);
+    defer gpa.free(spreads);
+    for (means, spreads, 0..) |*mean, *spread, feature| {
+        const position: f32 = @floatFromInt(feature);
+        mean.* = 0.01 * position;
+        spread.* = 0.5 + 0.001 * position;
+    }
+    twin.setFeatureNormalizer(means, spreads);
+    twin.runProgram(&robotgpu.policy_inputs_program);
+    // The trainer's own features of the same characters, with the same normaliser.
+    var simulated_state: track.State = try .init(gpa, m.body_count);
+    defer simulated_state.deinit(gpa);
+    var reference_state: track.State = try .init(gpa, m.body_count);
+    defer reference_state.deinit(gpa);
+    var reference_probe: rbt.Data = try .init(gpa, m);
+    defer reference_probe.deinit();
+    const raw_features: []f32 = try gpa.alloc(f32, feature_count);
+    defer gpa.free(raw_features);
+    const feature_scratch: track_resident.FeatureScratch = .{
+        .simulated = &simulated_state,
+        .reference = &reference_state,
+        .probe = &reference_probe,
+        .raw_features = raw_features,
+    };
+    const normalizer: latent.Normalizer = .{ .mean = means, .spread = spreads };
+    const trainer_row: []f32 = try gpa.alloc(f32, 2 * feature_count);
+    defer gpa.free(trainer_row);
+    const twin_row: []f32 = try gpa.alloc(f32, 2 * feature_count);
+    defer gpa.free(twin_row);
+    for (0..world_count) |env| {
+        const world: u32 = @intCast(env);
+        const goal_half: []f32 = trainer_row[0..feature_count];
+        const state_half: []f32 = trainer_row[feature_count..];
+        track_resident.supertrackFeaturesInto(fleet, env, normalizer, feature_scratch, goal_half, state_half);
+        twin.layout.world_f.policy_inputs.loadAll(world, twin_row);
+        try expectWorldNumbersAlike("policy_inputs (the trainer's as the fleet's)", 0, env, trainer_row, twin_row);
+    }
+}
+
+test "the twin's policy inputs are the trainer's, bit for bit - goal and state features, normalised" {
+    const gpa: Allocator = testing_allocator;
+    try expectTwinPolicyInputsAreTheTrainers(gpa, false);
+    try expectTwinPolicyInputsAreTheTrainers(gpa, true);
+}
+
+/// THE EXPLORATION ON THE TWIN AGAINST ITS DRAWS, on worlds of their own: every world's choices set to known numbers,
+/// then given at a spread of 0.3 for decision 11, with no filter (`giveActions`): each explored number is its choice
+/// plus `rbt.explorationNoise` at this seed, world, decision and number, exactly. Only the numbers that are the action
+/// are explored: without the limbs' stiffness, the limbs' numbers pass as they were chosen.
+fn expectTwinExplorationIsItsDraws(gpa: Allocator, limb_stiffness: bool) !void {
+    var matched: MatchedFleetAndTwin = undefined;
+    try matched.init(gpa, limb_stiffness);
+    defer matched.deinit(gpa);
+    const fleet: *track.Fleet = matched.fleet;
+    const twin: robotgpu.CpuTwin = matched.twin;
+    const world_count: u32 = matched.world_count;
+    const state: robotgpu.WorldStateLayout = twin.layout.world_f;
+    const action_count: u32 = twin.counts.action_count;
+    for (0..world_count) |env| {
+        const world: u32 = @intCast(env);
+        for (0..action_count) |index| {
+            const action: u32 = @intCast(index);
+            state.chosen_actions.store(world, action, knownChoice(world, action));
+        }
+    }
+    const explored_decision: u32 = 11;
+    const spread: f32 = 0.3;
+    const exploring_clock: robotgpu.DecisionClock = .{
+        .number = explored_decision,
+        .push_schedule_share = 0,
+        .exploration_spread = spread,
+    };
+    twin.giveActions(exploring_clock);
+    const explored_width: u32 = if (limb_stiffness) action_count else action_count - twin.counts.limb_count;
+    for (0..world_count) |env| {
+        const world: u32 = @intCast(env);
+        for (0..action_count) |index| {
+            const action: u32 = @intCast(index);
+            const choice: f32 = knownChoice(world, action);
+            const noise: f32 = rbt.explorationNoise(fleet.draw_seed, world, explored_decision, action, spread);
+            const is_explored: bool = action < explored_width;
+            const expected: f32 = if (is_explored) choice + noise else choice;
+            try expectEqual(expected, state.actions.load(world, action));
+        }
+    }
+}
+
+test "the twin's exploration is its draws, exactly - only the numbers that are the action" {
+    const gpa: Allocator = testing_allocator;
+    try expectTwinExplorationIsItsDraws(gpa, false);
+    try expectTwinExplorationIsItsDraws(gpa, true);
+}
+
+/// THE ACTION FILTER AT EACH DECISION ON THE TWIN AGAINST THE TRAINER's RULE, on worlds of their own: first every world
+/// given known actions with no filter - the actions "given before"; then the filter's shares mirrored (0.25 for the
+/// joints' offsets, 0.5 for the limbs' stiffnesses) and new choices given with no exploration, the first of each
+/// world's not finite (`filter_decision`). Against the trainer's rule (`giveAction`): a choice that is not finite asks
+/// for nothing, and every number is `rbt.filteredActionNumber` at its own share.
+fn expectTwinDecisionFilterIsTheTrainers(gpa: Allocator, limb_stiffness: bool) !void {
+    var matched: MatchedFleetAndTwin = undefined;
+    try matched.init(gpa, limb_stiffness);
+    defer matched.deinit(gpa);
+    const fleet: *track.Fleet = matched.fleet;
+    const twin: robotgpu.CpuTwin = matched.twin;
+    const world_count: u32 = matched.world_count;
+    const state: robotgpu.WorldStateLayout = twin.layout.world_f;
+    const action_count: u32 = twin.counts.action_count;
+    const offset_count: u32 = action_count - twin.counts.limb_count;
+    const quiet_clock: robotgpu.DecisionClock = .{
+        .number = 11,
+        .push_schedule_share = 0,
+        .exploration_spread = 0,
+    };
+    // The actions given before: known choices, given with no filter, then read back.
+    for (0..world_count) |env| {
+        const world: u32 = @intCast(env);
+        for (0..action_count) |index| {
+            const action: u32 = @intCast(index);
+            state.chosen_actions.store(world, action, knownChoice(world, action));
+        }
+    }
+    twin.giveActions(quiet_clock);
+    const given_before: []f32 = try gpa.alloc(f32, world_count * action_count);
+    defer gpa.free(given_before);
+    for (0..world_count) |env| {
+        const world: u32 = @intCast(env);
+        state.actions.loadAll(world, given_before[env * action_count ..][0..action_count]);
+    }
+    // The trainer's shares, mirrored with the fleet's settings; then new choices, the first of each world's not finite.
+    const shares: rbt.DecisionFilterShares = .{ .offsets = 0.25, .stiffness = 0.5 };
+    try twin.setTracking(fleet.trackingSettings(shares));
+    for (0..world_count) |env| {
+        const world: u32 = @intCast(env);
+        for (0..action_count) |index| {
+            const action: u32 = @intCast(index);
+            const is_first: bool = action == 0;
+            const finite_choice: f32 = -0.02 * float(action + 3 * world);
+            const choice: f32 = if (is_first) nan(f32) else finite_choice;
+            state.chosen_actions.store(world, action, choice);
+        }
+    }
+    twin.giveActions(quiet_clock);
+    for (0..world_count) |env| {
+        const world: u32 = @intCast(env);
+        for (0..action_count) |index| {
+            const action: u32 = @intCast(index);
+            const is_first: bool = action == 0;
+            const finite_choice: f32 = -0.02 * float(action + 3 * world);
+            // A choice that is not finite asks for nothing.
+            const asked: f32 = if (is_first) 0.0 else finite_choice;
+            const is_offset: bool = action < offset_count;
+            const share: f32 = if (is_offset) shares.offsets else shares.stiffness;
+            const previous: f32 = given_before[env * action_count + index];
+            const expected: f32 = rbt.filteredActionNumber(share, asked, previous);
+            try expectEqual(expected, state.actions.load(world, action));
+        }
+    }
+}
+
+test "the twin's decision filter is the trainer's rule, exactly - offsets at 0.25, stiffnesses at 0.5" {
+    const gpa: Allocator = testing_allocator;
+    try expectTwinDecisionFilterIsTheTrainers(gpa, false);
+    try expectTwinDecisionFilterIsTheTrainers(gpa, true);
+}
+
+/// THE CLOSED LOOP ON THE TWIN, AGAINST THE TRAINER: a trainer on a fleet made alike with the device's twin
+/// (`MatchedFleetAndTwin`, built fresh, so no earlier check's steps lie on either side) - one deterministic decision,
+/// then sixty with exploration, the trainer acting on its fleet and the twin acting through the trainer's own kit
+/// (`actOnTwin`): every decision's actions, everything each world carries and its rewards alike to the bit, through
+/// episodes ending and starting again. The trainer
+/// learns the joints' offsets alone, so the fleet has no limb stiffness.
+fn expectClosedLoopIsTheTrainers(gpa: Allocator) !void {
+    var matched: MatchedFleetAndTwin = undefined;
+    try matched.init(gpa, false);
+    defer matched.deinit(gpa);
+    const m: *rbt.Model = &matched.setup.imported.model;
+    const fleet: *track.Fleet = matched.fleet;
+    const twin: robotgpu.CpuTwin = matched.twin;
+    const world_count: u32 = matched.world_count;
+    const physics_steps: u32 = matched.physics_steps;
+    const twin_positions: []f32 = try gpa.alloc(f32, fleet.data[0].joint_positions.len);
+    defer gpa.free(twin_positions);
+    const twin_velocities: []f32 = try gpa.alloc(f32, fleet.data[0].joint_velocities.len);
+    defer gpa.free(twin_velocities);
+    // The policy's normaliser - distinct numbers for every feature - given to the twin and the trainer alike.
+    const feature_count: usize = rbt.localSize(m.body_count);
+    const means: []f32 = try gpa.alloc(f32, feature_count);
+    defer gpa.free(means);
+    const spreads: []f32 = try gpa.alloc(f32, feature_count);
+    defer gpa.free(spreads);
+    for (means, spreads, 0..) |*mean, *spread_of_feature, feature| {
+        const position: f32 = @floatFromInt(feature);
+        mean.* = 0.01 * position;
+        spread_of_feature.* = 0.5 + 0.001 * position;
+    }
+    twin.setFeatureNormalizer(means, spreads);
+    const normalizer: latent.Normalizer = .{ .mean = means, .spread = spreads };
+    // ONE DECISION FIRST: the trainer acts deterministically (the judge's actor - the policy's mean action, through
+    // the action filter, reading each character's last given action) and the twin acts through the trainer's own kit
+    // (`actOnTwin`), both from the same previous actions and with no exploration; every world's actions alike.
+    var learner_host: compute_host.Compute(zn_mlp) = .initCpu();
+    const learner_options: track_resident.Options = .{ .rows = 8, .window = 8, .hidden = 32, .policy_hidden = 32 };
+    const learner: *track_resident.Resident(zn_mlp) = try .init(gpa, &learner_host, fleet, normalizer, learner_options);
+    defer learner.deinit();
+    const learner_kit: LatentKit(zn_mlp) = learner.kit;
+    // The acting rows after everything the trainer's kit and its data path hold.
+    var acting_layout: kit_mlp.KitLayout = .{
+        .acts_floats = learner.data.end,
+        .params_floats = learner_kit.p_at + learner_kit.policy_count,
+        .dacts_floats = learner_kit.dtotal,
+    };
+    const world_arrays: robotgpu.WorldStateLayout = robotgpu.g.P.layout.world_f;
+    const input_stride: u32 = world_arrays.policy_inputs.stride;
+    const action_stride: u32 = world_arrays.actions.stride;
+    const acting: LatentKit(zn_mlp).PolicyRows = learner_kit.reservePolicyRows(
+        &acting_layout,
+        world_count,
+        input_stride,
+        action_stride,
+    );
+    learner_host.element_count = @max(learner_host.element_count, acting_layout.acts_floats);
+    learner.syncMirror();
+    // The twin gives its actions through the trainer's filter: its shares, mirrored with the fleet's settings.
+    const trainer_filter: rbt.DecisionFilterShares = .{
+        .offsets = learner.options.filter,
+        .stiffness = learner.options.stiffness_filter,
+    };
+    try twin.setTracking(fleet.trackingSettings(trainer_filter));
+    // Both sides from the same previous actions: the judge's slots start as the twin's. The twin's rows have room
+    // for each limb's stiffness after the joints' offsets; the trainer's slots hold the offsets alone.
+    const world_f: []f32 = &robotgpu.g.B.world_f;
+    const trainer_width: usize = learner.host.raw.len;
+    const trainer_actions: []f32 = try gpa.alloc(f32, world_count * trainer_width);
+    defer gpa.free(trainer_actions);
+    for (0..world_count) |env| {
+        const world: u32 = @intCast(env);
+        const twin_offsets: []const f32 = world_f[world_arrays.actions.at(world, 0)..][0..trainer_width];
+        @memcpy(trainer_actions[env * trainer_width ..][0..trainer_width], twin_offsets);
+    }
+    const judge: track.Actor = learner.judgeActor();
+    judge.act(judge.context, fleet, trainer_actions);
+    const closed_loop_clock: robotgpu.DecisionClock = .{
+        .number = 1,
+        .push_schedule_share = 0,
+        .exploration_spread = 0,
+    };
+    actOnTwin(learner_kit, &learner_host, acting, twin, closed_loop_clock);
+    for (0..world_count) |env| {
+        const world: u32 = @intCast(env);
+        const twin_offsets: []const f32 = world_f[world_arrays.actions.at(world, 0)..][0..trainer_width];
+        const trainer_offsets: []const f32 = trainer_actions[env * trainer_width ..][0..trainer_width];
+        try expectEqualSlices(f32, trainer_offsets, twin_offsets);
+    }
+    // THEN 160 DECISIONS WITH EXPLORATION, through episodes ending and starting again: the trainer acting and
+    // stepping its fleet (`act`), the twin acting through the trainer's kit at the same decision's number and spread,
+    // then one whole decision (`stepDecision`); the trainer's slots begin where the twin's actions are.
+    @memcpy(learner.actions, trainer_actions);
+    const noise_scale: f32 = 1.0;
+    const spread: f32 = noise_scale * learner.options.sigma;
+    const decision_count: usize = 160;
+    const mixture: []f32 = try gpa.alloc(f32, fleet.bins_start[1]);
+    defer gpa.free(mixture);
+    var ended_episodes: usize = 0;
+    // Every world's observation as the fleet makes it, one row after another (`Fleet.observe`), and the twin's row.
+    const observation_size: usize = track.observationSize(m);
+    const fleet_observations: []f32 = try gpa.alloc(f32, world_count * observation_size);
+    defer gpa.free(fleet_observations);
+    const twin_observation: []f32 = try gpa.alloc(f32, observation_size);
+    defer gpa.free(twin_observation);
+    // Scratch for the fleet's own tracking measures.
+    var judged_state: track.State = try .init(gpa, m.body_count);
+    defer judged_state.deinit(gpa);
+    var reference_data: rbt.Data = try .init(gpa, m);
+    defer reference_data.deinit();
+    var reference_state: track.State = try .init(gpa, m.body_count);
+    defer reference_state.deinit(gpa);
+    const compared_scratch: []f32 = try gpa.alloc(f32, twin_positions.len + twin_velocities.len + 64);
+    defer gpa.free(compared_scratch);
+    for (0..decision_count) |decision_index| {
+        const decision_number: u32 = @intCast(fleet.decision_number + 1);
+        const acting_clock: robotgpu.DecisionClock = .{
+            .number = decision_number,
+            .push_schedule_share = fleet.pushScheduleShare(),
+            .exploration_spread = spread,
+        };
+        // The curriculum's round on the host, before the fleet's step: a restart inside it draws its start from the
+        // mixture as it stands then, as the twin's resets draw from what is uploaded now.
+        uploadStartBinMixture(fleet, twin, mixture);
+        learner.act(1, noise_scale);
+        actOnTwin(learner_kit, &learner_host, acting, twin, acting_clock);
+        // One whole decision, as the fleet's step is one: both sides have judged, restarted their ended episodes and
+        // given their pushes when it returns, so everything is compared after it.
+        const decided_clock: robotgpu.DecisionClock = .{
+            .number = fleet.decision_number,
+            .push_schedule_share = fleet.pushScheduleShare(),
+        };
+        twin.stepDecision(physics_steps, decided_clock);
+        for (0..world_count) |env| {
+            const world: u32 = @intCast(env);
+            const twin_offsets: []const f32 = world_f[world_arrays.actions.at(world, 0)..][0..trainer_width];
+            const trainer_offsets: []const f32 = learner.actions[env * trainer_width ..][0..trainer_width];
+            try expectEqualSlices(f32, trainer_offsets, twin_offsets);
+        }
+        // Everything else each world carries, and the decision's rewards: the first difference named.
+        try expectWorldsAlike(fleet, twin, .after_a_decision, decision_index, compared_scratch);
+        // What each policy will see of its character and its reference: the twin's observation, the fleet's.
+        fleet.observe(fleet_observations);
+        for (0..world_count) |env| {
+            const world: u32 = @intCast(env);
+            twin.layout.world_f.observations.loadAll(world, twin_observation);
+            const fleet_row: []const f32 = fleet_observations[env * observation_size ..][0..observation_size];
+            try expectWorldNumbersAlike("observations", decision_index, env, fleet_row, twin_observation);
+            // The tracking terms of the decision just judged, for a character whose episode goes on (a restarted
+            // one's frame and state are its new episode's).
+            if (!fleet.dones[env]) {
+                const judged_at: usize = decision_index;
+                try expectTrackingAlike(fleet, twin, env, judged_at, &judged_state, &reference_data, &reference_state);
+            }
+        }
+        for (fleet.dones[0..world_count]) |done| {
+            if (done) {
+                ended_episodes += 1;
+            }
+        }
+    }
+    // Episodes ended and began again within the loop: the restarts were crossed, not only continuing worlds.
+    try expect(ended_episodes > 0);
+    // The twin's filter back to none, for whatever uses the twin next in this process.
+    try twin.setTracking(fleet.trackingSettings(.{}));
+}
+
+test "robot_latent_kit: acting through the trainer's kit, the twin follows the trainer through restarts, to the bit" {
+    try expectClosedLoopIsTheTrainers(testing_allocator);
+}
+
+test "the mocap passes Geno's rotation boxes unchanged; a ball bent past its box is clamped and charged" {
+    // Every frame of the clip: no ball outside its box (no SuperMimic excess from a ball) and every ball's target left
+    // to the bit by the clamp - the boxes are drawn from these very frames. Then one ball turned 0.3 rad past its box's
+    // high on one component: excess, and a target clamped back inside.
+    const gpa: Allocator = testing_allocator;
+    var setup: FleetSetup = undefined;
+    try setup.init(gpa);
+    defer setup.deinit();
+    const m: *rbt.Model = &setup.imported.model;
+    const fleet: *track.Fleet = try track.Fleet.init(gpa, m, &.{&setup.clip}, .{ .envs = 1, .capacity = 8 });
+    defer fleet.deinit();
+    const clip: *const dance.Clip = &setup.clip;
+    const root_len: usize = clip.nq - m.coordinate_count;
+    const pose: []f32 = try gpa.alloc(f32, m.coordinate_count);
+    defer gpa.free(pose);
+    const clamped: []f32 = try gpa.alloc(f32, m.coordinate_count);
+    defer gpa.free(clamped);
+    const no_ranges_share: f32 = 0.9;
+    for (0..clip.frame_count) |frame| {
+        @memcpy(pose, clip.pose(frame)[root_len..]);
+        try expectEqual(@as(f32, 0.0), rbt.superMimicJointLimitExcess(m, fleet.rotation_boxes, pose, no_ranges_share));
+        @memcpy(clamped, pose);
+        rbt.clampBalls(m, fleet.rotation_boxes, clamped);
+        try expectEqualSlices(f32, pose, clamped);
+    }
+    // A ball bent past its box: the first boxed joint's rotation vector pushed 0.3 rad past its high on x.
+    @memcpy(pose, clip.pose(0)[root_len..]);
+    const joint: usize = for (fleet.rotation_boxes, 0..) |maybe_box, index| {
+        if (maybe_box != null) {
+            break index;
+        }
+    } else unreachable;
+    const box: rbt.RotationBox = fleet.rotation_boxes[joint].?;
+    const middle_y: f32 = 0.5 * (box.low[1] + box.high[1]);
+    const middle_z: f32 = 0.5 * (box.low[2] + box.high[2]);
+    // Measured from the box's center: the turn past its high edge, composed with the center.
+    const bent: rbt.Quat = rbt.qmul(box.center, rbt.rotationOfVector(vec(box.high[0] + 0.3, middle_y, middle_z)));
+    const first: u32 = m.joint_first_coordinate[joint];
+    pose[first..][0..4].* = bent;
+    try expect(rbt.superMimicJointLimitExcess(m, fleet.rotation_boxes, pose, no_ranges_share) > 0.29);
+    @memcpy(clamped, pose);
+    rbt.clampBalls(m, fleet.rotation_boxes, clamped);
+    try expect(rbt.superMimicJointLimitExcess(m, fleet.rotation_boxes, clamped, no_ranges_share) < 1.0e-4);
+}
+
+test "a fleet's limbs at stiffness zero are the fleet without limbs, bit for bit" {
+    // Two fleets of two characters on the robot and clip, one with a stiffness per limb in its action and one without,
+    // started alike and given the same offsets - the first's every limb at zero - stepped four times: every position
+    // and velocity equal to the bit. Zero is the law's own spring, 3^0 being 1.
+    const gpa: Allocator = testing_allocator;
+    var setup: FleetSetup = undefined;
+    try setup.init(gpa);
+    defer setup.deinit();
+    const m: *rbt.Model = &setup.imported.model;
+    const world_count: usize = 2;
+    const without: *track.Fleet = try track.Fleet.init(gpa, m, &.{&setup.clip}, .{
+        .envs = world_count,
+        .capacity = 32,
+    });
+    defer without.deinit();
+    const with: *track.Fleet = try track.Fleet.init(gpa, m, &.{&setup.clip}, .{
+        .envs = world_count,
+        .capacity = 32,
+        .limb_stiffness = true,
+    });
+    defer with.deinit();
+    try expectEqual(without.action_width + m.limb_count, with.action_width);
+    for (0..world_count) |env| {
+        without.startAt(env, 0, 10 + 20 * env);
+        with.startAt(env, 0, 10 + 20 * env);
+    }
+    const offsets: []f32 = try gpa.alloc(f32, world_count * without.action_width);
+    defer gpa.free(offsets);
+    const offsets_and_limbs: []f32 = try gpa.alloc(f32, world_count * with.action_width);
+    defer gpa.free(offsets_and_limbs);
+    for (0..4) |step| {
+        @memset(offsets_and_limbs, 0);
+        for (0..world_count) |env| {
+            const env_offsets: []f32 = offsets[env * without.action_width ..][0..without.action_width];
+            for (env_offsets, 0..) |*offset, number| {
+                const phase: f32 = 0.9 * float(number + 1) + float(step + env);
+                offset.* = 0.5 * @sin(phase);
+            }
+            @memcpy(offsets_and_limbs[env * with.action_width ..][0..without.action_width], env_offsets);
+        }
+        _ = without.step(offsets);
+        _ = with.step(offsets_and_limbs);
+        for (0..world_count) |env| {
+            try expectEqualSlices(f32, without.data[env].joint_positions, with.data[env].joint_positions);
+            try expectEqualSlices(f32, without.data[env].joint_velocities, with.data[env].joint_velocities);
+        }
+    }
+}
+
+test "the fleet's clock: one decision at two physics steps is two steps at one, the action held" {
+    // Two fleets of one character on the same robot and clip, started alike: one deciding every second physics step,
+    // one every step. One decision of the first and two steps of the second, both given the same action, leave the
+    // character in the same state to the bit, at the same frame, earning the same reward.
+    const gpa: Allocator = testing_allocator;
+    var setup: FleetSetup = undefined;
+    try setup.init(gpa);
+    defer setup.deinit();
+    const m: *rbt.Model = &setup.imported.model;
+    const deciding_fleet: *track.Fleet = try track.Fleet.init(gpa, m, &.{&setup.clip}, .{
+        .envs = 1,
+        .capacity = 32,
+        .decide_every = 2,
+    });
+    defer deciding_fleet.deinit();
+    const stepping_fleet: *track.Fleet = try track.Fleet.init(gpa, m, &.{&setup.clip}, .{ .envs = 1, .capacity = 32 });
+    defer stepping_fleet.deinit();
+    const start_frame: usize = 10;
+    deciding_fleet.startAt(0, 0, start_frame);
+    stepping_fleet.startAt(0, 0, start_frame);
+    const action: []f32 = try gpa.alloc(f32, track.actionSize(m));
+    defer gpa.free(action);
+    for (action, 0..) |*component, index| {
+        const index_float: f32 = @floatFromInt(index % 5);
+        component.* = 0.1 * index_float - 0.2;
+    }
+    _ = deciding_fleet.step(action);
+    _ = stepping_fleet.step(action);
+    _ = stepping_fleet.step(action);
+    try expectEqual(stepping_fleet.frame[0], deciding_fleet.frame[0]);
+    try expectEqual(@as(u32, @intCast(start_frame + 2)), deciding_fleet.frame[0]);
+    try expectEqualSlices(f32, stepping_fleet.data[0].joint_positions, deciding_fleet.data[0].joint_positions);
+    try expectEqualSlices(f32, stepping_fleet.data[0].joint_velocities, deciding_fleet.data[0].joint_velocities);
+    try expectEqual(stepping_fleet.rewards[0], deciding_fleet.rewards[0]);
 }

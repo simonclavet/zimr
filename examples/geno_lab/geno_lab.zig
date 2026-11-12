@@ -525,14 +525,14 @@ fn drawRobot(
     tint: Color,
 ) void {
     const to_y_up: Mat = zm.zUpToYUp();
-    for (0..model.ngeom) |geom| {
+    for (0..model.geom_count) |geom| {
         const body: u32 = model.geom_body[geom];
-        const body_position: Vec = data.body_xpos[body];
-        const body_rotation: Quat = data.body_xrot[body];
+        const body_position: Vec = data.body_positions[body];
+        const body_rotation: Quat = data.body_orientations[body];
         // The geom in the world: its offset from its body, turned with the body; its rotation, after the body's.
-        const offset_in_world: Vec = zm.rotate(body_rotation, model.geom_pos[geom]);
+        const offset_in_world: Vec = zm.rotate(body_rotation, model.geom_local_position[geom]);
         const world_position: Vec = body_position + offset_in_world;
-        const world_quaternion: Quat = qmul(body_rotation, model.geom_rot[geom]);
+        const world_quaternion: Quat = qmul(body_rotation, model.geom_local_rotation[geom]);
         const world_rotation: Mat = quatToMat(world_quaternion);
         // The same place in the drawing, where y is up.
         const world_translation: Mat = translation(world_position[0], world_position[1], world_position[2]);

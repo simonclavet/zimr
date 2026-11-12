@@ -19,7 +19,7 @@
 //!     tools/zig-out/bin/st_bench --minutes=10 --out=/tmp/curve.csv
 //!     tools/zig-out/bin/st_bench --iterations=400 --action-scale=2.09 --out=/tmp/arm_b.csv     an A/B arm
 //!
-//! TWO BUILDS of this one file (Simon's choice, option C of the Sep 27 review): `st_bench`, ReleaseFast, for long
+//! TWO BUILDS of this one file: `st_bench`, ReleaseFast, for long
 //! runs, and `st_bench_safe`, ReleaseSafe - every index checked, every assert a stop - at 1.7x the time. Neither
 //! changes a number: the rows are bitwise identical when nothing is wrong. So a configuration is CLEARED by running
 //! its first stretch Safe and holding the Fast run's rows against it; a matching prefix says the Fast run met no bad
@@ -154,7 +154,7 @@ const bench_cli: cli.Config(BenchArgs) = .{
         .@"--sigma" = .{ .description = "exploration noise, in units of action" },
         .@"--twin-world" = .{ .description = "a second world model; rollouts step through the two's average" },
         .@"--w-disagree" = .{ .description = "the price on the two models' disagreement (needs --twin-world on)" },
-        .@"--filter" = .{ .description = "Simon's filter: the share of a new decision in what is applied" },
+        .@"--filter" = .{ .description = "the action filter: the share of a new decision in what is applied" },
         .@"--decide-every" = .{ .description = "physics steps per decision (2: 30 Hz)" },
         .@"--sees-applied" = .{ .description = "the policy sees the action it is applying (A1)" },
         .@"--clip-normaliser" = .{ .description = "the world model's normaliser from the clip (F4a)" },

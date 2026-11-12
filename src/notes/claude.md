@@ -426,7 +426,8 @@ Prior arc (`src/notes/mocap_plan.md`, §11-12): BVH/FBX loading, skinning, and t
 
 ★ **WHILE WORKING ON ROBOTGPU, RUN ITS ROOT ALONE**: `-Dfast-root=src/robotgpu_tests.zig` - its own tests and
 nothing else (it reaches the MJCF importer as the `robot_import` module, so the importer's tests stay in theirs).
-The robot family (`src/robot_tests.zig`) runs only when robot.zig itself changes, as a bitwise gate: about 40 s of
+The robot family (`src/robot_tests.zig`) runs only when robot.zig itself changes, as a bitwise gate - with
+`zbuild doc-sync`, since the robot course quotes robot.zig and a change can leave a quote behind: about 40 s of
 tests by default since Oct 31 - one learning test took 167 of its 204 s and is a slow test now, its quick form
 ("the agent's parts train on the dance") running by default.
     zig build test -Dtest-timing                     each fast-tier test process lists its tests of 1 s or more
@@ -526,24 +527,15 @@ when Simon names it.
   running the Zig compiler's own SPIR-V: the stages S0-S8, each written and cross-compiled for Windows in the
   sandbox, GPU runs on Simon's laptop. Its status line and journal say what is done and what is next.
 
-- `rl_track_plan.md` - **The RL plan. PAUSED since Oct 5 (Simon: a break from RL and mocap); resumes when Simon
-  names it. It was the current plan before the platforms plan (v4, Sep 27 evening).** SuperTrack on the 10-second
-  dance, fundamentals first, then the first night. Sections: standing rules (turn discipline; build/test traps -
-  `check` does not compile pages, insert declarations above doc comments; engineering rules - known answers, one
-  definition per concept, graph-vs-rows parity, the recipe as one value), the goal stated so it can fail, the
-  principles (P1-P7: one task; SuperTrack's failure rule; gravity; root motion seen; Simon's filter and 30 Hz clock
-  inside training; judged in reality), where we stand (the task, the judge's baselines - servo 1.53 s on
-  `dance_5_15` -, the CPU and GPU learners), what is DONE (Phase T, F1-F6a, the SuperTrack comparison, the Sep 27
-  review), lessons L1-L13, then THE WORK AHEAD in stages: A the action path (the policy sees its applied action; the
-  recipe as one value), B THE BENCH (`zig build st-bench`, a deterministic CPU learning curve with the judge and
-  trust/exploitation rows) and its baseline curve, C recipe decisions on the bench (offset scale and noise, the
-  paper's losses, the optimiser), D the world model's form (rigid-body graph ops, `AccelWorld`, the A/B), E scale and
-  drift, F the feasible reference, G the kit's parity, H the gate; then Phases R, ON, C, P, A, X, M; decisions,
-  risks, where things live.
-  Archived: v3 (Sep 26-27: Phases T and F in full, the MimicKit table, Phase R's workflow study) is
-  `src/notes/archive/rl_track_plan_v3.md`; v2 (Sep 23-26) and v1 (T1-T9b) beside it; `rl_track_journal.md` is the
-  dated history; `supertrack_comparison.md` tables the paper, an unofficial repo and ours.
-
+- `rl_track_plan.md` - **THE TRACKING PLAN (v6, Nov 2): SuperMimic, EfficientTDMPC and FlowDPG in one system.**
+  Runs beside `robotgpu_plan.md`, whose stages S3-S6 (constraints, collision, the tracker on the device) it depends
+  on; v1-v5 are in `archive/`. Its gates GT1-GT5, its tracks (E the worlds, S SuperMimic, T EfficientTDMPC, F the
+  flow, R the way back, M measurement), its next ten steps and its decisions D1-D5 are in the plan; the day-by-day
+  account is `rl_track_journal.md`.
+- `robotgpu_plan.md` - **The GPU simulator and the night (v3, Nov 6): MuJoCo Warp's simulator in zimr,** native and
+  web, its CPU twin robot.zig to the bit, and the training night built on it; v1 and v2 in `archive/`. Its components,
+  gates G1-G6, the additions that raise the night's odds (section 4b, with the order of the work from there) and its
+  journal are in the plan.
 - `ragdoll_compare_plan.md` - **PAUSED (it was the current plan at 2163).** A `ragdoll_compare`
   example: the MJCF humanoid dropped twice, once in reduced coordinates (`robot.zig` +
   `robot_physics.Bridge`) and once in maximal coordinates (`zimrphysics`, 13 bodies, 12 joints),
@@ -996,8 +988,9 @@ across restarts; the zip is insurance and the recovery point if it ever resets).
 ## Iterating — the velocity path
 Don't default to `zig build test` for iteration; it builds broadly. When working a
 specific example, shader, or module:
-- Build its standalone and hand it back: `zig build <name>-standalone
-  -Dmode=release` → `zig-out/standalone/<name>.html` → `present_files`.
+- Build its standalone and hand it back: `zig build <name> -Dplatform=web
+  -Dmode=release` (the step's name with dashes: `robotgpu_lab` → `robotgpu-lab`) →
+  `zig-out/standalone/<name>.html` → `present_files`.
 - **Always `-Dmode=release` for standalones.** It is ReleaseSmall but keeps the
   zimr asserts (`assertf`/`alwaysAssert`) and their on-page log. Omitting `-Dmode`
   defaults to **debug** (large + slow); reserve debug for crash-stacktrace work.
@@ -4505,3 +4498,16 @@ correct there ⇒ DPR-related, wrong ⇒ mode-related; then log
 - **Long REPLIES die too** (Sep 27, three times: the work finished, the reply never reached Simon's phone - each one
   pasted 300+ lines of code). The code rule stands, so the fix is upstream: plan each turn so its new code fits one
   reply (~150 lines). When a reply is lost, the next turn checks the tree against the snapshot and re-shows the code.
+
+
+## Conditions: return early, the cheap and the likely first
+
+When a function ends on any of several conditions, each condition returns the moment it is met - no flags gathered
+and tested together at the end - and the conditions are ordered so the function exits as soon as it can: cheap tests
+(a count, a flag) before costly ones (a loop, a load), and among equally cheap tests, the one most likely to decide
+first. A loop that searches returns, or `break`s with its value (`for ... else` as an expression), at its first find.
+A short comment states the order when it is not obvious. Example: `robotgpu.refuseUnsimulatedFeatures` - two counts and
+a flag, then possible contact (the likely constraint), then equalities, and the loop over the joints' ranges last.
+`and`/`or` short-circuit, so inside one expression the same rule holds: the cheap or likely operand first
+(`joint_count == 1 and jointTypeOf(...) == .free`).
+

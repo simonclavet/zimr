@@ -1,0 +1,10 @@
+// robotgpu side by side: Geno servoing the dance two seconds in, captured; the button tapped; the Go1 two seconds
+// into standing, captured. No other input; 960 x 540 - the button's centre at (116, 502).
+.{ .advance = 120 }
+.{ .capture_to = "robotgpu_sidebyside_geno.png" }
+.{ .move = .{ .x = 116, .y = 502 } }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 120 }
+.{ .capture_to = "robotgpu_sidebyside_go1.png" }

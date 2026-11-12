@@ -41,6 +41,7 @@ const eql = std.mem.eql;
 const zm = @import("zm");
 const float = zm.float;
 const assertf = zm.assertf;
+const assertUnreachable = zm.assertUnreachable;
 const Random = std.Random;
 const zrl = @import("zrl");
 const Tensor = zn.Tensor(f32);
@@ -122,8 +123,9 @@ pub fn runTrackingCost(
 pub const CriticOptions = extern struct {
     heads: u32 = 2,
     hidden: u32 = 32,
-    /// gamma per physics step: 1 - 1/90, a horizon of a second and a half at 60 Hz - about how long a fall and what
-    /// follows it take.
+    /// gamma per DECISION - per step of the fleet's clock (`robot_track.Fleet.Options.decide_every`), as every step
+    /// the critic sees is one: 1 - 1/90 is a horizon of a second and a half at 60 decisions a second - about how long
+    /// a fall and what follows it take - and the same second and a half at 30 a second is 1 - 1/45.
     discount: f32 = 1.0 - 1.0 / 90.0,
     seed: u32 = 1,
     learning_rate: f32 = 3e-4,
@@ -134,6 +136,14 @@ pub const CriticOptions = extern struct {
     beta1: f32 = 0.9,
     beta2: f32 = 0.999,
     epsilon: f32 = 1e-8,
+    /// THE IMAGINED FIT (`LatentCritic.updateImagined`), SuperTrack's critic only: after each policy update the critic
+    /// is also fitted to lambda-returns along the policy's own imagined rollout - the states where the policy reads it,
+    /// under the policy it judges - its two-hot loss weighted by this share, the real fit's weight being 1. 0: no
+    /// imagined fit.
+    imagined_share: f32 = 0,
+    /// Lambda per decision for those returns (`value_lambda_combine`): 0.92 is 0.4 s at 30 decisions a second,
+    /// SuperMimic's 0.95 at 50 in seconds.
+    imagined_lambda: f32 = 0.92,
 };
 
 /// THE DEVICE'S NUMBERS FOR THE LOG: statistics the learner's kernels write into a block of the parameter buffer,
@@ -349,6 +359,12 @@ pub fn LatentCritic(comptime M: type) type {
         costs_at: u32,
         decoded_at: u32,
         targets_at: u32,
+        /// THE IMAGINED FIT's own places (`reserveImagined`), when it has them: the imagined states after each step,
+        /// [steps][rows][features] from step 1 as the real ones are; the target values at each transition's own
+        /// state [heads][transitions]; the running advantage of its lambda-returns [rows].
+        imagined_states_at: ?u32 = null,
+        imagined_values_at: u32 = 0,
+        running_at: u32 = 0,
         /// Where the learner's stats block starts (`DeviceStats`), or null without one - set by the learner after it
         /// reserves the block; the critic records its numbers there (`critic_value_stats`).
         stats_at: ?u32 = null,
@@ -445,9 +461,11 @@ pub fn LatentCritic(comptime M: type) type {
             }
         }
 
-        /// The TD targets of the gathered window batch (this type's head): every real transition's inputs, its next
-        /// inputs, its cost and its target, in acts.
-        pub fn computeTargets(critic: Self, pipe: *Pipe) void {
+        /// THE FIRST HALF OF EVERY TARGET: from the states after each step at `states_at` - the recorded ones
+        /// (`computeTargets`) or the imagined ones (`computeImaginedTargets`), [steps][rows][features] from step 1 -
+        /// and the goals beside them, each transition's input rows, its cost where it led, and the target heads' values
+        /// there.
+        fn prepareTransitions(critic: Self, pipe: *Pipe, states_at: u32) void {
             const source: Source = critic.source;
             const features: u32 = source.features;
             const input_row_width: u32 = 2 * features;
@@ -459,8 +477,8 @@ pub fn LatentCritic(comptime M: type) type {
             // those of steps 2 .. W start exactly one step's block later - so four placements lay out every
             // transition of the batch: goals into the first half of each row, states into the second.
             const next_goals_at: u32 = source.goals_at + step_block_floats;
-            const next_states_at: u32 = source.states_at + step_block_floats;
-            const placement_sources = [_]u32{ source.goals_at, source.states_at, next_goals_at, next_states_at };
+            const next_states_at: u32 = states_at + step_block_floats;
+            const placement_sources = [_]u32{ source.goals_at, states_at, next_goals_at, next_states_at };
             const inputs_at: u32 = critic.inputs_at;
             const next_inputs_at: u32 = critic.next_inputs_at;
             const placement_destinations = [_]u32{ inputs_at, inputs_at, next_inputs_at, next_inputs_at };
@@ -487,6 +505,12 @@ pub fn LatentCritic(comptime M: type) type {
                 const head_values_at: u32 = critic.decoded_at + head_block_start;
                 bmpc_kit.decodeTwoHotRows(M, pipe, target_pass, critic.bins, head_values_at);
             }
+        }
+
+        /// The TD targets of the gathered window batch (this type's head): every real transition's inputs, its next
+        /// inputs, its cost and its target, in acts.
+        pub fn computeTargets(critic: Self, pipe: *Pipe) void {
+            critic.prepareTransitions(pipe, critic.source.states_at);
             // THE TARGETS: cost + gamma x the heads' mean. EfficientTDMPC's own combination, with the cost in the
             // reward's place and a single "dynamics head" - the real transition itself.
             pipe.params = .{
@@ -709,8 +733,98 @@ pub fn LatentCritic(comptime M: type) type {
         /// older update's weight in it smaller by a factor 0.99 - which is what keeps the regression's targets still
         /// enough to be chased.
         pub fn update(critic: Self, pipe: *Pipe, update_count: u32) void {
-            const options: Options = critic.options;
             critic.computeTargets(pipe);
+            const real_weight: f32 = 1.0;
+            critic.fitTargets(pipe, update_count, real_weight, .record_stats);
+        }
+
+        /// THE IMAGINED FIT's places, reserved after `init` (`CriticOptions.imagined_share`): `imagined_states_at` is
+        /// where the policy rollout leaves its imagined states, [steps][rows][features] from step 1 - the kit's own
+        /// blocks (`LatentKit.blockZ`), laid out as the real ones the critic reads, so the same placements serve.
+        pub fn reserveImagined(
+            critic: *Self,
+            layout: *kit_mlp.KitLayout,
+            imagined_states_at: u32,
+        ) void {
+            critic.imagined_states_at = imagined_states_at;
+            critic.imagined_values_at = layout.reserveActs(critic.options.heads * critic.transitions);
+            critic.running_at = layout.reserveActs(critic.source.rows);
+        }
+
+        /// THE IMAGINED TARGETS: lambda-returns along the policy's imagined rollout, for every transition the real
+        /// targets have - step k = 1 .. steps - 1 of each window - in the same places, so the same fit learns them:
+        ///
+        ///     inputs        [goal_k | imagined state_k], and the step after's        (the same four placements)
+        ///     costs         c(imagined state_(k+1)) against goal_(k+1)               (`lat_tracking_cost`)
+        ///     values        the target heads at both - V_(k+1) and V_k               (`twohot_decode`)
+        ///     returns       walked back from the last transition, the running advantage starting at zero
+        ///                   (`value_lambda_combine`: zimrrl's GAE recurrence)
+        ///
+        /// The last transition's return is its one-step target, c + gamma V; each earlier one leans on the path after
+        /// it by `imagined_lambda`. The goals are the real ones: imagination aims at the reference as the policy did.
+        pub fn computeImaginedTargets(critic: Self, pipe: *Pipe) void {
+            const imagined_states_at: u32 = critic.imagined_states_at orelse {
+                assertUnreachable(@src(), "the imagined fit has no places: `reserveImagined` first", .{});
+                return;
+            };
+            critic.prepareTransitions(pipe, imagined_states_at);
+            const source: Source = critic.source;
+            // The target heads' values where each transition BEGAN, too: the GAE recurrence reads both ends.
+            const input_row_width: u32 = 2 * source.features;
+            for (critic.target_passes, 0..) |target_pass, head_index| {
+                const head_block_start: u32 = @as(u32, @intCast(head_index)) * critic.transitions;
+                const own_values_at: u32 = critic.imagined_values_at + head_block_start;
+                target_pass.forward(pipe, critic.inputs_at, input_row_width);
+                bmpc_kit.decodeTwoHotRows(M, pipe, target_pass, critic.bins, own_values_at);
+            }
+            // The returns, the last transition first. Transition block j holds step k = j + 1 of every window.
+            const rows: u32 = source.rows;
+            pipe.params = .{ .rows = rows, .y_off = critic.running_at };
+            pipe.run("zero_rows", rows);
+            var transition_block: u32 = source.steps - 1;
+            while (transition_block > 0) {
+                transition_block -= 1;
+                const block_start: u32 = transition_block * rows;
+                pipe.params = .{
+                    .rows = rows,
+                    .x_off = critic.costs_at + block_start,
+                    .v_off = critic.decoded_at + block_start,
+                    .u_off = critic.imagined_values_at + block_start,
+                    .t_off = critic.running_at,
+                    .y_off = critic.targets_at + block_start,
+                    .gamma = critic.options.discount,
+                    .target_lambda = critic.options.imagined_lambda,
+                    .target_value_heads = critic.options.heads,
+                    .target_head_stride = critic.transitions,
+                };
+                pipe.run("value_lambda_combine", rows);
+            }
+        }
+
+        /// ONE IMAGINED UPDATE (`CriticOptions.imagined_share`): the imagined targets, then the same fit as a real
+        /// update, its loss weighted by the share - right after a policy update, while its rollout is in the kit's
+        /// blocks. The real update's log numbers are left as they are.
+        pub fn updateImagined(critic: Self, pipe: *Pipe, update_count: u32) void {
+            critic.computeImaginedTargets(pipe);
+            critic.fitTargets(pipe, update_count, critic.options.imagined_share, .leave_stats);
+        }
+
+        /// Whether a fit writes the critic's numbers for the log - the real fit does; the imagined one leaves them to
+        /// it, so the log reads one kind of target.
+        pub const StatsRecording = enum { record_stats, leave_stats };
+
+        /// THE FIT: the online heads regressed toward the targets the last `computeTargets` or
+        /// `computeImaginedTargets` left, the two-hot loss weighted by `loss_weight`, then one optimiser step and the
+        /// target heads' follow.
+        fn fitTargets(
+            critic: Self,
+            pipe: *Pipe,
+            update_count: u32,
+            loss_weight: f32,
+            stats: StatsRecording,
+        ) void {
+            const options: Options = critic.options;
+            const records_stats: bool = stats == .record_stats and critic.stats_at != null;
             // THE LOSS'S GRADIENT, head by head, into its own weight gradients.
             const input_row_width: u32 = 2 * critic.source.features;
             const head_passes: []const Network.Application = critic.head_passes;
@@ -718,7 +832,7 @@ pub fn LatentCritic(comptime M: type) type {
             for (head_passes, gradient_offsets, 0..) |head_pass, logits_gradient_offset, head_index| {
                 head_pass.forward(pipe, critic.inputs_at, input_row_width);
                 // For the log, each head's values decoded - into the targets' scratch, free once they are combined.
-                if (critic.stats_at != null) {
+                if (records_stats) {
                     const head_block_start: u32 = @as(u32, @intCast(head_index)) * critic.transitions;
                     bmpc_kit.decodeTwoHotRows(M, pipe, head_pass, critic.bins, critic.decoded_at + head_block_start);
                 }
@@ -733,7 +847,7 @@ pub fn LatentCritic(comptime M: type) type {
                     .twohot_high = critic.bins.high,
                     .twohot_axis = @backingInt(critic.bins.axis),
                     .twohot_divisor = @floatFromInt(critic.transitions),
-                    .loss_weight = 1.0,
+                    .loss_weight = loss_weight,
                     .row_mask = @backingInt(M.RowMask.every_row),
                 };
                 pipe.run("twohot_bwd", critic.transitions);
@@ -747,7 +861,8 @@ pub fn LatentCritic(comptime M: type) type {
                 );
             }
             // For the log: the heads' mean value, their spread, their error against the targets.
-            recordDeviceStat(M, pipe, critic.stats_at, "critic_value_mean", "critic_value_stats", .{
+            const stats_at: ?u32 = if (records_stats) critic.stats_at else null;
+            recordDeviceStat(M, pipe, stats_at, "critic_value_mean", "critic_value_stats", .{
                 .rows = critic.transitions,
                 .count = options.heads,
                 .x_off = critic.decoded_at,
@@ -1539,7 +1654,26 @@ pub fn LatentKit(comptime M: type) type {
         ph1_at: u32,
         ph2_at: u32,
         raw_at: u32,
+        /// THE WINDOW's STARTING ACTIONS, `rows x actions`: the action each row was given before its window began - the
+        /// previous action the action filter blends the window's first decision into (`policyStep`). Rest, zero, unless
+        /// the trainer stages the replay's.
+        start_actions_at: u32,
         action_scale: f32 = 1.0,
+        /// THE ACTION FILTER IN THE ROLLOUT (`zn_mlp.lat_act`, `lat_act_bwd`), as the trainer applies it when it acts:
+        /// each decision's action blended into the one before - the joints' offsets at `filter`, the limbs' stiffnesses
+        /// (an action's last `stiffness_count` numbers) at `stiffness_filter` - and differentiated exactly, a
+        /// decision's gradient reaching every later decision it still shapes. 1 and 1: no filter, the rollout as it
+        /// always was.
+        filter: f32 = 1.0,
+        stiffness_filter: f32 = 1.0,
+        stiffness_count: u32 = 0,
+        /// THE POLICY SEES THE ACTION APPLIED BEFORE ITS DECISION (the CPU learner's `sees_applied`): its block -
+        /// packed after the layers, zero at the start - is trained, from its weights' gradient and the gradient its
+        /// reading sends to the earlier decision's action. Off, the block is read but never trained, so it stays zero
+        /// and the policy is exactly the one that cannot see it. Every acting path reads the block with the action
+        /// applied before its decision - the trainer's mirror (its slot), the judge (its slots), the lab's player (its
+        /// controller's filtered action) and a device (its worlds' actions) - so a trained block acts everywhere alike.
+        sees_applied: bool = false,
         /// The price on the size of the raw action, beside the tracking loss (the CPU learner's).
         w_action: f32 = 0.0,
         /// The smoothness price (CAPS): `w_smooth * |a_k - a_(k-1)|^2` along the window - see `lat_act_bwd`.
@@ -1583,6 +1717,13 @@ pub fn LatentKit(comptime M: type) type {
         // The policy's gradient slots, one each, reused step after step: the raw action, its two
         // hidden layers, and its input [goal | state] (`lead + features` wide).
         draw_at: u32,
+        /// The action filter's CARRY in the gradients, `rows x actions` (`lat_act_bwd`): the action columns' whole
+        /// gradient so far, carried from each step to the one before; zero before the window's last step.
+        filter_carry_at: u32,
+        /// The gradient the policy's reading of the action applied before decision k sends to decision k-1's action,
+        /// `rows x actions` (`lat_act_bwd`'s `lat_applied_gradient`): written at step k, added at step k-1; zero
+        /// before the window's last step.
+        applied_gradient_at: u32,
         dph1_at: u32,
         dph2_at: u32,
         dp_at: u32,
@@ -1608,10 +1749,32 @@ pub fn LatentKit(comptime M: type) type {
         /// resident data's normaliser, and the stats block - which a second kit of the same shape finds where the
         /// first one does.
         const activation_offset_fields = [_][]const u8{
-            "x_at", "h1_at", "h2_at", "change_at", "z_at", "t_at", "g_at", "ph1_at", "ph2_at", "raw_at", "total",
+            "x_at",
+            "h1_at",
+            "h2_at",
+            "change_at",
+            "z_at",
+            "t_at",
+            "g_at",
+            "ph1_at",
+            "ph2_at",
+            "raw_at",
+            "start_actions_at",
+            "total",
         };
         const gradient_offset_fields = [_][]const u8{
-            "dz_at", "dh1_at", "dh2_at", "dx_at", "draw_at", "dph1_at", "dph2_at", "dp_at", "dchange_at", "dtotal",
+            "dz_at",
+            "dh1_at",
+            "dh2_at",
+            "dx_at",
+            "draw_at",
+            "dph1_at",
+            "dph2_at",
+            "dp_at",
+            "dchange_at",
+            "filter_carry_at",
+            "applied_gradient_at",
+            "dtotal",
         };
         const shared_offset_fields = [_][]const u8{
             "w1",
@@ -1695,13 +1858,16 @@ pub fn LatentKit(comptime M: type) type {
             // it. (A kit counted without them, then given a flow, would write its actions past its own end.)
             const policy_hidden_floats: u32 = 2 * steps * rows * policy_hidden;
             const step_actions_floats: u32 = steps * rows * actions;
-            const activations_end: u32 = policy_blocks + policy_hidden_floats + step_actions_floats;
+            const start_actions_at: u32 = policy_blocks + policy_hidden_floats + step_actions_floats;
+            const activations_end: u32 = start_actions_at + rows * actions;
             const has_gaussian_policy: bool = policy_hidden > 0;
             const policy_gradient_width: u32 = 2 * policy_hidden + lead + features;
             const policy_gradient_floats: u32 = if (has_gaussian_policy) rows * policy_gradient_width else 0;
             // A step's change's gradient in the network's own units (`changeGradient`), after everything else.
             const dchange_at: u32 = dx_at + rows * inputs + rows * actions + policy_gradient_floats;
-            const gradients_end: u32 = dchange_at + rows * features;
+            const filter_carry_at: u32 = dchange_at + rows * features;
+            const applied_gradient_at: u32 = filter_carry_at + rows * actions;
+            const gradients_end: u32 = applied_gradient_at + rows * actions;
             const w1: u32 = 0;
             const w2: u32 = w1 + inputs * hidden + hidden;
             const w3: u32 = w2 + hidden * hidden + hidden;
@@ -1730,16 +1896,19 @@ pub fn LatentKit(comptime M: type) type {
                     0
                 else
                     (lead + features) * policy_hidden + policy_hidden + policy_hidden * policy_hidden +
-                        policy_hidden + policy_hidden * actions + actions,
+                        policy_hidden + policy_hidden * actions + actions + actions * policy_hidden,
                 .ph1_at = policy_blocks,
                 .ph2_at = policy_blocks + steps * rows * policy_hidden,
                 .raw_at = policy_blocks + 2 * steps * rows * policy_hidden,
+                .start_actions_at = start_actions_at,
                 .total = activations_end,
                 .dz_at = 0,
                 .dh1_at = dh1_at,
                 .dh2_at = dh2_at,
                 .dx_at = dx_at,
                 .draw_at = dx_at + rows * inputs,
+                .filter_carry_at = filter_carry_at,
+                .applied_gradient_at = applied_gradient_at,
                 .dph1_at = dx_at + rows * inputs + rows * actions,
                 .dph2_at = dx_at + rows * inputs + rows * actions + rows * policy_hidden,
                 .dp_at = dx_at + rows * inputs + rows * actions + 2 * rows * policy_hidden,
@@ -2085,6 +2254,15 @@ pub fn LatentKit(comptime M: type) type {
             const w2p: u32 = self.p_at + policy_inputs * hp + hp;
             const w3p: u32 = w2p + hp * hp + hp;
             var step: u32 = self.steps;
+            // The action filter carries each decision's whole gradient to the one before: zero before the last.
+            const filtering: bool = self.filter < 1.0 or self.stiffness_filter < 1.0;
+            if (filtering) {
+                self.pipe.params = .{ .rows = self.rows * self.actions, .y_off = self.filter_carry_at };
+                self.pipe.run("zero_gradient_rows", self.rows * self.actions);
+            }
+            // The policy's reading of each applied action sends gradient to the decision before: none to the last.
+            self.pipe.params = .{ .rows = self.rows * self.actions, .y_off = self.applied_gradient_at };
+            self.pipe.run("zero_gradient_rows", self.rows * self.actions);
             self.trackingGrad(step);
             self.barrierGrad(step);
             // The window's last state also carries the cost after the window: the critic's value tail.
@@ -2108,20 +2286,35 @@ pub fn LatentKit(comptime M: type) type {
                 self.activationGrads(h1, self.dh1_at, tanh, self.hidden);
                 self.inputGrads(self.inputs, self.hidden, self.dh1_at, self.w1, self.dx_at);
                 // The action columns' gradient, back to the policy's raw output - plus the price.
-                const raw: u32 = self.raw_at + k * self.rows * self.actions;
+                const step_actions: u32 = self.rows * self.actions;
+                const raw: u32 = self.raw_at + k * step_actions;
+                const action_gradient_at: u32 = self.dx_at + self.features + self.references;
+                // The action price and the smoothness, each a mean over the step's numbers: d/dx of w x^2 is 2 w x.
+                const step_action_count: f32 = float(step_actions);
+                const penalty_coefficient: f32 = 2.0 * self.w_action / step_action_count;
+                const smooth_coefficient: f32 = 2.0 * self.w_smooth / step_action_count;
+                // A missing neighbour is this step itself: raw - raw, exactly zero.
+                const has_previous_step: bool = k > 0;
+                const has_next_step: bool = k + 1 < self.steps;
+                const previous_raw: u32 = if (has_previous_step) raw - step_actions else raw;
+                const next_raw: u32 = if (has_next_step) raw + step_actions else raw;
                 self.pipe.params = .{
                     .rows = self.rows,
                     .count = self.actions,
                     .stride = self.inputs,
-                    .dx_off = self.dx_at + self.features + self.references,
+                    .dx_off = action_gradient_at,
                     .x_off = raw,
                     .dy_off = self.draw_at,
                     .lat_scale = self.action_scale,
-                    .lat_penalty = 2.0 * self.w_action / float(self.rows * self.actions),
-                    .lat_smooth = 2.0 * self.w_smooth / float(self.rows * self.actions),
-                    // A missing neighbour is this step itself: raw - raw, exactly zero.
-                    .lat_prev = if (k > 0) raw - self.rows * self.actions else raw,
-                    .lat_next = if (k + 1 < self.steps) raw + self.rows * self.actions else raw,
+                    .lat_penalty = penalty_coefficient,
+                    .lat_smooth = smooth_coefficient,
+                    .lat_prev = previous_raw,
+                    .lat_next = next_raw,
+                    .lat_filter = self.filter,
+                    .lat_stiffness_filter = self.stiffness_filter,
+                    .lat_stiffness_count = self.stiffness_count,
+                    .lat_carry = self.filter_carry_at,
+                    .lat_applied_gradient = self.applied_gradient_at,
                 };
                 self.pipe.run("lat_act_bwd", self.rows * self.actions);
                 // A flow actor keeps the raw action's gradient projected onto its synergies, as its training row's
@@ -2141,8 +2334,31 @@ pub fn LatentKit(comptime M: type) type {
                 self.inputGrads(hp, hp, self.dph2_at, w2p, self.dph1_at);
                 self.activationGrads(ph1, self.dph1_at, tanh, hp);
                 self.weightGrads(self.blockX(k), self.width, policy_inputs, hp, self.dph1_at, self.p_at, accumulate);
-                if (k == 0) {
+                // The block reading the action applied before decision k: its weights' gradient at every decision; and
+                // the gradient it sends that action - decision k-1's - which step k-1's `lat_act_bwd` adds in.
+                const policy_weights: PolicyWeights = self.policyWeights();
+                const is_first_decision: bool = k == 0;
+                const applied_block: u32 = policy_weights.applied;
+                if (self.sees_applied) {
+                    const applied_before_at: u32 = self.appliedBeforeAt(k);
+                    const applied_before_stride: u32 = self.appliedBeforeStride(k);
+                    const actions: u32 = self.actions;
+                    const first_layer_gradient: u32 = self.dph1_at;
+                    self.weightGrads(
+                        applied_before_at,
+                        applied_before_stride,
+                        actions,
+                        hp,
+                        first_layer_gradient,
+                        applied_block,
+                        accumulate,
+                    );
+                }
+                if (is_first_decision) {
                     break;
+                }
+                if (self.sees_applied) {
+                    self.inputGrads(self.actions, hp, self.dph1_at, applied_block, self.applied_gradient_at);
                 }
                 self.inputGrads(policy_inputs, hp, self.dph1_at, self.p_at, self.dp_at);
                 // State k's gradient, from all four places - and the barrier, when there is one.
@@ -2660,8 +2876,21 @@ pub fn LatentKit(comptime M: type) type {
 
         /// The CPU learner's seven policy tensors in the kit's layout, `policy_count` floats, uploaded
         /// at `p_at`. The CPU's first layer is two blocks - state (`params[0]`), goal (`params[1]`) -
-        /// and the row puts the GOAL first, so they are stacked goal block, then state block.
+        /// and the row puts the GOAL first, so they are stacked goal block, then state block. The applied action's
+        /// block after them at ZERO: a policy that does not yet read the action it applies
+        /// (`packPolicyWithApplied`).
         pub fn packPolicy(self: Self, params: [7]Tensor, out: []f32) void {
+            self.packPolicyWithApplied(params, null, out);
+        }
+
+        /// `packPolicy`, with the applied action's block given (`actions x policy_hidden`, the CPU learner's
+        /// `AppliedRow.weights`), or zero when none is.
+        pub fn packPolicyWithApplied(
+            self: Self,
+            params: [7]Tensor,
+            applied_block: ?[]const f32,
+            out: []f32,
+        ) void {
             assertf(out.len == self.policy_count, @src(), "packPolicy: {d} floats given, the layout holds {d}", .{
                 out.len,
                 self.policy_count,
@@ -2671,10 +2900,214 @@ pub fn LatentKit(comptime M: type) type {
                 @memcpy(out[at..][0..params[i].data.len], params[i].data);
                 at += params[i].data.len;
             }
+            const block_size: usize = self.actions * self.policy_hidden;
+            const block_out: []f32 = out[at..][0..block_size];
+            if (applied_block) |given| {
+                @memcpy(block_out, given);
+            } else {
+                @memset(block_out, 0);
+            }
+            at += block_size;
             assertf(at == self.policy_count, @src(), "packPolicy: tensors hold {d} floats, layout {d}", .{
                 at,
                 self.policy_count,
             });
+        }
+
+        /// Where the policy's three layers keep their weights in `params` (`packPolicy`): the first over the goal and
+        /// the state, `(lead + features) x policy_hidden` then its bias; the second, `policy_hidden` square then its
+        /// bias; the third, `policy_hidden x actions` then its bias.
+        pub const PolicyWeights = struct {
+            first: u32,
+            second: u32,
+            third: u32,
+            /// The applied action's block, `actions x policy_hidden`, after the third layer's bias: the policy's view
+            /// of the action applied before its decision, summed into the first layer (`applied_add_activate`).
+            applied: u32,
+        };
+
+        pub fn policyWeights(self: Self) PolicyWeights {
+            const hp: u32 = self.policy_hidden;
+            const first: u32 = self.p_at;
+            const second: u32 = first + (self.lead + self.features) * hp + hp;
+            const third: u32 = second + hp * hp + hp;
+            const applied: u32 = third + hp * self.actions + self.actions;
+            return .{ .first = first, .second = second, .third = third, .applied = applied };
+        }
+
+        /// THE POLICY ACTING ON ROWS OF ITS OWN - one row per simulated world rather than the kit's training rows:
+        /// each row's goal and state (`lead + features` numbers, `input_stride` apart: the simulator pads its rows,
+        /// `policy_inputs`), its two hidden layers, and its raw actions (`actions` numbers, `raw_stride` apart, the
+        /// simulator's action rows). Reserved after the kit's own regions (`reservePolicyRows`).
+        pub const PolicyRows = struct {
+            rows: u32,
+            input_stride: u32,
+            raw_stride: u32,
+            inputs_at: u32,
+            hidden1_at: u32,
+            hidden2_at: u32,
+            raw_at: u32,
+            /// The action applied before each row's decision, rows `raw_stride` apart as the simulator's actions are:
+            /// what the policy's block reads (`applied_add_activate`) - for a simulated world, the action it was given
+            /// at its previous decision.
+            applied_at: u32,
+        };
+
+        /// Room in the activations for the policy to act on `rows` rows (`actOnRows`), its inputs and raw actions
+        /// laid out with the given strides - each at least a row's numbers.
+        pub fn reservePolicyRows(
+            self: Self,
+            layout: *kit_mlp.KitLayout,
+            rows: u32,
+            input_stride: u32,
+            raw_stride: u32,
+        ) PolicyRows {
+            assertf(self.policy_hidden > 0, @src(), "a kit without a policy cannot act", .{});
+            // A row's input: the goal's features, then the state's.
+            const input_width: u32 = self.lead + self.features;
+            const strides_hold_rows: bool = input_stride >= input_width and raw_stride >= self.actions;
+            assertf(strides_hold_rows, @src(), "strides {d} and {d} for rows of {d} and {d}", .{
+                input_stride,
+                raw_stride,
+                input_width,
+                self.actions,
+            });
+            const policy_hidden_width: u32 = self.policy_hidden;
+            const acting: PolicyRows = .{
+                .rows = rows,
+                .input_stride = input_stride,
+                .raw_stride = raw_stride,
+                .inputs_at = layout.reserveActs(rows * input_stride),
+                .hidden1_at = layout.reserveActs(rows * policy_hidden_width),
+                .hidden2_at = layout.reserveActs(rows * policy_hidden_width),
+                .raw_at = layout.reserveActs(rows * raw_stride),
+                .applied_at = layout.reserveActs(rows * raw_stride),
+            };
+            return acting;
+        }
+
+        /// The policy's raw actions for every row of `acting`: the three dense layers of its rollout's step
+        /// (`policyStep`) - tanh, tanh, linear, the same weights - over packed rows. No correction and no exploration:
+        /// those are added where the actions are written.
+        pub fn actOnRows(self: Self, acting: PolicyRows) void {
+            // The activations as the dense kernel takes them: the number of an `Act`.
+            const tanh_activation: u32 = @backingInt(M.Act.tanh);
+            const linear_activation: u32 = @backingInt(M.Act.linear);
+            const policy_hidden_width: u32 = self.policy_hidden;
+            // A row's input: the goal's features, then the state's - the order `policy_inputs` writes them in.
+            const input_width: u32 = self.lead + self.features;
+            const weights: PolicyWeights = self.policyWeights();
+            const rows: u32 = acting.rows;
+            // Rows wider than the policy's actions - a simulator's, with room for each limb's stiffness - are zeroed
+            // first: the layers write the policy's numbers alone, so the rest are nothing, never what memory held.
+            const raw_is_wider: bool = acting.raw_stride > self.actions;
+            if (raw_is_wider) {
+                const raw_numbers: u32 = rows * acting.raw_stride;
+                self.pipe.params = .{ .rows = raw_numbers, .y_off = acting.raw_at };
+                self.pipe.run("zero_rows", raw_numbers);
+            }
+            // The first layer: each row's goal and state, rows `input_stride` apart, into the first hidden layer -
+            // linear, for the block reading the action applied before each row's decision is summed after them, and
+            // only then the tanh (`applied_add_activate`), the rollout's own order.
+            self.denseRows(
+                rows,
+                acting.inputs_at,
+                acting.input_stride,
+                input_width,
+                policy_hidden_width,
+                weights.first,
+                acting.hidden1_at,
+                0,
+                linear_activation,
+            );
+            self.pipe.params = .{
+                .rows = rows,
+                .in_dim = self.actions,
+                .out_dim = policy_hidden_width,
+                .x_off = acting.applied_at,
+                .stride = acting.raw_stride,
+                .w_off = weights.applied,
+                .y_off = acting.hidden1_at,
+                .act = tanh_activation,
+            };
+            self.pipe.run("applied_add_activate", rows * policy_hidden_width);
+            // The second: the first hidden layer into the second, both packed.
+            self.denseRows(
+                rows,
+                acting.hidden1_at,
+                0,
+                policy_hidden_width,
+                policy_hidden_width,
+                weights.second,
+                acting.hidden2_at,
+                0,
+                tanh_activation,
+            );
+            // The third: the second hidden layer into the raw actions, linear, rows `raw_stride` apart - the spacing of
+            // the simulator's action rows, so one copy moves them all.
+            self.denseRows(
+                rows,
+                acting.hidden2_at,
+                0,
+                policy_hidden_width,
+                self.actions,
+                weights.third,
+                acting.raw_at,
+                acting.raw_stride,
+                linear_activation,
+            );
+        }
+
+        /// THE POLICY ACTING FOR A SIMULATOR ON THE SAME DEVICE: every world's row of goal and state, written by the
+        /// simulator one block world after world (`robotgpu.policy_inputs`), copied into the acting rows in one copy;
+        /// the action each world was given at its previous decision (`given_at`, the simulator's actions) copied in
+        /// as the action applied before this one, which the policy's block reads; the policy's layers (`actOnRows`);
+        /// and its raw actions copied into the simulator's choices (`chosen_at`), again one block - the exploration
+        /// and the action filter then make them the decision's actions (`robotgpu.give_program`). Every block's rows
+        /// are laid out with the strides the acting rows were reserved with (`reservePolicyRows`).
+        pub fn actWithSimulator(
+            self: Self,
+            acting: PolicyRows,
+            simulator: compute_host.DeviceField,
+            inputs_at: u32,
+            given_at: u32,
+            chosen_at: u32,
+        ) void {
+            const float_bytes: u32 = @sizeOf(f32);
+            const kit_acts: compute_host.DeviceField = self.pipe.deviceField(.acts);
+            const input_bytes: u32 = acting.rows * acting.input_stride * float_bytes;
+            const input_from: u32 = inputs_at * float_bytes;
+            const input_to: u32 = acting.inputs_at * float_bytes;
+            compute_host.copyFieldBetween(simulator, input_from, kit_acts, input_to, input_bytes);
+            const action_bytes: u32 = acting.rows * acting.raw_stride * float_bytes;
+            const given_from: u32 = given_at * float_bytes;
+            const applied_to: u32 = acting.applied_at * float_bytes;
+            compute_host.copyFieldBetween(simulator, given_from, kit_acts, applied_to, action_bytes);
+            self.actOnRows(acting);
+            const action_from: u32 = acting.raw_at * float_bytes;
+            const chosen_to: u32 = chosen_at * float_bytes;
+            compute_host.copyFieldBetween(kit_acts, action_from, simulator, chosen_to, action_bytes);
+        }
+
+        /// Where the action applied before decision `k` sits - the one the action filter blends into and the policy
+        /// reads: decision `k - 1`'s action columns, or before the window its starting actions.
+        fn appliedBeforeAt(self: Self, k: u32) u32 {
+            const is_first_decision: bool = k == 0;
+            return if (is_first_decision) self.start_actions_at else self.actionColumns(k - 1);
+        }
+
+        /// The rows' stride of `appliedBeforeAt`: the wide row's, or the starting actions' packed rows.
+        fn appliedBeforeStride(self: Self, k: u32) u32 {
+            const is_first_decision: bool = k == 0;
+            return if (is_first_decision) self.actions else self.width;
+        }
+
+        /// Where decision `k`'s action sits: the action columns of its wide row, after the goal, the state and the
+        /// reference.
+        fn actionColumns(self: Self, k: u32) u32 {
+            const row_start: u32 = self.blockX(k);
+            const columns_before_action: u32 = self.lead + self.features + self.references;
+            return row_start + columns_before_action;
         }
 
         /// The policy's turn at step k: its three layers over the row's [goal | state] slice, and
@@ -2692,14 +3125,30 @@ pub fn LatentKit(comptime M: type) type {
             const h1: u32 = self.ph1_at + k * self.rows * hp;
             const h2: u32 = self.ph2_at + k * self.rows * hp;
             const raw: u32 = self.raw_at + k * self.rows * self.actions;
-            const w1: u32 = self.p_at;
-            const w2: u32 = w1 + (self.lead + self.features) * hp + hp;
-            const w3: u32 = w2 + hp * hp + hp;
+            const weights: PolicyWeights = self.policyWeights();
+            const w1: u32 = weights.first;
+            const w2: u32 = weights.second;
+            const w3: u32 = weights.third;
             // The policy's slice: the row's first `lead + features` columns - the goal and the state -
             // read with the row's full stride, so the reference and action columns beyond them are
             // simply not part of this layer's input. Its weights are stacked in that same order
             // (`packPolicy`), which is what makes one matrix multiply do the work of two.
-            self.dense(self.blockX(k), self.width, self.lead + self.features, hp, w1, h1, tanh);
+            // The first layer's linear sum - the bias, the goal's terms, the state's - then the action applied before
+            // this decision, through its own block, summed after them, and only then the tanh.
+            self.dense(self.blockX(k), self.width, self.lead + self.features, hp, w1, h1, linear);
+            const applied_before_at: u32 = self.appliedBeforeAt(k);
+            const applied_before_stride: u32 = self.appliedBeforeStride(k);
+            self.pipe.params = .{
+                .rows = self.rows,
+                .in_dim = self.actions,
+                .out_dim = hp,
+                .x_off = applied_before_at,
+                .stride = applied_before_stride,
+                .w_off = weights.applied,
+                .y_off = h1,
+                .act = tanh,
+            };
+            self.pipe.run("applied_add_activate", self.rows * hp);
             self.dense(h1, 0, hp, hp, w2, h2, tanh);
             self.dense(h2, 0, hp, self.actions, w3, raw, linear);
             // A correction - a flow's, or one given - added to the policy's raw action before the exploration and the
@@ -2712,15 +3161,26 @@ pub fn LatentKit(comptime M: type) type {
             // And the action into the row: `lat_act` scales the raw output (and adds this step's noise)
             // straight into the action columns the world model's layers will read next - the two
             // networks never exchange a buffer, only columns of one row.
+            const action_columns_at: u32 = self.actionColumns(k);
+            const step_seed: u32 = M.latStepSeed(self.seed, k);
+            // The action before, for the action filter - the one the first layer read: the previous decision's
+            // action columns in its wide row, or before the window its starting actions, packed one row after another.
+            const previous_action_at: u32 = applied_before_at;
+            const previous_action_stride: u32 = applied_before_stride;
             self.pipe.params = .{
                 .rows = self.rows,
                 .count = self.actions,
                 .stride = self.width,
                 .x_off = raw,
-                .y_off = self.blockX(k) + self.lead + self.features + self.references,
+                .y_off = action_columns_at,
                 .lat_scale = self.action_scale,
                 .lat_sigma = self.sigma,
-                .lat_seed = M.latStepSeed(self.seed, k),
+                .lat_seed = step_seed,
+                .lat_filter = self.filter,
+                .lat_stiffness_filter = self.stiffness_filter,
+                .lat_stiffness_count = self.stiffness_count,
+                .lat_prev_action = previous_action_at,
+                .lat_prev_action_stride = previous_action_stride,
             };
             self.pipe.run("lat_act", self.rows * self.actions);
         }
@@ -2861,8 +3321,26 @@ pub fn LatentKit(comptime M: type) type {
             y: u32,
             act: u32,
         ) void {
+            self.denseRows(self.rows, x, stride, in_dim, out_dim, w, y, 0, act);
+        }
+
+        /// One dense layer over `rows` rows (`dense_fwd`): each row's `in_dim` inputs from `x`, `stride` floats
+        /// apart (0: packed), times the weights at `w` with their bias after them, activated, into `y`, its rows
+        /// `y_stride` floats apart (0: packed).
+        fn denseRows(
+            self: Self,
+            rows: u32,
+            x: u32,
+            stride: u32,
+            in_dim: u32,
+            out_dim: u32,
+            w: u32,
+            y: u32,
+            y_stride: u32,
+            act: u32,
+        ) void {
             self.pipe.params = .{
-                .rows = self.rows,
+                .rows = rows,
                 .in_dim = in_dim,
                 .out_dim = out_dim,
                 .act = act,
@@ -2870,8 +3348,9 @@ pub fn LatentKit(comptime M: type) type {
                 .stride = stride,
                 .w_off = w,
                 .y_off = y,
+                .y_stride = y_stride,
             };
-            self.pipe.run("dense_fwd", self.rows * out_dim);
+            self.pipe.run("dense_fwd", rows * out_dim);
         }
     };
 }
@@ -2880,6 +3359,9 @@ pub fn LatentKit(comptime M: type) type {
 pub const Start = struct {
     env: u32,
     index: u64,
+    /// Whether the record before `index` belongs to the same segment - the window continues an episode rather than
+    /// opening it - so its starting action is the one given just before it (`lat_gather_start_actions`), not rest.
+    continues_segment: bool = false,
 };
 
 /// THE TRACKING PLANNER'S SCORER: how good a plan is - H actions from a state - by SuperTrack's own objective. A plan
@@ -3571,6 +4053,8 @@ pub fn Resident(comptime M: type) type {
         ring_at: u32,
         norm_at: u32,
         starts_at: u32,
+        /// The starts' flags, `rows` per slot (`Start.continues_segment`, held by the ring): 1 or 0.
+        continues_at: u32,
         rows: u32,
         /// How many updates of one frame can have their starts staged at once.
         slots: u32,
@@ -3595,7 +4079,7 @@ pub fn Resident(comptime M: type) type {
             slots: u32,
         ) !Self {
             const m: *const rbt.Model = fleet.m;
-            const features: u32 = @intCast(track.localSize(m.nbody));
+            const features: u32 = @intCast(track.localSize(m.body_count));
             const references: u32 = @intCast(track.targetSize(m));
             const actions: u32 = @intCast(track.actionSize(m));
             const envs: u32 = @intCast(fleet.options.envs);
@@ -3615,14 +4099,16 @@ pub fn Resident(comptime M: type) type {
             const ring_at: u32 = start + table_rows * row;
             const norm_at: u32 = ring_at + capacity * envs * record;
             const starts_at: u32 = norm_at + 2 * features;
-            const end: u32 = starts_at + slots * 2 * rows;
+            // Each start's flag beside the starts: whether its window continues its segment.
+            const continues_at: u32 = starts_at + slots * 2 * rows;
+            const end: u32 = continues_at + slots * rows;
             // The tables and the ring after the kit's own activations.
             if (end > floatsIn(M, "acts")) {
                 return error.KitActivationsTooSmall;
             }
             var data: rbt.Data = try .init(gpa, m);
             errdefer data.deinit();
-            var state: track.State = try .init(gpa, m.nbody);
+            var state: track.State = try .init(gpa, m.body_count);
             errdefer state.deinit(gpa);
             return .{
                 .gpa = gpa,
@@ -3639,12 +4125,13 @@ pub fn Resident(comptime M: type) type {
                 .ring_at = ring_at,
                 .norm_at = norm_at,
                 .starts_at = starts_at,
+                .continues_at = continues_at,
                 .rows = rows,
                 .slots = slots,
                 .end = end,
                 .state = state,
                 .data = data,
-                .staging = try gpa.alloc(f32, @max(table_rows * row, @max(envs * record, 2 * rows))),
+                .staging = try gpa.alloc(f32, @max(table_rows * row, @max(envs * record, 3 * rows))),
             };
         }
 
@@ -3673,7 +4160,7 @@ pub fn Resident(comptime M: type) type {
             const m: *const rbt.Model = fleet.m;
             var at: usize = 0;
             for (fleet.clips) |clip| {
-                const root_len: usize = clip.nq - m.nq;
+                const root_len: usize = clip.nq - m.coordinate_count;
                 for (0..clip.frame_count) |frame| {
                     const out: []f32 = self.staging[at..][0..self.row];
                     fleet.referenceStateInto(clip, @intCast(frame), &self.data, &self.state);
@@ -3729,10 +4216,16 @@ pub fn Resident(comptime M: type) type {
                 });
                 self.staging[2 * i] = float(start.env);
                 self.staging[2 * i + 1] = float(@as(u32, @intCast(start.index % self.capacity)));
+                // The record before the window is read only if it is the same segment's and the ring still holds it.
+                const previous_held: bool = start.index > oldest;
+                const continues: bool = start.continues_segment and previous_held;
+                self.staging[2 * starts.len + i] = if (continues) 1.0 else 0.0;
             }
             // Staging is shared with the appends and the tables. Safe: an upload copies its data when
             // it is made (WebGPU's writeBuffer), so the buffer is free again the moment it returns.
             self.pipe.uploadAt(.acts, self.startsAt(slot), self.staging[0 .. 2 * starts.len]);
+            const flags: []const f32 = self.staging[2 * starts.len ..][0..starts.len];
+            self.pipe.uploadAt(.acts, self.continuesAt(slot), flags);
         }
 
         /// The steps the replay holds, the oldest and the newest, both inclusive - what `held` answers.
@@ -3753,6 +4246,11 @@ pub fn Resident(comptime M: type) type {
         /// Where a slot's window starts live.
         fn startsAt(self: Self, slot: u32) u32 {
             return self.starts_at + slot * 2 * self.rows;
+        }
+
+        /// Where slot `slot`'s flags sit: `rows` of them, one per start.
+        fn continuesAt(self: Self, slot: u32) u32 {
+            return self.continues_at + slot * self.rows;
         }
 
         /// A batch of windows into `kit`'s blocks - its first wide row and its targets filled, its rows'
@@ -3799,6 +4297,19 @@ pub fn Resident(comptime M: type) type {
                 .goals_off = kit.g_at,
             };
             self.pipe.run("lat_gather", kit.rows * (kit.steps + 1) * kit.width);
+            // And each window's starting action - the one given before it, or rest when it opens its segment.
+            self.pipe.params = .{
+                .rows = kit.rows,
+                .lat_features = self.features,
+                .lat_actions = self.actions,
+                .lat_envs = self.envs,
+                .lat_capacity = self.capacity,
+                .ring_off = self.ring_at,
+                .starts_off = self.startsAt(slot),
+                .x_off = self.continuesAt(slot),
+                .y_off = kit.start_actions_at,
+            };
+            self.pipe.run("lat_gather_start_actions", kit.rows * self.actions);
         }
 
         /// The step the fleet just took, into the ring - one upload for every character. Call it

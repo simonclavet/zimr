@@ -999,7 +999,7 @@ pub const GamepadAxisValue = struct {
 ///     .{ .wheel = .{ .dy = 1 } }                the wheel turns a notch away from the person (`Notches`)
 ///     .{ .key_down = .left_shift }              a key goes down, by its name in `KeyboardKey`
 ///     .{ .key_up = .left_shift }                ... and comes up
-///     .{ .text = "Simon" }                      text typed - a ZON string, so "\n" and "\u{e9}" are written so
+///     .{ .text = "Ada" }                      text typed - a ZON string, so "\n" and "\u{e9}" are written so
 ///     .{ .paste = "12ab34" }                    text pasted by the system's paste command
 ///     .capture                                  saves the frame last drawn, as frame_<n>.png in the capture directory
 ///     .{ .capture_to = "shots/name.png" }       saves the frame last drawn at a path of its own

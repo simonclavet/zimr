@@ -220,8 +220,7 @@ pub inline fn workgroupId() u32 {
 }
 
 /// The pointer type `shared` returns: a workgroup-storage pointer on GPU, a
-/// plain pointer on CPU (where the array is never read - the CPU path goes
-/// through global memory).
+/// plain pointer to an ordinary static array on CPU.
 fn SharedPtr(comptime T: type, comptime n: usize) type {
     return if (is_gpu) *addrspace(.shared) [n]T else *[n]T;
 }
@@ -231,7 +230,9 @@ fn SharedPtr(comptime T: type, comptime n: usize) type {
 /// a function makes Zig materialise the name as a runtime array that spv2wgsl
 /// can't lower. Returns a pointer to the `var<workgroup>` the backend emits.
 ///     const tile = k.shared(f32, 256, "rot_tile");   // at module scope
-/// Read it only inside an `if (k.is_gpu)` branch.
+/// On the CPU twin the array is an ordinary static one: a kernel's CPU path usually
+/// works in global memory instead, but code that runs a whole workgroup's lanes
+/// itself, one after another, may read and write it as the GPU's lanes would.
 pub inline fn shared(
     comptime T: type,
     comptime n: usize,
@@ -240,9 +241,12 @@ pub inline fn shared(
     if (is_gpu) {
         return @extern(*addrspace(.shared) [n]T, .{ .name = name });
     }
-    // CPU twin: a static backing array so the module-level const typechecks.
-    // Never read on the CPU side (the global-memory path is used there).
+    // CPU twin: a static backing array, one per NAME. Zig deduplicates a struct declared in a function by the
+    // comptime values its body captures, so a body capturing only `T` and `n` would give every array of the same type
+    // and length ONE buffer - harmless while the CPU never read them, wrong for code that runs a workgroup's lanes
+    // itself. The name, captured too, makes each array its own.
     const Holder = struct {
+        const array_name: []const u8 = name;
         var buf: [n]T = undefined;
     };
     return &Holder.buf;
@@ -343,6 +347,52 @@ pub inline fn workgroupBarrier() void {
     if (is_gpu) {
         gpuWorkgroupBarrier();
     }
+}
+
+/// The name prefix of a UNIFORM workgroup array (`sharedUniform`). spv2wgsl writes every load of a workgroup variable
+/// so named as WGSL's `workgroupUniformLoad`, and keeps the name over any other the variable picks up; its own copy of
+/// the prefix (`uniform_workgroup_prefix`) must stay equal to this one.
+pub const uniform_shared_prefix = "zimr_uniform_";
+
+/// Declare a UNIFORM workgroup-shared array `[n]T` named `name` - at module level, as `shared` - one whose values every
+/// invocation of the workgroup reads together, at the same point, to decide something they must all decide alike:
+/// whether a loop with barriers inside goes round again, which of two paths with barriers on them to take. It is a
+/// BROADCAST: whoever decides writes it, with plain stores; everyone reads it together, through `workgroupUniformLoad`
+/// and nothing else. spv2wgsl writes every read of it as the uniform load, which every invocation must reach - so an
+/// invocation that needs the value for arithmetic of its own (to lower a count, say) keeps a copy of its own, and
+/// writes the shared value without reading it back.
+///
+/// Why it is a kind of its own: WGSL's validators check uniformity from the source alone, and take any read of
+/// workgroup memory to be possibly different in different invocations. A barrier behind a decision made on a plain read
+/// is refused - by Chrome for the whole shader - although every invocation would decide alike. `workgroupUniformLoad`
+/// is the read they accept as the same everywhere, and the name tells spv2wgsl which reads are to be written so.
+pub inline fn sharedUniform(
+    comptime T: type,
+    comptime n: usize,
+    comptime name: []const u8,
+) SharedPtr(T, n) {
+    return shared(T, n, uniform_shared_prefix ++ name);
+}
+
+/// READ A UNIFORM WORKGROUP VALUE (`sharedUniform`): every invocation of the workgroup reads `array[index]` together
+/// and gets the same value, so a decision made on it is the same in all of them - WGSL's `workgroupUniformLoad`. On
+/// the GPU: a barrier (every earlier write to workgroup memory visible), the read, and a barrier (no invocation writes
+/// the value again before all have read it) - the builtin's own meaning, written out for SPIR-V, whose read spv2wgsl
+/// turns into the builtin itself. Like a barrier it must be reached by every invocation of the workgroup: call it only
+/// where they all are. On the CPU, the plain read.
+pub inline fn workgroupUniformLoad(
+    comptime T: type,
+    comptime n: usize,
+    array: SharedPtr(T, n),
+    index: u32,
+) T {
+    if (is_gpu) {
+        gpuWorkgroupBarrier();
+        const value: T = array[index];
+        gpuWorkgroupBarrier();
+        return value;
+    }
+    return array[index];
 }
 
 /// The element view a kernel sees for a `Buffers` field. Zig 1245 bans

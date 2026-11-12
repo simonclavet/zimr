@@ -4174,6 +4174,52 @@
         "use_new_terminal": false
     },
     {
+        "label": "zig: build robotgpu-lab",
+        "command": "zig",
+        "args": [
+            "build",
+            "robotgpu-lab",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release robotgpu-lab",
+        "command": "zig",
+        "args": [
+            "build",
+            "robotgpu-lab",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build robotgpu-sidebyside",
+        "command": "zig",
+        "args": [
+            "build",
+            "robotgpu-sidebyside",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release robotgpu-sidebyside",
+        "command": "zig",
+        "args": [
+            "build",
+            "robotgpu-sidebyside",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
         "label": "zig: build rock-demo",
         "command": "zig",
         "args": [
@@ -9506,6 +9552,28 @@
         "args": [
             "build",
             "robot-sidebyside",
+            "-Dplatform=windows"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build robotgpu-lab (windows)",
+        "command": "zig",
+        "args": [
+            "build",
+            "robotgpu-lab",
+            "-Dplatform=windows"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build robotgpu-sidebyside (windows)",
+        "command": "zig",
+        "args": [
+            "build",
+            "robotgpu-sidebyside",
             "-Dplatform=windows"
         ],
         "reveal": "no_focus",

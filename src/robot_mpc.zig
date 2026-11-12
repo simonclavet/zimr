@@ -17,7 +17,7 @@
 //!
 //! `K*dx` needs `dx` - how far the new rollout has drifted from the one we linearised
 //! about. For a legged or floating robot that difference is NOT a subtraction: `qpos` holds
-//! quaternions and the space it moves in is `nv`-dimensional, not `nq`. `stateDiff`
+//! quaternions and the space it moves in is `dof_count`-dimensional, not `coordinate_count`. `stateDiff`
 //! is the quaternion logarithm and is public for exactly this caller.
 //!
 //! Getting it wrong gives a planner that works on every arm and quietly steers legged
@@ -176,7 +176,7 @@ pub const Transition = struct {
     /// plainly it needed no thought: two types cannot both be `Scratch` here.
     const DerivativeScratch = struct {
         saved: rbt.State,
-        /// * RAW STATE, so `nq + nv + na` - NOT `ndx`. The configuration block keeps its `nq`
+        /// * RAW STATE, so `nq + nv + na` - NOT `ndx`. The configuration block keeps its `coordinate_count`
         /// entries because `stateDiff` needs the actual quaternions to take a logarithm of;
         /// a tangent vector cannot be differenced against another tangent vector unless both
         /// were taken about the same base point, and these were not. Sizing these `ndx`
@@ -200,14 +200,14 @@ pub const Transition = struct {
         m: *const rbt.Model,
         options: DerivativeOptions,
     ) !Transition {
-        const ndx: u32 = 2 * m.nv + m.na;
-        const nstate: u32 = m.nq + m.nv + m.na;
-        const ns: u32 = if (options.sensors) m.nsensordata else 0;
+        const ndx: u32 = 2 * m.dof_count + m.activation_count;
+        const nstate: u32 = m.coordinate_count + m.dof_count + m.activation_count;
+        const ns: u32 = if (options.sensors) m.sensor_value_count else 0;
         return .{
             .a = try gpa.alloc(f32, ndx * ndx),
-            .b = try gpa.alloc(f32, ndx * m.nu),
+            .b = try gpa.alloc(f32, ndx * m.actuator_count),
             .c = try gpa.alloc(f32, ns * ndx),
-            .d = try gpa.alloc(f32, ns * m.nu),
+            .d = try gpa.alloc(f32, ns * m.actuator_count),
             .ndx = ndx,
             .gpa = gpa,
             .scratch = .{
@@ -216,10 +216,10 @@ pub const Transition = struct {
                 .next_plus = try gpa.alloc(f32, nstate),
                 .next_minus = try gpa.alloc(f32, nstate),
                 .column = try gpa.alloc(f32, ndx),
-                .sensor = try gpa.alloc(f32, m.nsensordata),
-                .sensor_plus = try gpa.alloc(f32, m.nsensordata),
-                .sensor_minus = try gpa.alloc(f32, m.nsensordata),
-                .nudge = try gpa.alloc(f32, m.nv),
+                .sensor = try gpa.alloc(f32, m.sensor_value_count),
+                .sensor_plus = try gpa.alloc(f32, m.sensor_value_count),
+                .sensor_minus = try gpa.alloc(f32, m.sensor_value_count),
+                .nudge = try gpa.alloc(f32, m.dof_count),
             },
         };
     }
@@ -245,7 +245,7 @@ pub const Transition = struct {
 ///
 /// * `qpos` IS COPIED RAW HERE, not converted - this is the *reference* half of a pair that
 /// `stateDiff` later differences properly. Nothing consumes this layout except `stateDiff`,
-/// which knows the first `nq` entries are configuration and treats them with
+/// which knows the first `coordinate_count` entries are configuration and treats them with
 /// `differentiatePos`. Keeping the raw values is what makes that possible: a tangent vector
 /// alone cannot be differenced against another tangent vector unless both were taken about
 /// the same base point, and they were not.
@@ -254,9 +254,9 @@ pub const Transition = struct {
 /// * RAW, NOT TANGENT. This is the representation `stateDiff` consumes - the configuration
 /// block keeps its quaternions, because a logarithm needs them.
 pub fn readState(m: *const rbt.Model, d: *const rbt.Data, out: []f32) void {
-    @memcpy(out[0..m.nq], d.pos);
-    @memcpy(out[m.nq..][0..m.nv], d.vel);
-    @memcpy(out[m.nq + m.nv ..][0..m.na], d.act);
+    @memcpy(out[0..m.coordinate_count], d.joint_positions);
+    @memcpy(out[m.coordinate_count..][0..m.dof_count], d.joint_velocities);
+    @memcpy(out[m.coordinate_count + m.dof_count ..][0..m.activation_count], d.activations);
 }
 
 /// `out = (to - from) / h`, in the TANGENT space - the configuration block through the
@@ -274,13 +274,14 @@ pub fn stateDiff(
     to: []const f32,
     h: f32,
 ) void {
-    rbt.differentiatePos(m, out[0..m.nv], from[0..m.nq], to[0..m.nq], h);
+    rbt.differentiatePos(m, out[0..m.dof_count], from[0..m.coordinate_count], to[0..m.coordinate_count], h);
     const inv_h: f32 = 1.0 / h;
-    for (0..m.nv) |i| {
-        out[m.nv + i] = (to[m.nq + i] - from[m.nq + i]) * inv_h;
+    for (0..m.dof_count) |i| {
+        out[m.dof_count + i] = (to[m.coordinate_count + i] - from[m.coordinate_count + i]) * inv_h;
     }
-    for (0..m.na) |i| {
-        out[2 * m.nv + i] = (to[m.nq + m.nv + i] - from[m.nq + m.nv + i]) * inv_h;
+    for (0..m.activation_count) |i| {
+        const velocity_index: usize = m.coordinate_count + m.dof_count + i;
+        out[2 * m.dof_count + i] = (to[velocity_index] - from[velocity_index]) * inv_h;
     }
 }
 
@@ -305,7 +306,7 @@ fn writeColumn(
 
 /// Move `d` `amount` along tangent direction `column` of the state.
 ///
-/// ** THE POSITION BRANCH IS WHY THIS IS A FUNCTION. `d.pos[column] += amount` is wrong for
+/// ** THE POSITION BRANCH IS WHY THIS IS A FUNCTION. `d.joint_positions[column] += amount` is wrong for
 /// any model with a free or ball joint: the quaternion components are not independent
 /// coordinates, and nudging one denormalises it. `integratePos` with a one-hot velocity
 /// walks along the manifold instead, which is the same operation the integrator itself uses
@@ -317,14 +318,14 @@ fn nudgeState(
     column: usize,
     amount: f32,
 ) void {
-    if (column < m.nv) {
+    if (column < m.dof_count) {
         @memset(s.nudge, 0);
         s.nudge[column] = 1;
-        rbt.integratePos(m, d.pos, s.nudge, amount);
-    } else if (column < 2 * m.nv) {
-        d.vel[column - m.nv] += amount;
+        rbt.integratePos(m, d.joint_positions, s.nudge, amount);
+    } else if (column < 2 * m.dof_count) {
+        d.joint_velocities[column - m.dof_count] += amount;
     } else {
-        d.act[column - 2 * m.nv] += amount;
+        d.activations[column - 2 * m.dof_count] += amount;
     }
     d.stage = .stale;
 }
@@ -371,7 +372,7 @@ pub fn transition(
     const eps: f32 = options.eps orelse defaultEps(options.scheme);
     const centered: bool = options.scheme == .centered;
     const h: f32 = if (centered) 2 * eps else eps;
-    const want_sensors: bool = options.sensors and m.nsensordata > 0;
+    const want_sensors: bool = options.sensors and m.sensor_value_count > 0;
     const s: *Transition.DerivativeScratch = &out.scratch;
 
     // * WARM STARTING OFF FOR THE DURATION. See the file header: it makes each perturbed
@@ -392,26 +393,26 @@ pub fn transition(
     s.saved.restore(d);
 
     // -- controls -> B, D --
-    for (0..m.nu) |i| {
-        const base: f32 = d.ctrl[i];
-        d.ctrl[i] = base + eps;
+    for (0..m.actuator_count) |i| {
+        const base: f32 = d.controls[i];
+        d.controls[i] = base + eps;
         rbt.step(m, d);
         readState(m, d, s.next_plus);
         if (want_sensors) {
             @memcpy(s.sensor_plus, d.sensor_data);
         }
         s.saved.restore(d);
-        d.ctrl[i] = base;
+        d.controls[i] = base;
 
         if (centered) {
-            d.ctrl[i] = base - eps;
+            d.controls[i] = base - eps;
             rbt.step(m, d);
             readState(m, d, s.next_minus);
             if (want_sensors) {
                 @memcpy(s.sensor_minus, d.sensor_data);
             }
             s.saved.restore(d);
-            d.ctrl[i] = base;
+            d.controls[i] = base;
         }
 
         const from: []const f32 = if (centered) s.next_minus else s.next;
@@ -420,15 +421,15 @@ pub fn transition(
             // * THE POSITION ROWS ARE h TIMES THE VELOCITY ROWS, and the velocity rows are
             // the ones f32 can actually see. Overwrite rather than difference - see the
             // option's doc for the measurements, and for why this is B only.
-            for (0..m.nv) |r| {
-                s.column[r] = m.opt.timestep * s.column[m.nv + r];
+            for (0..m.dof_count) |r| {
+                s.column[r] = m.opt.timestep * s.column[m.dof_count + r];
             }
         }
-        writeColumn(out.b, m.nu, i, s.column);
+        writeColumn(out.b, m.actuator_count, i, s.column);
         if (want_sensors) {
             const sfrom: []const f32 = if (centered) s.sensor_minus else s.sensor;
             plainDiff(s.sensor_plus, sfrom, s.sensor_plus, h);
-            writeColumn(out.d, m.nu, i, s.sensor_plus);
+            writeColumn(out.d, m.actuator_count, i, s.sensor_plus);
         }
     }
 
@@ -549,8 +550,8 @@ test "*** derivative: A is the double integrator, to the digit" {
     defer data.deinit();
 
     // A state that is going somewhere, so a derivative that quietly ignores `v` still fails.
-    data.pos[0] = 0.3;
-    data.vel[0] = -1.7;
+    data.joint_positions[0] = 0.3;
+    data.joint_velocities[0] = -1.7;
 
     var jac: Transition = try .init(gpa, &model, .{ .scheme = .centered });
     defer jac.deinit();
@@ -566,8 +567,8 @@ test "*** derivative: A is the double integrator, to the digit" {
     // * AND THE STATE IS PUT BACK. A planner linearises and then keeps simulating from the
     // same point; a routine that leaves the last nudge behind corrupts the trajectory it was
     // asked to advise on, and would do it invisibly.
-    try expectApproxEqAbs(data.pos[0], 0.3, 1e-6);
-    try expectApproxEqAbs(data.vel[0], -1.7, 1e-6);
+    try expectApproxEqAbs(data.joint_positions[0], 0.3, 1e-6);
+    try expectApproxEqAbs(data.joint_velocities[0], -1.7, 1e-6);
 }
 
 test "** derivative: a spring shows up in A exactly where the algebra says" {
@@ -599,8 +600,8 @@ test "** derivative: a spring shows up in A exactly where the algebra says" {
     defer model.deinit();
     var data: rbt.Data = try .init(gpa, &model);
     defer data.deinit();
-    data.pos[0] = 0.25;
-    data.vel[0] = 0.4;
+    data.joint_positions[0] = 0.25;
+    data.joint_velocities[0] = 0.4;
 
     // The mass this DOF actually carries: the body's, plus the reflected rotor inertia.
     // `massDiagonal` reads the mass matrix, so the position stage has to have run.
@@ -640,7 +641,7 @@ test "** derivative: B is the control's path into the state, and it is h^2/M at 
     const h: f32 = model.opt.timestep;
     rbt.forward(&model, &data);
     const effective_mass: f32 = rbt.massDiagonal(&model, &data, 0);
-    try expect(model.nu == 1);
+    try expect(model.actuator_count == 1);
     try expectApproxEqAbs(jac.b[0], h * h / effective_mass, 1e-6); // dq'/du
     try expectApproxEqAbs(jac.b[1], h / effective_mass, 1e-4); // dv'/du
 }
@@ -666,8 +667,8 @@ test "*** derivative: on a LINEAR system there is no truncation error at all" {
     defer model.deinit();
     var data: rbt.Data = try .init(gpa, &model);
     defer data.deinit();
-    data.pos[0] = 0.25;
-    data.vel[0] = 0.4;
+    data.joint_positions[0] = 0.25;
+    data.joint_velocities[0] = 0.4;
     rbt.forward(&model, &data);
 
     const h: f32 = model.opt.timestep;
@@ -747,8 +748,8 @@ test "*** derivative: the eps sweep is U-shaped, and its floor is where f32 says
 
     // Well away from 0 and from pi/2, so neither sin nor cos is near a stationary point.
     const angle: f32 = 0.7;
-    data.pos[0] = angle;
-    data.vel[0] = 0.3;
+    data.joint_positions[0] = angle;
+    data.joint_velocities[0] = 0.3;
     rbt.forward(&model, &data);
 
     const h: f32 = model.opt.timestep;
@@ -815,21 +816,21 @@ test "*** derivative: a free joint - where nq != nv and the naive nudge is wrong
     defer model.deinit();
     var data: rbt.Data = try .init(gpa, &model);
     defer data.deinit();
-    try expect(model.nq == 7);
-    try expect(model.nv == 6);
+    try expect(model.coordinate_count == 7);
+    try expect(model.dof_count == 6);
 
     // Tumbling, off-axis, and away from the identity quaternion - a state where getting the
     // manifold wrong cannot hide.
-    data.pos[0] = 0.2;
-    data.pos[1] = 1.5;
+    data.joint_positions[0] = 0.2;
+    data.joint_positions[1] = 1.5;
     const s: f32 = @sin(0.4);
-    data.pos[3] = @cos(0.4);
-    data.pos[4] = s * 0.6;
-    data.pos[5] = s * 0.8;
-    data.pos[6] = 0;
-    data.vel[0] = 0.7;
-    data.vel[4] = 1.1;
-    data.vel[5] = -0.9;
+    data.joint_positions[3] = @cos(0.4);
+    data.joint_positions[4] = s * 0.6;
+    data.joint_positions[5] = s * 0.8;
+    data.joint_positions[6] = 0;
+    data.joint_velocities[0] = 0.7;
+    data.joint_velocities[4] = 1.1;
+    data.joint_velocities[5] = -0.9;
 
     var jac: Transition = try .init(gpa, &model, .{ .scheme = .centered });
     defer jac.deinit();
@@ -841,22 +842,27 @@ test "*** derivative: a free joint - where nq != nv and the naive nudge is wrong
     const h: f32 = model.opt.timestep;
     // Translational position rows: dq'/dv = h*I, and nothing from the rotational velocities.
     for (0..3) |row| {
-        for (0..model.nv) |col| {
+        for (0..model.dof_count) |col| {
             const want: f32 = if (col == row) h else 0;
-            try expectApproxEqAbs(jac.a[row * ndx + (model.nv + col)], want, 2e-4);
+            try expectApproxEqAbs(jac.a[row * ndx + (model.dof_count + col)], want, 2e-4);
         }
     }
     // Linear velocity is untouched by anything: gravity is constant, so dv'/dx has a clean
     // identity in the linear block and zeros against position.
     for (0..3) |row| {
-        for (0..model.nv) |col| {
+        for (0..model.dof_count) |col| {
             const want: f32 = if (col == row) 1.0 else 0;
-            try expectApproxEqAbs(jac.a[(model.nv + row) * ndx + (model.nv + col)], want, 2e-3);
+            try expectApproxEqAbs(jac.a[(model.dof_count + row) * ndx + (model.dof_count + col)], want, 2e-3);
         }
     }
     // * AND THE QUATERNION SURVIVED. Every nudge and every restore has to leave it unit; a
     // naive nudge drifts it, and a drifted quaternion silently rescales the body's inertia.
-    const q: [4]f32 = .{ data.pos[3], data.pos[4], data.pos[5], data.pos[6] };
+    const q: [4]f32 = .{
+        data.joint_positions[3],
+        data.joint_positions[4],
+        data.joint_positions[5],
+        data.joint_positions[6],
+    };
     const norm: f32 = @sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
     try expectApproxEqAbs(norm, 1.0, 1e-6);
 }
@@ -873,7 +879,7 @@ test "*** derivative: a free joint - where nq != nv and the naive nudge is wrong
 pub const Weights = struct {
     /// `ndx` weights on state error at every knot except the last.
     state: []const f32,
-    /// `nu` weights on control effort.
+    /// `actuator_count` weights on control effort.
     control: []const f32,
     /// `ndx` weights on state error at the final knot. Usually much larger than `state`.
     terminal: []const f32,
@@ -885,7 +891,7 @@ pub const Limits = struct {
     ///
     /// -- *** A SINGLE BOX FOR THE WHOLE HORIZON IS WRONG FOR ANYTHING THAT SWITCHES --
     ///
-    /// It used to be `nu` long and shared across the horizon, which is exact for an actuator
+    /// It used to be `actuator_count` long and shared across the horizon, which is exact for an actuator
     /// whose limits never change and silently catastrophic for a quadruped. There, a foot in
     /// SWING is pinned to zero force - and with one box, that pin applied to every future knot
     /// too, including the ones where the foot should be carrying the robot. At duty 0.5 that
@@ -1003,7 +1009,7 @@ fn cholesky(
     return true;
 }
 
-/// The largest `nu` the box solver will take on the stack. An assert, not a truncation.
+/// The largest `actuator_count` the box solver will take on the stack. An assert, not a truncation.
 const max_stack_nu: usize = 64;
 
 /// * A STACK BUFFER, WITH A LOUD CEILING. Threading another scratch slice through the
@@ -3943,7 +3949,7 @@ pub const LegWiring = struct {
 ///
 /// `forces` is `3 x leg_count`, the force the GROUND exerts on each foot - the same convention
 /// `zig` plans in, so a force straight out of the optimiser can be handed here unchanged.
-/// `out` is `nv` long and is ACCUMULATED into, so a caller can add swing torques afterwards.
+/// `out` is `dof_count` long and is ACCUMULATED into, so a caller can add swing torques afterwards.
 ///
 /// -- *** THE SIGN, AND HOW IT WAS SETTLED --
 ///
@@ -3965,8 +3971,8 @@ pub fn stanceTorques(
     jac_scratch: []Vec,
     out: []f32,
 ) void {
-    assertf(out.len == m.nv, @src(), "quadruped: torques want nv {d}, got {d}", .{ m.nv, out.len });
-    assertf(jac_scratch.len == m.nv, @src(), "quadruped: jacobian scratch wants nv", .{});
+    assertf(out.len == m.dof_count, @src(), "quadruped: torques want nv {d}, got {d}", .{ m.dof_count, out.len });
+    assertf(jac_scratch.len == m.dof_count, @src(), "quadruped: jacobian scratch wants nv", .{});
     assertf(
         forces.len == 3 * leg_count,
         @src(),
@@ -3993,7 +3999,7 @@ pub fn stanceTorques(
 /// torque that is subtly, consistently wrong in the direction the robot is travelling.
 pub fn footPosition(m: *const rbt.Model, d: *const rbt.Data, geom: u32) Vec {
     const body: u32 = m.geom_body[geom];
-    return d.body_xpos[body] + rotate(d.body_xrot[body], m.geom_pos[geom]);
+    return d.body_positions[body] + rotate(d.body_orientations[body], m.geom_local_position[geom]);
 }
 
 // ------------------------------------
@@ -4011,7 +4017,7 @@ test "*** quadruped: the mapped foot forces satisfy the floating base's own equi
     //
     //   A. plan a ground reaction force per foot (`hoverForces` - a quarter of the weight
     //      each) and map it through the foot Jacobians, `tau = -J^T*f`;
-    //   B. ask what the robot's own dynamics need to cancel gravity - `data.bias_force`, which
+    //   B. ask what the robot's own dynamics need to cancel gravity - `data.bias_joint_forces`, which
     //      is recursive Newton-Euler and shares no line of code with (A).
     //
     // If the sign of the map were backwards - the easy mistake, and one that reads as a gain
@@ -4042,7 +4048,7 @@ test "*** quadruped: the mapped foot forces satisfy the floating base's own equi
     var wiring: LegWiring = undefined;
     var foot_point: [leg_count]Vec = undefined;
     var found: usize = 0;
-    for (0..m.ngeom) |g| {
+    for (0..m.geom_count) |g| {
         if (m.geom_shape[g] != .sphere) {
             continue;
         }
@@ -4057,10 +4063,10 @@ test "*** quadruped: the mapped foot forces satisfy the floating base's own equi
         var depth: usize = 3;
         var walk: u32 = body;
         while (walk != rbt.world_body and depth > 0) {
-            const jnt: u32 = m.body_jnt_adr[walk];
-            if (m.body_jnt_num[walk] > 0 and m.jnt_type[jnt] == .hinge) {
+            const jnt: u32 = m.body_first_joint[walk];
+            if (m.body_joint_count[walk] > 0 and m.joint_type[jnt] == .hinge) {
                 depth -= 1;
-                chain[depth] = m.jnt_dof_adr[jnt];
+                chain[depth] = m.joint_first_dof[jnt];
             }
             walk = m.body_parent[walk];
         }
@@ -4071,7 +4077,7 @@ test "*** quadruped: the mapped foot forces satisfy the floating base's own equi
 
     // -- *** THE CHECK IS THE FLOATING BASE, AND THE FIRST VERSION ASKED THE WRONG QUESTION --
     //
-    // It compared `-J^T*f` against `bias_force` at the LEG joints and required positive
+    // It compared `-J^T*f` against `bias_joint_forces` at the LEG joints and required positive
     // correlation. Measured -0.62, and the code was right: those are not the same quantity.
     // `|J^Tf| = 10.9` against `|c_leg| = 1.6` - the ground force carries a quarter of the ROBOT,
     // the leg bias carries a thigh and a calf. From `M*v_dot + c = tau + J^Tf`, static equilibrium at
@@ -4084,7 +4090,7 @@ test "*** quadruped: the mapped foot forces satisfy the floating base's own equi
     // That is an identity, it needs no controller to compare against, and it fails loudly if
     // either the Jacobian or the sign is wrong.
     var total_mass: f32 = 0;
-    for (0..m.nbody) |b| {
+    for (0..m.body_count) |b| {
         total_mass += m.body_mass[b];
     }
     try expect(total_mass > 5.0);
@@ -4098,9 +4104,9 @@ test "*** quadruped: the mapped foot forces satisfy the floating base's own equi
     var forces: [trunk_control_dim]f32 = undefined;
     hoverForces(body_model, stance, &forces);
 
-    const jac: []Vec = try gpa.alloc(Vec, m.nv);
+    const jac: []Vec = try gpa.alloc(Vec, m.dof_count);
     defer gpa.free(jac);
-    const mapped: []f32 = try gpa.alloc(f32, m.nv);
+    const mapped: []f32 = try gpa.alloc(f32, m.dof_count);
     defer gpa.free(mapped);
     const all_down: [leg_count]bool = @splat(true);
 
@@ -4113,11 +4119,11 @@ test "*** quadruped: the mapped foot forces satisfy the floating base's own equi
     for (0..leg_count) |leg| {
         const f: Vec = vec(forces[3 * leg + 0], forces[3 * leg + 1], forces[3 * leg + 2]);
         rbt.jacPoint(m, &d, wiring.body[leg], foot_point[leg], jac, null);
-        for (0..m.nv) |i| {
+        for (0..m.dof_count) |i| {
             mapped[i] += -dot3(jac[i], f);
         }
     }
-    const bias: []const f32 = d.bias_force;
+    const bias: []const f32 = d.bias_joint_forces;
 
     // 1. * VERTICAL: the ground pushes up with exactly the robot's weight. `mapped` is -J^Tf,
     //    so `-mapped[2]` is the upward generalized force on the base.
@@ -4139,7 +4145,7 @@ test "*** quadruped: the mapped foot forces satisfy the floating base's own equi
     for (0..leg_count) |leg| {
         const f: Vec = vec(pushed_down[3 * leg + 0], pushed_down[3 * leg + 1], pushed_down[3 * leg + 2]);
         rbt.jacPoint(m, &d, wiring.body[leg], foot_point[leg], jac, null);
-        for (0..m.nv) |i| {
+        for (0..m.dof_count) |i| {
             mapped[i] += -dot3(jac[i], f);
         }
     }
@@ -4203,7 +4209,7 @@ pub const Task = struct {
 pub const Cost = struct {
     /// `ndx` weights on state error at every knot except the last.
     state: []const f32,
-    /// `nu` weights on control effort.
+    /// `actuator_count` weights on control effort.
     control: []const f32,
     /// `ndx` weights on state error at the final knot. Usually much larger than `state`.
     terminal: []const f32,
@@ -4287,7 +4293,7 @@ pub const Result = struct {
 /// is the standard choice, is positive semi-definite by construction - which the recursion needs
 /// - and converges quadratically near the solution, where it matters.
 ///
-/// `jac` is the point Jacobian at this knot, `nv` entries. `gradient` and `hessian` are this
+/// `jac` is the point Jacobian at this knot, `dof_count` entries. `gradient` and `hessian` are this
 /// knot's slices of the extra channel: `ndx` and `ndx x ndx`. Only the POSITION block is touched,
 /// so a velocity task can accumulate into the same arrays through the velocity block.
 pub fn addTaskResidual(
@@ -4335,7 +4341,7 @@ fn accumulateTask(
     terminal: bool,
 ) void {
     // *** THE KINEMATICS MUST BE CURRENT. `jacPoint` asserts it needs the position stage, and
-    // `optimize`'s loop leaves `d` at `.stale` after stepping - so reading `body_xpos` here
+    // `optimize`'s loop leaves `d` at `.stale` after stepping - so reading `body_positions` here
     // without a `forward` first is both a wrong Jacobian and a wrong point to hang it on.
     //
     // Caught by the end-to-end test rather than by the two unit oracles: they check the channel
@@ -4343,7 +4349,7 @@ fn accumulateTask(
     // A task cost assembled at a stale state would still have been perfectly correct algebra
     // about the wrong configuration.
     rbt.forward(m, d);
-    const at: Vec = d.body_xpos[task.body] + zm.rotate(d.body_xrot[task.body], task.offset);
+    const at: Vec = d.body_positions[task.body] + zm.rotate(d.body_orientations[task.body], task.offset);
     rbt.jacPoint(m, d, task.body, at, s.task_jacobian, null);
 
     const gradient: []f32 = if (terminal)
@@ -4363,7 +4369,7 @@ fn accumulateTask(
     );
     const w_pos: f32 = if (last) task.w_position_terminal else task.w_position;
     if (w_pos > 0) {
-        addTaskResidual(m.nv, s.task_jacobian, at - want, w_pos, false, gradient, hessian);
+        addTaskResidual(m.dof_count, s.task_jacobian, at - want, w_pos, false, gradient, hessian);
     }
 
     if (task.velocity) |velocity| {
@@ -4371,15 +4377,15 @@ fn accumulateTask(
         if (w_vel > 0) {
             // The point's world velocity is `J*q_dot`, which is what the residual is against.
             var moving: Vec = vec(0, 0, 0);
-            for (0..m.nv) |v| {
-                moving += s.task_jacobian[v] * splat(d.vel[v]);
+            for (0..m.dof_count) |v| {
+                moving += s.task_jacobian[v] * splat(d.joint_velocities[v]);
             }
             const want_vel: Vec = vec(
                 velocity[knot * 3 + 0],
                 velocity[knot * 3 + 1],
                 velocity[knot * 3 + 2],
             );
-            addTaskResidual(m.nv, s.task_jacobian, moving - want_vel, w_vel, true, gradient, hessian);
+            addTaskResidual(m.dof_count, s.task_jacobian, moving - want_vel, w_vel, true, gradient, hessian);
         }
     }
 }
@@ -4449,7 +4455,7 @@ pub const Plan = struct {
         /// make conditional.
         task_gradient: []f32,
         task_hessian: []f32,
-        /// `nv` - the point Jacobian at one knot, reused across all of them.
+        /// `dof_count` - the point Jacobian at one knot, reused across all of them.
         task_jacobian: []Vec,
         /// The terminal knot's blocks, which the running arrays do not cover.
         task_terminal_gradient: []f32,
@@ -4458,14 +4464,14 @@ pub const Plan = struct {
 
     pub fn init(gpa: Allocator, m: *const rbt.Model, horizon: u32) !Plan {
         assertf(horizon > 0, @src(), "a plan needs a horizon of at least 1, got {d}", .{horizon});
-        const ndx: u32 = 2 * m.nv + m.na;
-        const nstate: u32 = m.nq + m.nv + m.na;
-        const nu: u32 = m.nu;
+        const ndx: u32 = 2 * m.dof_count + m.activation_count;
+        const nstate: u32 = m.coordinate_count + m.dof_count + m.activation_count;
+        const nu: u32 = m.actuator_count;
         // -- *** THE CONTROL BOX IS ON BY DEFAULT --
         //
         // It used to be opt-in via `readLimits`, and the first caller to plan on a real
         // articulated robot forgot - so `optimize` planned UNCONSTRAINED while the model clamped
-        // `d.ctrl` to its ctrlrange on the way in. The plan asked for **357 N*m against a +/-260
+        // `d.controls` to its ctrlrange on the way in. The plan asked for **357 N*m against a +/-260
         // limit** and believed it would get it, then flew a trajectory the arm could not.
         //
         // An unbounded plan is the surprising case, so it is the one that should take an extra
@@ -4500,7 +4506,7 @@ pub const Plan = struct {
                 .has_kept = false,
                 .task_gradient = try gpa.alloc(f32, horizon * ndx),
                 .task_hessian = try gpa.alloc(f32, horizon * ndx * ndx),
-                .task_jacobian = try gpa.alloc(Vec, m.nv),
+                .task_jacobian = try gpa.alloc(Vec, m.dof_count),
                 .task_terminal_gradient = try gpa.alloc(f32, ndx),
                 .task_terminal_hessian = try gpa.alloc(f32, ndx * ndx),
                 .delta = try gpa.alloc(f32, ndx),
@@ -4554,7 +4560,7 @@ pub const Plan = struct {
         for (0..self.nu) |j| {
             var lo: f32 = -zm.floatMax(f32);
             var hi: f32 = zm.floatMax(f32);
-            if (m.act_ctrl_range[j]) |range| {
+            if (m.actuator_control_range[j]) |range| {
                 lo = range[0];
                 hi = range[1];
                 self.has_limits = true;
@@ -4615,7 +4621,7 @@ fn taskCost(
     terminal: bool,
 ) f32 {
     const task: Task = cost.task orelse return 0;
-    const at: Vec = d.body_xpos[task.body] + zm.rotate(d.body_xrot[task.body], task.offset);
+    const at: Vec = d.body_positions[task.body] + zm.rotate(d.body_orientations[task.body], task.offset);
     var total: f32 = 0;
 
     const want: Vec = vec(
@@ -4632,11 +4638,11 @@ fn taskCost(
         if (w_vel > 0) {
             // The point's world velocity, from the same Jacobian the gradient path uses.
             var jac_buf: [max_stack_ndx]Vec = undefined;
-            if (m.nv <= jac_buf.len) {
-                rbt.jacPoint(m, d, task.body, at, jac_buf[0..m.nv], null);
+            if (m.dof_count <= jac_buf.len) {
+                rbt.jacPoint(m, d, task.body, at, jac_buf[0..m.dof_count], null);
                 var moving: Vec = vec(0, 0, 0);
-                for (0..m.nv) |v| {
-                    moving += jac_buf[v] * splat(d.vel[v]);
+                for (0..m.dof_count) |v| {
+                    moving += jac_buf[v] * splat(d.joint_velocities[v]);
                 }
                 const want_vel: Vec = vec(
                     velocity[knot * 3 + 0],
@@ -4729,7 +4735,7 @@ fn rollout(
         // and the optimiser is not wrong, it is being asked two different questions - and the
         // symptom is a plan that will not move while every derivative in it is correct.
         total += taskCost(m, d, cost, @intCast(t), false);
-        @memcpy(d.ctrl, ctrl[t * nu ..][0..nu]);
+        @memcpy(d.controls, ctrl[t * nu ..][0..nu]);
         rbt.step(m, d);
         readState(m, d, states[(t + 1) * nstate ..][0..nstate]);
     }
@@ -4900,7 +4906,7 @@ pub fn optimize(
             @memset(s.task_hessian, 0);
         }
         for (0..plan.horizon) |t| {
-            @memcpy(d.ctrl, plan.ctrl[t * nu ..][0..nu]);
+            @memcpy(d.controls, plan.ctrl[t * nu ..][0..nu]);
             rbt.forward(m, d);
             transition(m, d, &s.jacobians, opt.derivative);
             @memcpy(s.a[t * ndx * ndx ..][0 .. ndx * ndx], s.jacobians.a);
@@ -5061,7 +5067,7 @@ pub fn optimize(
                     cost,
                     @intCast(t),
                 );
-                @memcpy(d.ctrl, s.ctrl_trial[t * nu ..][0..nu]);
+                @memcpy(d.controls, s.ctrl_trial[t * nu ..][0..nu]);
                 rbt.step(m, d);
                 readState(m, d, s.states_trial[(t + 1) * nstate ..][0..nstate]);
             }
@@ -5219,8 +5225,8 @@ test "*** mpc: on a linear system iLQR reproduces the LQR gains exactly" {
     // derivative exact, which is what lets this test ask about the RECURSION rather than
     // about precision. The reference is the origin too, so the optimum is `u = 0` and the
     // gains are still the full LQR gains.
-    data.pos[0] = 0.0;
-    data.vel[0] = 0.0;
+    data.joint_positions[0] = 0.0;
+    data.joint_velocities[0] = 0.0;
     rbt.forward(&model, &data);
 
     const reference: []f32 = try gpa.alloc(f32, (horizon + 1) * plan.nstate);
@@ -5336,8 +5342,8 @@ fn fromScratch(
     tolerance: f32,
     iterations: u32,
 ) Result {
-    data.pos[0] = 1.0;
-    data.vel[0] = 0.0;
+    data.joint_positions[0] = 1.0;
+    data.joint_velocities[0] = 0.0;
     rbt.forward(model, data);
     @memset(plan.ctrl, 0);
     return optimize(model, data, plan, cost, .{ .tolerance = tolerance, .iterations = iterations });
@@ -5354,8 +5360,8 @@ test "** mpc: the cart reaches the target, and a zero-cost problem stays put" {
     var plan: Plan = try .init(gpa, &model, horizon);
     defer plan.deinit();
 
-    data.pos[0] = 1.0;
-    data.vel[0] = 0.0;
+    data.joint_positions[0] = 1.0;
+    data.joint_velocities[0] = 0.0;
     rbt.forward(&model, &data);
 
     const reference: []f32 = try gpa.alloc(f32, (horizon + 1) * plan.nstate);
@@ -5409,8 +5415,8 @@ test "** mpc: the cart reaches the target, and a zero-cost problem stays put" {
     // * AND A PROBLEM ALREADY AT ITS OPTIMUM MUST NOT BE "IMPROVED". Starting at the target
     // with zero controls, the cost is already 0 and every gain should be a no-op - a line
     // search that accepts a step here is finding improvement in noise.
-    data.pos[0] = 0.0;
-    data.vel[0] = 0.0;
+    data.joint_positions[0] = 0.0;
+    data.joint_velocities[0] = 0.0;
     rbt.forward(&model, &data);
     @memset(plan.ctrl, 0);
     const settled: Result = optimize(&model, &data, &plan, cost, .{ .iterations = 5 });
@@ -5474,8 +5480,8 @@ test "*** mpc: control limits bind, and a saturated actuator gets no feedback" {
     try expectApproxEqAbs(@as(f32, -0.3), plan.ctrl_lower[0], 1.0e-6);
     try expectApproxEqAbs(@as(f32, 0.3), plan.ctrl_upper[0], 1.0e-6);
 
-    data.pos[0] = 1.0;
-    data.vel[0] = 0.0;
+    data.joint_positions[0] = 1.0;
+    data.joint_velocities[0] = 0.0;
     rbt.forward(&model, &data);
 
     const reference: []f32 = try gpa.alloc(f32, (horizon + 1) * plan.nstate);
@@ -5625,10 +5631,10 @@ test "*** mpc: a cartpole swings itself up, by pumping, on a motor too weak to l
     try expect(plan.has_limits);
 
     // Hanging straight down, at rest. theta = 0 is upright; the pole geom sits at +Y.
-    data.pos[0] = 0.0;
-    data.pos[1] = pi;
-    data.vel[0] = 0.0;
-    data.vel[1] = 0.0;
+    data.joint_positions[0] = 0.0;
+    data.joint_positions[1] = pi;
+    data.joint_velocities[0] = 0.0;
+    data.joint_velocities[1] = 0.0;
     rbt.forward(&model, &data);
 
     const reference: []f32 = try gpa.alloc(f32, (horizon + 1) * plan.nstate);
@@ -5660,7 +5666,7 @@ test "*** mpc: a cartpole swings itself up, by pumping, on a motor too weak to l
 
     const final_theta: f32 = plan.states[horizon * ns + 1];
     const final_x: f32 = plan.states[horizon * ns];
-    const final_vtheta: f32 = plan.states[horizon * ns + model.nq + 1];
+    const final_vtheta: f32 = plan.states[horizon * ns + model.coordinate_count + 1];
 
     // 1. It ends upright and STOPPED - not merely passing through on the way round, which a
     //    pole spinning freely would also do.
@@ -5697,7 +5703,7 @@ test "*** mpc: a cartpole swings itself up, by pumping, on a motor too weak to l
     var passed_horizontal: bool = false;
     for (0..horizon) |t| {
         const angle: f32 = plan.states[t * ns + 1];
-        peak_speed = @max(peak_speed, @abs(plan.states[t * ns + model.nq + 1]));
+        peak_speed = @max(peak_speed, @abs(plan.states[t * ns + model.coordinate_count + 1]));
         if (@abs(plan.ctrl[t]) > 0.99) {
             saturated_knots += 1;
         }
@@ -5770,8 +5776,8 @@ test "*** mpc: receding horizon - a warm re-solve is cheap enough to run inside 
 
     // Start near upright but genuinely disturbed - leaning and moving.
     data.reset(&model);
-    data.pos[1] = 0.25;
-    data.vel[1] = -0.8;
+    data.joint_positions[1] = 0.25;
+    data.joint_velocities[1] = -0.8;
     rbt.forward(&model, &data);
 
     const reference: []f32 = try gpa.alloc(f32, (horizon + 1) * plan.nstate);
@@ -5804,10 +5810,10 @@ test "*** mpc: receding horizon - a warm re-solve is cheap enough to run inside 
         total_iterations += step_result.iterations;
 
         feedbackControl(&model, &data, &plan, applied);
-        @memcpy(data.ctrl, applied);
+        @memcpy(data.controls, applied);
         rbt.step(&model, &data);
 
-        worst_angle = @max(worst_angle, @abs(data.pos[1]));
+        worst_angle = @max(worst_angle, @abs(data.joint_positions[1]));
         if (plan.has_limits) {
             try expect(applied[0] >= plan.ctrl_lower[0] - 1.0e-5);
             try expect(applied[0] <= plan.ctrl_upper[0] + 1.0e-5);
@@ -5818,7 +5824,7 @@ test "*** mpc: receding horizon - a warm re-solve is cheap enough to run inside 
     //    control it would be past horizontal within half a second. Two iterations per tick
     //    caught it and held it.
     try expect(worst_angle < 0.6);
-    try expect(@abs(data.pos[1]) < 0.15);
+    try expect(@abs(data.joint_positions[1]) < 0.15);
 
     // 2. * AND THE WARM SOLVES REALLY WERE CHEAP - the point of `shift`. Two hundred ticks
     //    at a budget of two is at most 400 iterations; a controller that needed a cold solve
@@ -5827,7 +5833,7 @@ test "*** mpc: receding horizon - a warm re-solve is cheap enough to run inside 
     try expect(total_iterations <= 400);
 
     // 3. And the cart is still on its rail, which a plan that ignored limits would not be.
-    try expect(@abs(data.pos[0]) < 2.45);
+    try expect(@abs(data.joint_positions[0]) < 2.45);
 }
 
 test "*** mpc: shift moves the trajectory with the gains, and the closed loop swings up" {
@@ -5859,7 +5865,7 @@ test "*** mpc: shift moves the trajectory with the gains, and the closed loop sw
     const ns: u32 = plan.nstate;
 
     data.reset(&model);
-    data.pos[1] = 3.0;
+    data.joint_positions[1] = 3.0;
     rbt.forward(&model, &data);
 
     const reference: []f32 = try gpa.alloc(f32, (horizon + 1) * ns);
@@ -5890,29 +5896,29 @@ test "*** mpc: shift moves the trajectory with the gains, and the closed loop sw
 
     // 2. * AND THE BEHAVIOUR. A closed loop - shift, re-solve on a budget, apply, step - must
     //    actually swing the pole up and hold it. This is the demo's loop, in miniature.
-    const applied: []f32 = try gpa.alloc(f32, model.nu);
+    const applied: []f32 = try gpa.alloc(f32, model.actuator_count);
     defer gpa.free(applied);
     @memset(plan.ctrl, 0);
     data.reset(&model);
-    data.pos[1] = 3.0;
+    data.joint_positions[1] = 3.0;
     rbt.forward(&model, &data);
     _ = optimize(&model, &data, &plan, cost, .{ .iterations = 60 });
 
     var reached_upright: bool = false;
     for (0..500) |_| { // 5 s at 100 Hz
         feedbackControl(&model, &data, &plan, applied);
-        @memcpy(data.ctrl, applied);
+        @memcpy(data.controls, applied);
         rbt.step(&model, &data);
         shift(&plan);
         _ = optimize(&model, &data, &plan, cost, .{ .iterations = 8 });
-        if (@abs(data.pos[1]) < 0.2) {
+        if (@abs(data.joint_positions[1]) < 0.2) {
             reached_upright = true;
         }
     }
     try expect(reached_upright);
     // Upright and still there at the end - not merely passing through on a spin.
-    try expect(@abs(data.pos[1]) < 0.3);
-    try expect(@abs(data.pos[0]) < 2.45);
+    try expect(@abs(data.joint_positions[1]) < 0.3);
+    try expect(@abs(data.joint_positions[0]) < 2.45);
 }
 
 // ==========================================================================
@@ -6581,7 +6587,7 @@ test "*** a fresh Plan is already bounded by the model's actuators" {
     //
     // `readLimits` was public, documented and opt-in, and the first caller to plan on a real
     // articulated robot forgot it. `optimize` then planned UNCONSTRAINED while the model clamped
-    // `d.ctrl` to its ctrlrange on the way in - so the plan asked for **357 N*m against a +/-260
+    // `d.controls` to its ctrlrange on the way in - so the plan asked for **357 N*m against a +/-260
     // limit** and believed it would get it, then flew a trajectory the arm could not.
     //
     // * A DEFAULT THAT SILENTLY REMOVES A CONSTRAINT IS THE WRONG DEFAULT. The failure is
@@ -6601,7 +6607,7 @@ test "*** a fresh Plan is already bounded by the model's actuators" {
     });
     defer imported.deinit();
     const model: *const rbt.Model = &imported.model;
-    try expect(model.nu > 0); // an arm with no actuators would make this vacuous
+    try expect(model.actuator_count > 0); // an arm with no actuators would make this vacuous
 
     var plan: Plan = try .init(gpa, model, 8);
     defer plan.deinit();
@@ -6610,7 +6616,7 @@ test "*** a fresh Plan is already bounded by the model's actuators" {
     // Every knot carries the actuator's own range - the box does not change with time.
     for (0..plan.horizon) |t| {
         for (0..plan.nu) |j| {
-            const range: [2]f32 = model.act_ctrl_range[j] orelse continue;
+            const range: [2]f32 = model.actuator_control_range[j] orelse continue;
             try expectApproxEqAbs(range[0], plan.ctrl_lower[t * plan.nu + j], 1.0e-6);
             try expectApproxEqAbs(range[1], plan.ctrl_upper[t * plan.nu + j], 1.0e-6);
         }
@@ -6776,16 +6782,16 @@ test "*** the task reduction matches a numerical gradient of the task cost" {
 
     // A pose off the home configuration, so no Jacobian column is trivially zero.
     const pose = [_]f32{ 0.35, -0.6, 0.9, -0.4, 0.25 };
-    @memcpy(d.pos[0..m.nq], pose[0..m.nq]);
-    @memset(d.vel, 0);
+    @memcpy(d.joint_positions[0..m.coordinate_count], pose[0..m.coordinate_count]);
+    @memset(d.joint_velocities, 0);
     d.stage = .stale;
     rbt.forward(m, &d);
 
-    const jac: []Vec = try gpa.alloc(Vec, m.nv);
+    const jac: []Vec = try gpa.alloc(Vec, m.dof_count);
     defer gpa.free(jac);
-    rbt.jacPoint(m, &d, hand, d.body_xpos[hand], jac, null);
+    rbt.jacPoint(m, &d, hand, d.body_positions[hand], jac, null);
 
-    const ndx: u32 = 2 * m.nv;
+    const ndx: u32 = 2 * m.dof_count;
     const gradient: []f32 = try gpa.alloc(f32, ndx);
     defer gpa.free(gradient);
     const hessian: []f32 = try gpa.alloc(f32, ndx * ndx);
@@ -6793,24 +6799,24 @@ test "*** the task reduction matches a numerical gradient of the task cost" {
     @memset(gradient, 0);
     @memset(hessian, 0);
 
-    const residual: Vec = d.body_xpos[hand] - target;
-    addTaskResidual(m.nv, jac, residual, weight, false, gradient, hessian);
+    const residual: Vec = d.body_positions[hand] - target;
+    addTaskResidual(m.dof_count, jac, residual, weight, false, gradient, hessian);
 
     // Numerical: 0.5*w*|p(q) - target|^2, centred differences on each joint.
     const eps: f32 = 1.0e-3;
-    for (0..m.nv) |v| {
-        const keep: f32 = d.pos[v];
-        d.pos[v] = keep + eps;
+    for (0..m.dof_count) |v| {
+        const keep: f32 = d.joint_positions[v];
+        d.joint_positions[v] = keep + eps;
         d.stage = .stale;
         rbt.forward(m, &d);
-        const ahead: Vec = d.body_xpos[hand] - target;
+        const ahead: Vec = d.body_positions[hand] - target;
         const cost_up: f32 = 0.5 * weight * dot3(ahead, ahead);
-        d.pos[v] = keep - eps;
+        d.joint_positions[v] = keep - eps;
         d.stage = .stale;
         rbt.forward(m, &d);
-        const behind: Vec = d.body_xpos[hand] - target;
+        const behind: Vec = d.body_positions[hand] - target;
         const cost_down: f32 = 0.5 * weight * dot3(behind, behind);
-        d.pos[v] = keep;
+        d.joint_positions[v] = keep;
 
         const numeric: f32 = (cost_up - cost_down) / (2.0 * eps);
         try expectApproxEqAbs(numeric, gradient[v], jacobianTolerance(numeric));
@@ -6821,16 +6827,16 @@ test "*** the task reduction matches a numerical gradient of the task cost" {
     // * AND THE HESSIAN MUST BE SYMMETRIC AND POSITIVE SEMI-DEFINITE. `J^TwJ` is both by
     // construction; the recursion depends on it, and a transpose slip would break one or other
     // silently rather than loudly.
-    for (0..m.nv) |i| {
-        for (0..m.nv) |j| {
+    for (0..m.dof_count) |i| {
+        for (0..m.dof_count) |j| {
             try expectApproxEqAbs(hessian[i * ndx + j], hessian[j * ndx + i], 1.0e-6);
         }
     }
-    for (0..m.nv) |i| {
+    for (0..m.dof_count) |i| {
         try expect(hessian[i * ndx + i] >= 0);
     }
     // The velocity block is untouched by a position task.
-    for (m.nv..ndx) |i| {
+    for (m.dof_count..ndx) |i| {
         try expectApproxEqAbs(@as(f32, 0), gradient[i], 1.0e-9);
     }
 }
@@ -6870,17 +6876,17 @@ test "*** a task cost alone drives the hand to a target, with no joint reference
     defer d.deinit();
     const hand: u32 = imported.bodyIndex("hand") orelse return error.SkipZigTest;
 
-    @memcpy(d.pos, m.qpos0);
-    @memset(d.vel, 0);
+    @memcpy(d.joint_positions, m.reference_joint_positions);
+    @memset(d.joint_velocities, 0);
     d.stage = .stale;
     rbt.forward(m, &d);
-    const start_gap: f32 = length3(d.body_xpos[hand] - vec(0.55, 0.30, 0.95));
+    const start_gap: f32 = length3(d.body_positions[hand] - vec(0.55, 0.30, 0.95));
 
     const horizon: u32 = 120;
     var plan: Plan = try .init(gpa, m, horizon);
     defer plan.deinit();
 
-    const nstate: u32 = m.nq + m.nv;
+    const nstate: u32 = m.coordinate_count + m.dof_count;
     const reference: []f32 = try gpa.alloc(f32, (horizon + 1) * nstate);
     defer gpa.free(reference);
     const target: []f32 = try gpa.alloc(f32, 3 * (horizon + 1));
@@ -6889,7 +6895,7 @@ test "*** a task cost alone drives the hand to a target, with no joint reference
     defer gpa.free(state_w);
     const term_w: []f32 = try gpa.alloc(f32, plan.ndx);
     defer gpa.free(term_w);
-    const ctrl_w: []f32 = try gpa.alloc(f32, m.nu);
+    const ctrl_w: []f32 = try gpa.alloc(f32, m.actuator_count);
     defer gpa.free(ctrl_w);
 
     // Nothing in state space wants anything: no pose to hold, no velocity to reach.
@@ -6918,13 +6924,13 @@ test "*** a task cost alone drives the hand to a target, with no joint reference
                 .w_position_terminal = 400.0,
             },
         }, .{ .iterations = 4 });
-        @memcpy(d.ctrl, plan.ctrl[0..m.nu]);
+        @memcpy(d.controls, plan.ctrl[0..m.actuator_count]);
         rbt.step(m, &d);
         shift(&plan);
     }
     rbt.forward(m, &d);
 
-    const final_gap: f32 = length3(d.body_xpos[hand] - vec(0.55, 0.30, 0.95));
+    const final_gap: f32 = length3(d.body_positions[hand] - vec(0.55, 0.30, 0.95));
     // The target is well inside a 1.28 m reach, and 200 steps is 0.8 s - ample.
     try expect(start_gap > 0.5); // the test would be vacuous if it started there
     try expect(final_gap < 0.10);

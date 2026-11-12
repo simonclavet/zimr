@@ -16,7 +16,7 @@
 // samplers, no FS uniforms; the only binding is the VS's mvp UBO at
 // group 0). The WebGPU binding model is documented in src/zimr.zig.
 //
-// CANNOT be verified in the sandbox (no GPU); Simon verifies in the
+// CANNOT be verified in the sandbox (no GPU); verified by eye in the
 // browser. Build-side contract: compiles clean, embedded WGSL is
 // naga-valid (wgsl_strict), node link-check instantiates, lint 0.
 

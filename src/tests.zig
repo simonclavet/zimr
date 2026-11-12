@@ -3,7 +3,7 @@
 //! any information a reader does not already see.
 // src/tests.zig - the host test aggregator.
 //
-// POLICY (Simon, t1176): every live source file gets
+// POLICY (t1176): every live source file gets
 // `std.testing.refAllDecls` so no declaration can rot unanalyzed -
 // dead code must either compile or be deleted.  Shallow (not
 // recursive): file-level decls are forced; inner namespaces get
@@ -19,6 +19,7 @@
 
 const std = @import("std");
 const refAllDecls = std.testing.refAllDecls;
+const expectEqualStrings = std.testing.expectEqualStrings;
 
 comptime {
     // ===== Test files (cross-cutting suites) =====
@@ -172,4 +173,13 @@ test {
         }
     }
     refAllDecls(@import("zm"));
+}
+
+test "kompute and spv2wgsl name a uniform workgroup array alike" {
+    // kompute names the array (`sharedUniform`) and spv2wgsl recognises it by the name, writing every read of it as
+    // WGSL's `workgroupUniformLoad`. Were the two prefixes to drift apart, every such read would quietly turn back into
+    // a plain one - which a browser refuses as soon as a barrier stands behind a decision made on it.
+    const kompute_prefix: []const u8 = @import("kompute.zig").uniform_shared_prefix;
+    const translator_prefix: []const u8 = @import("spv2wgsl.zig").uniform_workgroup_prefix;
+    try expectEqualStrings(kompute_prefix, translator_prefix);
 }

@@ -126,19 +126,19 @@ fn restart(s: *State) void {
     }
     // Sit the robot ON the slope: rotate its base to match and lift it clear.
     const tilt: Quat = zm.quatFromAxisAngle(vec(0, 1, 0), s.slope);
-    s.data.pos[3] = tilt[0];
-    s.data.pos[4] = tilt[1];
-    s.data.pos[5] = tilt[2];
-    s.data.pos[6] = tilt[3];
-    s.data.pos[2] = 0.30 + 0.25 * @sin(@abs(s.slope));
-    @memset(s.data.vel, 0);
-    @memset(s.data.applied_force, 0);
+    s.data.joint_positions[3] = tilt[0];
+    s.data.joint_positions[4] = tilt[1];
+    s.data.joint_positions[5] = tilt[2];
+    s.data.joint_positions[6] = tilt[3];
+    s.data.joint_positions[2] = 0.30 + 0.25 * @sin(@abs(s.slope));
+    @memset(s.data.joint_velocities, 0);
+    @memset(s.data.applied_joint_forces, 0);
     s.data.stage = .stale;
     rbt.forward(m, &s.data);
-    @memcpy(s.home, s.data.pos[0..m.nq]);
+    @memcpy(s.home, s.data.joint_positions[0..m.coordinate_count]);
     s.bridge.teleported();
 
-    s.start_pos = s.data.body_xpos[1];
+    s.start_pos = s.data.body_positions[1];
     s.slid = 0;
     s.elapsed = 0;
     s.cone_worst = 0;
@@ -171,7 +171,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.bridge = try rphys.Bridge.init(gpa, &s.world, &s.imported.model, &s.data, 256);
     s.bridge.listen(&s.world);
 
-    s.home = try gpa.alloc(f32, s.imported.model.nq);
+    s.home = try gpa.alloc(f32, s.imported.model.coordinate_count);
     s.slope = 0.0;
     s.friction = 0.6;
     s.last_slope = -1;
@@ -304,11 +304,11 @@ fn drawScene(s: *State, gl: *z.WgpuGl) void {
     );
     z.drawMeshInstanced(gl, &s.cube, &s.transform, slope_colour);
 
-    for (1..m.nbody) |b| {
-        const at: Vec = zm.zUpToYUpPoint(s.data.body_xpos[b]);
+    for (1..m.body_count) |b| {
+        const at: Vec = zm.zUpToYUpPoint(s.data.body_positions[b]);
         const parent: u32 = m.body_parent[b];
         if (parent != rbt.world_body) {
-            z.drawLine3D(gl, zm.zUpToYUpPoint(s.data.body_xpos[parent]), at, robot_colour);
+            z.drawLine3D(gl, zm.zUpToYUpPoint(s.data.body_positions[parent]), at, robot_colour);
         }
         s.transform[0] = mulMat(translation(at[0], at[1], at[2]), scaling(0.05, 0.05, 0.05));
         z.drawMeshInstanced(gl, &s.sphere, &s.transform, robot_colour);
@@ -316,7 +316,7 @@ fn drawScene(s: *State, gl: *z.WgpuGl) void {
 
     // * WHERE IT STARTED, so the slide is visible rather than only reported.
     const from: Vec = zm.zUpToYUpPoint(s.start_pos);
-    const now: Vec = zm.zUpToYUpPoint(s.data.body_xpos[1]);
+    const now: Vec = zm.zUpToYUpPoint(s.data.body_positions[1]);
     const holding: bool = s.slid < 0.05;
     z.drawLine3D(gl, from, now, if (holding) hold_colour else slip_colour);
     s.transform[0] = mulMat(translation(from[0], from[1], from[2]), scaling(0.05, 0.05, 0.05));
@@ -379,7 +379,7 @@ fn update(f: *z.Frame, s: *State) void {
             }
         }
         rbt.forward(m, &s.data);
-        s.slid = length3(s.data.body_xpos[1] - s.start_pos);
+        s.slid = length3(s.data.body_positions[1] - s.start_pos);
     }
 
     z.clearViewport(f, background);

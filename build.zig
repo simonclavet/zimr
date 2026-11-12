@@ -48,6 +48,18 @@
 // and behavioural parity is verified against it.
 
 const std = @import("std");
+const robotgpu_program = @import("src/robotgpu_program.zig");
+const zn_mlp_kernel_names = @import("src/gpu/zn_mlp_kernels.zig");
+
+/// robotgpu's kernels - read from `src/robotgpu_program.zig`, the one list of them (`kernel_names`: the step
+/// program's, then the constraint program's), so the build compiles and translates exactly the kernels robotgpu has.
+const robotgpu_entries: [robotgpu_program.kernel_names.len][]const u8 = entries: {
+    var names: [robotgpu_program.kernel_names.len][]const u8 = undefined;
+    for (robotgpu_program.kernel_names, 0..) |name, index| {
+        names[index] = name;
+    }
+    break :entries names;
+};
 const builtin = @import("builtin");
 
 const ArrayList = std.ArrayList;
@@ -1954,8 +1966,23 @@ pub const EngineShaderEmbed = struct {
     path: LazyPath,
 };
 
+/// A host-side file of a compute kernel (`ComputeKernel.host`): the name the app imports it by, and its source.
+pub const KernelHost = struct {
+    import_name: []const u8,
+    source: []const u8,
+};
+
 pub const ComputeKernel = struct {
     basename: []const u8,
+    /// Set when the kernel imports robot.zig: it gets the app's own robot module - the one its engine imports, since a
+    /// file belongs to one module - for its CPU module and its shaders alike (robotgpu's kernels).
+    wants_robot: bool = false,
+    /// A robotgpu kernel's arena lengths, a path imported as `robotgpu_sizes` by its shaders and its CPU module alike.
+    robotgpu_sizes: ?[]const u8 = null,
+    /// A host-side file built over this kernel module, imported by the app as `host.import_name` - with the engine,
+    /// the robot module and the kernel module, so the app and the host file share the one kernel module (robotgpu's
+    /// `Sim`).
+    host: ?KernelHost = null,
     /// Multi-kernel modules (t1178): each named entry is translated to its
     /// own WGSL module (spv2wgsl --entry) imported as `<entry>_wgsl`.
     /// null = single-kernel module, imported as `<basename>_wgsl`.
@@ -2224,6 +2251,21 @@ const VulkanHostTestInputs = struct {
     shader_interface_mod: *Module,
     assert_log: bool,
     profile_enabled: bool,
+    /// Whether the test runs its long checks at full size (`-Dlong-checks`): by default each is sized for llvmpipe, a
+    /// GPU emulated on the CPU, so the whole test stays within a few minutes.
+    long_checks: bool,
+    /// Whether the run is limited to some checks (`-Dtest-filter`): then no report of the device's coverage, which a
+    /// part of the checks cannot give.
+    filtered: bool,
+    /// The checks to run (`-Dtest-filter`): Zig's test runner runs only the tests whose names contain one; none, all.
+    filters: []const []const u8,
+    /// How the test is optimized (`-Dhost-test-optimize`): Debug unless said - `addVulkanHostTest` says why, and when
+    /// not.
+    optimize: std.builtin.OptimizeMode,
+    /// A file of arena lengths for robotgpu's kernels in place of the tests' (`-Dhost-test-sizes`), or null. Larger
+    /// arenas hold more worlds: a run that measures what many worlds cost on a real GPU names
+    /// `src/robotgpu_sizes_bench.zig`.
+    robotgpu_sizes: ?[]const u8,
 };
 
 /// One of the test's kernel files, built twice: as SPIR-V (one module holding every entry; `entry` only labels the
@@ -2294,6 +2336,13 @@ fn addVulkanHostTest(
     target: ResolvedTarget,
     inputs: VulkanHostTestInputs,
 ) *Compile {
+    // Debug, measured against ReleaseSafe (which keeps the safety checks and zimr's asserts too): ReleaseSafe ran the
+    // test in 3 minutes instead of 6, but compiled it in 2 minutes instead of 11 seconds - and the test recompiles
+    // whenever a kernel changes, its SPIR-V embedded. The run's cost is mostly llvmpipe's, which no mode here speeds.
+    // A RUN READ FOR ITS TIMINGS ON A REAL GPU is built ReleaseSafe (`-Dhost-test-optimize=ReleaseSafe`): in Debug the
+    // host's own work on every dispatch is several times slower, and at a small world count that work is most of what
+    // a decision costs.
+    const host_test_optimize: std.builtin.OptimizeMode = inputs.optimize;
     const native_options: *Options = b.addOptions();
     native_options.addOption(bool, "assert_log", inputs.assert_log);
     native_options.addOption(bool, "profile_enabled", inputs.profile_enabled);
@@ -2307,7 +2356,7 @@ fn addVulkanHostTest(
     const engine_mod: *Module = b.createModule(.{
         .root_source_file = b.path("src/zimr.zig"),
         .target = target,
-        .optimize = .Debug,
+        .optimize = host_test_optimize,
         .link_libc = links_libc,
     });
     engine_mod.addImport("shader_interface", inputs.shader_interface_mod);
@@ -2318,7 +2367,7 @@ fn addVulkanHostTest(
     const test_mod: *Module = b.createModule(.{
         .root_source_file = b.path("tools/vk_host_test.zig"),
         .target = target,
-        .optimize = .Debug,
+        .optimize = host_test_optimize,
         .link_libc = links_libc,
     });
     test_mod.addImport("zimr", engine_mod);
@@ -2332,7 +2381,12 @@ fn addVulkanHostTest(
     test_mod.addImport("zn", numerics.zimrnum);
     for (host_test_kernels) |kernel| {
         const kernel_source: LazyPath = b.path(kernel.source);
-        const sizes_file: ?LazyPath = if (kernel.robotgpu_sizes) |sizes_path| b.path(sizes_path) else null;
+        // The kernel's own sizes file, or the run's in its place (`-Dhost-test-sizes`).
+        const sizes_path: ?[]const u8 = if (kernel.robotgpu_sizes) |own_sizes_path|
+            inputs.robotgpu_sizes orelse own_sizes_path
+        else
+            null;
+        const sizes_file: ?LazyPath = if (sizes_path) |path| b.path(path) else null;
         const kernel_modules: ShaderPipeline.KernelModules = .{
             .zimrnum = kernel.wants_zimrnum,
             .zimrrl = kernel.wants_zimrrl,
@@ -2368,8 +2422,29 @@ fn addVulkanHostTest(
             kernel_mod.addImport("robotgpu_sizes", sizes_mod);
         }
         test_mod.addImport(kernel.import_name, kernel_mod);
+        if (eql(u8, kernel.import_name, "robotgpu")) {
+            // robotgpu's host side (`Sim`), over this very kernel module, so the test's twin and its Sim share one.
+            const robotgpu_host_mod: *Module = b.createModule(.{
+                .root_source_file = b.path("src/robotgpu_host.zig"),
+            });
+            robotgpu_host_mod.addImport("zimr", engine_mod);
+            robotgpu_host_mod.addImport("zm", inputs.zimrmath_mod);
+            robotgpu_host_mod.addImport("robot", engine_robot.robot);
+            robotgpu_host_mod.addImport("robotgpu", kernel_mod);
+            test_mod.addImport("robotgpu_host", robotgpu_host_mod);
+        }
     }
-    return b.addExecutable(.{ .name = "vk_host_test", .root_module = test_mod });
+    // The test's own options: whether its long checks run at full size.
+    const test_options: *Options = b.addOptions();
+    test_options.addOption(bool, "long_checks", inputs.long_checks);
+    test_options.addOption(bool, "filtered", inputs.filtered);
+    test_mod.addOptions("vk_host_test_options", test_options);
+    // Geno's get-up clip, embedded: the tracking check then runs wherever the test does - a machine that is handed the
+    // executable alone has no examples folder beside it.
+    test_mod.addAnonymousImport("geno_getup_zclip", .{ .root_source_file = b.path("examples/geno_ppo/getup.zclip") });
+    // The checks are the file's `test` blocks, run by Zig's test runner: one alone with `-Dtest-filter`, each one's
+    // time recorded by the build, and each one's leaks found by the testing allocator.
+    return b.addTest(.{ .name = "vk_host_test", .root_module = test_mod, .filters = inputs.filters });
 }
 
 /// The headless trainer (`tools/geno_trainer.zig`) built for `target`: the engine on the native host, `zn_mlp`'s
@@ -2436,6 +2511,8 @@ fn addGenoTrainer(
         "src/gpu/zn_mlp_sizes_trainer.zig";
     const sized_kernels: *Step.WriteFile = b.addWriteFiles();
     _ = sized_kernels.addCopyFile(b.path(trainer_sizes), "zn_mlp_sizes.zig");
+    // The kit's list of its kernels, which it imports from beside it.
+    _ = sized_kernels.addCopyFile(b.path("src/gpu/zn_mlp_kernels.zig"), "zn_mlp_kernels.zig");
     const kernel_source: LazyPath = sized_kernels.addCopyFile(b.path("src/gpu/zn_mlp.zig"), "zn_mlp.zig");
     const kernel_output: ShaderPipeline.ComputeOutput = inputs.shader_pipeline.addComputeOutput(
         kernel_source,
@@ -3198,15 +3275,39 @@ pub const AppContext = struct {
             if (k.wants_zimrrl) {
                 kernel_mod.addImport("zrl", ctx.zimrrl_mod);
             }
+            // The app's own robot module, as its engine imports it.
+            const robot_mod: ?*Module = if (k.wants_robot) ctx.zimr_mod.import_table.get("robot").? else null;
+            if (robot_mod) |robot_module| {
+                kernel_mod.addImport("robot", robot_module);
+            }
+            const sizes_file: ?LazyPath = if (k.robotgpu_sizes) |sizes_path| owner.path(sizes_path) else null;
+            if (sizes_file) |sizes_root| {
+                const sizes_mod: *Module = b.createModule(.{ .root_source_file = sizes_root });
+                kernel_mod.addImport("robotgpu_sizes", sizes_mod);
+            }
             user_mod.addImport(k.basename, kernel_mod);
-
+            if (k.host) |kernel_host| {
+                const host_mod: *Module = b.createModule(.{ .root_source_file = owner.path(kernel_host.source) });
+                host_mod.addImport("zimr", ctx.zimr_mod);
+                host_mod.addImport("zm", ctx.zimrmath_mod);
+                if (robot_mod) |robot_module| {
+                    host_mod.addImport("robot", robot_module);
+                }
+                host_mod.addImport(k.basename, kernel_mod);
+                user_mod.addImport(kernel_host.import_name, host_mod);
+            }
+            const kernel_modules: ShaderPipeline.KernelModules = .{
+                .zimrnum = k.wants_zimrnum,
+                .zimrrl = k.wants_zimrrl,
+                .robot = k.wants_robot,
+                .robotgpu_sizes = sizes_file,
+            };
             if (k.entries) |entries| {
-                ctx.shader_pipeline.addComputeKernelImports(
+                ctx.shader_pipeline.addComputeKernelImportsWithModules(
                     user_mod,
                     kernel_src,
                     entries,
-                    k.wants_zimrnum,
-                    k.wants_zimrrl,
+                    kernel_modules,
                     kernel_embed,
                 );
             } else {
@@ -3255,109 +3356,15 @@ pub fn bakeMesh(
     mod.addAnonymousImport(import_name, .{ .root_source_file = baked_path });
 }
 
-/// Every kernel of `src/gpu/zn_mlp.zig`: the pages that build their pipeline table from the module's whole kernel
-/// list (geno_ppo, geno_lab) register them all, SAC's and SuperTrack's included.
-const zn_mlp_entries = [_][]const u8{
-    "dense_fwd",
-    "act_bwd",
-    "dense_bwd_x",
-    "dense_bwd_w",
-    "mse_bwd",
-    "mse_value",
-    "adam",
-    "ppo_mean_grad",
-    "ppo_logstd_grad",
-    "squash_fwd",
-    "squash_logp",
-    "sac_target",
-    "min_route",
-    "squash_bwd",
-    "squash_logstd_grad",
-    "alpha_grad",
-    "polyak",
-    "cp_wm_input",
-    "cp_wm_input_bwd",
-    "cp_force",
-    "cp_force_bwd",
-    "cp_step",
-    "cp_step_bwd",
-    "cp_track_bwd",
-    "add_block",
-    "lat_advance",
-    "lat_take",
-    "lat_gather",
-    "lat_act",
-    "lat_act_bwd",
-    "st_policy_fwd",
-    "st_policy_bwd",
-    "st_world_fwd",
-    "st_world_bwd",
-    "st_reduce",
-    "norm_fwd",
-    "mish_fwd",
-    "simnorm_fwd",
-    "mish_bwd",
-    "simnorm_bwd",
-    "norm_params_bwd",
-    "norm_bwd",
-    "twohot_fwd",
-    "twohot_bwd",
-    "twohot_decode",
-    "place_columns",
-    "take_columns",
-    "grad_square_partials",
-    "clip_factor",
-    "adam_clipped",
-    "policy_distill_bwd",
-    "policy_divergence",
-    "running_scale_update",
-    "policy_draw",
-    "value_target_combine",
-    "mask_values",
-    "mask_gradients",
-    "broadcast_rows",
-    "plan_score_combine",
-    "copy_row_blocks",
-    "mppi_sample",
-    "mppi_elites",
-    "mppi_refit",
-    "mppi_begin",
-    "mppi_choose",
-    "mppi_explore",
-    "lat_barrier_bwd",
-    "lat_tracking_cost",
-    "twohot_value_bwd",
-    "ensemble_tail_weights",
-    "flow_time_features",
-    "flow_euler_step",
-    "flow_path_points",
-    "flow_dpg_bwd",
-    "hashed_noise",
-    "copy_columns",
-    "hashed_uniforms",
-    "copy_columns_from_gradients",
-    "plan_gather",
-    "plan_mailbox",
-    "synergy_decode_add",
-    "synergy_project_gradient",
-    "flow_draw_losses",
-    "fpo_advantages",
-    "fpo_velocity_gradient",
-    "fpo_normalize_advantages",
-    "stat_root_mean_square",
-    "stat_mean_square_difference",
-    "stat_mean_and_deviation",
-    "fpo_ratio_stats",
-    "stat_copy",
-    "critic_value_stats",
-    "stat_barrier",
-    "share_factor",
-    "add_scaled_gradients",
-    "gradients_from_sum",
-    "plan_gain_stats",
-    "lat_skip_gather",
-    "lat_skip_targets",
-    "lat_scale_columns",
+/// Every kernel of `src/gpu/zn_mlp.zig` - read from `src/gpu/zn_mlp_kernels.zig`, the one list of them: the pages
+/// that build their pipeline table from the module's whole kernel list (geno_ppo, geno_lab) register them all, SAC's
+/// and SuperTrack's included.
+const zn_mlp_entries: [zn_mlp_kernel_names.kernels.len][]const u8 = entries: {
+    var names: [zn_mlp_kernel_names.kernels.len][]const u8 = undefined;
+    for (zn_mlp_kernel_names.kernels, 0..) |kernel, index| {
+        names[index] = kernel;
+    }
+    break :entries names;
 };
 
 /// geno_lab: the training lab. Embeds the dance clip the training page trains on (`examples/geno_ppo/dance.zclip`),
@@ -4373,19 +4380,16 @@ fn checkDiskSpace(b: *std.Build) void {
     const gb: f64 = 1024.0 * 1024.0 * 1024.0;
     std.debug.print(
         \\
-        \\  Disk is {d:.0}% full ({d:.1} GB free) — refusing to build.
+        \\  The disk is {d:.0}% full ({d:.1} GB free), so the build stops here: a build
+        \\  that runs out of space partway fails with only "No space left on device".
         \\
-        \\  Running out of space mid-link fails with a cryptic "No space left on
-        \\  device" and no other warning, so we stop here instead.
-        \\
-        \\  .zig-cache is currently {d:.1} GB.
-        \\
-        \\  Free space cheapest-first:
-        \\    rm -rf zig-out          # regenerable build outputs
-        \\    rm -rf .zig-cache/tmp && mkdir .zig-cache/tmp   # scratch (the build needs the dir itself)
-        \\    rm -rf .zig-cache       # LAST RESORT: costs a full cold rebuild
-        \\  Never delete single entries under .zig-cache/o: a cached step then fails
-        \\  ("checking cache failed: FileNotFound") instead of rebuilding.
+        \\  .zig-cache holds {d:.1} GB. To make room:
+        \\    rm -rf zig-out                                  # the build's outputs, rebuilt on demand
+        \\    rm -rf .zig-cache/tmp && mkdir .zig-cache/tmp   # scratch (the build needs the directory)
+        \\    rm -rf .zig-cache                               # the whole cache - fine once nothing else
+        \\                                                    # large can go; the next build refills it
+        \\  Clear the cache whole or not at all: a single entry removed under .zig-cache/o
+        \\  makes its step fail ("checking cache failed: FileNotFound") instead of rebuilding.
         \\
         \\
     , .{ space.used_pct, f64of(space.free_bytes) / gb, f64of(cache_bytes) / gb });
@@ -5238,7 +5242,7 @@ pub fn build(b: *std.Build) void {
 
     // st-bench (plan B1): SuperTrack's learning curve on Geno's 10-second dance, deterministic, on the CPU - the rig
     // every remaining recipe decision is measured on. Rooted in `src/` like robot-bench and clip-bake, because a root
-    // under `tools/` cannot reach the robot files. TWO builds of the one file (Simon's option C): `st_bench`
+    // under `tools/` cannot reach the robot files. TWO builds of the one file: `st_bench`
     // ReleaseFast for long runs, `st_bench_safe` ReleaseSafe - 1.7x the time, every index checked - to clear a
     // configuration first. The rows are bitwise identical between them, which is what makes the Fast one checkable
     // (`st_bench --compare=safe.csv,fast.csv`). INSTALLED like `measure`, since a step cannot forward arguments:
@@ -5407,6 +5411,18 @@ pub fn build(b: *std.Build) void {
     );
     // Pure-Zig shader tools as real artifact edges (no sub-build, no C++).
     shader_pipeline.spv2wgsl_exe = spv2wgsl_tool_exe;
+    // `-Dspirv-opt`: every compute kernel's SPIR-V through tools/spirvopt.zig's -O pipeline (a port of SPIRV-Tools'
+    // optimizer) before WGSL and Vulkan take it - off by default, so the two can be compared.
+    const spirv_opt_help: []const u8 = "Optimize every compute kernel's SPIR-V with tools/spirvopt.zig";
+    const spirv_opt: bool = b.option(bool, "spirv-opt", spirv_opt_help) orelse false;
+    if (spirv_opt) {
+        const spirvopt_module: *Module = b.createModule(.{
+            .root_source_file = b.path("tools/spirvopt.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseSafe,
+        });
+        shader_pipeline.spirvopt_exe = b.addExecutable(.{ .name = "spirvopt", .root_module = spirvopt_module });
+    }
     // Every graphics shader the pipeline translates, collected as it is added, for the `corpus` step. Only zimr's
     // own build checks the corpus, so a project depending on zimr collects nothing.
     const wgsl_corpus: *WgslCorpus = b.allocator.create(WgslCorpus) catch @panic("OOM");
@@ -5720,6 +5736,19 @@ pub fn build(b: *std.Build) void {
             .shader_interface_mod = shader_interface_mod,
             .assert_log = assert_log,
             .profile_enabled = profile_enabled,
+            .long_checks = b.option(bool, "long-checks", "vk-host-test: run its long checks at full size") orelse false,
+            .filtered = test_filter != null,
+            .filters = if (test_filter) |filter| b.dupeStrings(&.{filter}) else &.{},
+            .optimize = b.option(
+                std.builtin.OptimizeMode,
+                "host-test-optimize",
+                "vk-host-test: its optimize mode (Debug unless said; ReleaseSafe for a run read for its timings)",
+            ) orelse .Debug,
+            .robotgpu_sizes = b.option(
+                []const u8,
+                "host-test-sizes",
+                "vk-host-test: a file of robotgpu arena lengths in place of the tests' (src/robotgpu_sizes_bench.zig)",
+            ),
         };
         const host_test_exe: *Compile = addVulkanHostTest(b, b.graph.host, host_test_inputs);
         const host_test_run: *Step.Run = b.addRunArtifact(host_test_exe);
@@ -5734,7 +5763,7 @@ pub fn build(b: *std.Build) void {
         const native_os_tests: *Step.Compile = b.addTest(.{ .root_module = native_os_mod });
         const host_test_step: *Step = b.step(
             "vk-host-test",
-            "Run the Vulkan host headless under the validation layer (needs a Vulkan driver and the layer)",
+            "Run the Vulkan host's checks headless under the validation layer (-Dtest-filter runs some)",
         );
         host_test_step.dependOn(&host_test_run.step);
         host_test_step.dependOn(&b.addRunArtifact(native_os_tests).step);
@@ -5753,6 +5782,32 @@ pub fn build(b: *std.Build) void {
             "Build zig-out/windows/vk_host_test.exe, the Vulkan host test, to run on a Windows machine's GPU",
         );
         windows_host_test_step.dependOn(&windows_host_test_install.step);
+
+        // ---- robotgpu-wgsl: robotgpu's kernels translated to WGSL, every one, at the tests' sizes - the simulator's
+        // web build compiles from the same source (its plan, D19), so a kernel that cannot become WGSL fails here, the
+        // day it is written, not when the web build is assembled. `--strict` refuses what spv2wgsl cannot translate;
+        // the WGSL lands in zig-out/robotgpu_wgsl/ to read, and the browser is its full validator.
+        const robotgpu_wgsl_step: *Step = b.step(
+            "robotgpu-wgsl",
+            "Translate robotgpu's kernels to WGSL (zig-out/robotgpu_wgsl/), as its web build will",
+        );
+        const robotgpu_kernel_modules: ShaderPipeline.KernelModules = .{
+            .robot = true,
+            .robotgpu_sizes = b.path("src/robotgpu_sizes_test.zig"),
+        };
+        for (robotgpu_entries) |robotgpu_entry| {
+            const robotgpu_pipeline: *ShaderPipeline = host_test_inputs.shader_pipeline;
+            const robotgpu_output: ShaderPipeline.ComputeOutput = robotgpu_pipeline.addComputeOutputWithModules(
+                b.path("src/robotgpu.zig"),
+                robotgpu_entry,
+                robotgpu_kernel_modules,
+            );
+            const robotgpu_wgsl_install: *Step.InstallFile = b.addInstallFile(
+                robotgpu_output.wgsl,
+                b.fmt("robotgpu_wgsl/{s}.wgsl", .{robotgpu_entry}),
+            );
+            robotgpu_wgsl_step.dependOn(&robotgpu_wgsl_install.step);
+        }
 
         // ---- geno-trainer: Geno trained by PPO or SuperTrack, headless, in a run folder (`tools/geno_trainer.zig`):
         // installed beside the headless programs for the build machine, and beside the Windows programs for Windows.
@@ -7311,6 +7366,32 @@ pub fn build(b: *std.Build) void {
             .title = "zimr - WebGPU - compute particles",
             .compute_kernels = &.{.{ .basename = "particle_step" }},
         },
+        // robotgpu's checks in a page: Geno's worlds stepped on the GPU and on the CPU twin side by side, each check
+        // shown as agreeing or not - on WebGPU in a browser, on Vulkan natively.
+        .{
+            .name = "robotgpu_lab",
+            .title = "zimr - robotgpu lab",
+            .compute_kernels = &.{.{
+                .basename = "robotgpu",
+                .source_path = "src/robotgpu.zig",
+                .entries = &robotgpu_entries,
+                .wants_robot = true,
+                .robotgpu_sizes = "src/robotgpu_sizes_test.zig",
+                .host = .{ .import_name = "robotgpu_host", .source = "src/robotgpu_host.zig" },
+            }},
+        },
+        .{
+            .name = "robotgpu_sidebyside",
+            .title = "zimr - robotgpu, side by side",
+            .compute_kernels = &.{.{
+                .basename = "robotgpu",
+                .source_path = "src/robotgpu.zig",
+                .entries = &robotgpu_entries,
+                .wants_robot = true,
+                .robotgpu_sizes = "src/robotgpu_sizes_page.zig",
+                .host = .{ .import_name = "robotgpu_host", .source = "src/robotgpu_host.zig" },
+            }},
+        },
         // The sorted twin: same fluid, neighbour grid built by a spatial counting
         // sort (clearGrid -> countGrid -> prefixSum -> scatter -> copyback) so
         // density/force/viscosity read cell-contiguous (coalesced) memory.
@@ -8176,6 +8257,7 @@ pub fn build(b: *std.Build) void {
     // the `zn.` names each example uses), so it is not listed here.
     const doc_folds_pages = [_][]const u8{
         "src/notes/tutorials/robot-mocap-tutorial.html",
+        "src/notes/tutorials/robots.html",
         "src/notes/tutorials/backends-tutorial.html",
         "src/notes/tutorials/gpu-compute-tutorial.html",
         "src/notes/tutorials/sound_tutorial.html",
@@ -8438,7 +8520,7 @@ pub fn build(b: *std.Build) void {
         );
         music_theory_test_step.dependOn(&music_theory_test_run.step);
 
-        // test-magic-isomorphic-keyboard: the keyboard's own tests - Simon's drawing, the photo's stickers, the tonic
+        // test-magic-isomorphic-keyboard: the keyboard's own tests - the drawn layout, the photo's stickers, the tonic
         // on F, the triangles - built from the example's file as `test-goban` is. They reach only the layouts'
         // arithmetic, so the module needs `zm` and the music theory above, and nothing of the engine is compiled.
         const keyboard_test_mod: *Module = b.createModule(.{
@@ -8455,7 +8537,7 @@ pub fn build(b: *std.Build) void {
         const keyboard_test_run: *Run = b.addRunArtifact(keyboard_test);
         const keyboard_test_step: *Step = b.step(
             "test-magic-isomorphic-keyboard",
-            "The magic isomorphic keyboard's tests: Simon's drawing, the photo, the tonic on F, the triangles",
+            "The magic isomorphic keyboard's tests: the drawn layout, the photo, the tonic on F, the triangles",
         );
         keyboard_test_step.dependOn(&keyboard_test_run.step);
     }
@@ -9192,6 +9274,10 @@ pub fn build(b: *std.Build) void {
             // is what keeps a thousand numerical tests running in seconds. See
             // `src/notes/zimrnum_plan.md` section 3 - do not collapse the two files.
             "src/zimrnum.zig",
+            // `spv2wgsl.zig` - the SPIR-V to WGSL translator every web kernel and shader passes through. Its closure
+            // is `std` alone, so its own tests run in seconds here; in the full test binary they wait minutes behind
+            // everything else.
+            "src/spv2wgsl.zig",
             // `zimrrl.zig` - the reinforcement-learning library, built on zimrnum. Its closure is `zm`, `zn` and
             // `std`, shader-free for the same reason, so it belongs to this tier; `zig build test-zimrrl` runs it
             // alone.
@@ -9207,6 +9293,7 @@ pub fn build(b: *std.Build) void {
             // (the Vulkan host's reading). Its closure (`wgpu.zig`, `shader_introspect.zig`, `shader_interface`) is
             // shader-free.
             "src/gpu.zig",
+            "src/compute_host.zig",
             // `sound.zig` - the mixer, its renderer, the instrument and the worklet's entry points. Its closure is
             // shader-free; `zig build test-sound` runs it alone, in seconds.
             "src/sound.zig",
@@ -9287,6 +9374,23 @@ pub fn build(b: *std.Build) void {
         // `-Dfast-root=<file>`: that one file of the list alone - its tests checked without building every other root.
         const fast_root_description: []const u8 = "test-fast: run only this file of the fast list (its path as listed)";
         const fast_root_only: ?[]const u8 = b.option([]const u8, "fast-root", fast_root_description);
+        // A file NOT on the list would select nothing, and the step would report success for a run that tested
+        // nothing. It fails instead, naming the file and where the list is.
+        if (fast_root_only) |only_root| {
+            const is_listed: bool = for (fast_test_roots) |root| {
+                if (eql(u8, root, only_root)) {
+                    break true;
+                }
+            } else false;
+            if (!is_listed) {
+                const unlisted_message: []const u8 = b.fmt(
+                    "test-fast: -Dfast-root={s} is not one of the fast roots (`fast_test_roots` in build.zig), " ++
+                        "so nothing would be tested",
+                    .{only_root},
+                );
+                test_fast_step.dependOn(&b.addFail(unlisted_message).step);
+            }
+        }
         for (fast_test_roots) |root| {
             if (fast_root_only) |only_root| {
                 if (!eql(u8, root, only_root)) {
@@ -9393,7 +9497,10 @@ pub fn build(b: *std.Build) void {
                 if (train_chunk) {
                     fast_run.has_side_effects = true;
                 }
-                if (!aggregated_elsewhere) {
+                // A member of the union runs there - unless `-Dfast-root` selected it alone, when the union is
+                // filtered out and this run is the only one: without it, `test-fast` reported success for a
+                // run that tested nothing (found Nov 3, a robot_mjcf.zig test that never ran).
+                if (!aggregated_elsewhere or fast_root_only != null) {
                     test_fast_step.dependOn(&fast_run.step);
                 }
                 fast_runs.append(b.allocator, fast_run) catch @panic("OOM");
@@ -9884,7 +9991,7 @@ pub fn build(b: *std.Build) void {
         "lint-files",
         "Comma-separated Zig files to lint instead of the default full-tree scan.",
     );
-    // -- *** LINT AND FMT ARE CHECKED, NEVER APPLIED BY A BUILD, AND NEVER IN A COMPILE'S WAY (Simon, Oct 18) --
+    // -- *** LINT AND FMT ARE CHECKED, NEVER APPLIED BY A BUILD, AND NEVER IN A COMPILE'S WAY --
     //
     // No build writes a source file. `lint` and `lint-check` CHECK - the layout too, as the `zig-fmt` rule - and
     // list every finding; a fixable one ends `autofix: zig build lint-fix`, and the summary prints that command on a
@@ -9954,6 +10061,9 @@ pub fn build(b: *std.Build) void {
             "zig-out/",
         };
         const deletion_skip = [_][]const u8{
+            // The SPIR-V optimizer, a single-file port of SPIRV-Tools' source/opt brought in whole (Nov 7): not yet in
+            // the house style, so it opts out of the style gate until it is.
+            "tools/spirvopt.zig",
             // Host-only debug harness (bakeFontAtlas -> imageDrawTextWithFont ->
             // PNG, viewable in-sandbox for CPU text-path debugging). Not engine
             // code and never compiled into a build; opts out of the style gate.
@@ -10279,4 +10389,7 @@ pub fn build(b: *std.Build) void {
     gateEveryTool(b, gate_step);
     // And after that walk, so `tools` never picks up a compile-only twin: `zig build check`, what ZLS runs on save.
     addCompileCheck(b, smoke_focus);
+    // `check` also translates robotgpu's kernels to WGSL (`robotgpu-wgsl`, made with the host tests above), so a kernel
+    // the web build could not use fails the check the day it is written.
+    b.top_level_steps.get("check").?.step.dependOn(&b.top_level_steps.get("robotgpu-wgsl").?.step);
 }

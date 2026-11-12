@@ -57,6 +57,7 @@ const mulMat = zm.mulMat;
 const translation = zm.translation;
 const scaling = zm.scaling;
 const splat = zm.splat;
+const assertUnreachable = zm.assertUnreachable;
 
 // ---- `humanoid_flex`, WHICH IS ALL HINGES ----
 //
@@ -180,7 +181,7 @@ const State = struct {
     /// ... no hinge formula". The decomposition written two turns ago WAS that hinge formula,
     /// rediscovered badly.
     ///
-    /// *** THE SOLVED `kin_data.pos` IS A FULL SET OF JOINT ANGLES, consistent with the model's
+    /// *** THE SOLVED `kin_data.joint_positions` IS A FULL SET OF JOINT ANGLES, consistent with the model's
     /// limits and kinematics - which is exactly what the ragdoll's PD controller wants. The
     /// kinematic robot follows the capture by IK; the ragdoll follows the kinematic robot by PD.
     kin_data: rbt.Data,
@@ -355,7 +356,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // ** THE LANDSCAPE IS NOT SMOOTH: 0.17s at 400/40, 10.00s at 800/40, 1.98s at 1500/60. A
     // controller this sensitive to its gains is working but not yet robust, and that is a thing
     // a learned correction should fix rather than something to tune further.
-    // ---- SIMON'S NUMBERS FROM THE DEVICE, NOT THE HEADLESS SWEEP ----
+    // ---- THE NUMBERS FROM THE DEVICE, NOT THE HEADLESS SWEEP ----
     //
     // The sweep reached 10.00s at 800/40 with the root's orientation initialised from the clip.
     // On the device that still explodes and 84/3.4 was needed to calm it, which means the two
@@ -449,7 +450,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.bridge = try bridge_mod.Bridge.init(gpa, &s.world, &s.imported.model, &s.data, 256);
     s.bridge.listen(&s.world);
 
-    const bodies: usize = s.imported.model.nbody;
+    const bodies: usize = s.imported.model.body_count;
 
     // ---- the capture, and the T-pose that aligns it ----
     var capture: codecs.bvh.Data = try codecs.bvh.parse(gpa, dance_bvh, null);
@@ -481,10 +482,10 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // `ikScratchSize` exists and the first version guessed `8 * nv + 64` instead. It panicked
     // inside `ikStep` - and the panic handler named the function in one build, which is the
     // whole argument for having installed it.
-    s.ik_scratch = try gpa.alloc(f32, rbt.ikScratchSize(s.imported.model.nv));
+    s.ik_scratch = try gpa.alloc(f32, rbt.ikScratchSize(s.imported.model.dof_count));
     s.retargeted = try gpa.alloc(Vec, bodies);
-    s.previous_qpos = try gpa.alloc(f32, s.imported.model.nq);
-    s.previous_target = try gpa.alloc(f32, s.imported.model.nq);
+    s.previous_qpos = try gpa.alloc(f32, s.imported.model.coordinate_count);
+    s.previous_target = try gpa.alloc(f32, s.imported.model.coordinate_count);
     @memset(s.previous_target, 0);
     s.human_metres = try gpa.alloc(Vec, human_joints);
     s.human_rest_pos = try gpa.alloc(Vec, human_joints);
@@ -494,10 +495,10 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.has_previous = false;
 
     // The robot's own rest pose, forward-kinematicked once. `rbt.forward` has already run on
-    // `s.data`, so these are the values it produced for `qpos0`.
+    // `s.data`, so these are the values it produced for `reference_joint_positions`.
     for (0..bodies) |b| {
-        s.robot_rest_rot[b] = s.data.body_xrot[b];
-        s.robot_rest_pos[b] = s.data.body_xpos[b];
+        s.robot_rest_rot[b] = s.data.body_orientations[b];
+        s.robot_rest_pos[b] = s.data.body_positions[b];
     }
 
     const robot_reference: []Quat = try gpa.alloc(Quat, bodies);
@@ -613,8 +614,8 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         );
     }
 
-    s.target = try gpa.alloc(f32, s.imported.model.nq);
-    @memcpy(s.target, s.data.pos);
+    s.target = try gpa.alloc(f32, s.imported.model.coordinate_count);
+    @memcpy(s.target, s.data.joint_positions);
 }
 
 /// Target body positions, built by walking the robot's tree and pointing each bone along the
@@ -625,12 +626,12 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 /// direction keeps the robot's proportions and asks the solve for the closest reachable pose.
 fn buildRetargetedSkeleton(s: *State, positions: []const Vec) void {
     const m: *const rbt.Model = &s.imported.model;
-    const limit: usize = @min(m.nbody, s.retargeted.len);
+    const limit: usize = @min(m.body_count, s.retargeted.len);
     s.retargeted[0] = vec(0, 0, 0);
 
     for (1..limit) |b| {
         const parent: u32 = m.body_parent[b];
-        const own_length: f32 = length3(m.body_pos[b]);
+        const own_length: f32 = length3(m.body_rest_position[b]);
         const hb: i32 = s.human_of_body[b];
 
         if (parent == 0) {
@@ -642,12 +643,12 @@ fn buildRetargetedSkeleton(s: *State, positions: []const Vec) void {
         }
         const hp: i32 = s.human_of_body[parent];
         if (hb < 0 or hp < 0 or own_length < 1.0e-6) {
-            s.retargeted[b] = s.retargeted[parent] + m.body_pos[b];
+            s.retargeted[b] = s.retargeted[parent] + m.body_rest_position[b];
             continue;
         }
         const bone: Vec = positions[@intCast(hb)] - positions[@intCast(hp)];
         if (length3(bone) < 1.0e-6) {
-            s.retargeted[b] = s.retargeted[parent] + m.body_pos[b];
+            s.retargeted[b] = s.retargeted[parent] + m.body_rest_position[b];
             continue;
         }
         s.retargeted[b] = s.retargeted[parent] + normalize3(bone) * splat(own_length);
@@ -662,7 +663,7 @@ fn buildRetargetedSkeleton(s: *State, positions: []const Vec) void {
 /// sequence, no rest-pose algebra, no aim rule, no bend-plane rule, no hinge formula." The
 /// decomposition this replaces was that hinge formula, rediscovered badly two turns ago.
 ///
-/// *** THE SOLVED `kin_data.pos` IS A FULL SET OF JOINT ANGLES obeying the model's limits and
+/// *** THE SOLVED `kin_data.joint_positions` IS A FULL SET OF JOINT ANGLES obeying the model's limits and
 /// its kinematics, so the ragdoll's PD has a target that is reachable by construction - which a
 /// per-axis projection could never promise.
 ///
@@ -728,8 +729,8 @@ fn solveKinematicPose(s: *State, frame: usize) void {
 
     // ---- FORWARD KINEMATICS ON THE SOLVED POSE, OR NOTHING CAN SEE IT ----
     //
-    // *** `solvePointCloud` WRITES `kin_data.pos` AND NOTHING ELSE. The body transforms are
-    // still whatever the last `forward` left there, so a drawing that reads `body_xpos` shows
+    // *** `solvePointCloud` WRITES `kin_data.joint_positions` AND NOTHING ELSE. The body transforms are
+    // still whatever the last `forward` left there, so a drawing that reads `body_positions` shows
     // the previous pose - or the rest pose, for ever, if `forward` was never called at all.
     // That is exactly what happened: the IK ran every frame and nothing on screen used it.
     rbt.forward(m, &s.kin_data);
@@ -747,11 +748,11 @@ fn solveKinematicPose(s: *State, frame: usize) void {
     // sees has little to do with the clip.
     var worst_reach: f32 = 0;
     var reach_body: usize = 0;
-    for (1..m.nbody) |b| {
+    for (1..m.body_count) |b| {
         if (s.human_of_body[b] < 0) {
             continue;
         }
-        const missed: f32 = length3(s.kin_data.body_xpos[b] - s.retargeted[b]);
+        const missed: f32 = length3(s.kin_data.body_positions[b] - s.retargeted[b]);
         if (missed > worst_reach) {
             worst_reach = missed;
             reach_body = b;
@@ -760,14 +761,14 @@ fn solveKinematicPose(s: *State, frame: usize) void {
     s.ik_residual = worst_reach;
     s.ik_residual_body = reach_body;
 
-    @memcpy(s.previous_qpos, s.kin_data.pos[0..m.nq]);
+    @memcpy(s.previous_qpos, s.kin_data.joint_positions[0..m.coordinate_count]);
     s.has_previous = true;
 }
 
 /// Copy the solved kinematic pose into the PD target.
 fn writeTargetFromClip(s: *State, frame: usize) void {
     solveKinematicPose(s, frame);
-    @memcpy(s.target, s.kin_data.pos[0..s.imported.model.nq]);
+    @memcpy(s.target, s.kin_data.joint_positions[0..s.imported.model.coordinate_count]);
 
     // ---- CLAMP THE TARGET TO EACH JOINT'S DECLARED RANGE ----
     //
@@ -780,12 +781,12 @@ fn writeTargetFromClip(s: *State, frame: usize) void {
     // error stays large and the panel's `max |angle|` line says so - clamping the target does
     // not quieten a sim that is already out of range, it only stops this end contributing.
     const m: *const rbt.Model = &s.imported.model;
-    for (0..m.njnt) |j| {
-        if (m.jnt_type[j] != .hinge) {
+    for (0..m.joint_count) |j| {
+        if (m.joint_type[j] != .hinge) {
             continue;
         }
-        if (m.jnt_range[j]) |range| {
-            const q: u32 = m.jnt_qpos_adr[j];
+        if (m.joint_range[j]) |range| {
+            const q: u32 = m.joint_first_coordinate[j];
             s.target[q] = clamp(s.target[q], range[0], range[1]);
         }
     }
@@ -803,11 +804,11 @@ fn writeTargetFromClip(s: *State, frame: usize) void {
     // only thing preventing the flip, and nobody has checked that it does.
     var jump: f32 = 0;
     var where: usize = 0;
-    for (0..m.njnt) |j| {
-        if (m.jnt_type[j] != .hinge) {
+    for (0..m.joint_count) |j| {
+        if (m.joint_type[j] != .hinge) {
             continue;
         }
-        const q: u32 = m.jnt_qpos_adr[j];
+        const q: u32 = m.joint_first_coordinate[j];
         const moved: f32 = @abs(s.target[q] - s.previous_target[q]);
         if (moved > jump) {
             jump = moved;
@@ -828,14 +829,14 @@ fn resetToClip(s: *State) void {
     // T-pose while the target is a dance pose makes the controller cross that gap in one step -
     // a shove at t = 0 that has nothing to do with whether the clip is trackable.
     writeTargetFromClip(s, 0);
-    @memcpy(s.data.pos, s.target);
-    @memset(s.data.vel, 0);
+    @memcpy(s.data.joint_positions, s.target);
+    @memset(s.data.joint_velocities, 0);
     s.accumulator = 0;
     s.playhead = 0;
     s.survived = 0;
     s.fallen = false;
     rbt.forward(&s.imported.model, &s.data);
-    s.start_height = s.data.body_xpos[1][2];
+    s.start_height = s.data.body_positions[1][2];
 }
 
 fn deinit(gpa: Allocator, s: *State) void {
@@ -878,24 +879,24 @@ fn deinit(gpa: Allocator, s: *State) void {
 /// three its rotation; driving the rotation too would CLAMP the character rather than hang it,
 /// and a clamped root cannot show the tracking errors that make a limb swing wrong.
 ///
-/// Written straight into `applied_force` because a free joint is not powered and never will be -
+/// Written straight into `applied_joint_forces` because a free joint is not powered and never will be -
 /// `Actuation` is right to exclude it, and this is a hook rather than a motor.
 fn hangFromHook(s: *State) void {
     const m: *const rbt.Model = &s.imported.model;
-    if (m.njnt == 0 or m.jnt_type[0] != .free) {
+    if (m.joint_count == 0 or m.joint_type[0] != .free) {
         return;
     }
-    const v: u32 = m.jnt_dof_adr[0];
-    const hook: Vec = s.kin_data.body_xpos[1] + vec(2.0, 0, 3.0);
-    const at: Vec = s.data.body_xpos[1];
+    const v: u32 = m.joint_first_dof[0];
+    const hook: Vec = s.kin_data.body_positions[1] + vec(2.0, 0, 3.0);
+    const at: Vec = s.data.body_positions[1];
 
     // Stiff and well damped: the hook should hold, not bounce. `kv` near `2*sqrt(kp)` is roughly
     // critical for a unit mass, and the character is heavier, so this errs toward sluggish.
     const hook_kp: f32 = 900.0;
     const hook_kv: f32 = 60.0;
     inline for (0..3) |k| {
-        const pull: f32 = hook_kp * (hook[k] - at[k]) - hook_kv * s.data.vel[v + k];
-        s.data.applied_force[v + k] += pull;
+        const pull: f32 = hook_kp * (hook[k] - at[k]) - hook_kv * s.data.joint_velocities[v + k];
+        s.data.applied_joint_forces[v + k] += pull;
     }
 }
 
@@ -914,11 +915,11 @@ fn hangFromHook(s: *State) void {
 /// the controller's. Use the hook to watch it move, this to measure whether it tracks.
 fn pinRootInWorld(s: *State) void {
     const m: *const rbt.Model = &s.imported.model;
-    if (m.njnt == 0 or m.jnt_type[0] != .free) {
+    if (m.joint_count == 0 or m.joint_type[0] != .free) {
         return;
     }
-    const q: u32 = m.jnt_qpos_adr[0];
-    const v: u32 = m.jnt_dof_adr[0];
+    const q: u32 = m.joint_first_coordinate[0];
+    const v: u32 = m.joint_first_dof[0];
 
     // Beside the kinematic robot and well clear of the floor, so nothing is in contact and
     // contact forces cannot contribute to what is being measured.
@@ -927,19 +928,19 @@ fn pinRootInWorld(s: *State) void {
     // Three metres up put the character above the camera's framing and made the two impossible
     // to compare by eye. **The whole value of pinning is that the two poses can be read against
     // each other**, which needs them at the same height and close together.
-    const at: Vec = s.kin_data.body_xpos[1] + vec(2.0, 0, 0);
+    const at: Vec = s.kin_data.body_positions[1] + vec(2.0, 0, 0);
     inline for (0..3) |k| {
-        s.data.pos[q + k] = at[k];
+        s.data.joint_positions[q + k] = at[k];
     }
     // Upright, x-y-z-w. Using the clip's own root orientation would rotate the whole character
     // and make the joint errors harder to read against a fixed view.
-    s.data.pos[q + 3] = 0;
-    s.data.pos[q + 4] = 0;
-    s.data.pos[q + 5] = 0;
-    s.data.pos[q + 6] = 1;
+    s.data.joint_positions[q + 3] = 0;
+    s.data.joint_positions[q + 4] = 0;
+    s.data.joint_positions[q + 5] = 0;
+    s.data.joint_positions[q + 6] = 1;
 
     inline for (0..6) |k| {
-        s.data.vel[v + k] = 0;
+        s.data.joint_velocities[v + k] = 0;
     }
     rbt.forward(m, &s.data);
 }
@@ -959,12 +960,12 @@ fn measureJointError(s: *State) void {
     var worst: f32 = 0;
     var where: usize = 0;
 
-    for (0..m.njnt) |j| {
-        if (m.jnt_type[j] != .hinge) {
+    for (0..m.joint_count) |j| {
+        if (m.joint_type[j] != .hinge) {
             continue;
         }
-        const q: u32 = m.jnt_qpos_adr[j];
-        const err: f32 = @abs(s.target[q] - s.data.pos[q]);
+        const q: u32 = m.joint_first_coordinate[j];
+        const err: f32 = @abs(s.target[q] - s.data.joint_positions[q]);
         if (err > worst) {
             worst = err;
             where = j;
@@ -985,14 +986,14 @@ fn measureJointError(s: *State) void {
     var target_max: f32 = 0;
     var sim_max: f32 = 0;
     var limit_max: f32 = 0;
-    for (0..m.njnt) |j| {
-        if (m.jnt_type[j] != .hinge) {
+    for (0..m.joint_count) |j| {
+        if (m.joint_type[j] != .hinge) {
             continue;
         }
-        const q: u32 = m.jnt_qpos_adr[j];
+        const q: u32 = m.joint_first_coordinate[j];
         target_max = @max(target_max, @abs(s.target[q]));
-        sim_max = @max(sim_max, @abs(s.data.pos[q]));
-        if (m.jnt_range[j]) |r| {
+        sim_max = @max(sim_max, @abs(s.data.joint_positions[q]));
+        if (m.joint_range[j]) |r| {
             limit_max = @max(limit_max, @max(@abs(r[0]), @abs(r[1])));
         }
     }
@@ -1011,7 +1012,7 @@ fn measureJointError(s: *State) void {
 /// asking it twenty times.
 ///
 /// ** THE RESET BUTTON SETS A FLAG RATHER THAN RESETTING. The panel draws mid-frame, after the
-/// physics has stepped and while the draw is in flight; rewriting `data.pos` there would put the
+/// physics has stepped and while the draw is in flight; rewriting `data.joint_positions` there would put the
 /// character somewhere the frame already decided it was not. `update` consumes the flag at the
 /// top of the next frame, where a reset is a normal thing to do.
 /// The stage-0 bar, as words. Under 0.2 s the retarget or the gains are wrong and no policy
@@ -1035,10 +1036,10 @@ fn drawPanel(s: *State, f: *z.Frame, clip_length: f32) bool {
     if (u.window("dance_track", .{})) |window| {
         defer window.close();
 
-        // `njnt` is ALL joints, not ball ones - the old label said "24 ball joints" for a
+        // `joint_count` is ALL joints, not ball ones - the old label said "24 ball joints" for a
         // model that has none. A label that contradicts the model it describes is worse than
         // no label, because it is read as information.
-        u.text("{d} bodies   {d} DOF   {d} joints", .{ m.nbody - 1, m.nv, m.njnt });
+        u.text("{d} bodies   {d} DOF   {d} joints", .{ m.body_count - 1, m.dof_count, m.joint_count });
 
         // ---- THE TWO HEIGHTS, SIDE BY SIDE ----
         //
@@ -1057,7 +1058,7 @@ fn drawPanel(s: *State, f: *z.Frame, clip_length: f32) bool {
             s.max_joint_error,
             s.max_joint_error * 57.2957795,
             s.worst_joint,
-            s.imported.names[s.imported.model.jnt_body[s.worst_joint]],
+            s.imported.names[s.imported.model.joint_body[s.worst_joint]],
         });
 
         // A dance should move no joint much past 0.1 rad per frame at 60 fps. Above that the
@@ -1072,7 +1073,7 @@ fn drawPanel(s: *State, f: *z.Frame, clip_length: f32) bool {
         u.text("target jump/frame {d:.3} rad on joint {d} ({s})   {s}", .{
             s.target_jump,
             s.jump_joint,
-            s.imported.names[s.imported.model.jnt_body[s.jump_joint]],
+            s.imported.names[s.imported.model.joint_body[s.jump_joint]],
             if (s.target_jump > 0.3) "NOT SMOOTH" else "smooth",
         });
 
@@ -1083,8 +1084,8 @@ fn drawPanel(s: *State, f: *z.Frame, clip_length: f32) bool {
         });
 
         u.text("root height:  reference {d:.3} m   ragdoll {d:.3} m", .{
-            s.kin_data.body_xpos[1][2],
-            s.data.body_xpos[1][2],
+            s.kin_data.body_positions[1][2],
+            s.data.body_positions[1][2],
         });
         const current_frame: usize = @floor(s.playhead * s.clip_fps);
         u.text("clip {d:.2}s / {d:.2}s   frame {d} of {d}", .{
@@ -1156,11 +1157,11 @@ fn drawReference(s: *State, gl: *z.WgpuGl) void {
     // travel, because the IK targets were built from the capture's world positions.
     const side: Vec = vec(1.2, 0, 0);
 
-    for (0..m.ngeom) |g| {
+    for (0..m.geom_count) |g| {
         const body: u32 = m.geom_body[g];
-        const body_rot: Quat = s.kin_data.body_xrot[body];
-        const world_pos: Vec = s.kin_data.body_xpos[body] + side + zm.rotate(body_rot, m.geom_pos[g]);
-        const world_rot: Mat = quatToMat(qmul(body_rot, m.geom_rot[g]));
+        const body_rot: Quat = s.kin_data.body_orientations[body];
+        const world_pos: Vec = s.kin_data.body_positions[body] + side + zm.rotate(body_rot, m.geom_local_position[g]);
+        const world_rot: Mat = quatToMat(qmul(body_rot, m.geom_local_rotation[g]));
         const place: Mat = mulMat(
             mulMat(to_y_up, translation(world_pos[0], world_pos[1], world_pos[2])),
             world_rot,
@@ -1243,11 +1244,11 @@ fn drawCaptureSkeleton(s: *State, gl: *z.WgpuGl, frame: usize) void {
 fn drawRobot(s: *State, gl: *z.WgpuGl, tint: Color) void {
     const m: *const rbt.Model = &s.imported.model;
     const to_y_up: Mat = zm.zUpToYUp();
-    for (0..m.ngeom) |g| {
+    for (0..m.geom_count) |g| {
         const body: u32 = m.geom_body[g];
-        const body_rot: Quat = s.data.body_xrot[body];
-        const world_pos: Vec = s.data.body_xpos[body] + zm.rotate(body_rot, m.geom_pos[g]);
-        const world_rot: Mat = quatToMat(qmul(body_rot, m.geom_rot[g]));
+        const body_rot: Quat = s.data.body_orientations[body];
+        const world_pos: Vec = s.data.body_positions[body] + zm.rotate(body_rot, m.geom_local_position[g]);
+        const world_rot: Mat = quatToMat(qmul(body_rot, m.geom_local_rotation[g]));
         const place: Mat = mulMat(
             mulMat(to_y_up, translation(world_pos[0], world_pos[1], world_pos[2])),
             world_rot,
@@ -1363,10 +1364,10 @@ fn update(f: *z.Frame, s: *State) void {
             }
             rbt.forward(m, &s.data);
             s.bridge.sync(&s.world, m, &s.data) catch |err| {
-                zm.assertUnreachable(@src(), "bridge sync failed: {t}", .{err});
+                assertUnreachable(@src(), "bridge sync failed: {t}", .{err});
             };
             zp.step(&s.world, sim_dt) catch |err| {
-                zm.assertUnreachable(@src(), "world step failed: {t}", .{err});
+                assertUnreachable(@src(), "world step failed: {t}", .{err});
             };
             s.last_swept = s.bridge.swept_count;
             s.last_capacity = s.data.contacts.len;

@@ -11,7 +11,7 @@
 //! policy plus Gaussian noise (the paper's sigma), into a cyclic buffer; the two networks train
 //! in tandem from it, one step each per iteration.
 //!
-//! The question it answers (Simon, Sep 19): can that alone hold a REAL cartpole upright under
+//! The question it answers : can that alone hold a REAL cartpole upright under
 //! pushes? zimrnum's "SuperTrack in miniature" proved the mechanism - gradient reaches a policy
 //! through a learned model - but measured its loss through the model, never ran the policy on
 //! the simulator, and fed the model MPC data. This runs the policy on the real cartpole.
@@ -1247,7 +1247,7 @@ fn runCartpole(options: Options, iterations: usize, every: usize, stop_above: f3
 }
 
 test "supertrack: supervised learning alone holds a real cartpole upright under pushes" {
-    // *** SIMON'S QUESTION: can a world model learned by supervision, and a policy optimised by
+    // *** THE QUESTION: can a world model learned by supervision, and a policy optimised by
     // back-propagating a tracking loss through it, hold a REAL cartpole upright under pushes -
     // with no reward, no critic, no MPC and no PPO or SAC? Eight cartpoles gather data with the
     // current policy plus noise; each iteration trains the world model one step and the policy

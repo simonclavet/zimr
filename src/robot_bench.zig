@@ -113,13 +113,16 @@ const Hold = struct {
     /// while leaving the contacts TRUE, which is the part that matters.
     fn refreshFeet(model: *const rbt.Model, data: *rbt.Data) void {
         data.clearContacts();
-        for (0..model.ngeom) |g| {
+        for (0..model.geom_count) |g| {
             const radius: f32 = switch (model.geom_shape[g]) {
                 .sphere => |sph| sph.radius,
                 else => continue,
             };
             const body: u32 = model.geom_body[g];
-            const at: Vec = data.body_xpos[body] + zm.rotate(data.body_xrot[body], model.geom_pos[g]);
+            const at: Vec = data.body_positions[body] + zm.rotate(
+                data.body_orientations[body],
+                model.geom_local_position[g],
+            );
             const gap: f32 = at[2] - radius;
             if (gap > 0.01) {
                 continue; // clear of the floor
@@ -139,15 +142,15 @@ const Hold = struct {
 
     fn apply(self: Hold, model: *const rbt.Model, data: *rbt.Data) void {
         refreshFeet(model, data);
-        @memset(data.applied_force, 0);
-        for (0..model.njnt) |j| {
-            if (model.jnt_type[j] != .hinge) {
+        @memset(data.applied_joint_forces, 0);
+        for (0..model.joint_count) |j| {
+            if (model.joint_type[j] != .hinge) {
                 continue;
             }
-            const q: u32 = model.jnt_qpos_adr[j];
-            const v: u32 = model.jnt_dof_adr[j];
-            const wanted: f32 = self.kp * (self.home[q] - data.pos[q]) - self.kv * data.vel[v];
-            data.applied_force[v] = clamp(wanted, -self.limit, self.limit) + data.bias_force[v];
+            const q: u32 = model.joint_first_coordinate[j];
+            const v: u32 = model.joint_first_dof[j];
+            const wanted: f32 = self.kp * (self.home[q] - data.joint_positions[q]) - self.kv * data.joint_velocities[v];
+            data.applied_joint_forces[v] = clamp(wanted, -self.limit, self.limit) + data.bias_joint_forces[v];
         }
     }
 };
@@ -198,7 +201,7 @@ fn benchmarkHeld(
     // lint:off debug-print: a native benchmark whose output is the deliverable
     std.debug.print(
         "{s:<28} nv {d:>2}  {d:>8.0} ns/step  {d:>7.0}x rt  nc {d}  solver {d:.1} it mean, {d} max\n",
-        .{ label, model.nv, per_step, realtime, data.constraint_count, iter_mean, iter_max },
+        .{ label, model.dof_count, per_step, realtime, data.constraint_count, iter_mean, iter_max },
     );
 }
 
@@ -320,8 +323,8 @@ pub fn main() !void {
         defer m.deinit();
         var d: rbt.Data = try .init(gpa, &m);
         defer d.deinit();
-        d.pos[0] = 1.1;
-        d.pos[1] = -0.6;
+        d.joint_positions[0] = 1.1;
+        d.joint_positions[1] = -0.6;
         benchmark("1. two-link arm", &m, &d, steps_per_case);
     }
 
@@ -332,8 +335,8 @@ pub fn main() !void {
         m.opt.timestep = 1.0 / 240.0;
         var d: rbt.Data = try .init(gpa, &m);
         defer d.deinit();
-        d.pos[1] = 0.6;
-        d.pos[3] = -0.9;
+        d.joint_positions[1] = 0.6;
+        d.joint_positions[3] = -0.9;
         benchmark("2. KUKA iiwa, free", &m, &d, steps_per_case);
     }
 
@@ -347,13 +350,13 @@ pub fn main() !void {
         defer m.deinit();
         m.opt.timestep = 1.0 / 240.0;
         // Narrow every joint's range around its current pose so the limits engage.
-        for (0..m.njnt) |ji| {
-            m.jnt_range[ji] = .{ -0.05, 0.05 };
+        for (0..m.joint_count) |ji| {
+            m.joint_range[ji] = .{ -0.05, 0.05 };
         }
         var d: rbt.Data = try .init(gpa, &m);
         defer d.deinit();
-        for (0..m.nv) |i| {
-            d.pos[i] = 0.3; // outside every limit
+        for (0..m.dof_count) |i| {
+            d.joint_positions[i] = 0.3; // outside every limit
         }
         rbt.forward(&m, &d);
         benchmark("3. KUKA, all limits active", &m, &d, steps_per_case);
@@ -447,15 +450,15 @@ pub fn main() !void {
         // and the reference height is READ FROM THE KEYFRAME - it used to be the literal
         // string "0.2700" in the format, which would have kept printing after any edit to
         // the model.
-        const height: f32 = d.body_xpos[trunk][2];
+        const height: f32 = d.body_positions[trunk][2];
         const home_height: f32 = home[2];
         var worst_joint_error: f32 = 0;
-        for (0..imported.model.njnt) |ji| {
-            if (imported.model.jnt_type[ji] != .hinge) {
+        for (0..imported.model.joint_count) |ji| {
+            if (imported.model.joint_type[ji] != .hinge) {
                 continue;
             }
-            const qi: u32 = imported.model.jnt_qpos_adr[ji];
-            worst_joint_error = @max(worst_joint_error, @abs(d.pos[qi] - home[qi]));
+            const qi: u32 = imported.model.joint_first_coordinate[ji];
+            worst_joint_error = @max(worst_joint_error, @abs(d.joint_positions[qi] - home[qi]));
         }
         const holding: bool = worst_joint_error < 0.15;
         // lint:off debug-print: a native benchmark whose output is the deliverable
@@ -582,12 +585,12 @@ pub fn main() !void {
         // `robot_mjcf` imports a robot and leaves the scene to the caller, which is why
         // `examples/humanoid` builds a `zimrphysics` world with a static box and bridges into
         // it. Until a scene exists the character falls forever, and this reports exactly that.
-        const start_z: f32 = d.body_xpos[1][2];
+        const start_z: f32 = d.body_positions[1][2];
         var lowest_z: f32 = start_z;
         var contacts_seen: usize = 0;
         for (0..2000) |_| {
             rbt.step(&imported.model, &d);
-            const z_now: f32 = d.body_xpos[1][2];
+            const z_now: f32 = d.body_positions[1][2];
             if (z_now < lowest_z) {
                 lowest_z = z_now;
             }
@@ -731,7 +734,7 @@ pub fn main() !void {
         // lint:off debug-print: a native benchmark whose output is the deliverable.
         std.debug.print(
             "   ragdoll drop: start z {d:.3}  final z {d:.3}  lowest {d:.3}  frames with contact {d}/2000\n",
-            .{ start_z, d.body_xpos[1][2], lowest_z, contacts_seen },
+            .{ start_z, d.body_positions[1][2], lowest_z, contacts_seen },
         );
     }
 

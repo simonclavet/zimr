@@ -182,22 +182,22 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.bridge = try bridge_mod.Bridge.init(gpa, &s.world, &s.imported.model, &s.data, 64);
     s.bridge.listen(&s.world);
 
-    s.home = try gpa.dupe(f32, s.data.pos);
-    s.pose_scratch = try gpa.alloc(f32, s.imported.model.nq);
+    s.home = try gpa.dupe(f32, s.data.joint_positions);
+    s.pose_scratch = try gpa.alloc(f32, s.imported.model.coordinate_count);
     s.ik_scratch = try gpa.alloc(Vec, ctl.Ik.scratchSize(&s.imported.model));
     s.wrist = s.imported.bodyIndex("wrist").?;
     s.cube_body = s.imported.bodyIndex("cube").?;
     s.left_finger_q = blk: {
-        for (0..s.imported.model.njnt) |j| {
-            if (s.imported.model.jnt_type[j] == .slide) {
-                break :blk s.imported.model.jnt_qpos_adr[j];
+        for (0..s.imported.model.joint_count) |j| {
+            if (s.imported.model.joint_type[j] == .slide) {
+                break :blk s.imported.model.joint_first_coordinate[j];
             }
         }
         break :blk 0;
     };
 
     // Start the target where the grasp point already is, so nothing lurches on frame one.
-    s.target = s.data.body_xpos[s.wrist] + zm.rotate(s.data.body_xrot[s.wrist], grasp_offset);
+    s.target = s.data.body_positions[s.wrist] + zm.rotate(s.data.body_orientations[s.wrist], grasp_offset);
     s.reach_error = 0;
     s.grip = 0;
     s.physics_on = true;
@@ -240,7 +240,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 /// visibly fail to arrive.
 fn solveReach(s: *State) void {
     const m: *const rbt.Model = &s.imported.model;
-    @memcpy(s.pose_scratch, s.data.pos);
+    @memcpy(s.pose_scratch, s.data.joint_positions);
     const result: ctl.Ik.Result = (ctl.Ik{ .max_iterations = 40 }).solve(
         m,
         &s.data,
@@ -256,14 +256,14 @@ fn solveReach(s: *State) void {
         },
         s.ik_scratch,
     );
-    for (0..m.njnt) |j| {
-        if (m.jnt_type[j] != .hinge) {
+    for (0..m.joint_count) |j| {
+        if (m.joint_type[j] != .hinge) {
             continue;
         }
-        const q: u32 = m.jnt_qpos_adr[j];
-        s.home[q] = s.data.pos[q];
+        const q: u32 = m.joint_first_coordinate[j];
+        s.home[q] = s.data.joint_positions[q];
     }
-    @memcpy(s.data.pos, s.pose_scratch);
+    @memcpy(s.data.joint_positions, s.pose_scratch);
     s.data.stage = .stale;
     rbt.forward(m, &s.data);
     s.reach_error = result.error_distance;
@@ -277,24 +277,24 @@ fn solveReach(s: *State) void {
 fn resetScene(s: *State) void {
     const m: *const rbt.Model = &s.imported.model;
     _ = rmj.applyKeyframe(m, &s.data, s.robot.keyframes[0]);
-    const cube_joint: u32 = m.jnt_qpos_adr[m.body_jnt_adr[s.cube_body]];
-    s.data.pos[cube_joint + 0] = table_center[0];
-    s.data.pos[cube_joint + 1] = 0;
-    s.data.pos[cube_joint + 2] = table_center[2] + table_half[2] + cube_half;
-    s.data.pos[cube_joint + 3] = 0;
-    s.data.pos[cube_joint + 4] = 0;
-    s.data.pos[cube_joint + 5] = 0;
-    s.data.pos[cube_joint + 6] = 1;
-    @memset(s.data.vel, 0);
-    @memset(s.data.acc, 0);
+    const cube_joint: u32 = m.joint_first_coordinate[m.body_first_joint[s.cube_body]];
+    s.data.joint_positions[cube_joint + 0] = table_center[0];
+    s.data.joint_positions[cube_joint + 1] = 0;
+    s.data.joint_positions[cube_joint + 2] = table_center[2] + table_half[2] + cube_half;
+    s.data.joint_positions[cube_joint + 3] = 0;
+    s.data.joint_positions[cube_joint + 4] = 0;
+    s.data.joint_positions[cube_joint + 5] = 0;
+    s.data.joint_positions[cube_joint + 6] = 1;
+    @memset(s.data.joint_velocities, 0);
+    @memset(s.data.joint_accelerations, 0);
     s.data.clearContacts();
     s.data.forgetWarmStart();
     s.data.stage = .stale;
     rbt.forward(m, &s.data);
-    @memcpy(s.home, s.data.pos);
+    @memcpy(s.home, s.data.joint_positions);
     s.grip = 0;
     s.accumulator = 0;
-    s.target = s.data.body_xpos[s.wrist] + zm.rotate(s.data.body_xrot[s.wrist], grasp_offset);
+    s.target = s.data.body_positions[s.wrist] + zm.rotate(s.data.body_orientations[s.wrist], grasp_offset);
 }
 
 fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
@@ -326,8 +326,8 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
         u.text("gripper (one motor, coupled)", .{});
         _ = u.slider("close", &s.grip, .{ .min = -0.010, .max = 0.020, .fmt = "{d:.3}" });
         u.text("   left {d:>6.3}  right {d:>6.3}", .{
-            s.data.pos[s.left_finger_q],
-            s.data.pos[s.left_finger_q + 1],
+            s.data.joint_positions[s.left_finger_q],
+            s.data.joint_positions[s.left_finger_q + 1],
         });
         u.separator();
 
@@ -351,11 +351,11 @@ fn drawScene(s: *State, gl: *z.WgpuGl) void {
     );
     z.drawMeshInstanced(gl, &s.cube, &s.transform, table_col);
 
-    for (0..m.ngeom) |g| {
+    for (0..m.geom_count) |g| {
         const body: u32 = m.geom_body[g];
-        const body_rot: Quat = s.data.body_xrot[body];
-        const world_pos: Vec = s.data.body_xpos[body] + zm.rotate(body_rot, m.geom_pos[g]);
-        const world_rot: Mat = quatToMat(zm.qmul(body_rot, m.geom_rot[g]));
+        const body_rot: Quat = s.data.body_orientations[body];
+        const world_pos: Vec = s.data.body_positions[body] + zm.rotate(body_rot, m.geom_local_position[g]);
+        const world_rot: Mat = quatToMat(zm.qmul(body_rot, m.geom_local_rotation[g]));
         const place: Mat = mulMat(
             mulMat(to_y_up, translation(world_pos[0], world_pos[1], world_pos[2])),
             world_rot,

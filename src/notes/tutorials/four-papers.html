@@ -1,0 +1,1335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Four methods, and what they could become together</title>
+<style>
+  :root { --ink: #1d2230; --faint: #6b7280; --rule: #d9dde5; --paper: #ffffff; --tint: #f4f6fa; --accent: #2f5fb3; }
+  @media (prefers-color-scheme: dark) { :root { --ink: #e7e9ee; --faint: #9aa3b2; --rule: #343a46; --paper: #15181f; --tint: #1c2029; --accent: #86a7e8; } }
+  html { color-scheme: light dark; }
+  body { font-family: Georgia, "Times New Roman", serif; color: var(--ink); background: var(--paper); margin: 0; padding: 2rem 1rem 4rem; line-height: 1.5; }
+  main { max-width: 56rem; margin: 0 auto; }
+  h1 { font-size: 2rem; line-height: 1.15; margin: 0 0 .5rem; }
+  h2 { font-size: 1.45rem; margin: 3rem 0 .75rem; border-bottom: 1px solid var(--rule); padding-bottom: .25rem; }
+  h3 { font-size: 1.15rem; margin: 2rem 0 .5rem; }
+  h4 { font-size: 1rem; margin: 1.5rem 0 .4rem; }
+  p { margin: .6rem 0 .9rem; }
+  .lede { color: var(--faint); font-style: italic; }
+  pre.sketch { background: var(--tint); border: 1px solid var(--rule); border-radius: 6px; padding: .9rem 1rem; overflow-x: auto; font-size: .82rem; line-height: 1.35; }
+  pre.sketch code { font-family: ui-monospace, Menlo, Consolas, monospace; }
+  figure { margin: 1.2rem 0 1.5rem; }
+  figure svg { max-width: 100%; height: auto; display: block; }
+  figcaption { color: var(--faint); font-size: .92rem; margin-top: .4rem; }
+  table { border-collapse: collapse; width: 100%; font-size: .93rem; margin: 1rem 0 1.4rem; }
+  th, td { text-align: left; vertical-align: top; padding: .4rem .55rem; border-bottom: 1px solid var(--rule); }
+  th { background: var(--tint); }
+  code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .9em; }
+  .idea { border-left: 3px solid var(--accent); padding: .1rem 1rem .1rem 1rem; margin: 1.2rem 0; background: var(--tint); border-radius: 0 6px 6px 0; }
+  .idea h4 { margin-top: .6rem; }
+  .svg-ink { stroke: var(--ink); fill: none; stroke-width: 1.4; }
+  .svg-box { fill: var(--tint); stroke: var(--ink); stroke-width: 1.2; }
+  .svg-text { fill: var(--ink); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; white-space: pre; }
+  .svg-faint { fill: var(--faint); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px; white-space: pre; }
+  .svg-accent { stroke: var(--accent); fill: none; stroke-width: 1.6; }
+  .svg-dash { stroke: var(--accent); fill: none; stroke-width: 1.4; stroke-dasharray: 5 4; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Four methods, and what they could become together</h1>
+<p class="lede">SuperMimic, SkipWorld, EfficientTDMPC and FlowDPG, explained in detail; then twenty ways to combine and
+extend them for a tracker that comes back from large perturbations.</p>
+
+<h2 id="guide">How to read this</h2>
+
+<p>Part one, sections 1 to 5, explains the four methods as their papers describe them, with their own numbers; it
+can be read on its own. Part two, sections 6 to 8, is about our tracker: what it is trying to do, twenty ideas drawn
+from the four, and the five changes recommended for the plan. Part three, section 9, is a wide brainstorm on one
+question, recoveries from far away. Part four, section 10, works four of those ideas through to the point where they
+could be built. A reader short of time can take the map below, the side-by-side table of section 5, and section 8.</p>
+
+<ul>
+<li><a href="#supermimic">1. SuperMimic</a> - <a href="#skipworld">2. SkipWorld</a> - <a href="#efficienttdmpc">3. EfficientTDMPC</a> - <a href="#flowdpg">4. FlowDPG</a> - <a href="#side-by-side">5. Side by side</a></li>
+<li><a href="#ours">6. What our tracker is trying to do</a> - <a href="#ideas">7. Twenty ways to combine and extend them</a> - <a href="#plan">8. What this suggests for the plan</a></li>
+<li><a href="#far">9. Far from the reference: a wild brainstorm</a></li>
+<li><a href="#worked">10. Four ideas worked through</a>: <a href="#leash">the leash</a>, <a href="#reanchor">re-anchoring the goal</a>, <a href="#intents">intents</a>, <a href="#reversed">reversed falls</a></li>
+</ul>
+
+<h3>The words</h3>
+
+<table>
+<tr><th>Term</th><th>Meaning here</th></tr>
+<tr><td>world model</td><td>a learned function from a state and an action to the next state; "dynamics model" and "latent dynamics" in the papers mean the same</td></tr>
+<tr><td>imagined rollout</td><td>a sequence of states produced by the model from a start state and a policy's actions, with no simulator involved</td></tr>
+<tr><td>backpropagation through time</td><td>the gradient of an imagined return with respect to the policy's parameters, taken through every step of the rollout</td></tr>
+<tr><td>critic, bootstrapping</td><td>a learned estimate of the return from a state; "bootstrapping at depth h" replaces everything after step h by that estimate</td></tr>
+<tr><td>survival weight</td><td>the product of (1 - termination probability) over the steps so far, which multiplies later rewards</td></tr>
+<tr><td>replay</td><td>the store of logged transitions the model is fit on and imagined rollouts start from</td></tr>
+<tr><td>distillation</td><td>training one network to reproduce another's output: a student from a teacher, a policy from a planner</td></tr>
+<tr><td>reanalyze</td><td>re-running the planner on stored states to refresh the targets a policy is distilled from</td></tr>
+<tr><td>stride, skip</td><td>how many steps one call of a model covers; a skip model predicts the endpoint of several</td></tr>
+<tr><td>pessimism</td><td>subtracting an uncertainty from an estimate before acting on it</td></tr>
+<tr><td>flow matching</td><td>a generative policy that turns noise into an action by integrating a learned velocity field</td></tr>
+<tr><td>potential</td><td>a reward equal to the change of a function of the state, which telescopes over an episode</td></tr>
+<tr><td>aftermath, return streak</td><td>our episode rule: after a loss the character may live on, and a run of decisions back on the reference counts as a return</td></tr>
+</table>
+
+<h2 id="map">The map</h2>
+
+<p>The four papers answer four different questions, but they share one shape: a learned model of what happens next, a
+way to choose actions with it, and a discipline for keeping the model's errors from steering the choice. SuperMimic
+learns a humanoid's dynamics once and trains a tracking policy by differentiating through it. SkipWorld makes a
+model's long rollouts cheap by distilling a model that leaps several steps at once, then uses the cheap model to
+filter and the accurate one to decide. EfficientTDMPC keeps a planner honest by scoring an action sequence at every
+depth, averaging over an ensemble of models, and refusing to learn from actions the models are unsure about. FlowDPG
+teaches a generative policy to move toward higher value without differentiating through its own sampling, by
+distilling a value-driven correction into it at the policy's own estimate of its action.</p>
+
+<figure>
+<svg viewBox="0 0 760 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The four methods on one map">
+  <defs><marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="currentColor"/></marker></defs>
+  <rect x="20" y="20" width="340" height="120" rx="8" class="svg-box"/>
+  <text x="34" y="44" class="svg-text">SuperMimic</text>
+  <text x="34" y="64" class="svg-faint">learn the dynamics once from a simulator's logs;</text>
+  <text x="34" y="80" class="svg-faint">train the policy by backpropagating an imagined</text>
+  <text x="34" y="96" class="svg-faint">return through the model; a critic covers the rest;</text>
+  <text x="34" y="112" class="svg-faint">a soft survival weight for termination</text>
+  <rect x="400" y="20" width="340" height="120" rx="8" class="svg-box"/>
+  <text x="414" y="44" class="svg-text">SkipWorld</text>
+  <text x="414" y="64" class="svg-faint">train the model on its own rollouts; distill a model</text>
+  <text x="414" y="80" class="svg-faint">leaping s steps, from the dense model's endpoint;</text>
+  <text x="414" y="96" class="svg-faint">screen many candidates with the leap,</text>
+  <text x="414" y="112" class="svg-faint">refine the few with the dense model</text>
+  <rect x="20" y="160" width="340" height="120" rx="8" class="svg-box"/>
+  <text x="34" y="184" class="svg-text">EfficientTDMPC</text>
+  <text x="34" y="204" class="svg-faint">score a planned sequence by every prefix,</text>
+  <text x="34" y="220" class="svg-faint">averaged; an ensemble of dynamics heads whose</text>
+  <text x="34" y="236" class="svg-faint">disagreement is an uncertainty; distill nothing</text>
+  <text x="34" y="252" class="svg-faint">the models are unsure about, where episodes end</text>
+  <rect x="400" y="160" width="340" height="120" rx="8" class="svg-box"/>
+  <text x="414" y="184" class="svg-text">FlowDPG</text>
+  <text x="414" y="204" class="svg-faint">the policy's one-step estimate of its action;</text>
+  <text x="414" y="220" class="svg-faint">the critic's gradient there, scaled to its own step;</text>
+  <text x="414" y="236" class="svg-faint">the corrected action distilled back as one L2</text>
+  <text x="414" y="252" class="svg-faint">target, anchored to known-good behaviour</text>
+  <text x="380" y="154" class="svg-faint" text-anchor="middle">one learned model of what happens next, used four ways</text>
+</svg>
+<figcaption>The four methods on one map. Left to right and top to bottom: how to learn a policy through a model, how to
+make rollouts cheap, how to keep a planner honest, and how to improve a generative policy without differentiating
+through its sampling.</figcaption>
+</figure>
+
+<h2 id="supermimic">1. SuperMimic: one differentiable world model</h2>
+
+<p>SuperMimic trains one whole-body controller for a humanoid across a large library of motion clips. The idea that
+makes it cheap is that every clip, however different, runs on the same body and the same contacts: one learned model
+of those dynamics can serve every clip. The policy is then improved not by sampling the simulator, as PPO does, but
+by differentiating an imagined return through the model, which gives the policy an analytic gradient with far less
+variance than a likelihood-ratio estimate.</p>
+
+<h3>The loop</h3>
+
+<figure>
+<svg viewBox="0 0 760 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="SuperMimic's training loop">
+  <rect x="20" y="40" width="230" height="90" rx="8" class="svg-box"/>
+  <text x="135" y="66" class="svg-text" text-anchor="middle">1. collect</text>
+  <text x="135" y="86" class="svg-faint" text-anchor="middle">the policy acts in the simulator,</text>
+  <text x="135" y="102" class="svg-faint" text-anchor="middle">noisy actions logged,</text>
+  <text x="135" y="118" class="svg-faint" text-anchor="middle">into a fixed replay</text>
+  <rect x="265" y="40" width="230" height="90" rx="8" class="svg-box"/>
+  <text x="380" y="66" class="svg-text" text-anchor="middle">2. fit the model</text>
+  <text x="380" y="86" class="svg-faint" text-anchor="middle">on 8-step windows,</text>
+  <text x="380" y="102" class="svg-faint" text-anchor="middle">rolled on its own predictions</text>
+  <text x="380" y="118" class="svg-faint" text-anchor="middle">from the logged state</text>
+  <rect x="510" y="40" width="230" height="90" rx="8" class="svg-box"/>
+  <text x="625" y="66" class="svg-text" text-anchor="middle">3. improve the policy</text>
+  <text x="625" y="86" class="svg-faint" text-anchor="middle">32 imagined steps through the</text>
+  <text x="625" y="102" class="svg-faint" text-anchor="middle">frozen model, from replay states;</text>
+  <text x="625" y="118" class="svg-faint" text-anchor="middle">the critic beyond the horizon</text>
+  <path d="M250,85 L265,85" class="svg-ink" marker-end="url(#ar)"/>
+  <path d="M495,85 L510,85" class="svg-ink" marker-end="url(#ar)"/>
+  <path d="M625,130 L625,180 L135,180 L135,130" class="svg-ink" marker-end="url(#ar)"/>
+  <text x="380" y="200" class="svg-faint" text-anchor="middle">one loop; the replay, the model and the policy all move together, Dyna-style</text>
+  <text x="380" y="230" class="svg-faint" text-anchor="middle">4096 worlds; 3 hours on one GPU beat 128 GPUs for 7 days</text>
+</svg>
+<figcaption>SuperMimic's three phases run in one loop. Transitions from older policies stay valid for fitting the model,
+since the dynamics do not depend on who collected them.</figcaption>
+</figure>
+
+<h3>The model</h3>
+
+<p>The model has a learned dynamics core and four heads, each either learned or computed analytically from the
+predicted state:</p>
+
+<pre class="sketch"><code>   s_{t+1} = f(s_t, a_t, xi)        the dynamics (learned)
+   r_{t+1} = r(s_t, a_t, g_t)       the reward (analytic: the tracking reward from the predicted state)
+   o_t     = g(s_t, xi)             the observation (analytic: what the policy reads, from the state)
+   d_t     = d(s_t, g_t)            the termination probability (learned: a number in [0, 1])
+
+   xi      the episode's simulation context: friction, calibration offsets, the torso's centre of mass</code></pre>
+
+<p>Two choices here matter more than they look. First, the simulator's randomness has known sources, so the model is
+deterministic and simply conditioned on the context <code>xi</code>; sensor noise is added outside the model when the
+policy acts in imagination. Second, an analytic head has no loss term and no error of its own: the reward the policy
+is optimized for is the true reward of the predicted state, not a second network's guess at it.</p>
+
+<p>The model is fit on short windows from the replay. A window starts at a logged state and is rolled forward on the
+logged actions for <em>k</em> = 8 steps, each step from the model's own previous prediction, and every step is
+compared with what the simulator did:</p>
+
+<pre class="sketch"><code>   logged:     s_0 --a_0--&gt; s_1 --a_1--&gt; s_2 ... s_8
+   the model:  s_0 --a_0--&gt; s^_1 --a_1--&gt; s^_2 ... s^_8        (each from the model's previous output)
+
+   L_WM = sum over j = 1..8 of  |s^_j - s_j|^2  +  (r^_j - r_j)^2  +  |o^_j - o_j|^2  +  BCE(d^_j, d_j)
+                                                 (no term for an analytic head)</code></pre>
+
+<p>Because the window is autoregressive, the model learns to correct its own drift. That is why it stays stable over
+rollouts far longer than eight steps: the paper's imagined horizon is 32, four times the fitting window, and the
+model holds up over indefinitely long rollouts in practice.</p>
+
+<h3>The policy, through the model</h3>
+
+<p>With the model frozen, the policy and a critic are trained on imagined rollouts of <em>H</em> = 32 steps. Each
+rollout starts from a replay state with its recorded context. The policy acts on the predicted observation plus
+re-sampled sensor noise. The objective is a discounted sum of predicted rewards, weighted by a <em>survival
+weight</em>, plus the critic's estimate of everything beyond the horizon:</p>
+
+<pre class="sketch"><code>   c_0 = 1,   c_{t+1} = c_t (1 - d^_{t+1})                          the survival weight: how likely the rollout is still alive
+
+   J(theta) = E[ sum_{t=0}^{H-1} gamma^t c_t r^_{t+1}  +  gamma^H c_H V(s^_H, g_H, xi) ]
+
+   gradient: backpropagation through time, through the model's Jacobians in s^ and a, over all H steps</code></pre>
+
+<p>The survival weight is SuperMimic's answer to termination. A simulator terminates an episode abruptly, which no
+gradient can pass through; the model instead predicts a probability of termination, and the weight multiplies every
+later reward by the probability of having survived so far. Falling costs the policy all the future rewards it would
+have collected, smoothly, so the gradient tells it in which direction falling becomes less likely.</p>
+
+<figure>
+<svg viewBox="0 0 760 170" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The survival weight along an imagined rollout">
+  <text x="20" y="24" class="svg-text">imagined step   0     1     2     3     4     5     6     7</text>
+  <text x="20" y="48" class="svg-text">d^ (fall prob)  .00   .01   .02   .10   .40   .70   .90   .95</text>
+  <text x="20" y="72" class="svg-text">c (survival)    1.00  .99   .97   .87   .52   .16   .02   .00</text>
+  <text x="20" y="96" class="svg-text">reward counted  r_1   .99r_2 .97r_3 .87r_4 .52r_5 .16r_6 .02r_7 ...</text>
+  <path d="M30,150 L730,150" class="svg-ink"/>
+  <path d="M60,120 L150,121 L240,123 L330,131 L420,142 L510,149 L600,150 L690,150" class="svg-accent"/>
+  <text x="700" y="118" class="svg-faint">c_t</text>
+  <text x="380" y="166" class="svg-faint" text-anchor="middle">a rollout that starts to fall at step 3 loses its later rewards smoothly, and the loss is differentiable</text>
+</svg>
+<figcaption>The survival weight along one imagined rollout. By the time the model is sure the character has fallen, the
+remaining rewards count for nothing, and the way they fade carries a gradient.</figcaption>
+</figure>
+
+<p>The critic is fit to generalized-advantage returns computed backward over the imagined transitions, starting from
+its own estimate at the horizon, with no target network:</p>
+
+<pre class="sketch"><code>   R^_H = V_H
+   R^_t = r^_{t+1} + gamma (1 - d^_{t+1}) [ (1 - lambda) V_{t+1} + lambda R^_{t+1} ]        t = H-1 ... 0
+
+   L_V = sum_t (V_t - R^_t)^2,   the targets fixed while the critic is fit</code></pre>
+
+<p>Together, the policy and critic are a short-horizon actor-critic in the spirit of SHAC, which differentiates
+through a simulator; SuperMimic differentiates through a learned surrogate instead, which costs a model error but
+gains a rollout more than ten times faster than the simulator and a gradient the simulator never had.</p>
+
+<h3>What it achieves, and why</h3>
+
+<table>
+<tr><th>Measure</th><th>SuperMimic</th><th>The baseline, SONIC</th></tr>
+<tr><td>Compute to beat the baseline's return</td><td>3 h on one H100</td><td>128 L40 GPUs for 168 h, about 21,000 GPU-hours</td></tr>
+<tr><td>Failed motions of 129,514</td><td>25 after 3 h; 0 after 9.8 h on two GPUs</td><td>179</td></tr>
+<tr><td>Same motions, same reward, PPO in the simulator with 8192 worlds</td><td>return 0.82 in 1.2 h</td><td>0.72 after 18 h on eight GPUs</td></tr>
+<tr><td>The model's 8-step error as the data grows from 1 h to 264 h of motion</td><td colspan="2">stays within 0.007 to 0.011: one model amortizes the shared dynamics</td></tr>
+</table>
+
+<p>The scaling result is the deepest one. Adding motions does not make the model's job harder, because the body and
+its contacts are the same body and contacts; the GPU-hours to a target return grow slowly with the library. Compute
+stops being the bottleneck, and tracking scaling laws become measurable.</p>
+
+<h2 id="skipworld">2. SkipWorld: leap, then refine</h2>
+
+<p>SkipWorld plans visual navigation with a world model: given the current frames and a goal image, it rolls many
+candidate action sequences forward in the model and keeps the one whose predicted final view best matches the goal.
+Two things make this hard. Models trained on ground-truth histories are deployed in a closed loop where they see only
+their own predictions, so their errors compound. And scoring a candidate means several sequential model calls, so
+the cost grows with the horizon times the number of candidates.</p>
+
+<h3>Latent AutoRoll: train on your own predictions</h3>
+
+<pre class="sketch"><code>   the context C_t = [z_{t-3}, z_{t-2}, z_{t-1}, z_t]      the latest latents the model conditions on
+
+   step 1:  z^_{t+1} = F(C_t, a_{t+1}, tau)                 predict; loss against the true z_{t+1}
+            C_{t+1} = shift(C_t, z^_{t+1})                   drop the oldest, append the PREDICTION, not the truth
+   step 2:  z^_{t+2} = F(C_{t+1}, a_{t+2}, tau)             the model now sees its own output in its context
+   ...
+   L_AR = (1/H) sum_h L_diff(z_{t+h} | C_{t+h-1}, a_{t+h})</code></pre>
+
+<p>This is the same remedy SuperMimic applies with its autoregressive windows: the model trained on its own
+predictions learns to recover from its own errors, so what it does in a closed loop is what it was trained to do.</p>
+
+<h3>SkipDistill: a student that leaps</h3>
+
+<p>The dense model predicts one step at a time. The skip student predicts the endpoint of <em>s</em> steps in one
+call, from the current context, the actions over those steps added together, and the stride itself as a condition.
+Its target is not the ground truth, which would be the obvious choice. It is the dense teacher's own endpoint after
+<em>s</em> dense steps, with the teacher frozen:</p>
+
+<figure>
+<svg viewBox="0 0 760 210" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="SkipDistill: the student imitates the teacher's endpoint">
+  <text x="20" y="28" class="svg-text">teacher, dense:</text>
+  <circle cx="150" cy="60" r="7" class="svg-ink"/><circle cx="250" cy="60" r="7" class="svg-ink"/><circle cx="350" cy="60" r="7" class="svg-ink"/><circle cx="450" cy="60" r="7" class="svg-ink"/><circle cx="550" cy="60" r="9" class="svg-accent"/>
+  <path d="M157,60 L243,60" class="svg-ink" marker-end="url(#ar)"/><path d="M257,60 L343,60" class="svg-ink" marker-end="url(#ar)"/><path d="M357,60 L443,60" class="svg-ink" marker-end="url(#ar)"/><path d="M457,60 L541,60" class="svg-ink" marker-end="url(#ar)"/>
+  <text x="150" y="85" class="svg-faint" text-anchor="middle">C_t</text><text x="250" y="85" class="svg-faint" text-anchor="middle">z^_{t+1}</text><text x="350" y="85" class="svg-faint" text-anchor="middle">z^_{t+2}</text><text x="450" y="85" class="svg-faint" text-anchor="middle">z^_{t+3}</text><text x="550" y="85" class="svg-faint" text-anchor="middle">teacher endpoint z^T_{t+4}</text>
+  <text x="20" y="128" class="svg-text">student, one leap:</text>
+  <circle cx="150" cy="160" r="7" class="svg-ink"/><circle cx="550" cy="160" r="9" class="svg-accent"/>
+  <path d="M157,160 C300,120 400,120 541,160" class="svg-accent" marker-end="url(#ar)"/>
+  <text x="350" y="135" class="svg-faint" text-anchor="middle">F_phi(C_t, a_{t+1} + ... + a_{t+4}, 4 tau)</text>
+  <text x="550" y="185" class="svg-faint" text-anchor="middle">z^S_{t+4}</text>
+  <text x="600" y="110" class="svg-faint">L_distill = SmoothL1(z^S, sg(z^T))</text>
+</svg>
+<figcaption>The student is distilled from the teacher's endpoint, stop-gradient, so the two models agree with each
+other rather than each approximating the truth in its own way. Strides 2, 4 and 8 are sampled during training.</figcaption>
+</figure>
+
+<p>Distilling from the teacher rather than the truth is the subtle choice. The student's job is to predict where the
+teacher would end up, because the planner's refinement stage uses the teacher: a student that agreed with the truth
+but not with the teacher would filter candidates the teacher then disagrees about.</p>
+
+<h3>Skip-then-Refine: the funnel</h3>
+
+<pre class="sketch"><code>   N = 120 candidate action sequences over H = 8 steps
+     |
+     |  the student, stride 8: ONE call per candidate, the endpoint decoded and compared with the goal
+     v
+   P = 20 candidates with the lowest coarse cost
+     |
+     |  the teacher, stride 1: 8 dense calls per candidate, R = 3 stochastic rollouts each, costs averaged
+     v
+   top K candidates, their actions averaged into the action taken
+
+   dense planning of all 120:    120 x 8 x 3 = 2880 dense calls
+   skip-then-refine:             120 (student) + 20 x 8 x 3 = 600 teacher calls      2.7x faster
+   accuracy: ATE 4.2% lower, RPE 2.7% lower than the dense baseline</code></pre>
+
+<p>The funnel is the point: the cheap model decides who is worth the expensive model's time, and the expensive model
+makes the decision. The ablation separates the two gains. AutoRoll alone brings the accuracy, ATE 3.26 against the
+baseline's 3.33, but as a dense planner it costs 3,808 seconds per query; the skip student alone is fast, 465 seconds,
+but less reliable on its own; AutoRoll with refinement reaches 3.20; the full funnel keeps that accuracy, 3.19, at
+835 seconds. A larger stride loses almost nothing: stride 8 sits at near-peak accuracy with the best runtime.</p>
+
+<h2 id="efficienttdmpc">3. EfficientTDMPC: an honest planner</h2>
+
+<p>The TD-MPC family learns a latent dynamics model, a reward head, a value ensemble and a policy, and plans with
+MPPI: it searches action sequences that maximize an estimated return, the predicted rewards over the sequence plus the
+value at its end. The estimate is built from learned parts, each of which errs, and a planner is exactly the thing
+that finds and exploits such errors: a sequence that the model wrongly believes leads to great reward wins the search.
+BMPC, the baseline, trains the policy entirely by distillation from the planner and refreshes stale targets by
+replanning on replay states, which deepens the dependence on the estimate. EfficientTDMPC's three changes each make
+the estimate harder to fool.</p>
+
+<h3>Value-equivalent learning</h3>
+
+<p>One background idea is needed first. The reward and value heads are trained on the latents the dynamics model
+rolls out, not on encoded true states. So they learn to compensate for the dynamics' errors: if the model drifts, the
+reward head is trained to predict the true reward from the drifted latent. This is the MuZero idea, and it couples
+the heads to the model.</p>
+
+<h3>The multi-horizon objective</h3>
+
+<p>A planned sequence is usually scored once, at its full depth. EfficientTDMPC scores it at every depth and averages:</p>
+
+<pre class="sketch"><code>   Q_h(z_t, a_t..a_{t+h-1}) = sum_{u&lt;h} gamma^u R(z^_{t+u}, a_{t+u}) + gamma^h V(z^_{t+h})      the first h actions, then the critic
+
+   Q_aggregate = (1/H) sum_{h=1}^{H} Q_h
+
+   a sequence whose every prefix stays valuable under the policy's continuation wins;
+   one whose value appears only at the last step does not</code></pre>
+
+<figure>
+<svg viewBox="0 0 760 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Two sequences scored at every depth">
+  <text x="20" y="26" class="svg-text">depth h            1      2      3      4      5      6     mean</text>
+  <text x="20" y="56" class="svg-text">sequence A: Q_h    10     10     11     11     12     12     11.0   steady</text>
+  <text x="20" y="86" class="svg-text">sequence B: Q_h     6      5      5      4      8     20      8.0   pays only at the end</text>
+  <text x="20" y="126" class="svg-faint">scored at depth 6 alone, B wins (20 against 12); averaged over depths, A wins (11 against 8)</text>
+  <text x="20" y="150" class="svg-faint">B's last-step value is the kind a model error produces; the average does not let one depth decide</text>
+  <path d="M60,185 L720,185" class="svg-ink"/>
+</svg>
+<figcaption>A worked comparison. Averaging over depths rewards sequences that are good all along, which an erroneous
+model rarely fabricates at every depth at once.</figcaption>
+</figure>
+
+<h3>A value-equivalent ensemble</h3>
+
+<p>Several dynamics heads, four by default, are initialized differently and trained on the same windows; the reward
+and value heads are trained on every head's rollouts. A return estimate then rolls out with one dynamics head
+<em>i</em> and bootstraps with one value head <em>j</em>; the mean over all pairs is the return, and their variance is
+how much the models disagree:</p>
+
+<pre class="sketch"><code>   Q(i, j) = sum_u gamma^u R(z^_u) + gamma^H V_j(z^_H),   z^ rolled by dynamics head i
+   Q_mean  = mean over (i, j)
+   sigma^2 = variance over (i, j) / (N_f N_v)
+
+   heads added to BMPC:   2 heads +10% AUC,   4 heads +22%,   8 heads +33%</code></pre>
+
+<h3>Pessimistic reanalyze</h3>
+
+<p>When policy targets are refreshed by replanning on replay states, the planned actions are never executed, so the
+model is never corrected on them. The pessimistic objective subtracts the uncertainty:</p>
+
+<pre class="sketch"><code>   J_reanalyze = Q_mean - beta sigma_Q          beta = 10
+
+   only actions the models agree about are distilled into the policy, which then proposes actions the models
+   have been trained on - and the value targets built from them become reliable in turn</code></pre>
+
+<p>The paper's empirical rule is precise: pessimism helps on tasks that can terminate early, such as humanoid walking,
+sitting and balancing a pole, and does nothing or slightly hurts on tasks that cannot. A model's optimistic error on a
+terminating task is a fall it did not foresee.</p>
+
+<h3>The practical changes</h3>
+
+<ul>
+<li>Every transition enters the replay immediately, not at an episode's end, so new experience reaches the model,
+critic and policy without delay.</li>
+<li>A longer planning horizon at acting time, together with the multi-horizon objective.</li>
+<li>Reanalyze, which dominates wall-clock time, runs with one eighth of the planning budget: fewer particles, elites
+and policy seeds suffice when the planner only refreshes targets.</li>
+</ul>
+
+<p>Together, on top of BMPC: the best sample efficiency reported on HumanoidBench and the DeepMind Control Suite,
+reaching BMPC's final performance in 57% fewer environment steps, without a significant increase in wall-clock time.</p>
+
+<h2 id="flowdpg">4. FlowDPG: improve a generative policy without differentiating through it</h2>
+
+<p>A flow-matching policy produces an action by integrating a learned velocity field from noise to a clean action
+chunk over a pseudo-time <em>t</em> from 0 to 1, in several steps. Such policies represent multimodal, feasible
+behaviour well, which is why manipulation has adopted them. But the standard way to improve a deterministic actor
+with a critic, DDPG's chain rule from the critic's gradient back to the actor's parameters, would have to pass
+through every integration step: a chain of Jacobians as long as the solver, expensive and numerically fragile,
+worst exactly when the velocity field is still poor.</p>
+
+<h3>The one-step estimate</h3>
+
+<p>From any point along the integration, the clean action can be estimated in one forward pass:</p>
+
+<pre class="sketch"><code>   x_t = (1 - t) x_0 + t x_1                       the noisy action at pseudo-time t (x_0 noise, x_1 the clean action)
+   u_t = x_1 - x_0                                 the flow-matching target velocity
+
+   a^ = x_t + (1 - t) v(x_t, t, s)                 the one-step estimate of the clean action, no gradient
+   consistency: L_cons = |a^ - x_1|^2 = (1 - t)^2 |v - u_t|^2     keeps the estimate on the action manifold</code></pre>
+
+<h3>The two vectors</h3>
+
+<figure>
+<svg viewBox="0 0 760 220" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="FlowDPG's two vectors: feasibility and value">
+  <circle cx="120" cy="160" r="6" class="svg-ink"/><text x="110" y="185" class="svg-faint">x_t, noisy</text>
+  <path d="M126,156 L400,80" class="svg-ink" marker-end="url(#ar)"/>
+  <text x="230" y="105" class="svg-faint">the demonstration-driven velocity: a^ = x_t + (1-t) v</text>
+  <circle cx="405" cy="78" r="6" class="svg-ink"/><text x="415" y="70" class="svg-faint">a^, feasible</text>
+  <path d="M410,75 L520,40" class="svg-accent" marker-end="url(#ar)"/>
+  <text x="250" y="30" class="svg-faint">delta = alpha |u_t| g / (|g| + eps): the critic's correction, scaled to the policy's step</text>
+  <circle cx="525" cy="38" r="7" class="svg-accent"/><text x="540" y="55" class="svg-faint">a* = a^ + delta: the target</text>
+  <path d="M126,160 L520,42" class="svg-dash"/>
+  <text x="250" y="178" class="svg-faint">u*_t = a* - x_0: the velocity distilled into the field, one L2 regression</text>
+  <text x="380" y="210" class="svg-faint" text-anchor="middle">g = gradient of min(Q_1, Q_2) at a^, critics frozen for this step</text>
+</svg>
+<figcaption>FlowDPG combines two vectors: the demonstration-driven velocity that keeps the action feasible, and the
+critic's correction that steers it toward higher value, scaled to the field's own velocity so its size never explodes.</figcaption>
+</figure>
+
+<pre class="sketch"><code>   L = lambda |v(x_t, t, s) - u*_t|^2  +  (1 - lambda) |v(x_t, t, s) - u_t|^2
+         the distilled, value-improved target           the behaviour-cloning anchor
+
+   lambda warms up linearly from 0, so an unreliable early critic cannot dominate;
+   the anchor is computed only on demonstrations and SUCCESSFUL rollouts, so it stays tied to behaviour that worked;
+   inference is the unchanged multi-step ODE</code></pre>
+
+<h3>Why it is a policy gradient</h3>
+
+<p>The vanilla deterministic policy gradient on the flow policy is an integral over pseudo-time of the critic's
+gradient times the sensitivity of the final action to the intermediate one, times the field's parameter gradient.
+FlowDPG's update equals it under three explicit approximations: the critic's gradient is taken at the one-step
+estimate, which sets the sensitivity to the identity; the integral is estimated at one random <em>t</em>, exactly as
+flow matching estimates its own loss; and the raw step size is replaced by the adaptive scaling. The last removes a
+known source of instability in the DDPG family.</p>
+
+<h3>Value learning that never leaves the data</h3>
+
+<p>The critics are twin Q networks whose minimum is used wherever a single estimate is needed. Their bootstrap target
+comes from an expectile value function, IQL's: a value trained toward the upper tail of the action-values of dataset
+actions, which never queries the critic at an action the data did not contain. Rewards per action chunk come from a
+frozen stage-and-progress predictor plus a terminal success term. The results on two real robots: 92% end-to-end
+success on dual-arm AirPods assembly over 8 stages, an 86% rubric score on scrambled-egg cooking over 14 stages,
+substantially above the alternatives that condition on value, bolt on an adapter, or differentiate through the ODE.</p>
+
+<h2 id="side-by-side">5. Side by side</h2>
+
+<table>
+<tr><th></th><th>SuperMimic</th><th>SkipWorld</th><th>EfficientTDMPC</th><th>FlowDPG</th></tr>
+<tr><td>What is learned</td><td>a dynamics model with analytic heads; a deterministic policy; a critic</td><td>a dense latent model; a skip student</td><td>latent dynamics ensemble, reward, value ensemble, policy</td><td>a flow policy's velocity field; twin critics; an expectile value</td></tr>
+<tr><td>From what</td><td>logged simulator transitions, 8-step windows</td><td>trajectories, own-prediction contexts</td><td>replay windows, inserted at once</td><td>demonstrations and online rollouts</td></tr>
+<tr><td>How actions improve</td><td>BPTT of an imagined return through the model</td><td>planning: a funnel of candidates</td><td>MPPI planning, distilled into the policy</td><td>a critic-driven correction distilled into the field</td></tr>
+<tr><td>Where model error is controlled</td><td>autoregressive fit; analytic heads; the critic beyond H</td><td>AutoRoll; the student distilled from the teacher; refine with the teacher</td><td>average over depths and heads; pessimism where unsure</td><td>the critic's gradient at a near-data estimate; the BC anchor; IQL's in-data value</td></tr>
+<tr><td>Termination</td><td>a predicted probability, a survival weight</td><td>none</td><td>pessimism switched on where episodes end</td><td>terminal success in the reward</td></tr>
+</table>
+
+
+<h2 id="ours">6. What our tracker is trying to do</h2>
+
+<p>Our system tracks a minute of captured dance with Geno, a 23-ball-joint character, on a GPU simulator that runs
+thousands of worlds at once, and it must do one thing the papers above do not set out to do: come back. A policy
+that tracks well in calm conditions is the easy half. The night's goal is a policy that resists pushes, recovers from
+stumbles, and returns to its reference after a large perturbation, in a way that looks natural. That makes
+termination the central problem: an episode that ends at the first loss teaches nothing about returning, and an
+episode that never ends teaches nothing about the cost of falling. Our episode rule already has a grace period, a
+loss, an aftermath in which the character may return, and a return streak; the curriculum starts episodes where the
+returns are low; the servo and the limbs' stiffness are part of the action.</p>
+
+<p>The learning is SuperMimic's shape: a world model fit on short windows of logged physics, a policy improved by
+backpropagation through imagined rollouts, a critic beyond the horizon. What the other three papers add is precisely
+what a recovery policy needs. SkipWorld shows how to look further ahead cheaply. EfficientTDMPC shows how to keep a
+planner from believing a model that cannot know what a fall looks like. FlowDPG shows how to pull a policy toward
+higher value while anchoring it to behaviour known to work. The twenty ideas below are read with that in mind.</p>
+
+<h2 id="ideas">7. Twenty ways to combine and extend them</h2>
+
+<div class="idea">
+<h4>1. Soft termination from the judgement itself, no learned head</h4>
+<p><em>From SuperMimic's survival weight, with our analytic judgement.</em> SuperMimic learns a termination
+probability because its simulator only reports a hard end. Our termination rule is a threshold on quantities the
+world model predicts: the tracking error, the head's height. So the survival weight can be analytic: a sigmoid of the
+margin to the threshold, <code>d = sigmoid((error - threshold) / width)</code>, differentiable with respect to the
+predicted state, needing no training and never wrong about the rule. The width is the one parameter: a few
+centimetres of error. <strong>Cost:</strong> one function. <strong>Gain:</strong> the gradient of "do not fall" flows
+into the policy from the first round, from the true rule.</p>
+</div>
+
+<figure>
+<svg viewBox="0 0 760 210" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Soft termination from the tracking error">
+  <path d="M60,170 L720,170" class="svg-ink"/><path d="M60,170 L60,30" class="svg-ink"/>
+  <text x="720" y="190" class="svg-faint" text-anchor="end">tracking error</text>
+  <text x="22" y="40" class="svg-faint">d: 1</text><text x="22" y="174" class="svg-faint">d: 0</text>
+  <path d="M60,169 C250,169 330,168 380,150 C430,132 460,70 520,45 C580,31 650,31 720,31" class="svg-accent"/>
+  <path d="M450,30 L450,170" class="svg-dash"/>
+  <text x="450" y="22" class="svg-faint" text-anchor="middle">threshold</text>
+  <path d="M400,100 L500,100" class="svg-ink"/><text x="450" y="118" class="svg-faint" text-anchor="middle">width</text>
+  <text x="200" y="150" class="svg-faint">tracking: the gradient of d is zero, nothing to fear</text>
+  <text x="560" y="150" class="svg-faint">lost: d near 1</text>
+  <text x="390" y="200" class="svg-faint" text-anchor="middle">near the threshold the slope carries the gradient "move the error down, and you survive"</text>
+</svg>
+<figcaption>Soft termination as a sigmoid of the margin to the threshold. The rule is the judgement's own; only the
+width is chosen, and it decides how far from the edge the policy starts to feel the cliff.</figcaption>
+</figure>
+
+<div class="idea">
+<h4>2. The imagined return scored at every depth</h4>
+<p><em>EfficientTDMPC's multi-horizon objective, applied to SuperMimic's BPTT.</em> The policy's imagined objective
+bootstraps the critic once, at the horizon. Average instead the returns bootstrapped at depths 1 to H, or weight them
+as a lambda return. A policy is then rewarded for rollouts that stay good all along, which a model error rarely
+fabricates at every depth at once, and the gradient's variance from the far steps, where the model is least sure,
+falls. <strong>Cost:</strong> one loop over depths in the loss. <strong>Gain:</strong> stability of the policy's
+gradient at long imagination horizons, which recovery needs.</p>
+</div>
+
+<figure>
+<svg viewBox="0 0 760 190" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The imagined return bootstrapped at every depth">
+  <text x="20" y="24" class="svg-text">imagined steps:   s0 -a0-> s1 -a1-> s2 -a2-> s3 -a3-> s4 ... s32</text>
+  <text x="20" y="54" class="svg-text">R_1  = r1 + g V(s1)</text>
+  <text x="20" y="74" class="svg-text">R_2  = r1 + g r2 + g^2 V(s2)</text>
+  <text x="20" y="94" class="svg-text">R_3  = r1 + g r2 + g^2 r3 + g^3 V(s3)</text>
+  <text x="20" y="114" class="svg-text">...</text>
+  <text x="20" y="134" class="svg-text">R_32 = r1 + ... + g^31 r32 + g^32 V(s32)          (SuperMimic's objective: this one alone)</text>
+  <text x="20" y="166" class="svg-text">J = mean of R_1 ... R_32  (or their lambda-weighted sum)     each term differentiable through the model</text>
+  <path d="M20,146 L740,146" class="svg-dash"/>
+</svg>
+<figcaption>The imagined objective bootstrapped at every depth. Early depths trust the critic, late depths trust the
+model; averaging them trusts neither too much.</figcaption>
+</figure>
+
+<div class="idea">
+<h4>3. Two world-model heads, and their disagreement as a number we can use</h4>
+<p><em>EfficientTDMPC's value-equivalent ensemble, at the smallest size.</em> Two dynamics heads, differently
+initialized, trained on the same windows, the critic trained on both heads' rollouts. The imagined return is averaged
+over the heads, and their disagreement along a rollout is an uncertainty the rest of the system can read: the planner
+(idea 9), the curriculum (idea 11), the diagnostics. <strong>Cost:</strong> twice the model's compute, a small share
+of a round. <strong>Gain:</strong> an uncertainty with no extra machinery, and a less exploitable model.</p>
+</div>
+
+<figure>
+<svg viewBox="0 0 760 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Two model heads diverging along an imagined rollout">
+  <circle cx="80" cy="100" r="7" class="svg-ink"/><text x="80" y="125" class="svg-faint" text-anchor="middle">s0</text>
+  <path d="M87,98 C200,90 320,80 440,60 C520,47 600,40 680,38" class="svg-accent"/>
+  <path d="M87,102 C200,110 320,120 440,140 C520,153 600,160 680,162" class="svg-ink"/>
+  <text x="690" y="42" class="svg-faint">head 1</text><text x="690" y="166" class="svg-faint">head 2</text>
+  <path d="M440,60 L440,140" class="svg-dash"/><text x="452" y="104" class="svg-faint">disagreement sigma_t</text>
+  <path d="M260,88 L260,112" class="svg-dash"/>
+  <text x="200" y="185" class="svg-faint">near the start the heads agree: the model knows this region</text>
+  <text x="470" y="185" class="svg-faint">later they part: the policy has led the rollout where the data is thin</text>
+</svg>
+<figcaption>Two heads trained on the same data diverge where that data is thin. The gap is an uncertainty the
+planner, the curriculum and the diagnostics can all read, and a return penalized by it is a cautious return.</figcaption>
+</figure>
+
+<div class="idea">
+<h4>4. The reference as the anchor</h4>
+<p><em>FlowDPG's two vectors, read for a residual policy.</em> Our action is an offset around the reference pose:
+the servo toward the reference is the feasibility vector, and the policy's offset is the value-driven correction. Make
+the anchor explicit: a term that pulls the offset toward zero, weighted by (1 - lambda), with lambda warming up from
+zero as the model and critic become trustworthy. Early in training the policy is the servo plus noise, which tracks
+reasonably; later the correction takes over where it earns value. <strong>Cost:</strong> one loss term and a
+schedule. <strong>Gain:</strong> no early collapse from a critic that does not yet know anything.</p>
+</div>
+
+<figure>
+<svg viewBox="0 0 760 180" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The reference as anchor, the offset as correction">
+  <circle cx="140" cy="120" r="7" class="svg-ink"/><text x="140" y="145" class="svg-faint" text-anchor="middle">the reference pose</text>
+  <path d="M147,118 L300,118" class="svg-ink" marker-end="url(#ar)"/><text x="223" y="108" class="svg-faint" text-anchor="middle">the servo: feasibility</text>
+  <circle cx="305" cy="118" r="6" class="svg-ink"/>
+  <path d="M311,114 L450,60" class="svg-accent" marker-end="url(#ar)"/><text x="400" y="78" class="svg-faint">the policy's offset: the value-driven correction</text>
+  <circle cx="455" cy="58" r="7" class="svg-accent"/><text x="470" y="62" class="svg-faint">the action taken</text>
+  <path d="M311,120 L380,120" class="svg-dash"/><text x="392" y="124" class="svg-faint">(1 - lambda) pulls the offset toward zero; lambda grows as the critic earns trust</text>
+  <text x="380" y="170" class="svg-faint" text-anchor="middle">early: the servo plus noise, which tracks; later: the correction where it earns value; the teacher bends the same vector</text>
+</svg>
+<figcaption>FlowDPG's two vectors, for a residual policy. The reference is the anchor that keeps the action feasible;
+the offset is the correction that earns value; the teacher's offset is distilled as a scaled step along the same
+vector.</figcaption>
+</figure>
+
+<div class="idea">
+<h4>5. The physics-MPC teacher distilled the FlowDPG way</h4>
+<p><em>FlowDPG's adaptive shift and warm-up, for our teacher.</em> The teacher finds, in the device physics, an offset
+that improves the imagined return. Distill it as FlowDPG distills its critic's correction: the target is the policy's
+own action plus a step along the teacher's direction, the step scaled to the action's natural size,
+<code>delta = alpha |a| g / (|g| + eps)</code>, with the teacher's weight lambda warming up. The teacher never replaces
+the policy's action with its own; it bends it. <strong>Cost:</strong> the teacher's search, already planned.
+<strong>Gain:</strong> stable distillation, and a teacher that fades naturally as the policy's own correction grows.</p>
+</div>
+
+<div class="idea">
+<h4>6. The skip model distilled from the dense model's endpoint</h4>
+<p><em>SkipDistill.</em> Our skip model, which predicts three decisions ahead in one leap, is best trained not only on
+logged physics but on the dense model's own three-step rollout, stop-gradient, with the actions over the leap
+aggregated and the stride as a condition. The two models then agree with each other, which is what matters when one
+screens and the other decides. <strong>Cost:</strong> three dense model steps per skip target, in the same batch.
+<strong>Gain:</strong> a skip model that predicts where the dense model would go, so a funnel built on them is
+consistent.</p>
+</div>
+
+<div class="idea">
+<h4>7. Skip-then-refine for the teacher</h4>
+<p><em>SkipWorld's funnel, for our MPC.</em> The teacher's candidates are many; the physics is expensive. Score every
+candidate offset sequence with the skip model in one leap, keep the best few, and run only those in the physics.
+SkipWorld's numbers suggest a factor near three with no loss of accuracy. <strong>Cost:</strong> none beyond idea 6.
+<strong>Gain:</strong> a teacher the GPU can afford every decision, for every world in trouble.</p>
+</div>
+
+<figure>
+<svg viewBox="0 0 760 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Skip-then-refine for the physics-MPC teacher">
+  <rect x="40" y="40" width="200" height="110" rx="8" class="svg-box"/>
+  <text x="140" y="66" class="svg-text" text-anchor="middle">N candidate offsets</text>
+  <text x="140" y="90" class="svg-faint" text-anchor="middle">around the policy's action,</text>
+  <text x="140" y="106" class="svg-faint" text-anchor="middle">three decisions each</text>
+  <text x="140" y="132" class="svg-faint" text-anchor="middle">scored by the SKIP model: one leap each</text>
+  <path d="M240,95 L300,95" class="svg-ink" marker-end="url(#ar)"/>
+  <rect x="300" y="55" width="160" height="80" rx="8" class="svg-box"/>
+  <text x="380" y="81" class="svg-text" text-anchor="middle">the best P</text>
+  <text x="380" y="103" class="svg-faint" text-anchor="middle">run in the PHYSICS,</text>
+  <text x="380" y="119" class="svg-faint" text-anchor="middle">three decisions each</text>
+  <path d="M460,95 L520,95" class="svg-ink" marker-end="url(#ar)"/>
+  <rect x="520" y="65" width="200" height="60" rx="8" class="svg-box"/>
+  <text x="620" y="91" class="svg-text" text-anchor="middle">the teacher's offset</text>
+  <text x="620" y="111" class="svg-faint" text-anchor="middle">distilled, scaled, warmed up</text>
+  <text x="380" y="180" class="svg-faint" text-anchor="middle">the skip model decides who is worth the physics' time; the physics decides</text>
+</svg>
+<figcaption>SkipWorld's funnel with the physics as the refining stage. The skip model screens, the simulator decides,
+and the teacher costs a few physics rollouts per world in trouble instead of many.</figcaption>
+</figure>
+
+<div class="idea">
+<h4>8. Two teachers for the skip model</h4>
+<p><em>SkipDistill, with the physics we have.</em> SkipWorld distills from the dense model because it has no ground
+truth in a closed loop. We have the physics: for logged action sequences, the skip model's endpoint can be regressed
+to the physics' true state three decisions later; for imagined sequences, to the dense model's endpoint. One loss,
+two teachers, by which data each term has. <strong>Cost:</strong> bookkeeping. <strong>Gain:</strong> the skip model
+is anchored to the truth where the truth exists.</p>
+</div>
+
+<div class="idea">
+<h4>9. A pessimistic teacher</h4>
+<p><em>EfficientTDMPC's pessimism, in the planner.</em> The teacher scores a candidate by the imagined return minus
+beta times the heads' disagreement along its rollout. A candidate that looks wonderful to one head and dreadful to the
+other is a model error, and exactly the kind a planner finds. <strong>Cost:</strong> idea 3. <strong>Gain:</strong>
+the teacher proposes only what the model can vouch for.</p>
+</div>
+
+<div class="idea">
+<h4>10. Reanalyze the teacher on replay states</h4>
+<p><em>BMPC's reanalyze, EfficientTDMPC's cheap budget.</em> The teacher need not run only on live worlds. Between
+decisions, on states from the replay, a reduced search refreshes the teacher's offsets as training targets, so the
+policy learns from the teacher's current opinion rather than a stale one. <strong>Cost:</strong> GPU time the lab can
+measure. <strong>Gain:</strong> many more teacher targets per hour.</p>
+</div>
+
+<div class="idea">
+<h4>11. Curriculum by disagreement</h4>
+<p><em>SuperMimic's curriculum, with EfficientTDMPC's uncertainty.</em> Our starts are drawn by a mixture toward bins
+of low return. Add a term toward bins where the model's heads disagree most: starts land where the model needs
+data, which is also where the policy will later need to recover. <strong>Cost:</strong> one more mixture weight.
+<strong>Gain:</strong> the data goes where the model is weak before the policy exploits the weakness.</p>
+</div>
+
+<div class="idea">
+<h4>12. A generative head for the aftermath</h4>
+<p><em>FlowDPG's flow policy, for recovery only.</em> Tracking is unimodal; recovery is not: which foot steps, which
+way the arms swing. A small flow-matching head for the aftermath, improved FlowDPG-style from the critic's and
+teacher's corrections, with the deterministic head kept for tracking. The simplest form is a mixture of a few recovery
+modes, the critic choosing. <strong>Cost:</strong> a second head and its sampler. <strong>Gain:</strong> recoveries
+that commit to one of several good strategies instead of averaging them into a bad one.</p>
+</div>
+
+<div class="idea">
+<h4>13. Action chunks in trouble</h4>
+<p><em>FlowDPG's chunks with SkipWorld's leap.</em> In the aftermath, the policy proposes a chunk of three decisions
+at once, scored by the skip model in one leap: fewer, larger decisions while recovering, dense decisions while
+tracking. <strong>Cost:</strong> the policy's output widens for the chunk. <strong>Gain:</strong> recoveries planned
+as a whole motion rather than step by step.</p>
+</div>
+
+<div class="idea">
+<h4>14. The critic as SuperMimic fits it</h4>
+<p>Generalized-advantage returns computed backward over the imagined rollout, from the critic's own estimate at the
+horizon, with the survival weight in the recursion and no target network. <strong>Cost:</strong> none.
+<strong>Gain:</strong> one fewer network to keep in step, and a critic trained on exactly the returns the policy
+optimizes.</p>
+</div>
+
+<div class="idea">
+<h4>15. Noise outside the model</h4>
+<p><em>SuperMimic.</em> Sensor noise is re-sampled and added to the predicted observation when the policy acts in
+imagination, never modelled. The policy learns to be robust to it; the model stays deterministic.
+<strong>Cost:</strong> none. <strong>Gain:</strong> robustness without a noise model, and a cleaner model to fit.</p>
+</div>
+
+<div class="idea">
+<h4>16. The simulation context as a model input</h4>
+<p><em>SuperMimic's xi.</em> When randomization comes, friction and mass enter the model as inputs rather than as
+unexplained variation, and the policy can read them too. <strong>Cost:</strong> a few inputs. <strong>Gain:</strong>
+one model for every randomized world; the way to real-robot transfer later.</p>
+</div>
+
+<div class="idea">
+<h4>17. Goal interfaces sharing one model</h4>
+<p><em>SuperMimic's goal encoders.</em> Beside the reference-tracking goal, a velocity or direction goal trained
+through the same model, so Geno can later be steered rather than only replayed. <strong>Cost:</strong> an encoder and
+a reward. <strong>Gain:</strong> a controllable character from the same training.</p>
+</div>
+
+<div class="idea">
+<h4>18. One network, two strides</h4>
+<p><em>Our skip model, simplified by SkipWorld.</em> Rather than a second network, the world model takes the stride as
+an input and predicts the mean rate over it; dense windows and skip windows train the same weights in one batch.
+<strong>Cost:</strong> one input. <strong>Gain:</strong> no second model to keep consistent, and shared features
+between the scales.</p>
+</div>
+
+<div class="idea">
+<h4>19. Pessimism only where episodes can end</h4>
+<p><em>EfficientTDMPC's rule, applied within one task.</em> Pessimism helps where termination is possible and hurts
+where it is not. For us both happen in the same run: calm tracking rarely ends, the aftermath often does. Apply the
+disagreement penalty only to worlds in trouble, in the teacher and in the imagined return. <strong>Cost:</strong> a
+flag we already have. <strong>Gain:</strong> caution where it pays, speed where it does not.</p>
+</div>
+
+<div class="idea">
+<h4>20. The model's error as the gate for everything</h4>
+<p><em>SuperMimic's scaling plot, as a discipline.</em> Every learning signal above rides on the model. The model's
+short-window error against the physics, on live rollouts, is the one number that says whether any of them can be
+trusted: the lab reports it per experiment, the teacher's weight and the imagination horizon follow it, and a night
+whose model error climbs stops its policy updates before they do harm. <strong>Cost:</strong> a measurement we
+already planned. <strong>Gain:</strong> the whole system fails safe.</p>
+</div>
+
+<h2 id="plan">8. What this suggests for the plan</h2>
+
+<p>The ideas sort themselves by how much they change for how little. Five of them are small enough to adopt before
+the first night and strong enough to change its outcome; the rest belong to the second night or later.</p>
+
+<table>
+<tr><th>Change</th><th>Ideas</th><th>Why now</th><th>Size</th></tr>
+<tr><td>Soft analytic termination and the survival weight in imagination</td><td>1, 14</td><td>Termination is our central problem, and this makes it differentiable from the true rule with no training</td><td>one function, one loop</td></tr>
+<tr><td>The imagined return scored at every depth</td><td>2</td><td>Stability at the long horizons recovery needs</td><td>one loop</td></tr>
+<tr><td>Two model heads; pessimism only in trouble</td><td>3, 19, 9</td><td>An uncertainty for free, used exactly where episodes can end</td><td>twice the model's compute</td></tr>
+<tr><td>The reference as anchor, the teacher distilled the FlowDPG way</td><td>4, 5</td><td>Defines the teacher precisely, with no early collapse</td><td>two loss terms, a schedule</td></tr>
+<tr><td>The skip model distilled from the dense model, and the funnel for the teacher</td><td>6, 7, 8, 18</td><td>Defines the skip model and makes the teacher affordable every decision</td><td>already planned, now exact</td></tr>
+</table>
+
+<p>Three principles behind the choices. Prefer analytic to learned wherever the rule is known: the reward, the
+observation, now the termination. Let every learned quantity carry its own uncertainty, and spend caution only where
+the task can end. Anchor every improvement to behaviour known to work: the reference for the policy, the physics
+for the skip model, the model's measured error for the whole.</p>
+
+<p>Left for later, deliberately: a generative recovery head (12), action chunks (13), the simulation context (16) and
+goal interfaces (17). Each is a genuine extension, and each is a change a night should be able to blame on its own.</p>
+
+
+<h2 id="far">9. Far from the reference: a wild brainstorm</h2>
+
+<p>SuperMimic's policy is trained near its references: episodes start on a clip frame, the action noise is small, and
+a lost reference ends the episode. That is enough to track, and not enough to come back. Everything below asks one
+question: what would it take for the same recipe to learn to return from metres away, from the ground, from the middle
+of a fall, and to make the return look like the dance it belongs to? The ideas are deliberately wide. Some are small
+and sure; some would be research. Each says which paper's tool it borrows.</p>
+
+<h3>A. Where episodes start</h3>
+
+<div class="idea">
+<h4>A1. A curriculum of distance, not only of return</h4>
+<p>Start noise today is a few centimetres and a small velocity. Make the start a distribution over <em>distance to the
+reference</em>, drawn by the curriculum: a share of starts on the frame, a share pushed a metre off, a share lying on
+the ground near the frame's position, a share dropped from a height. SuperMimic's mixture then runs over start
+<em>kinds</em> as well as bins: the kinds whose returns are lowest get more practice, with a uniform floor so none is
+abandoned. The curriculum already measures returns per bin; a return per kind is the same bookkeeping.</p>
+</div>
+
+<div class="idea">
+<h4>A2. The ground poses the physics gives us</h4>
+<p>Where should a character on the ground start? Not in a hand-written pose. Drop the character from every clip frame,
+let the physics settle it for a second, and keep the resting poses: a library of ground states the body actually
+reaches, each labelled with the frame it fell from. Starts on the ground draw from this library, with the clip
+continuing from that frame. The library costs one physics pass over the clips, on the device, and the poses are
+natural by construction.</p>
+</div>
+
+<div class="idea">
+<h4>A3. Starts in mid-fall</h4>
+<p>Between upright and ground lies the fall itself: the states where a recovery is still possible but closing.
+Record the falling states from pushed episodes - the aftermath's first second - into a replay of their own, and start
+a share of episodes from them. These are the states where one good decision changes the outcome, and they are rare
+in ordinary rollouts. EfficientTDMPC's practical lesson applies: insert them the moment they happen.</p>
+</div>
+
+<div class="idea">
+<h4>A4. Hindsight starts: resume where a recovery was lost</h4>
+<p>When an aftermath ends in failure, the states a few decisions before the end are the ones to practise. Start new
+episodes there, with the same clip and frame, so the policy meets the same hard moment again from slightly earlier,
+until it passes. This is a curriculum at the level of single states rather than bins, and the replay already holds
+every state needed.</p>
+</div>
+
+<div class="idea">
+<h4>A5. Pushes that scale with competence</h4>
+<p>A push schedule that opens with training is in the plan. Make it close the loop: the push rate and speed per bin
+follow that bin's return estimate, so the policy is pushed hardest where it tracks best and gently where it is still
+learning. The same mixture arithmetic as the curriculum, read the other way round.</p>
+</div>
+
+<h3>B. What the policy is paid for</h3>
+
+<div class="idea">
+<h4>B1. Pay for approach, not only for arrival</h4>
+<p>Far from the reference, the tracking reward is nearly zero everywhere, so its gradient says nothing. Add a
+potential: a reward proportional to the <em>decrease</em> of distance to the reference per decision - position,
+heading and pose separately - which is dense at any distance and vanishes exactly when the character is back. A
+potential-based term leaves the optimal policy unchanged near the reference and gives the far policy a direction. It
+is analytic, differentiable through the model, and SuperMimic's objective takes it as one more term.</p>
+</div>
+
+<div class="idea">
+<h4>B2. The soft survival weight shaped by distance</h4>
+<p>Idea 1 of the previous section makes termination a sigmoid of the error margin. With far starts, no single threshold
+fits: a character a metre off has not "lost" what it never had. Let the threshold follow the start: an episode that
+began far is allowed to be far, and its threshold tightens as it approaches, like a leash shortening. The survival
+weight then means "the character is not getting further away than it has been", which is the right thing to never do.</p>
+</div>
+
+<div class="idea">
+<h4>B3. A return bonus with a clock</h4>
+<p>SuperMimic has no reward for returning, only for being there. Give the aftermath a bonus at the moment the return
+streak completes, discounted by how long it took: a fast return earns more than a slow one. The bonus is a single
+step's reward, which the critic learns to anticipate, and it makes the policy prefer the decisive recovery over the
+cautious one that takes four seconds.</p>
+</div>
+
+<div class="idea">
+<h4>B4. Naturalness as closeness to the captures, not to the frame</h4>
+<p>A return should look like the dance. Reward the <em>pose</em>'s distance to the nearest captured pose over all
+clips - not the reference frame's pose, which may be far - so that even a character on the ground moves through poses
+the captures contain. The rotation boxes already describe the captures' envelope; a soft version of their excess is
+this reward's cheapest form. Where the captures hold no get-up, this term still prefers a return that passes through
+captured poses to one that does not.</p>
+</div>
+
+<div class="idea">
+<h4>B5. The multi-horizon objective as a brake on wishful recoveries</h4>
+<p>EfficientTDMPC's averaging over depths matters most far from the data. A recovery the model invents that pays
+only at step 32 is exactly a model error; a recovery that lowers the distance at every depth is real. The averaged
+objective weights the near steps, where the model is good, and lets the far steps vote without deciding.</p>
+</div>
+
+<h3>C. A model that knows what it does not know</h3>
+
+<div class="idea">
+<h4>C1. Two heads far from home</h4>
+<p>The model has seen little of the ground, the mid-fall, the metre-off state. Two heads trained on the same data
+disagree there, and the disagreement is a map of where the model is lost. Use it three ways: subtract it from the
+imagined return in the aftermath (pessimism, EfficientTDMPC); send starts there (curriculum by disagreement); and
+shorten the imagination horizon where it is large, since a model that is lost at step 5 should not be trusted at
+step 32.</p>
+</div>
+
+<div class="idea">
+<h4>C2. The physics as the model's teacher where it is lost</h4>
+<p>Where the heads disagree, run the physics: a few decisions from that state, with the policy's actions, logged
+straight into the replay with high priority. The device simulator is cheap and exact; the model is cheap and
+approximate; the disagreement decides which one to spend. This is SkipWorld's teacher-and-student with the roles
+assigned by uncertainty.</p>
+</div>
+
+<div class="idea">
+<h4>C3. A model fit on recoveries as a second window</h4>
+<p>The model's 8-step windows come from everywhere in the replay, mostly calm tracking. Keep a second sampler that
+draws windows from the aftermath only, in proportion to how badly the model does there, so the dynamics of
+stumbling, catching, and standing up get the share of the fit they need. Data freshness, as EfficientTDMPC insists,
+but by region of state space.</p>
+</div>
+
+<div class="idea">
+<h4>C4. The skip model as the long-range eye</h4>
+<p>A recovery is decided over seconds, not decisions. A skip model that leaps a second predicts, from a far state,
+roughly where the character will be after one second of a given intent, which is all a recovery plan needs at its
+coarse level. SkipWorld's student is trained exactly for this: the endpoint, from the dense model's rollout, with the
+stride as input. For recovery, its error on the ground states is what to watch.</p>
+</div>
+
+<h3>D. Planning the way back</h3>
+
+<div class="idea">
+<h4>D1. The funnel for recoveries only</h4>
+<p>The physics-MPC teacher is expensive; recoveries are rare. Run the teacher only for worlds in the aftermath: the
+skip model screens many candidate intents over a second, the physics refines the few, and the chosen offset is
+distilled FlowDPG-style. Calm tracking never pays for the teacher. SkipWorld's 2.7 times becomes larger here, because
+most worlds need no teacher at all.</p>
+</div>
+
+<div class="idea">
+<h4>D2. Plan in intents, not in joints</h4>
+<p>A recovery's candidates should not be random joint offsets; they should be a few intents: step left, step right,
+crouch, reach a hand down, roll. Each intent is a short captured or hand-made motion played through the servo, and
+the planner chooses among intents and their timings. The candidate set is tiny, the physics refines it, and the
+distilled policy learns which intent the state calls for. SkipWorld's action aggregation over a stride is the same
+thing: the sum of actions over the leap is an intent.</p>
+</div>
+
+<div class="idea">
+<h4>D3. Re-anchor the goal: the frame that is easiest to return to</h4>
+<p>A character on the ground should not chase the frame the clock says; it should rejoin the dance at the frame it
+can reach soonest. Let the planner choose the target frame among the next few seconds of the clip, scored by the
+imagined cost of getting there, and let the reference's clock jump to it on return. The reference becomes a path to
+rejoin rather than a schedule to keep, which is what a dancer who stumbles actually does.</p>
+</div>
+
+<div class="idea">
+<h4>D4. Time-reversed falls as get-up references</h4>
+<p>The captures hold no get-up, but the physics holds thousands of falls. Reverse a recorded fall in time and it is a
+get-up: physically implausible in its forces, but a plausible <em>path of poses</em> from the ground to standing.
+Use reversed falls as references for the servo during a get-up, with the policy's offsets correcting what the reversal
+gets wrong. Then the time-reversed fall library is a free, natural, body-specific set of get-up motions.</p>
+</div>
+
+<div class="idea">
+<h4>D5. Reanalyze the hard moments</h4>
+<p>BMPC replans on replay states to refresh policy targets. Do it only for the hardest states: the mid-fall and
+ground states with the lowest returns, a reduced-budget teacher run between decisions. The policy's targets at the
+rare, decisive moments stay fresh without the cost of replanning everywhere.</p>
+</div>
+
+<h3>E. What the policy is</h3>
+
+<div class="idea">
+<h4>E1. One policy, two conditions</h4>
+<p>The simplest change: give the policy its distance to the reference and the aftermath flag as inputs. A network
+that knows it is far behaves differently from one that thinks it is near, and the same weights serve both. Without
+this, the policy must infer from the pose alone that it is on the ground.</p>
+</div>
+
+<div class="idea">
+<h4>E2. A flow-matching head for the first second of trouble</h4>
+<p>The first second after a big push is where strategies diverge - the foot that steps, the side that bends - and a
+deterministic policy averages them into a crouch. A small flow policy proposes the first second's intent, improved
+FlowDPG-style from the critic's and the teacher's corrections, anchored to recoveries that succeeded; the tracker
+takes over once the intent is under way. Multimodality where it matters, determinism everywhere else.</p>
+</div>
+
+<div class="idea">
+<h4>E3. Action chunks that the skip model scores</h4>
+<p>In trouble, the policy emits a chunk of three decisions; the skip model scores the chunk in one leap; the chunk
+runs. Fewer decisions while recovering, each with a view a second ahead, and the dense policy resumes when the
+reference is near. FlowDPG's chunks with SkipWorld's stride.</p>
+</div>
+
+<div class="idea">
+<h4>E4. Stiffness as the recovery's dial</h4>
+<p>The limbs' stiffness is already part of the action. A fall wants soft limbs on impact and stiff ones when pushing
+off; let the policy learn that dial under the recovery rewards, and let the teacher's intents carry a stiffness
+profile of their own. This is the one lever a human recovering also uses, and no paper's policy has it.</p>
+</div>
+
+<h3>F. The data</h3>
+
+<div class="idea">
+<h4>F1. Relabel every recovery with the frame it reached</h4>
+<p>A recovery that rejoined the dance at frame 1,240 was, in hindsight, a successful episode toward frame 1,240
+whatever the clock said. Store it with that goal, as hindsight relabelling does, so the replay fills with successful
+returns from far states toward reachable frames. The model learns the same dynamics either way; the policy learns
+from successes it did not plan.</p>
+</div>
+
+<div class="idea">
+<h4>F2. Successful recoveries as the anchor</h4>
+<p>FlowDPG computes its behaviour-cloning anchor only on demonstrations and successful rollouts. Do the same: the
+policy's anchor far from the reference is not the servo toward a frame it cannot reach, but its own successful
+recoveries from similar states. The anchor set grows as the policy improves, and the policy is pulled toward what
+has worked.</p>
+</div>
+
+<div class="idea">
+<h4>F3. Record the pushes, learn to predict them</h4>
+<p>The model sees a push as an unexplained jump. Log the push as an input to the model - an external impulse for one
+decision - so it is predicted rather than absorbed as error, and so the policy can be trained in imagination against
+pushes the model applies itself. SuperMimic's sim context, extended to the one thing that changes within an episode.</p>
+</div>
+
+<h3>G. Two wild ones</h3>
+
+<div class="idea">
+<h4>G1. A model of the recovery itself</h4>
+<p>Train the skip model to predict not the state after one second but the <em>outcome</em>: the distance to the
+reference after one second under an intent, and whether the character is still upright. That is a value function of
+intents, learned from physics outcomes, usable by the planner with no rollout at all. It is EfficientTDMPC's
+value-equivalence pushed to its end: the model that predicts only what the decision needs.</p>
+</div>
+
+<div class="idea">
+<h4>G2. Train the fall</h4>
+<p>Every fall the policy has is data; a policy that falls <em>well</em> - lands softly, ends in a pose the get-up
+library knows - makes the recovery that follows possible. Give the fall its own small reward, the landing's impact and
+the resting pose's distance to the library, so the policy learns to fall toward states it can get up from. Recovery
+then starts before the ground.</p>
+</div>
+
+<figure>
+<svg viewBox="0 0 760 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Where the far-start ideas act along an episode">
+  <path d="M40,250 L720,250" class="svg-ink"/>
+  <text x="40" y="272" class="svg-faint">start</text><text x="700" y="272" class="svg-faint" text-anchor="end">return</text>
+  <path d="M60,165 C200,215 420,235 700,245" class="svg-accent"/>
+  <text x="60" y="155" class="svg-faint">distance to the reference</text>
+  <rect x="40" y="40" width="150" height="90" rx="6" class="svg-box"/>
+  <text x="115" y="60" class="svg-text" text-anchor="middle">at the start</text>
+  <text x="115" y="80" class="svg-faint" text-anchor="middle">A1 distance kinds</text>
+  <text x="115" y="96" class="svg-faint" text-anchor="middle">A2 ground poses</text>
+  <text x="115" y="112" class="svg-faint" text-anchor="middle">A3 falls, A4 hindsight</text>
+  <rect x="230" y="40" width="170" height="90" rx="6" class="svg-box"/>
+  <text x="315" y="60" class="svg-text" text-anchor="middle">far away</text>
+  <text x="315" y="80" class="svg-faint" text-anchor="middle">B1 approach reward</text>
+  <text x="315" y="96" class="svg-faint" text-anchor="middle">C1 pessimism, D1 funnel</text>
+  <text x="315" y="112" class="svg-faint" text-anchor="middle">D2 intents, E2 flow head</text>
+  <rect x="440" y="40" width="150" height="90" rx="6" class="svg-box"/>
+  <text x="515" y="60" class="svg-text" text-anchor="middle">closing in</text>
+  <text x="515" y="80" class="svg-faint" text-anchor="middle">B2 the leash</text>
+  <text x="515" y="96" class="svg-faint" text-anchor="middle">D3 re-anchored goal</text>
+  <text x="515" y="112" class="svg-faint" text-anchor="middle">B4 captured poses</text>
+  <rect x="610" y="40" width="110" height="90" rx="6" class="svg-box"/>
+  <text x="665" y="60" class="svg-text" text-anchor="middle">home</text>
+  <text x="665" y="80" class="svg-faint" text-anchor="middle">B3 return bonus</text>
+  <text x="665" y="96" class="svg-faint" text-anchor="middle">F1 relabel</text>
+  <text x="665" y="112" class="svg-faint" text-anchor="middle">tracking resumes</text>
+  <text x="380" y="22" class="svg-faint" text-anchor="middle">one episode that starts far: where each idea acts</text>
+</svg>
+<figcaption>The far-start ideas along one episode. Each acts at a different distance from the reference, and none of
+them changes what happens near it, where SuperMimic's recipe already works.</figcaption>
+</figure>
+
+<figure>
+<svg viewBox="0 0 760 230" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Re-anchoring the goal to the reachable frame">
+  <text x="20" y="26" class="svg-text">the clip's frames:</text>
+  <path d="M40,60 L720,60" class="svg-ink"/>
+  <circle cx="200" cy="60" r="6" class="svg-ink"/><text x="200" y="48" class="svg-faint" text-anchor="middle">the clock says here</text>
+  <circle cx="330" cy="60" r="6" class="svg-ink"/><circle cx="430" cy="60" r="6" class="svg-ink"/><circle cx="560" cy="60" r="7" class="svg-accent"/><text x="560" y="48" class="svg-faint" text-anchor="middle">easiest to reach</text>
+  <circle cx="120" cy="190" r="8" class="svg-accent"/><text x="120" y="212" class="svg-faint" text-anchor="middle">the character, on the ground</text>
+  <path d="M126,185 L197,67" class="svg-dash"/><text x="140" y="130" class="svg-faint">cost 9</text>
+  <path d="M128,186 L327,66" class="svg-dash"/><text x="230" y="150" class="svg-faint">cost 6</text>
+  <path d="M130,187 L553,66" class="svg-accent" marker-end="url(#ar)"/><text x="400" y="150" class="svg-faint">cost 3: a frame two seconds on, standing, feet apart</text>
+  <text x="380" y="100" class="svg-faint" text-anchor="middle">the clock jumps to the chosen frame on return; the dance is rejoined, not caught up with</text>
+</svg>
+<figcaption>Re-anchoring the goal. From the ground, the reference's current frame may be the hardest to reach; a frame a
+little later may be standing with the feet apart. The planner scores a few candidate frames by imagined cost and the
+reference's clock jumps on return.</figcaption>
+</figure>
+
+<figure>
+<svg viewBox="0 0 760 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="A fall reversed in time as a get-up reference">
+  <text x="20" y="26" class="svg-text">a recorded fall, forward:</text>
+  <text x="40" y="60" class="svg-faint">standing  ->  stumble  ->  knees  ->  hands  ->  on the ground</text>
+  <text x="20" y="106" class="svg-text">the same frames, reversed:</text>
+  <text x="40" y="140" class="svg-faint">on the ground  ->  hands  ->  knees  ->  stumble  ->  standing</text>
+  <path d="M60,70 L60,125" class="svg-accent" marker-end="url(#ar)"/>
+  <text x="380" y="180" class="svg-faint" text-anchor="middle">implausible as forces, plausible as a path of poses: a servo target for the get-up, the policy correcting the rest</text>
+</svg>
+<figcaption>A fall reversed in time. The body passes through the same poses either way; what the reversal gets wrong,
+the forces, is exactly what the policy's offsets and the physics correct.</figcaption>
+</figure>
+
+<h3>What I would try first</h3>
+
+<p>Four of these are cheap enough and promising enough for the experiment that trains the new signals together, and
+they compose: a distance curriculum with ground starts from the physics' own resting poses (A1, A2); the approach
+potential and the leash (B1, B2), both analytic and differentiable; the policy told its distance and its aftermath
+(E1); and the funnel for recoveries only (D1), so the teacher's cost is paid where it buys something. The
+re-anchored goal (D3) is the one idea here that could change what a tracker is, and it costs a search over a few
+frames with the imagined cost we already compute; it deserves an experiment of its own on the second night.</p>
+
+
+<h2 id="worked">10. Four ideas worked through</h2>
+
+<p>The brainstorm above is wide on purpose. This part narrows: the four ideas that could change what the tracker is,
+each written precisely enough to build, with a worked example, its cost in a round, how it fails, and how one hour of
+an experiment would tell.</p>
+
+<h3 id="leash">10.1 The approach potential and the leash</h3>
+
+<p><strong>The rule.</strong> Let <em>D</em> be a distance from the character to its reference, built from the same
+quantities the judgement already computes: the root's horizontal offset, its heading error, and the mean joint
+error, each divided by a scale so that one unit of each is "clearly lost". Two terms enter the imagined objective:</p>
+
+<pre class="sketch"><code>   approach reward at step t:   r_approach = k_a (D_{t-1} - D_t)          dense at any distance; zero once D stops changing
+   the leash:                   L_t = min(L_{t-1}, D_t + margin)          never longer than it has been
+   soft termination:            d_t = sigmoid((D_t - L_t) / width)        "getting further away than you have been"
+   survival weight:             c_{t+1} = c_t (1 - d_{t+1})               as SuperMimic's</code></pre>
+
+<p>The potential is telescoping: over a whole episode its sum is <code>k_a (D_start - D_end)</code>, so it does not
+change which recovery is best, only how early the policy is told that it is on the right track. The leash starts at
+the start's own distance plus a margin, so an episode that began a metre off is allowed a metre, and it shortens as
+the character closes in. Near the reference, the leash equals the ordinary threshold and this is exactly idea 1 of
+part 7.</p>
+
+<figure>
+<svg viewBox="0 0 760 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The leash along a recovery">
+  <path d="M60,200 L720,200" class="svg-ink"/><path d="M60,200 L60,30" class="svg-ink"/>
+  <text x="720" y="220" class="svg-faint" text-anchor="end">decisions</text><text x="20" y="40" class="svg-faint">D</text>
+  <path d="M60,60 C160,70 240,110 330,140 C420,170 520,186 700,190" class="svg-accent"/>
+  <path d="M60,50 L140,50 L140,62 L220,62 L220,88 L300,88 L300,118 L380,118 L380,148 L460,148 L460,168 L540,168 L540,180 L700,180" class="svg-dash"/>
+  <text x="330" y="52" class="svg-faint">the leash L: never longer than D has been, plus the margin</text>
+  <text x="200" y="165" class="svg-faint">the distance D, falling as the recovery works</text>
+  <path d="M460,120 L500,98" class="svg-ink" marker-end="url(#ar)"/><text x="505" y="96" class="svg-faint">a stumble past the leash: a loss</text>
+</svg>
+<figcaption>The leash follows the distance down and never goes back up. A recovery that makes steady progress is never
+terminated however far it started; one that gives ground past the margin is.</figcaption>
+</figure>
+
+<p><strong>A worked example.</strong> A start 1.0 m off, heading right, pose on the frame; scales of 0.3 m, 0.5 rad
+and 0.2 rad; a margin of 0.5 units; a width of 0.3 units; <em>k</em><sub>a</sub> = 2.</p>
+
+<pre class="sketch"><code>   decision     D      leash L   d (fall)   r_approach   r_tracking   note
+   start       3.3     3.8       0.00       -            0.0          a metre off is 3.3 units; the leash allows 3.8
+   1           3.1     3.6       0.00       +0.4         0.0          moving: paid for approach, nothing for tracking
+   2           2.6     3.1       0.00       +1.0         0.0
+   3           2.8     3.1       0.27       -0.4         0.0          a stumble: D rises, d rises, c falls to 0.73
+   4           2.1     2.6       0.00       +1.4         0.1          recovered: the leash tightens again
+   8           0.6     1.1       0.00       +0.6         0.6          the tracking reward takes over
+   12          0.2     0.7       0.00       +0.1         0.9          home; the leash is the ordinary threshold</code></pre>
+
+<p>At decisions 1 and 2 the tracking reward is zero and the approach reward is the only signal; by decision 8 the
+roles have swapped. The stumble at decision 3 costs 27% of the remaining rewards through the survival weight, which is
+the gradient saying "do not give ground".</p>
+
+<p><strong>Cost.</strong> Three numbers per world per decision, computed from the judgement's own quantities; nothing
+learned. <strong>Failure modes.</strong> A potential with too large <em>k</em><sub>a</sub> rewards rushing: the policy
+dives toward the reference and arrives falling. The telescoping bounds the total, but the per-step shaping can still
+dominate the tracking reward midway; the scales must put "clearly lost" at one unit and <em>k</em><sub>a</sub> near the
+tracking reward's size. A leash with no margin terminates on noise. <strong>The hour.</strong> Starts at 0.5 and 1.0 m
+on the control's clips; the share that returns within four seconds, against the control's, at 20, 40 and 60 minutes.</p>
+
+<h3 id="reanchor">10.2 Re-anchoring the goal</h3>
+
+<p><strong>The rule.</strong> In the aftermath, every decision, consider the clip's frames from the clock's frame to
+a few seconds ahead, at a coarse step. For each candidate frame, estimate the cost of reaching it: the distance
+<em>D</em> to that frame now, divided by a speed the character can manage, plus the imagined return of heading there if
+the skip model is at hand, minus the tracking reward forgone by skipping the frames between. Choose the cheapest.
+The reference's clock jumps to the chosen frame at the moment of return, and until then the goal the policy sees is
+the chosen frame, with the clip continuing from it.</p>
+
+<pre class="sketch"><code>   candidates:   f = clock, clock + 0.5 s, clock + 1.0 s, ..., clock + 3 s          (seven frames)
+   cost(f)   =   D(now, f) / speed  +  skipped(f) x penalty_per_second  -  imagined_return(f) x weight
+   goal      =   argmin cost; the clock jumps to goal on return (return streak complete)</code></pre>
+
+<figure>
+<svg viewBox="0 0 760 210" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The cost of rejoining at each candidate frame">
+  <text x="20" y="26" class="svg-text">candidate      clock   +0.5s   +1.0s   +1.5s   +2.0s   +2.5s   +3.0s</text>
+  <text x="20" y="52" class="svg-text">pose there     crouch  turn    stand   stand   lunge   stand   crouch</text>
+  <text x="20" y="78" class="svg-text">D now          2.9     2.4     1.6     1.4     2.2     1.5     2.0</text>
+  <text x="20" y="104" class="svg-text">D / speed      5.8     4.8     3.2     2.8     4.4     3.0     4.0</text>
+  <text x="20" y="130" class="svg-text">skipped        0.0     0.2     0.4     0.6     0.8     1.0     1.2</text>
+  <text x="20" y="156" class="svg-text">cost           5.8     5.0     3.6     3.4     5.2     4.0     5.2      -&gt; rejoin at +1.5 s</text>
+  <text x="380" y="190" class="svg-faint" text-anchor="middle">the standing frame 1.5 s on is the cheapest to rejoin; the lunge at +2.0 s is not, however near in time</text>
+</svg>
+<figcaption>A worked re-anchoring. The frame the clock points at is a crouch two units away; a standing frame a second
+and a half later is closer in pose and heading, and cheaper even after paying for the frames skipped.</figcaption>
+</figure>
+
+<p><strong>Cost.</strong> Seven distances per world in the aftermath per decision, each a judgement-sized computation;
+with the skip model, seven leaps. Nothing for worlds that are tracking. <strong>Failure modes.</strong> A goal that
+jumps every decision is a goal the policy cannot aim at: the choice must be sticky, changing only when a candidate
+beats the current goal by a clear margin. A penalty per skipped second that is too small lets the character "rejoin"
+by skipping to a frame it happens to resemble, learning nothing of the dance between; too large and this is the
+ordinary tracker. The records must store which frame was the goal, since the policy's observation changes with it.
+<strong>The hour.</strong> Pushes of 1.5 m/s on the control's clips, the goal re-anchored against the goal on the
+clock; the returns within four seconds, and - the measure this idea exists for - how natural the returns look in the
+evaluation's pictures.</p>
+
+<h3 id="intents">10.3 Planning in intents</h3>
+
+<p><strong>The rule.</strong> An intent is a short motion played through the servo for one second: a step with the
+left foot, with the right, a crouch, a hand reaching to the floor, a roll, each as a few key poses interpolated, plus
+"do nothing", which is the tracker. The teacher's candidate set in the aftermath is the intents times a few timings,
+twenty or so candidates. The skip model scores each by the imagined distance and survival after a second; the physics
+refines the best three; the winning intent's first decision becomes the teacher's offset, distilled as in idea 5.</p>
+
+<pre class="sketch"><code>   candidates:   { step L, step R, crouch, reach down, roll, hold }  x  { now, in 1 decision, in 2 }   = 18
+   screen:       18 skip leaps  ->  imagined D and survival after one second
+   refine:       the best 3 in the physics, one second each
+   distill:      the winner's first offset, scaled to the policy's step, with the warm-up</code></pre>
+
+<p><strong>Why intents and not offsets.</strong> Random joint offsets over a second span a space the physics will not
+reward in any direction most of the time; a planner finds nothing. Six intents span the space of what a body does
+when it stumbles, and the physics ranks them reliably. SkipWorld's candidates are random action sequences because its
+action is two numbers; ours is seventy-five.</p>
+
+<p><strong>Cost.</strong> Per world in the aftermath per decision: 18 leaps of the skip model and three seconds of
+physics - against the thousands of worlds tracking, which pay nothing. If a tenth of the worlds are in trouble, the
+teacher costs about a third of a round's physics. <strong>Failure modes.</strong> Intents are hand-made, so a
+recovery that needs a motion no intent contains is not found; the policy can still discover it under the rewards,
+but not from the teacher. An intent library that grows with the captures' own recoveries, once some succeed, is the
+natural repair. <strong>The hour.</strong> The teacher with intents against the teacher with random offsets, both
+distilled the same way; the share of returns, and the distilled policy's returns with the teacher switched off at the
+end of the hour.</p>
+
+<h3 id="reversed">10.4 Time-reversed falls</h3>
+
+<p><strong>The rule.</strong> From every pushed episode that ends on the ground, keep the last two seconds of the fall
+as a clip of poses; reverse it in time; smooth the velocities; store it, labelled with the resting pose it starts from
+and the standing frame it ends at. When an episode starts on the ground, the servo's reference for the first two
+seconds is the reversed fall whose resting pose is nearest, and the goal then re-anchors to the clip. The policy's
+offsets and the physics correct what the reversal gets wrong: a reversed fall has the right poses in the right order
+and the wrong forces, and the servo supplies forces of its own.</p>
+
+<figure>
+<svg viewBox="0 0 760 170" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The get-up library built from falls">
+  <rect x="20" y="30" width="200" height="60" rx="6" class="svg-box"/><text x="120" y="55" class="svg-text" text-anchor="middle">pushed episodes</text><text x="120" y="75" class="svg-faint" text-anchor="middle">thousands of falls</text>
+  <path d="M220,60 L280,60" class="svg-ink" marker-end="url(#ar)"/>
+  <rect x="280" y="30" width="200" height="60" rx="6" class="svg-box"/><text x="380" y="55" class="svg-text" text-anchor="middle">reversed, smoothed</text><text x="380" y="75" class="svg-faint" text-anchor="middle">keyed by the resting pose</text>
+  <path d="M480,60 L540,60" class="svg-ink" marker-end="url(#ar)"/>
+  <rect x="540" y="30" width="200" height="60" rx="6" class="svg-box"/><text x="640" y="55" class="svg-text" text-anchor="middle">a get-up reference</text><text x="640" y="75" class="svg-faint" text-anchor="middle">for the start nearest it</text>
+  <text x="380" y="130" class="svg-faint" text-anchor="middle">the library grows as the policy falls in new ways; a get-up that succeeds is itself kept, forward, as a better reference</text>
+</svg>
+<figcaption>Falls are free; get-ups are not. Reversed and smoothed, the falls the device already produces are a library
+of body-specific get-up paths, replaced by real get-ups as the policy learns them.</figcaption>
+</figure>
+
+<p><strong>Cost.</strong> The clip storage of a few hundred two-second motions, and a nearest-pose lookup at ground
+starts. <strong>Failure modes.</strong> A reversed fall begins with the body pushing the floor as it never pushed
+during the fall; the servo may fail to lift the torso in time and the reversed reference runs ahead. A slower playback
+rate for the first second, or re-anchoring the goal to a later point of the reversed clip when the body lags, keeps
+the reference within reach. Falls that end face-down reverse into get-ups that start face-down, which is right; but
+a fall that ended tangled gives a get-up no body performs - the library should keep only falls whose resting pose
+the rotation boxes accept. <strong>The hour.</strong> Ground starts with the reversed references against ground
+starts with the clip's frame as reference; the share standing within three seconds.</p>
+
+<h3>The round's budget with all four</h3>
+
+<p>Taking the control's round as one unit of physics for its worlds, the four add: the leash and potential, nothing;
+re-anchoring, seven distance computations for the worlds in the aftermath; intents, eighteen leaps and three seconds
+of physics for those worlds; the reversed library, a lookup at ground starts. With a tenth of the worlds in trouble
+and two model heads, the round costs about one and a half units: the control's physics, a third more for the
+teacher's refinements, and the model's second head on the learning side. Everything else is bookkeeping the device
+already does.</p>
+
+
+<h2 id="hybrid">11. The design decided: a planner-fed flow offset on a SuperMimic tracker</h2>
+
+<p>This section states one architecture precisely, as decided on 7 November: SuperMimic's tracker as the base, a
+flow-matching offset on top of it learned the FlowDPG way, a planner in the manner of EfficientTDMPC that screens
+with the skip model and refines in the real physics, and the planner's executed actions feeding every learner.</p>
+
+<h3>The pieces</h3>
+
+<pre class="sketch"><code>   W     the world model: dense, SuperMimic's, fit on 8-step windows of EVERY trajectory; analytic reward,
+         observation and termination; two heads (their disagreement is the planner's uncertainty)
+   S     the skip model: stride k = 3 decisions, one network with the stride as input, distilled from W's
+         endpoint and from the physics' true endpoint where logged actions exist
+   pi    the base policy: deterministic, SuperMimic's residual tracker
+   F     the offset policy: a flow-matching head; it sees the observation, the goal, pi's action, the distance to the
+         reference and the aftermath flag; it emits ONE decision's offset delta
+   T     the planner: EfficientTDMPC's objective in our setting, screened by S, refined in the physics
+   the action executed in a policy world:   a = pi(o, g) + delta,  delta ~ F, one sample per decision, ALWAYS on
+   the deployed controller, at evaluation and on the nights' runs:   pi + F alone; T is a training device</code></pre>
+
+<h3>The planner T</h3>
+
+<pre class="sketch"><code>   horizon H = 6 decisions (two leaps of S)
+   candidates: 64 offset sequences - pi's action plus samples of F plus noise, the previous winner shifted one
+               decision as the warm start (receding horizon)
+   screen:     S scores all 64 in two leaps each: the imagined return at every depth, averaged (the multi-horizon
+               objective), averaged over W's two heads, minus beta x their disagreement for a world in trouble
+   refine:     the best 3 run in the PHYSICS for the 6 decisions; the best of the 3 wins
+   execute:    the winner's FIRST offset only; then replan from what actually happened
+   reward:     the tracking reward with SuperMimic's penalties, plus the leash and the approach potential</code></pre>
+
+<h3>Two kinds of worlds, every decision</h3>
+
+<pre class="sketch"><code>   policy worlds     execute pi + delta (delta ~ F)          ordinary experience, flagged "policy"
+   planner worlds    execute T's first offset               real trajectories under planned actions, flagged "planned"
+   which worlds plan: a fixed share of all worlds (a tenth), plus every world in trouble (the aftermath)</code></pre>
+
+<h3>What each learner is fed</h3>
+
+<pre class="sketch"><code>   W, S   every trajectory, both kinds - the planned ones correct W exactly where a planner's errors would hide
+   pi     BPTT through W from replay states (SuperMimic), plus a distillation term toward the planned actions at
+          planned states (BMPC-style, its weight a dial kept modest: where plans are multimodal, pi averages them and F
+          carries the modes)
+   F      FlowDPG: the anchor is the planned offsets at planned states, computed only on planned trajectories that
+          SUCCEEDED (returned, or kept the reference); the correction g is the gradient of W's imagined return with
+          respect to delta - analytic, a short BPTT - taken at F's one-step estimate of delta, scaled to the flow's
+          own step, its weight lambda warming up from zero
+   critic every trajectory; bootstraps T's returns and pi's imagined returns beyond the horizon</code></pre>
+
+<figure>
+<svg viewBox="0 0 760 330" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The decided architecture's data flow">
+  <rect x="20" y="30" width="170" height="70" rx="8" class="svg-box"/><text x="105" y="56" class="svg-text" text-anchor="middle">policy worlds</text><text x="105" y="78" class="svg-faint" text-anchor="middle">pi + delta, delta ~ F</text>
+  <rect x="20" y="130" width="170" height="70" rx="8" class="svg-box"/><text x="105" y="156" class="svg-text" text-anchor="middle">planner worlds</text><text x="105" y="178" class="svg-faint" text-anchor="middle">T's first offset, replanned</text>
+  <rect x="290" y="80" width="170" height="70" rx="8" class="svg-box"/><text x="375" y="106" class="svg-text" text-anchor="middle">replay</text><text x="375" y="128" class="svg-faint" text-anchor="middle">every trajectory, flagged</text>
+  <path d="M190,65 L290,105" class="svg-ink" marker-end="url(#ar)"/><path d="M190,165 L290,125" class="svg-ink" marker-end="url(#ar)"/>
+  <rect x="560" y="20" width="180" height="50" rx="8" class="svg-box"/><text x="650" y="50" class="svg-text" text-anchor="middle">W and S: the models</text>
+  <rect x="560" y="90" width="180" height="50" rx="8" class="svg-box"/><text x="650" y="120" class="svg-text" text-anchor="middle">pi: BPTT + distillation</text>
+  <rect x="560" y="160" width="180" height="50" rx="8" class="svg-box"/><text x="650" y="190" class="svg-text" text-anchor="middle">F: anchor + W's gradient</text>
+  <path d="M460,105 L560,45" class="svg-ink" marker-end="url(#ar)"/><path d="M460,115 L560,115" class="svg-ink" marker-end="url(#ar)"/><path d="M460,125 L560,185" class="svg-ink" marker-end="url(#ar)"/>
+  <rect x="290" y="220" width="170" height="70" rx="8" class="svg-box"/><text x="375" y="246" class="svg-text" text-anchor="middle">T: the planner</text><text x="375" y="268" class="svg-faint" text-anchor="middle">S screens 64, the physics refines 3</text>
+  <path d="M650,215 L650,255 L460,255" class="svg-dash" marker-end="url(#ar)"/><text x="520" y="248" class="svg-faint">S, W's heads</text>
+  <path d="M290,255 L105,255 L105,200" class="svg-dash" marker-end="url(#ar)"/><text x="130" y="248" class="svg-faint">the plans</text>
+  <text x="380" y="318" class="svg-faint" text-anchor="middle">solid: experience; dashed: the planner's inputs and outputs. pi + F alone is what is deployed.</text>
+</svg>
+<figcaption>The decided architecture. Both kinds of worlds feed one replay; every learner reads it; the planner reads the
+models and writes the planner worlds' actions. What is judged, and what could run on a phone, is pi + F.</figcaption>
+</figure>
+
+<h3>What stays open</h3>
+
+<p>The share of planner worlds, the distillation weight on pi, F's offset scale in calm tracking, beta, the leash's
+margin and width, and the skip model's accuracy on far states are all dials; the lab's screen is where they are
+set. The one risk the design accepts knowingly: pi is distilled from multimodal plans and will average them where
+they diverge, so F must be able to carry the whole of a recovery's mode by itself - which is what its anchor on
+successful plans is for.</p>
+
+</main>
+</body>
+</html>

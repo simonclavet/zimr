@@ -37,6 +37,8 @@ const Io = std.Io;
 const indexOfPos = std.mem.indexOfPos;
 const sliceAsBytes = std.mem.sliceAsBytes;
 const trim = std.mem.trim;
+const indexOfScalarPos = std.mem.indexOfScalarPos;
+const writeInt = std.mem.writeInt;
 const wgpu = @import("wgpu.zig");
 const host = @import("host.zig");
 const compute_pass = wgpu.compute_pass;
@@ -47,6 +49,7 @@ const float = zm.float;
 const Vec2 = zm.Vec2;
 const assertf = zm.assertf;
 const assertUnreachable = zm.assertUnreachable;
+const panicf = zm.panicf;
 const splat2 = zm.splat2;
 const float64 = zm.float64;
 
@@ -244,6 +247,107 @@ fn wgslDeclName(line: []const u8) ?[]const u8 {
     return line[begin..end];
 }
 
+/// A MODULE's ENTRY POINTS as far as one kernel is concerned: how many it has, and whether one is named as the kernel.
+const EntryPoints = struct {
+    count: usize,
+    has_name: bool,
+};
+
+/// SPIR-V's ENTRY POINTS. A SPIR-V module is a sequence of 32-bit little-endian words: a five-word header (the magic
+/// number, the version, the generator, the id bound, a reserved word), then instructions one after another. An
+/// instruction's first word packs two numbers - its length in words in the high 16 bits, its opcode in the low 16 -
+/// so the reader can step from one instruction to the next without understanding most of them. An entry point is an
+/// `OpEntryPoint` (opcode 15), laid out as
+///
+///     word 0   (length << 16) | 15
+///     word 1   the execution model (5 for a compute shader)
+///     word 2   the id of the function it enters
+///     word 3.. the entry point's name, UTF-8, nul-terminated, padded with zeros to a whole word
+///     then     the ids of the variables it uses
+///
+/// so "alpha" is the words 0x68706c61 ("alph") and 0x00000061 ("a" and the nul).
+fn scanSpirvEntryPoints(module: []const u8, kernel_name: []const u8) EntryPoints {
+    const header_word_count: usize = 5;
+    const entry_point_opcode: u32 = 15;
+    const name_word_offset: usize = 3;
+    const bytes_per_word: usize = 4;
+    const module_word_count: usize = module.len / bytes_per_word;
+    var entry_points: EntryPoints = .{ .count = 0, .has_name = false };
+    var word_index: usize = header_word_count;
+    while (word_index < module_word_count) {
+        const first_byte: usize = word_index * bytes_per_word;
+        const instruction_first_word: u32 = readInt(u32, module[first_byte..][0..4], .little);
+        const instruction_word_count: usize = instruction_first_word >> 16;
+        const opcode: u32 = instruction_first_word & 0xffff;
+        // A length of zero would never move forward: the module is malformed, and the reading stops.
+        if (instruction_word_count == 0) {
+            break;
+        }
+        const is_entry_point: bool = opcode == entry_point_opcode;
+        const has_name_words: bool = instruction_word_count > name_word_offset;
+        if (is_entry_point and has_name_words) {
+            entry_points.count += 1;
+            // The name's field runs from its first word to the instruction's end; the name itself to its nul.
+            const name_first_byte: usize = (word_index + name_word_offset) * bytes_per_word;
+            const instruction_end_byte: usize = (word_index + instruction_word_count) * bytes_per_word;
+            const name_field_end: usize = @min(instruction_end_byte, module.len);
+            const name_field: []const u8 = module[name_first_byte..name_field_end];
+            const name_length: usize = indexOfScalar(u8, name_field, 0) orelse name_field.len;
+            const entry_point_name: []const u8 = name_field[0..name_length];
+            if (eql(u8, entry_point_name, kernel_name)) {
+                entry_points.has_name = true;
+            }
+        }
+        word_index += instruction_word_count;
+    }
+    return entry_points;
+}
+
+/// WGSL's ENTRY POINTS. In WGSL text an entry point is a function carrying the `@compute` attribute, as in
+///
+///     @compute @workgroup_size(64)
+///     fn push_worlds(@builtin(global_invocation_id) id: vec3<u32>) { ... }
+///
+/// so each `@compute` begins one, and its name is what follows the next `fn ` up to the opening parenthesis. Helper
+/// functions have no `@compute` and are not counted.
+fn scanWgslEntryPoints(text: []const u8, kernel_name: []const u8) EntryPoints {
+    var entry_points: EntryPoints = .{ .count = 0, .has_name = false };
+    var search_from: usize = 0;
+    while (indexOfPos(u8, text, search_from, "@compute")) |compute_attribute_at| {
+        const fn_keyword_at: usize = indexOfPos(u8, text, compute_attribute_at, "fn ") orelse break;
+        const function_name_start: usize = fn_keyword_at + "fn ".len;
+        const function_name_end: usize = indexOfScalarPos(u8, text, function_name_start, '(') orelse break;
+        const spaced_function_name: []const u8 = text[function_name_start..function_name_end];
+        const function_name: []const u8 = trim(u8, spaced_function_name, " \t\r\n");
+        entry_points.count += 1;
+        if (eql(u8, function_name, kernel_name)) {
+            entry_points.has_name = true;
+        }
+        search_from = function_name_end;
+    }
+    return entry_points;
+}
+
+/// THE ENTRY POINTS OF A KERNEL's MODULE, read from the module itself - SPIR-V (recognised by its magic number) or WGSL
+/// text. A module built from an older kernel list than the host's lacks the newer kernels' entry points, and a driver
+/// then fails with a message that does not say why (Mesa: "Entry point not found"; elsewhere a bare error code); read
+/// here first, the host can name the cause.
+fn scanEntryPoints(module: []const u8, kernel_name: []const u8) EntryPoints {
+    if (isSpirv(module)) {
+        return scanSpirvEntryPoints(module, kernel_name);
+    }
+    // WGSL is the browser's form of a module, so only a browser's host scans one. A native program embeds SPIR-V
+    // alone - the build's native-WGSL check refuses a program that carries a WGSL entry attribute anywhere in it, and
+    // the WGSL scan's own search text is that attribute - so on a native host the scan is not compiled at all, and a
+    // module that is not SPIR-V has no entry point this host can read.
+    const modules_may_be_wgsl: bool = host.is_browser;
+    if (modules_may_be_wgsl) {
+        return scanWgslEntryPoints(module, kernel_name);
+    }
+    const no_entry_points: EntryPoints = .{ .count = 0, .has_name = false };
+    return no_entry_points;
+}
+
 /// Independent host<->WGSL binding cross-check. Returns the first binding the
 /// kernel's WGSL DECLARES and REFERENCES in its body whose number is NOT in
 /// `bound` (the binding numbers the host actually put in the layout), or null
@@ -316,6 +420,37 @@ fn dispatchGrid(workgroups: u32) DispatchGrid {
     return grid;
 }
 
+test "compute_host: a module's entry points are read from SPIR-V and from WGSL" {
+    // A SPIR-V module of the header and one OpEntryPoint (GLCompute, function id 1, the name "alpha" in two words).
+    const words = [_]u32{
+        0x07230203,     0x00010500, 0, 2,          0,
+        (5 << 16) | 15, 5,          1, 0x68706c61, 0x00000061,
+    };
+    var spirv_bytes: [words.len * 4]u8 = undefined;
+    for (words, 0..) |value, index| {
+        writeInt(u32, spirv_bytes[index * 4 ..][0..4], value, .little);
+    }
+    const spirv_alpha: EntryPoints = scanEntryPoints(&spirv_bytes, "alpha");
+    try expectEqual(@as(usize, 1), spirv_alpha.count);
+    try expect(spirv_alpha.has_name);
+    try expect(!scanEntryPoints(&spirv_bytes, "beta").has_name);
+    // WGSL with a helper and one entry point: only the `@compute` function counts. The WGSL scan is called by its own
+    // name: `scanEntryPoints` reaches it on a browser's host alone, and this test runs on a native one as well.
+    const wgsl: []const u8 =
+        \\fn helper(value: f32) -> f32 { return value; }
+        \\@compute @workgroup_size(64)
+        \\fn alpha(@builtin(global_invocation_id) id: vec3<u32>) {}
+    ;
+    const wgsl_alpha: EntryPoints = scanWgslEntryPoints(wgsl, "alpha");
+    try expectEqual(@as(usize, 1), wgsl_alpha.count);
+    try expect(wgsl_alpha.has_name);
+    try expect(!scanWgslEntryPoints(wgsl, "helper").has_name);
+    // The one entry `scanEntryPoints` gives both forms: it reads WGSL where a module may be WGSL, and nowhere else.
+    const dispatched_count: usize = scanEntryPoints(wgsl, "alpha").count;
+    const expected_dispatched_count: usize = if (host.is_browser) 1 else 0;
+    try expectEqual(expected_dispatched_count, dispatched_count);
+}
+
 test "compute_host: a large dispatch spreads over rows of at most 65,535 workgroups" {
     const small: DispatchGrid = dispatchGrid(10);
     try expectEqual(@as(u32, 10), small.x);
@@ -344,6 +479,38 @@ pub const FieldLoan = struct {
     bytes: u64,
     owner_loans: *u32,
 };
+
+/// A FIELD's BUFFER ON THE DEVICE (`Compute.deviceField`): what a buffer-to-buffer copy between two pipelines needs.
+pub const DeviceField = struct {
+    device: wgpu.DeviceHandle,
+    queue: wgpu.QueueHandle,
+    buffer: wgpu.BufferHandle,
+    bytes: u32,
+};
+
+/// ONE COPY BETWEEN TWO PIPELINES ON ONE DEVICE: `byte_count` bytes from `source` at `source_byte` into `destination`
+/// at `destination_byte`, recorded and submitted on their queue - after every dispatch submitted before it, since one
+/// queue runs its submissions in order (call it after the source's work is submitted, not inside an open batch). How
+/// experience goes from the physics to the learner without leaving the GPU. Both fields on one device and one queue;
+/// WebGPU wants the offsets and the size in multiples of 4 bytes, and both ranges inside their buffers.
+pub fn copyFieldBetween(
+    source: DeviceField,
+    source_byte: u32,
+    destination: DeviceField,
+    destination_byte: u32,
+    byte_count: u32,
+) void {
+    const same_device: bool = source.device == destination.device and source.queue == destination.queue;
+    assertf(same_device, @src(), "copyFieldBetween: the two fields live on different devices or queues", .{});
+    const aligned: bool = source_byte % 4 == 0 and destination_byte % 4 == 0 and byte_count % 4 == 0;
+    assertf(aligned, @src(), "copyFieldBetween: offsets and size must be multiples of 4 bytes", .{});
+    const fits: bool = source_byte + byte_count <= source.bytes and destination_byte + byte_count <= destination.bytes;
+    assertf(fits, @src(), "copyFieldBetween: {d} bytes overrun a field", .{byte_count});
+    const encoder: wgpu.CommandEncoderHandle = wgpu.createCommandEncoder(source.device);
+    wgpu.copyBufferToBuffer(encoder, source.buffer, source_byte, destination.buffer, destination_byte, byte_count);
+    const commands: wgpu.CommandBufferHandle = wgpu.finishCommandEncoder(encoder);
+    wgpu.queueSubmit(source.queue, commands);
+}
 
 pub fn Compute(comptime M: type) type {
     comptime {
@@ -374,9 +541,16 @@ pub fn Compute(comptime M: type) type {
         const Buffers = M.Buffers;
         const Params = M.Params;
         const Field = meta.FieldEnum(Buffers);
+        /// Whether the module names its kernels (`M.kernels`, the list its device module is compiled with). A module
+        /// that does not - an example whose build lists its entries itself - runs without counts.
+        const counts_dispatches: bool = @hasDecl(M, "kernels");
 
         backend: Backend = .cpu,
         params: Params = undefined,
+        /// How many times each of the module's kernels has been dispatched on this pipe, by its place in
+        /// `M.kernels` (`dispatchKernel`): what a test reads to know which kernels a run really sent to its device -
+        /// a check on a CPU twin alone proves nothing about a GPU.
+        dispatch_counts: [if (counts_dispatches) M.kernels.len else 0]u32 = @splat(0),
         /// Element count for slicing variable-length fields on READBACK (e.g.
         /// `num_particles`). Set once after init. This is no longer the dispatch
         /// width - that's the explicit `n` in `run(name, n)`. readLatest clamps to
@@ -416,6 +590,10 @@ pub fn Compute(comptime M: type) type {
             /// could constant-fold to a trap and DCE this whole registry in
             /// ReleaseSmall (the shaders silently vanished); that footgun is gone.
             pipelines: []wgpu.ComputePipelineHandle,
+            /// Whether some pipeline may still be compiling in the background (`PipelinesMade.in_the_background`): set
+            /// when the pipe is made so, cleared by `pipelineProgress` once every pipeline is ready. No kernel is
+            /// dispatched while it is set.
+            pipelines_pending: bool = false,
             kernel_names: [][]const u8,
             /// One bind group PER KERNEL, parallel to `pipelines`. Each binds
             /// only the fields its kernel uses (+ the uniform), so a kernel that
@@ -690,6 +868,40 @@ pub fn Compute(comptime M: type) type {
             kernels: []const KernelWgsl,
             borrowed: []const Borrowed,
         ) !Self {
+            return initGpuMaking(gpa, dev, queue, kernels, borrowed, .in_the_call);
+        }
+
+        /// HOW A GPU PIPE's PIPELINES ARE MADE. `in_the_call`: each is compiled as the pipe is made, and the pipe is
+        /// ready when its `init` returns - what a native host does in any case, and a browser too when asked this
+        /// way, though it then compiles them one after another and the page draws nothing until the last.
+        /// `in_the_background`: a browser compiles them off the page's thread, several at once where it can, and the
+        /// page goes on drawing; no kernel may be dispatched until `pipelineProgress` says every pipeline is ready.
+        pub const PipelinesMade = enum { in_the_call, in_the_background };
+
+        /// `initGpu`, ITS PIPELINES MADE IN THE BACKGROUND (`PipelinesMade.in_the_background`): the pipe is returned
+        /// at once, and may dispatch once `pipelineProgress` is complete - a page asks once a frame, and shows that
+        /// it is preparing meanwhile. A module with many kernels, or large ones, starts in a fraction of the time.
+        pub fn initGpuInBackground(
+            gpa: Allocator,
+            dev: wgpu.DeviceHandle,
+            queue: wgpu.QueueHandle,
+            kernels: []const KernelWgsl,
+        ) !Self {
+            const owns_every_field: []const Borrowed = &.{};
+            return initGpuMaking(gpa, dev, queue, kernels, owns_every_field, .in_the_background);
+        }
+
+        /// THE GPU PIPE's MAKING, behind `initGpu`, `initGpuBorrowing` and `initGpuInBackground`: the fields' buffers
+        /// - the pipe's own, or the `borrowed` ones - then every kernel's bind group and its pipeline, made as
+        /// `pipelines_made` says.
+        fn initGpuMaking(
+            gpa: Allocator,
+            dev: wgpu.DeviceHandle,
+            queue: wgpu.QueueHandle,
+            kernels: []const KernelWgsl,
+            borrowed: []const Borrowed,
+            pipelines_made: PipelinesMade,
+        ) !Self {
             assertf(kernels.len >= 1, @src(), "initGpu: need at least one kernel, got {d}", .{kernels.len});
 
             // WEBGPU'S STORAGE-BUFFER CEILING. `maxStorageBuffersPerShaderStage` has a
@@ -863,6 +1075,28 @@ pub fn Compute(comptime M: type) type {
                     "kernel '{s}' binds {d} storage buffers; portable limit is {d} (won't run on a stock device)",
                     .{ k.name, n_storage, max_portable_storage_buffers },
                 );
+                // Pre-flight: the kernel's module has the kernel's entry point. A module built from an
+                // older kernel list than the host's lacks the newer kernels, and the driver's own failure
+                // does not say so - here the cause is named (init-only; gone in ship).
+                if (comptime zm.allow_assert) {
+                    const kernel_entry_points: EntryPoints = scanEntryPoints(k.wgsl, k.name);
+                    if (!kernel_entry_points.has_name) {
+                        // How many of the host's kernels the module lacks - one, or every kernel added since.
+                        var kernels_missing_an_entry: usize = 0;
+                        for (kernels) |other_kernel| {
+                            const other_module: []const u8 = other_kernel.wgsl;
+                            const other_entry_points: EntryPoints = scanEntryPoints(other_module, other_kernel.name);
+                            kernels_missing_an_entry += @intFromBool(!other_entry_points.has_name);
+                        }
+                        assertUnreachable(
+                            @src(),
+                            "kernel '{s}': its module has no entry point by that name - {d} entry points for {d} " ++
+                                "kernels, {d} of them missing. The module was built from an older kernel list than " ++
+                                "the host's: rebuild it.",
+                            .{ k.name, kernel_entry_points.count, kernels.len, kernels_missing_an_entry },
+                        );
+                    }
+                }
                 // Pre-flight host<->WGSL binding cross-check (init-only; gone in
                 // ship). Independent of the `kbuf_<field>` usage scan that built
                 // `layout_entries`: if the kernel's WGSL uses a binding the layout
@@ -894,13 +1128,16 @@ pub fn Compute(comptime M: type) type {
                 const pipeline_layout: wgpu.PipelineLayoutHandle = wgpu.createPipelineLayout(dev, &.{bgl}, k.name);
                 const module: wgpu.ShaderModuleHandle = wgpu.createShaderModuleWgsl(dev, k.wgsl, k.name);
                 assertf(module != .invalid, @src(), "kernel '{s}': WGSL module failed to compile", .{k.name});
-                const pipeline: wgpu.ComputePipelineHandle = wgpu.createComputePipeline(
-                    dev,
-                    pipeline_layout,
-                    module,
-                    k.name,
-                    k.name,
-                );
+                const pipeline: wgpu.ComputePipelineHandle = switch (pipelines_made) {
+                    .in_the_call => wgpu.createComputePipeline(dev, pipeline_layout, module, k.name, k.name),
+                    .in_the_background => wgpu.createComputePipelineInBackground(
+                        dev,
+                        pipeline_layout,
+                        module,
+                        k.name,
+                        k.name,
+                    ),
+                };
                 // A failed pipeline is stored as `.invalid` and would otherwise
                 // only blow up later as a frozen device with no message; catch it
                 // here, named, during development (stripped in ship builds).
@@ -931,6 +1168,7 @@ pub fn Compute(comptime M: type) type {
                     .uniform = uniform,
                     .staging = staging,
                     .pipelines = pipelines,
+                    .pipelines_pending = pipelines_made == .in_the_background,
                     .kernel_names = kernel_names,
                     .bind_groups = bind_groups,
                     .bindings = bindings,
@@ -1099,6 +1337,36 @@ pub fn Compute(comptime M: type) type {
                 }
             }
             return true;
+        }
+
+        /// FIELD `field`'s BUFFER ON THE DEVICE: its handle, its size in bytes (the field's own: a buffer created for
+        /// it has exactly that size, a lent one at least that), and the device and queue it lives on - what a copy into
+        /// another pipeline on the same device needs (`copyFieldInto`). The GPU backend only: on the CPU a field is the
+        /// module's own array, and a copy is a `@memcpy`.
+        pub fn deviceField(self: *const Self, comptime field: Field) DeviceField {
+            const gp: *const Gpu = &self.gpu.?;
+            const field_index: usize = fieldIndex(@tagName(field));
+            const element_count: usize = @field(M.g.B, @tagName(field)).len;
+            const byte_count: u32 = @intCast(element_count * @sizeOf(ElemOf(field)));
+            return .{ .device = gp.dev, .queue = gp.queue, .buffer = gp.field_bufs[field_index], .bytes = byte_count };
+        }
+
+        /// FIELD `field`'s BYTES INTO ANOTHER PIPELINE's FIELD on the same device and queue (`copyFieldBetween`) -
+        /// refused while this pipeline has an open batch or recording: its dispatches not yet submitted, the copy
+        /// would run before them and move what they have not yet written.
+        pub fn copyFieldInto(
+            self: *const Self,
+            comptime field: Field,
+            source_byte: u32,
+            destination: DeviceField,
+            destination_byte: u32,
+            byte_count: u32,
+        ) void {
+            const gp: *const Gpu = &self.gpu.?;
+            const submitted: bool = gp.batch_enc == .invalid and gp.rec_enc == .invalid;
+            const message: []const u8 = "copyFieldInto: `" ++ @tagName(field) ++ "` has dispatches not yet submitted";
+            assertf(submitted, @src(), message, .{});
+            copyFieldBetween(self.deviceField(field), source_byte, destination, destination_byte, byte_count);
         }
 
         /// `upload` at an ELEMENT offset into the field, not at its start.
@@ -1445,6 +1713,67 @@ pub fn Compute(comptime M: type) type {
             wgpu.vulkan_host.computePassSetPushConstants(@backingInt(pass), bytes.ptr, bytes.len);
         }
 
+        /// How many of a pipe's pipelines are ready, of how many (`pipelineProgress`).
+        pub const PipelineProgress = struct {
+            ready: u32,
+            total: u32,
+
+            pub fn isComplete(progress: PipelineProgress) bool {
+                return progress.ready == progress.total;
+            }
+        };
+
+        /// HOW FAR THE PIPE's PIPELINES HAVE COME. A pipe made by `initGpu`, and a pipe on the CPU, are complete at
+        /// once. A pipe made by `initGpuInBackground` asks the host about each pipeline while any is pending: a page
+        /// calls this once a frame and dispatches nothing until it is complete - from then on the pipe is as any
+        /// other. A pipeline the browser refused stops the page here, by its kernel's name.
+        pub fn pipelineProgress(self: *Self) PipelineProgress {
+            const kernel_count: u32 = @intCast(M.kernels.len);
+            if (self.backend != .gpu) {
+                return .{ .ready = kernel_count, .total = kernel_count };
+            }
+            const gp: *Gpu = &self.gpu.?;
+            const pipeline_count: u32 = @intCast(gp.pipelines.len);
+            if (!gp.pipelines_pending) {
+                return .{ .ready = pipeline_count, .total = pipeline_count };
+            }
+            var ready: u32 = 0;
+            for (gp.pipelines, gp.kernel_names) |pipeline, kernel_name| {
+                const state: wgpu.PipelineState = wgpu.computePipelineState(pipeline);
+                const was_refused: bool = state == .failed;
+                assertf(!was_refused, @src(), "kernel '{s}': the browser refused its compute pipeline", .{kernel_name});
+                if (state == .ready) {
+                    ready += 1;
+                }
+            }
+            if (ready == pipeline_count) {
+                gp.pipelines_pending = false;
+            }
+            return .{ .ready = ready, .total = pipeline_count };
+        }
+
+        /// One pipeline's making (`pipelineMakings`): its kernel, and the milliseconds the host took over it.
+        pub const PipelineMaking = struct {
+            kernel: []const u8,
+            milliseconds: f64,
+        };
+
+        /// EACH PIPELINE's MAKING into `makings`, in the pipe's kernel order; returns how many were written - the
+        /// pipe's kernels, or `makings.len` if that is fewer. The milliseconds are the browser's own, from asking for
+        /// a pipeline to having it: zero for a pipeline made in the call or still pending, and on a native host.
+        /// Nothing is written for a pipe on the CPU.
+        pub fn pipelineMakings(self: *const Self, makings: []PipelineMaking) usize {
+            if (self.backend != .gpu) {
+                return 0;
+            }
+            const gp: *const Gpu = &self.gpu.?;
+            const written: usize = @min(makings.len, gp.pipelines.len);
+            for (makings[0..written], gp.pipelines[0..written], gp.kernel_names[0..written]) |*making, pipeline, name| {
+                making.* = .{ .kernel = name, .milliseconds = wgpu.computePipelineMilliseconds(pipeline) };
+            }
+            return written;
+        }
+
         /// TIME THIS PIPE'S KERNELS ON THE GPU. From now on every dispatch is bracketed by two timestamps - the GPU's
         /// clock at the top of the pipeline before it and at the bottom after it, in the kernel's two slots of a pool -
         /// and `kernelTimings` reads each kernel's last duration:
@@ -1573,6 +1902,18 @@ pub fn Compute(comptime M: type) type {
 
         /// `run` and `runPushed`'s body: `pushes` (compile-time, so a module that never pushes never reaches the
         /// native call) says whether `push_bytes` go into the pass before the dispatch.
+        /// A kernel's place in the module's list (`M.kernels`). A kernel the list does not name cannot be run: the list
+        /// is what a device's module is compiled with, so such a kernel would run on the CPU and on no GPU.
+        fn kernelIndex(comptime name: []const u8) usize {
+            @setEvalBranchQuota(100_000);
+            for (M.kernels, 0..) |kernel, index| {
+                if (eql(u8, kernel, name)) {
+                    return index;
+                }
+            }
+            @compileError("run('" ++ name ++ "'): the module's kernel list does not name it - no device module has it");
+        }
+
         fn dispatchKernel(
             self: *Self,
             comptime name: []const u8,
@@ -1580,6 +1921,10 @@ pub fn Compute(comptime M: type) type {
             comptime pushes: bool,
             push_bytes: []const u8,
         ) void {
+            if (comptime counts_dispatches) {
+                const kernel_index: usize = comptime kernelIndex(name);
+                self.dispatch_counts[kernel_index] +|= 1;
+            }
             assertf(n > 0, @src(), "run('" ++ name ++ "'): n must be > 0", .{});
             assertf(
                 n <= M.config.max,
@@ -1676,6 +2021,11 @@ pub fn Compute(comptime M: type) type {
                         assertUnreachable(@src(), "run: kernel '" ++ name ++ "' is not registered with this pipe", .{});
                         unreachable;
                     };
+                    // A pipe made in the background dispatches nothing until its pipelines are ready.
+                    const pipelines_are_ready: bool = !gp.pipelines_pending;
+                    const dispatched_early: []const u8 = "run: kernel '" ++ name ++
+                        "' dispatched before the pipe's pipelines were ready (pipelineProgress)";
+                    assertf(pipelines_are_ready, @src(), dispatched_early, .{});
                     const pipeline: wgpu.ComputePipelineHandle = gp.pipelines[ki];
                     const bind_group: wgpu.BindGroupHandle = gp.bind_groups[ki];
                     gp.kernel_last_n[ki] = n; // for describe()
@@ -1942,6 +2292,161 @@ pub fn Compute(comptime M: type) type {
             }
         }
 
+        /// A RANGE OF ONE FIELD ON ITS WAY BACK from the GPU - requested now (`requestRange`), collected later, so the
+        /// host never waits for the GPU in between: what a browser requires, and what keeps a frame's work flowing
+        /// natively:
+        ///
+        ///     requestRange   the range copied into a staging buffer of its own, by a command submitted after every
+        ///                    dispatch so far - the GPU copies while the host does other work
+        ///     collect        has the copy finished? then the range lands in `destination` (true); if not, false
+        ///                    at once
+        ///     wait           collect, waiting for the copy if it has not finished
+        ///     discard        the request given up, its staging buffer released
+        ///
+        /// Each request is collected, waited for or discarded once. On the CPU twin the range is copied when it is
+        /// requested - a snapshot, so both backends hand back the range as it was then - and collecting it always
+        /// succeeds.
+        pub fn RangeRequest(comptime field: Field) type {
+            return struct {
+                const Request = @This();
+                const Element: type = ElemOf(field);
+
+                /// How many elements the range holds.
+                count: u32,
+                /// The GPU's copy: the staging buffer it lands in, and the read the host polls - `.invalid` on the
+                /// twin, and once the request is collected or discarded.
+                staging: wgpu.BufferHandle = .invalid,
+                read: wgpu.BufferRead = .invalid,
+                /// The twin's snapshot, and the allocator that owns it until the request is collected or discarded.
+                snapshot: []Element = &.{},
+                snapshot_owner: ?Allocator = null,
+
+                /// The range into `destination` if the GPU has finished copying it - true - or false at once, the
+                /// request still pending.
+                pub fn collect(request: *Request, destination: []Element) bool {
+                    assertf(destination.len == request.count, @src(), "collect: {d} elements into room for {d}", .{
+                        request.count,
+                        destination.len,
+                    });
+                    if (request.snapshot_owner) |owner| {
+                        @memcpy(destination, request.snapshot);
+                        owner.free(request.snapshot);
+                        request.snapshot = &.{};
+                        request.snapshot_owner = null;
+                        return true;
+                    }
+                    const pending: bool = request.read != .invalid;
+                    assertf(pending, @src(), "collect: a request already collected or discarded", .{});
+                    const copied: bool = wgpu.bufferReadPoll(request.read);
+                    if (!copied) {
+                        return false;
+                    }
+                    wgpu.bufferReadInto(request.read, sliceAsBytes(destination));
+                    request.release();
+                    return true;
+                }
+
+                /// The range into `destination`, waiting for the GPU's copy if it has not finished. Native only: a
+                /// browser finishes a copy only once control returns to it, so a page collects once a frame instead.
+                pub fn wait(request: *Request, destination: []Element) void {
+                    if (comptime host.is_browser) {
+                        @compileError("wait: a browser cannot wait for the GPU - collect once a frame instead");
+                    }
+                    while (!request.collect(destination)) {
+                        std.atomic.spinLoopHint();
+                    }
+                }
+
+                /// The request given up: its snapshot freed, or its read and staging buffer released - safe while the
+                /// copy is still in flight, the buffer's destruction waiting for the GPU.
+                pub fn discard(request: *Request) void {
+                    if (request.snapshot_owner) |owner| {
+                        owner.free(request.snapshot);
+                        request.snapshot = &.{};
+                        request.snapshot_owner = null;
+                        return;
+                    }
+                    request.release();
+                }
+
+                /// The GPU's half released: the read's bytes and the staging buffer.
+                fn release(request: *Request) void {
+                    wgpu.bufferReadRelease(request.read);
+                    wgpu.destroyBuffer(request.staging);
+                    request.read = .invalid;
+                    request.staging = .invalid;
+                }
+            };
+        }
+
+        /// REQUEST A RANGE of `field` - `count` elements from element `first` - to collect later (`RangeRequest`). On
+        /// the GPU, a copy into a staging buffer of the range's own size, submitted after every dispatch so far, so the
+        /// range holds what they wrote and nothing a later dispatch writes; on the CPU twin, a snapshot in memory from
+        /// `gpa`. Not inside an open batch or recording, whose dispatches are not yet submitted. The same on the web,
+        /// where the read is the browser's asynchronous map, finished once control returns to the browser - so a page
+        /// requests in one frame and collects in a later one.
+        pub fn requestRange(
+            self: *Self,
+            gpa: Allocator,
+            comptime field: Field,
+            first: u32,
+            count: u32,
+        ) Allocator.Error!RangeRequest(field) {
+            const Element: type = ElemOf(field);
+            const Request: type = RangeRequest(field);
+            const field_length: usize = @field(M.g.B, @tagName(field)).len;
+            const end: usize = @as(usize, first) + count;
+            assertf(count > 0 and end <= field_length, @src(), "requestRange: elements {d}..{d} of a field of {d}", .{
+                first,
+                end,
+                field_length,
+            });
+            switch (self.backend) {
+                .cpu => {
+                    const snapshot: []Element = try gpa.alloc(Element, count);
+                    @memcpy(snapshot, @field(M.g.B, @tagName(field))[first..end]);
+                    const request: Request = .{ .count = count, .snapshot = snapshot, .snapshot_owner = gpa };
+                    return request;
+                },
+                .worker => {
+                    panicf(@src(), "requestRange: a worker pipe reads through readLatest", .{});
+                },
+                .gpu => {
+                    if (comptime @sizeOf(Element) % 4 != 0) {
+                        @compileError("requestRange: the GPU copies whole 4-byte words, and `" ++ @tagName(field) ++
+                            "` holds " ++ @typeName(Element));
+                    }
+                    const gp: *Gpu = &self.gpu.?;
+                    const outside_batch: bool = gp.batch_enc == .invalid and gp.rec_enc == .invalid;
+                    assertf(outside_batch, @src(), "requestRange inside an open batch or recording", .{});
+                    // The copy's offsets are 32-bit: the range must end within the field's first 4 GB.
+                    const first_byte_wide: u64 = @as(u64, first) * @sizeOf(Element);
+                    const range_bytes_wide: u64 = @as(u64, count) * @sizeOf(Element);
+                    const end_byte_wide: u64 = first_byte_wide + range_bytes_wide;
+                    const within_32_bits: bool = end_byte_wide <= zm.maxInt(u32);
+                    assertf(within_32_bits, @src(), "requestRange: bytes up to {d}, past a copy's 32-bit offsets", .{
+                        end_byte_wide,
+                    });
+                    const first_byte: u32 = @intCast(first_byte_wide);
+                    const range_bytes: u32 = @intCast(range_bytes_wide);
+                    const staging: wgpu.BufferHandle = wgpu.createBuffer(gp.dev, .{
+                        .size = range_bytes,
+                        .usage = .{ .map_read = true, .copy_dst = true },
+                        .label = "range_request",
+                    });
+                    const field_buffer: wgpu.BufferHandle = gp.field_bufs[fieldIndex(@tagName(field))];
+                    const encoder: wgpu.CommandEncoderHandle = wgpu.createCommandEncoder(gp.dev);
+                    wgpu.copyBufferToBuffer(encoder, field_buffer, first_byte, staging, 0, range_bytes);
+                    const commands: wgpu.CommandBufferHandle = wgpu.finishCommandEncoder(encoder);
+                    wgpu.queueSubmit(gp.queue, commands);
+                    // Started after the submission, so the read waits for the copy and for every dispatch before it.
+                    const read: wgpu.BufferRead = wgpu.bufferReadStart(staging, range_bytes);
+                    const request: Request = .{ .count = count, .staging = staging, .read = read };
+                    return request;
+                },
+            }
+        }
+
         pub fn readLatest(self: *Self, comptime field: Field) ?[]const ElemOf(field) {
             // Variable-count fields (pos/vel/...) are sized to capacity and slice to
             // the live `element_count`; fixed fields (grid_counts, cell_start) must
@@ -2050,6 +2555,36 @@ pub fn Compute(comptime M: type) type {
             }
         }
     };
+}
+
+test "compute_host: a pipe counts every dispatch of every kernel" {
+    const M = struct {
+        pub const config = .{ .max = 64, .workgroup = 64 };
+        pub const Buffers = extern struct { data: [64]f32 };
+        pub const Params = extern struct {
+            count: u32,
+            _pad0: u32 = 0,
+            _pad1: u32 = 0,
+            _pad2: u32 = 0,
+        };
+        pub const g = struct {
+            pub var B: Buffers = undefined;
+            pub var P: Params = undefined;
+        };
+        pub const kernels = [_][:0]const u8{ "double", "triple" };
+        pub fn double(c: struct { id: u32, params: Params }) void {
+            g.B.data[c.id] *= 2;
+        }
+        pub fn triple(c: struct { id: u32, params: Params }) void {
+            g.B.data[c.id] *= 3;
+        }
+    };
+    var pipe: Compute(M) = .initCpu();
+    pipe.params = .{ .count = 4 };
+    pipe.run("triple", 4);
+    pipe.run("triple", 2);
+    try expectEqual(@as(u32, 0), pipe.dispatch_counts[0]);
+    try expectEqual(@as(u32, 2), pipe.dispatch_counts[1]);
 }
 
 test "Compute .worker runs the SAME kernel and gets the SAME answer" {
@@ -2180,6 +2715,7 @@ test "Compute CPU backend runs a kernel as a plain loop" {
             pub var B: Buffers = undefined;
             pub var P: Params = undefined;
         };
+        pub const kernels = [_][:0]const u8{"double"};
         pub fn double(c: struct { id: u32, params: Params }) void {
             if (c.id >= c.params.count) {
                 return;
@@ -2223,6 +2759,7 @@ test "Compute CPU backend: multi-buffer gravity step (pos + vel)" {
             pub var B: Buffers = undefined;
             pub var P: Params = undefined;
         };
+        pub const kernels = [_][:0]const u8{"step"};
         pub fn step(c: struct { id: u32, params: Params }) void {
             if (c.id >= c.params.count) {
                 return;

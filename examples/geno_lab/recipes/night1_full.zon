@@ -8,6 +8,9 @@
         // 8 characters on each of the 4 clips (they are assigned by character); the physics on every core.
         .characters = 32,
         .physics_threads = 0,
+        // The policy and the world model at 30 Hz over 60 Hz physics: every count below is in decisions.
+        .decide_every = 2,
+        .max_steps = 300,
         // 256 steps of replay per character (4.3 s): with the flow's teachers and the planner's search beside
         // SuperTrack's windows, the whole system fills 79% of the trainer's 128 MB of activations and 90% of their
         // gradients (the start line says it).
@@ -16,13 +19,15 @@
         // SuperMimic's horizons (a horizon of 8 learns poorly with a critic, 32 fastest).
         .rows = 32,
         .window = 8,
-        .policy_window = 32,
+        .policy_window = 16,
         // The networks at a third of the reference implementations' widths: SuperMimic's world model and policy 680
         // wide (theirs 2048), the critic's heads 170 (EfficientTDMPC's 512). The trainer's buffers are sized for them
         // (`zn_mlp_sizes_trainer.zig`).
         .hidden = 680,
         .policy_hidden = 680,
-        .critic = .{ .hidden = 170 },
+        // The critic's discount per decision: 1 - 1/45, a second and a half at 30 decisions a second; fitted to its
+        // real transitions and, beside them, to the policy's imagined rollouts at an equal weight.
+        .critic = .{ .hidden = 170, .discount = 0.97777778, .imagined_share = 1.0 },
         // Four world model updates and two policy updates a round: SuperMimic trains about 16 world model steps and 13
         // imagined policy steps for every step of data, this learner 0.5 and 2 at one of each - 2 and 4 here. Raise
         // them while a round's training stays below its acting (the handover's first ten minutes).
@@ -61,8 +66,8 @@
         },
         // RETURNS: five seconds (300 steps) to come back after a loss, 8 steps holding the reference again to have
         // returned, a quarter of the policy's windows drawn inside returns.
-        .aftermath_steps = 300,
-        .return_steps = 8,
+        .aftermath_steps = 150,
+        .return_steps = 4,
         .return_window_share = 0.25,
         // THE FLOW ACTOR, as wide as the policy, its three teachers sharing each update (their natural sizes differ
         // tenfold): FlowDPG 1, the planner's distillation 0.5 - the ways back the search found - and FPO 0.25, grown

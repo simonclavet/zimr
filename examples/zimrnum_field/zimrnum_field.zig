@@ -633,7 +633,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     // -- *** PLAIN TEXT ROWS, NOT A UI TABLE --
     //
-    // The `ui.zig` version worked and Simon prefers this one. It is also the honest fit: this
+    // The `ui.zig` version worked, and this one is preferred. It is also the honest fit: this
     // page is read as a SCREENSHOT, so scrolling, column sizing and a frozen header buy nothing,
     // while the UI library cost ~400 KB of standalone and an extra frame-ordering contract to get
     // wrong - which it duly was, twice. Text rows have no such contract.

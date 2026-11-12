@@ -126,20 +126,23 @@ pub const Vec = zm.Vec;
 pub const Quat = zm.Quat;
 const vec = zm.vec;
 const vec_zero = zm.vec_zero;
+const quat = zm.quat;
 const quat_identity = zm.quat_identity;
 const splat = zm.splat;
 const dot3 = zm.dot3;
 const cross = zm.cross;
 const length3 = zm.length3;
 const normalize3 = zm.normalize3;
-const qmul = zm.qmul;
+pub const qmul = zm.qmul;
 const rotate = zm.rotate;
 const conjugate = zm.conjugate;
 const quatFromAxisAngle = zm.quatFromAxisAngle;
 const clamp = zm.clamp;
 const acosRad = zm.acosRad;
+const asinRad = zm.asinRad;
 const atan2Rad = zm.atan2Rad;
 const maxInt = zm.maxInt;
+const cosTurns = zm.cosTurns;
 const pi = zm.pi;
 const assertf = zm.assertf;
 
@@ -412,8 +415,9 @@ pub const Inertia = struct {
 
 /// Normalize a quaternion, falling back to identity if it has collapsed. Integration and
 /// user input both walk quaternions off the unit sphere, and a zero-norm quaternion has no
-/// orientation to recover - identity keeps the simulation running instead of emitting NaN.
-fn normalizeQuat(q: Quat) Quat {
+/// orientation to recover - identity keeps the simulation running instead of emitting NaN. Shared with robotgpu's
+/// kinematics kernel.
+pub fn normalizeQuat(q: Quat) Quat {
     const n: f32 = @sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
     return if (n > 1.0e-9) q / splat(n) else quat_identity;
 }
@@ -451,7 +455,9 @@ pub const Pose = struct {
 
 /// The four kinds of degree of freedom, and the only four. A body with no joint is welded
 /// to its parent, which is free and exact - no constraint needed.
-pub const JointType = enum {
+/// Backed by u32, MuJoCo's numbering (`mjtJoint`) in declaration order: the device packs a joint's type as this tag's
+/// own integer and decodes it with the enum's conversion, no second table of numbers anywhere.
+pub const JointType = enum(u32) {
     /// 7 position coords (xyz + quat), 6 velocity coords. Only on a child of the world.
     free,
     /// 4 position coords (quat), 3 velocity coords. Orientation relative to the parent.
@@ -478,6 +484,131 @@ pub const JointType = enum {
             .ball => 3,
             .slide, .hinge => 1,
         };
+    }
+};
+
+/// ONE JOINT's COORDINATES: its run of `joint_positions`, as many numbers as its type has (`posCount`), held in room
+/// for the most any joint has, a free joint's seven:
+///
+///     joint     its coordinates                                     numbers
+///     slide     its offset along its axis                           1
+///     hinge     its angle about its axis                            1
+///     ball      its orientation, a unit quaternion (x, y, z, w)     4
+///     free      its position (x, y, z), then its orientation        3 + 4
+///
+/// The numbers past a joint's own are unused, zero as the constructors make them. A value, so a function of one
+/// joint's coordinates takes and returns one, and robotgpu's kernels call it on a world's joint as robot.zig calls it
+/// on a model's. Each constructor and reader is inline: it compiles to its stores or its loads, as indexing the numbers
+/// by hand would.
+pub const JointCoordinates = struct {
+    numbers: [room]f32 = @splat(0),
+
+    /// A free joint's seven, the most any joint has.
+    pub const room: usize = 7;
+
+    /// A slide's offset or a hinge's angle: the one number either has.
+    pub inline fn ofSingle(value: f32) JointCoordinates {
+        var coordinates: JointCoordinates = .{};
+        coordinates.numbers[0] = value;
+        return coordinates;
+    }
+
+    pub inline fn ofBall(orientation: Quat) JointCoordinates {
+        var coordinates: JointCoordinates = .{};
+        inline for (0..4) |k| {
+            coordinates.numbers[k] = orientation[k];
+        }
+        return coordinates;
+    }
+
+    pub inline fn ofFree(position: Vec, orientation: Quat) JointCoordinates {
+        var coordinates: JointCoordinates = .{};
+        inline for (0..3) |k| {
+            coordinates.numbers[k] = position[k];
+        }
+        inline for (0..4) |k| {
+            coordinates.numbers[3 + k] = orientation[k];
+        }
+        return coordinates;
+    }
+
+    pub inline fn single(coordinates: JointCoordinates) f32 {
+        return coordinates.numbers[0];
+    }
+
+    pub inline fn ballOrientation(coordinates: JointCoordinates) Quat {
+        const numbers: [room]f32 = coordinates.numbers;
+        return .{ numbers[0], numbers[1], numbers[2], numbers[3] };
+    }
+
+    pub inline fn freePosition(coordinates: JointCoordinates) Vec {
+        const numbers: [room]f32 = coordinates.numbers;
+        return vec(numbers[0], numbers[1], numbers[2]);
+    }
+
+    pub inline fn freeOrientation(coordinates: JointCoordinates) Quat {
+        const numbers: [room]f32 = coordinates.numbers;
+        return .{ numbers[3], numbers[4], numbers[5], numbers[6] };
+    }
+};
+
+/// ONE JOINT's VELOCITY: its run of `joint_velocities`, a number per degree of freedom (`dofCount`), held in room for
+/// the most any joint has, a free joint's six:
+///
+///     joint            its velocity                                  numbers
+///     slide, hinge     its rate                                      1
+///     ball             its angular velocity (x, y, z)                3
+///     free             its linear velocity, then its angular one     3 + 3
+///
+/// The numbers past a joint's own are unused, zero as the constructors make them; like `JointCoordinates`, a value
+/// whose constructors and readers are inline.
+pub const JointVelocity = struct {
+    numbers: [room]f32 = @splat(0),
+
+    /// A free joint's six, the most any joint has.
+    pub const room: usize = 6;
+
+    /// A slide's or a hinge's rate: the one number either has.
+    pub inline fn ofSingle(rate: f32) JointVelocity {
+        var velocity: JointVelocity = .{};
+        velocity.numbers[0] = rate;
+        return velocity;
+    }
+
+    pub inline fn ofBall(angular: Vec) JointVelocity {
+        var velocity: JointVelocity = .{};
+        inline for (0..3) |k| {
+            velocity.numbers[k] = angular[k];
+        }
+        return velocity;
+    }
+
+    pub inline fn ofFree(linear: Vec, angular: Vec) JointVelocity {
+        var velocity: JointVelocity = .{};
+        inline for (0..3) |k| {
+            velocity.numbers[k] = linear[k];
+            velocity.numbers[3 + k] = angular[k];
+        }
+        return velocity;
+    }
+
+    pub inline fn single(velocity: JointVelocity) f32 {
+        return velocity.numbers[0];
+    }
+
+    pub inline fn ballAngular(velocity: JointVelocity) Vec {
+        const numbers: [room]f32 = velocity.numbers;
+        return vec(numbers[0], numbers[1], numbers[2]);
+    }
+
+    pub inline fn freeLinear(velocity: JointVelocity) Vec {
+        const numbers: [room]f32 = velocity.numbers;
+        return vec(numbers[0], numbers[1], numbers[2]);
+    }
+
+    pub inline fn freeAngular(velocity: JointVelocity) Vec {
+        const numbers: [room]f32 = velocity.numbers;
+        return vec(numbers[3], numbers[4], numbers[5]);
     }
 };
 
@@ -605,7 +736,9 @@ pub const GeomShape = union(enum) {
     /// An arbitrary convex shape, given as the point cloud its hull is taken of.
     ///
     /// * WHY A POINT CLOUD RATHER THAN A BUILT HULL. robot.zig depends only on zimrmath and
-    /// has no convex-hull builder - nor should it, since it never does collision detection.
+    /// has no convex-hull builder - nor should it: its own collision is only the primitives
+    /// against a plane (`planeSphere`, `planeCapsule`, `planeBox`), everything else the physics
+    /// engine's.
     /// The points are what a mesh file provides; the physics engine builds the hull, and the
     /// mass properties below are derived here from the points' bounding box, which is all
     /// the inertia model needs.
@@ -633,14 +766,13 @@ pub const GeomSpec = struct {
     ///
     /// -- ** IT LIVES ON THE GEOM BECAUSE THAT IS WHERE THE MATERIAL IS --
     ///
-    /// A contact needs one number and there are two surfaces, so the pair has to be combined -
-    /// geometrically, `sqrt(a*b)`, which is what both MuJoCo and `zimrphysics` use.
-    ///
-    /// * THIS WAS DROPPED FOR SEVERAL SESSIONS and the symptom was nothing like the cause. Every
-    /// contact took a hardcoded 0.5 whatever the model said, and a limp humanoid on the ground
-    /// crept sideways at a rate that ACCELERATED - 0.109 m over 25 s, against MuJoCo's 0.071 and
-    /// falling. With the model's own 0.7 the creep goes steady and lands within 7% of MuJoCo.
-    /// The default here matches MuJoCo's own default for the same reason.
+    /// A contact needs one number and there are two surfaces, so the pair has to be combined. MuJoCo
+    /// takes the LARGER of the two for geoms of the same priority (`mj_contactParam`: "friction:
+    /// max"), and so do robot.zig's own floor contacts (`pushFloorContacts`); `zimrphysics` takes
+    /// their geometric mean, `sqrt(a*b)`. Each geom's own value matters: a contact that took one
+    /// fixed value whatever the model said lets a limp humanoid on the ground creep sideways
+    /// faster and faster, where its own 0.7 keeps the creep steady and close to MuJoCo's. The
+    /// default matches MuJoCo's own.
     friction: f32 = 1.0,
     density: f32 = 1000.0,
     /// Override the density-derived mass. Useful when a model quotes link masses directly.
@@ -855,7 +987,7 @@ pub const ActuatorSpec = struct {
 pub const Stage = enum(u8) {
     /// Position or velocity has been written; everything derived is stale.
     stale = 0,
-    /// `kinematics` and `comPos` have run: body poses, `cdof`, `cinert` are current.
+    /// `kinematics` and `comPos` have run: body poses, `dof_axes`, `body_inertias` are current.
     position,
     /// `comVel` has run: body velocities are current.
     velocity,
@@ -1027,7 +1159,7 @@ pub const SolverOptions = struct {
     ///     momentum on:    3 solver iterations,  19,280 ns/step
     ///
     /// **A 4.7x reduction in iterations, and 8% SLOWER.** Each iteration costs roughly twice
-    /// as much, because extrapolating the forces invalidates `d.acc` and it must be rebuilt -
+    /// as much, because extrapolating the forces invalidates `d.joint_accelerations` and it must be rebuilt -
     /// `rebuildAccelerationFromForces` is O(rows x nv), the same order as the sweep it is
     /// accelerating. At sixteen rows the fixed cost dominates the saved sweeps.
     ///
@@ -1099,7 +1231,29 @@ pub const SolverOptions = struct {
     /// tolerance below that is unreachable, and the solver would spin to `max_iterations`
     /// on a problem it had already solved exactly. Scaling by the problem removes the
     /// dependence on how stiff the model happens to be.
+    ///
+    /// NEWTON reads it in MuJoCo's sense, scaled by 1 / trace(M) for the same reason: it stops once the line search
+    /// finds no step, or the round's improvement, the gradient's length or half the Newton decrement - each times that
+    /// scale - falls below it (`solveNewton`).
     tolerance: f32 = 1.0e-6,
+    /// Newton's line search: its ceiling on iterations, and its tolerance on the slope along the line, a fraction of
+    /// `tolerance` scaled by the step's length (`searchLine`). MuJoCo's `ls_iterations` and `ls_tolerance`, with its
+    /// defaults.
+    line_search_iterations: u32 = 50,
+    line_search_tolerance: f32 = 0.01,
+};
+
+/// WHICH INERTIA A CONSTRAINT ROW'S SOFTNESS IS MEASURED AGAINST. A row's regulariser is R = (1 - imp)/imp x A,
+/// with A the row's inverse inertia - how easily the mechanism moves along it when pushed - so the choice of A sets
+/// how soft each row is.
+pub const ConstraintInertia = enum(u32) {
+    /// A = J M^-1 J^T at the current pose: exact, and a back-substitution through M for every row of every step.
+    /// MuJoCo's `mjENBL_DIAGEXACT`, an option it leaves off.
+    exact,
+    /// MuJoCo's default (`mj_diagApprox`): A from the inverse weights measured once at the reference pose
+    /// (`Model.body_translation_inverse_weight`, `Model.dof_inverse_weight`), by the row's kind - no solve at all, at
+    /// the price of ignoring how the pose has changed the inertia since.
+    reference_pose,
 };
 
 /// Simulation-wide settings, mirroring `mjModel.opt`.
@@ -1124,14 +1278,26 @@ pub const Options = struct {
     /// See `boundVelocity` for the failure that motivated it.
     max_velocity: f32 = 100.0,
     solver: SolverOptions = .{},
-    /// Start each solver row from the force that constraint carried last step.
+    /// Start each solve from last step's answer. Gauss-Seidel starts each row from the force that constraint carried
+    /// last step; Newton starts from last step's accelerations (`Data.warmstart_accelerations`, MuJoCo's
+    /// `qacc_warmstart`) when they cost less than the free acceleration.
     ///
-    /// On by default because it is a large, free win: measured at 29 iterations cold versus
-    /// a handful warm on a seven-axis arm against its limits. The switch exists so a test
+    /// For Gauss-Seidel a large, free win: measured at 29 iterations cold versus a handful warm on a seven-axis arm
+    /// against its limits. For Newton it depends on the motion: a win where little changes from step to step (a
+    /// settled, standing Go1 at 500 Hz, 901 rounds warm against 1,000 cold), a loss where much does (the tracker's
+    /// humanoid following its get-up and dance clips at 60 Hz, 10-17% more rounds and 20-37% more line-search
+    /// evaluations warm - `solveNewton`'s THE START). MuJoCo's `warmstart` flag, on by default. The switch exists so a
+    /// test
     /// can prove the converged answer does not depend on it - and so a determinism-sensitive
     /// caller (differential rollouts, section 4d) can turn it off and get a solve that depends on
     /// nothing but the current state.
     warm_start: bool = true,
+    /// Which inertia each constraint row's softness is measured against (`ConstraintInertia`).
+    constraint_inertia: ConstraintInertia = .exact,
+    /// Build no constraint rows at all - no equalities, no joint limits, no contacts - so the acceleration is the
+    /// smooth one: MuJoCo's `mjDSBL_CONSTRAINT`. For stepping a model whose constraints are not wanted, or not
+    /// simulated by the engine stepping it (robotgpu refuses a model with constraints unless this is set).
+    disable_constraints: bool = false,
     /// How many simultaneous contacts to make room for. Sizing happens at build, so this
     /// is a promise about the worst case rather than a limit the simulation enforces
     /// gracefully - exceeding it is an assert, on the zimr392 principle that a silently
@@ -1268,7 +1434,7 @@ pub const Anchor = struct {
 pub const Coordinate = struct {
     qpos: u32,
     dof: u32,
-    /// The joint's rest value, which the polynomial is measured from - the same `qpos0`
+    /// The joint's rest value, which the polynomial is measured from - the same `reference_joint_positions`
     /// convention MuJoCo uses, so a coupling written for one reads the same in the other.
     rest: f32,
 };
@@ -1316,11 +1482,10 @@ pub const Equality = struct {
     impedance: Impedance,
 };
 
-/// NAMING NOTE. Counts stay as `nq`, `nv`, `nu`, `na` rather than becoming
-/// `position_count` and friends. Those four are the universal notation of the field -
-/// Featherstone, MuJoCo, Pinocchio and every robotics paper use them - and a reader
-/// checking this file against a reference would have to translate every line. Everything
-/// that is NOT standard notation is spelled out in full.
+/// NAMING NOTE. Counts stay as `coordinate_count`, `dof_count`, `actuator_count`, `activation_count` rather than
+/// becoming `position_count` and friends. Those four are the universal notation of the field - Featherstone, MuJoCo,
+/// Pinocchio and every robotics paper use them - and a reader checking this file against a reference would have to
+/// translate every line. Everything that is NOT standard notation is spelled out in full.
 pub const Model = struct {
     /// Owns every table below, so `deinit` is one call rather than a forty-line errdefer
     /// ladder.
@@ -1333,21 +1498,21 @@ pub const Model = struct {
     arena: *ArenaAllocator,
     opt: Options,
 
-    nbody: u32,
-    njnt: u32,
-    nsite: u32,
-    ngeom: u32,
-    nq: u32,
-    nv: u32,
-    nu: u32,
-    na: u32,
+    body_count: u32,
+    joint_count: u32,
+    site_count: u32,
+    geom_count: u32,
+    coordinate_count: u32,
+    dof_count: u32,
+    actuator_count: u32,
+    activation_count: u32,
     /// Worst-case constraint rows. Sized at build so `Data` never reallocates: one row per
     /// limited joint today, plus contacts once phase 7 lands. zimr's 2D engine learned the
     /// hard way (zimr392) that a silently-clamped constraint pool freezes a world without
     /// saying so, so this is generous and the overflow is a loud assert.
     constraint_capacity: u32,
     /// Total nonzeros in the lower triangle of M - the size of `Data.mass_matrix`.
-    mass_nonzero_count: u32,
+    mass_entry_count: u32,
 
     // ---- bodies ----
     body_parent: []u32,
@@ -1357,42 +1522,47 @@ pub const Model = struct {
     /// Index of the root of this body's kinematic tree (the child-of-world above it).
     body_root: []u32,
     /// Pose relative to the parent.
-    body_pos: []Vec,
-    body_rot: []Quat,
+    body_rest_position: []Vec,
+    body_rest_rotation: []Quat,
     /// Centre of mass in the body frame.
-    body_ipos: []Vec,
+    body_centre_of_mass_offset: []Vec,
     /// Inertia about that centre of mass, in the body frame. A FULL symmetric tensor,
     /// not MuJoCo's principal moments plus a quaternion - see `geomsToBodyMass`.
-    body_inertia: []Inertia,
+    body_local_inertia: []Inertia,
     body_mass: []f32,
+    /// MuJoCo's `body_invweight0`, translation and rotation apart: how easily each body moves when pushed, measured
+    /// once at the reference pose - the mean diagonal of J M^-1 J^T for its centre of mass
+    /// (`refreshReferenceInverseWeights`). Zero for a body that cannot move.
+    body_translation_inverse_weight: []f32,
+    body_rotation_inverse_weight: []f32,
     /// Mass of this body plus everything below it - needed by the subtree-COM frames.
     body_subtree_mass: []f32,
     /// Each body's SUBTREE SIZE: the body and every body below it (`countSubtrees`). Bodies are in depth-first order,
     /// so a body's subtree is the contiguous run `[body, body + body_subtree_count[body])` - what lets a sum over a
     /// subtree run over a range (robotgpu's tree sums).
     body_subtree_count: []u32,
-    body_jnt_adr: []u32,
-    body_jnt_num: []u32,
-    body_dof_adr: []u32,
-    body_dof_num: []u32,
+    body_first_joint: []u32,
+    body_joint_count: []u32,
+    body_first_dof: []u32,
+    body_dof_count: []u32,
 
     // ---- joints ----
-    jnt_type: []JointType,
-    jnt_body: []u32,
-    jnt_axis: []Vec,
-    jnt_pos: []Vec,
-    jnt_qpos_adr: []u32,
-    jnt_dof_adr: []u32,
-    jnt_range: []?[2]f32,
-    jnt_limit_softness: []Softness,
-    jnt_limit_impedance: []Impedance,
-    jnt_limit_margin: []f32,
-    jnt_damping: []f32,
+    joint_type: []JointType,
+    joint_body: []u32,
+    joint_local_axis: []Vec,
+    joint_local_anchor: []Vec,
+    joint_first_coordinate: []u32,
+    joint_first_dof: []u32,
+    joint_range: []?[2]f32,
+    joint_limit_softness: []Softness,
+    joint_limit_impedance: []Impedance,
+    joint_limit_margin: []f32,
+    joint_damping: []f32,
     /// True when any joint has non-zero damping, so the integrator can pick its path once
     /// rather than scanning every step. See `dampedVelocityStep`.
     has_dof_damping: bool,
-    jnt_stiffness: []f32,
-    jnt_ref: []f32,
+    joint_stiffness: []f32,
+    joint_reference_position: []f32,
 
     // ---- degrees of freedom ----
     /// The DOF immediately above this one in the tree, or `no_dof` at a root. This chain
@@ -1400,40 +1570,48 @@ pub const Model = struct {
     /// is `i` or one of its ancestors.
     dof_parent: []u32,
     dof_body: []u32,
-    dof_jnt: []u32,
+    dof_joint: []u32,
     dof_armature: []f32,
+    /// MuJoCo's `dof_invweight0`: the same for each joint's own freedoms - the mean diagonal of its block of M^-1 at
+    /// the reference pose (`refreshReferenceInverseWeights`).
+    dof_inverse_weight: []f32,
+    /// THE LIMB each dof belongs to (`dofLimbs`: a body's limb starts at its first ancestor, or itself, whose parent
+    /// branches), `no_limb` for the free root's - where a stiffness per limb reaches (`LimbStiffness`).
+    dof_limb: []u32,
+    /// How many limbs `dof_limb` numbers: Geno six, the Go1 four, an arm on a fixed base one.
+    limb_count: u32,
 
     // ---- mass-matrix sparsity (structure, so it lives with the model) ----
     /// Nonzeros in row `i`: the length of `i`'s ancestor chain, including `i` itself.
-    mass_row_nonzeros: []u32,
+    mass_row_entry_count: []u32,
     /// Where row `i` starts in the packed value array.
     mass_row_start: []u32,
     /// Column index of each packed entry. Within a row the order is root-first and the
     /// DIAGONAL IS LAST, which is what lets CRB walk the chain with a single decrement.
-    mass_col_index: []u32,
+    mass_entry_column: []u32,
 
     // ---- sites ----
     site_body: []u32,
-    site_pos: []Vec,
-    site_rot: []Quat,
+    site_local_position: []Vec,
+    site_local_rotation: []Quat,
 
     // ---- geoms ----
     /// Per-geom Coulomb friction, combined with the other surface's at contact time.
     geom_friction: []f32,
     geom_body: []u32,
     geom_shape: []GeomShape,
-    geom_pos: []Vec,
-    geom_rot: []Quat,
+    geom_local_position: []Vec,
+    geom_local_rotation: []Quat,
 
     // ---- sensors ----
-    nsensor: u32,
+    sensor_count: u32,
     /// Total width of `Data.sensor_data`.
-    nsensordata: u32,
+    sensor_value_count: u32,
     sensor_kind: []SensorKind,
     /// Resolved index of what each sensor reads: a joint, tendon, actuator or site.
     sensor_target: []u32,
     /// Where each sensor's reading starts in `Data.sensor_data`.
-    sensor_adr: []u32,
+    sensor_first_value: []u32,
 
     // ---- equality constraints ----
     /// Loop closures. * STRUCT-OF-ONE rather than the parallel arrays the rest of `Model`
@@ -1441,10 +1619,10 @@ pub const Model = struct {
     /// loops, and equalities are neither hot nor numerous. `m.equalities[e].a.body` says what
     /// it is; `m.eq_body[e][0]` needs a comment to say the same thing.
     equalities: []Equality,
-    neq: u32,
+    equality_count: u32,
 
     // ---- tendons ----
-    ntendon: u32,
+    tendon_count: u32,
     /// Each tendon's length coefficients over the DOFs: `ntendon x nv`, row-major.
     ///
     /// This IS the tendon Jacobian `dlength/dq`, and for a FIXED tendon it is CONSTANT, so
@@ -1459,24 +1637,24 @@ pub const Model = struct {
     // ---- actuators ----
     /// Which kind of transmission each actuator uses, and what it points at: a joint
     /// index for `.joint`, a tendon index for `.tendon`.
-    act_kind: []TransmissionKind,
-    act_target: []u32,
+    actuator_kind: []TransmissionKind,
+    actuator_target: []u32,
     /// The single DOF a `.joint` actuator drives, or `no_dof` for a tendon, whose force
     /// spreads across every DOF its coefficients touch.
-    act_dof: []u32,
-    act_gear: []f32,
+    actuator_dof: []u32,
+    actuator_gear: []f32,
     /// The affine force law, collapsed from whatever shortcut the spec used.
-    act_gain: []f32,
-    act_bias: [][3]f32,
-    act_activation: []Activation,
+    actuator_gain: []f32,
+    actuator_bias: [][3]f32,
+    actuator_activation_dynamics: []Activation,
     /// Index into `Data.act` for actuators that have internal state, `no_dof` otherwise.
-    act_state_adr: []u32,
-    act_ctrl_range: []?[2]f32,
-    act_force_range: []?[2]f32,
+    actuator_activation_index: []u32,
+    actuator_control_range: []?[2]f32,
+    actuator_force_range: []?[2]f32,
 
     /// The reference configuration. `reset` restores it, springs measure from it, and
     /// from phase 6 the constraint regularizer is scaled by the inertia evaluated here.
-    qpos0: []f32,
+    reference_joint_positions: []f32,
 
     pub fn deinit(self: *Model) void {
         const gpa: Allocator = self.arena.child_allocator;
@@ -1524,14 +1702,14 @@ fn jointIndexByName(spec: ModelSpec, name: []const u8) BuildError!u32 {
 /// something to approximate.
 fn coordinateOf(spec: ModelSpec, m: Model, name: []const u8) BuildError!Coordinate {
     const j: u32 = try jointIndexByName(spec, name);
-    switch (m.jnt_type[j]) {
+    switch (m.joint_type[j]) {
         .hinge, .slide => {},
         .free, .ball => return BuildError.UnsupportedJointForCoupling,
     }
     return .{
-        .qpos = m.jnt_qpos_adr[j],
-        .dof = m.jnt_dof_adr[j],
-        .rest = m.qpos0[m.jnt_qpos_adr[j]],
+        .qpos = m.joint_first_coordinate[j],
+        .dof = m.joint_first_dof[j],
+        .rest = m.reference_joint_positions[m.joint_first_coordinate[j]],
     };
 }
 
@@ -1542,8 +1720,8 @@ fn restPose(m: *const Model, body: u32) Pose {
     }
     const parent: Pose = restPose(m, m.body_parent[body]);
     return .{
-        .pos = parent.pos + rotate(parent.rot, m.body_pos[body]),
-        .rot = qmul(parent.rot, m.body_rot[body]),
+        .pos = parent.pos + rotate(parent.rot, m.body_rest_position[body]),
+        .rot = qmul(parent.rot, m.body_rest_rotation[body]),
     };
 }
 
@@ -1554,8 +1732,8 @@ fn restToWorld(m: *const Model, body: u32, point: Vec) Vec {
 
 /// Express a point given in one body's frame in another body's frame, at the REST pose.
 ///
-/// Walks each body's parent chain to the world using the model's own `body_pos`/`body_rot` -
-/// which is `qpos0`, since a joint at its zero coordinate contributes nothing. That is exactly
+/// Walks each body's parent chain to the world using the model's own `body_rest_position`/`body_rest_rotation` -
+/// which is `reference_joint_positions`, since a joint at its zero coordinate contributes nothing. That is exactly
 /// the configuration a spec describes, so a closure derived here is satisfied the moment the
 /// model is built.
 fn restFrameAnchor(m: *const Model, from_body: u32, point: Vec, to_body: u32) Vec {
@@ -1579,7 +1757,9 @@ fn siteIndex(site: anytype) u32 {
 pub const no_dof: u32 = maxInt(u32);
 
 /// Mass below which a body counts as massless for the purpose of deriving a com.
-const min_mass: f32 = 1.0e-9;
+/// The smallest mass treated as mass: a subtree lighter than this has no centre of mass to divide out (`comPos`).
+/// Shared with robotgpu's centre-of-mass kernel.
+pub const min_mass: f32 = 1.0e-9;
 
 /// Build a model from a spec assembled at runtime.
 ///
@@ -1597,7 +1777,7 @@ const min_mass: f32 = 1.0e-9;
 ///
 /// -- * WHY THIS IS PUBLIC, AND WHAT IT COST TO LEARN --
 ///
-/// `body_mass` and `body_inertia` are read every step, so scaling them changes the physics
+/// `body_mass` and `body_local_inertia` are read every step, so scaling them changes the physics
 /// immediately - which makes a live mass slider look trivial to write. `body_subtree_mass`
 /// is NOT recomputed each step: it is accumulated once at build time, and it feeds the
 /// centre-of-mass reductions that `comPos` and `comVel` perform before the mass matrix is
@@ -1612,11 +1792,14 @@ const min_mass: f32 = 1.0e-9;
 /// (6.2 kN peak, no NaN), while the same tower SCALED to 300 kg exploded. When two paths to
 /// the same state disagree, print both states and diff them - every field matched except
 /// this one.
+///
+/// * The reference pose's inverse weights depend on the masses too (and on the inertias and the armature): a caller
+/// changing any of them calls `refreshReferenceInverseWeights` as well, as MuJoCo asks for `mj_setConst`.
 pub fn refreshSubtreeMass(m: *Model) void {
     for (m.body_subtree_mass, m.body_mass) |*dst, own| {
         dst.* = own;
     }
-    var bi: u32 = m.nbody;
+    var bi: u32 = m.body_count;
     while (bi > 1) {
         bi -= 1;
         m.body_subtree_mass[m.body_parent[bi]] += m.body_subtree_mass[bi];
@@ -1635,14 +1818,14 @@ pub fn refreshSubtreeMass(m: *Model) void {
 /// GPU's tree sums would silently mix subtrees (`error.BodiesNotDepthFirst`).
 fn countSubtrees(m: *Model) BuildError!void {
     @memset(m.body_subtree_count, 1);
-    var reverse_body: u32 = m.nbody;
+    var reverse_body: u32 = m.body_count;
     while (reverse_body > 1) {
         reverse_body -= 1;
         const parent: u32 = m.body_parent[reverse_body];
         m.body_subtree_count[parent] += m.body_subtree_count[reverse_body];
     }
     var body: u32 = 1;
-    while (body < m.nbody) : (body += 1) {
+    while (body < m.body_count) : (body += 1) {
         const parent: u32 = m.body_parent[body];
         const parent_run_end: u32 = parent + m.body_subtree_count[parent];
         const inside_parent_run: bool = parent < body and body < parent_run_end;
@@ -1699,7 +1882,7 @@ const BodyMass = struct {
 /// `off` is `(xy, xz, yz)` in that same order, so the two halves copy straight across.
 ///
 /// `h` is the FIRST MOMENT, `mass * com`, and is zero here because a stated inertia is
-/// given about the centre of mass by definition. `body_ipos` carries the offset separately,
+/// given about the centre of mass by definition. `body_centre_of_mass_offset` carries the offset separately,
 /// exactly as it does for the geom-derived path.
 fn inertialToBodyMass(inertial: InertialSpec) BodyMass {
     return .{
@@ -1825,8 +2008,8 @@ fn geomsToBodyMass(geoms: []const GeomSpec) BodyMass {
 fn lastDofOf(m: *const Model, body: u32) u32 {
     var b: u32 = body;
     while (true) {
-        if (m.body_dof_num[b] > 0) {
-            return m.body_dof_adr[b] + m.body_dof_num[b] - 1;
+        if (m.body_dof_count[b] > 0) {
+            return m.body_first_dof[b] + m.body_dof_count[b] - 1;
         }
         if (b == world_body) {
             return no_dof;
@@ -1887,6 +2070,85 @@ fn siteIndexByName(spec: ModelSpec, name: []const u8) BuildError!u32 {
         }
     }
     return BuildError.UnknownName;
+}
+
+/// The character's root body: the one the free joint moves, or the first body below the world when the root is
+/// welded. Everything that speaks of "the root's frame" means this body.
+pub fn rootBody(m: *const Model) u32 {
+    if (m.joint_count > 0 and m.joint_type[0] == .free) {
+        return m.joint_body[0];
+    }
+    return 1;
+}
+
+/// The degrees of freedom a free root owns - six, if joint 0 is a free joint - which nothing actuates; zero for a
+/// model whose root is welded to the world.
+pub fn rootDofCount(m: *const Model) u32 {
+    const has_free_root: bool = m.joint_count > 0 and m.joint_type[0] == .free;
+    return if (has_free_root) 6 else 0;
+}
+
+/// The limb of no dof - the free root's, which no servo drives: the largest u32, above every limb's number.
+pub const no_limb: u32 = 0xffff_ffff;
+
+/// How many bodies hang from `body` directly.
+fn childCount(m: *const Model, body: u32) u32 {
+    var children: u32 = 0;
+    for (m.body_parent[1..m.body_count]) |parent| {
+        if (parent == body) {
+            children += 1;
+        }
+    }
+    return children;
+}
+
+/// WHERE A BODY's LIMB STARTS (the limbs of variable-stiffness locomotion, after Spoljaric, Yan & Lee 2025): at its
+/// first ancestor, or itself, whose parent branches - Geno's legs and spine start below his hips, his arms and neck
+/// below his chest; the Go1's legs below its trunk. On a path that never branches below the world - an arm on a fixed
+/// base, a chain on a free root - at the topmost body: the whole chain is one limb. Run when a model is set up, not in
+/// a step: each ancestor's children are counted afresh.
+pub fn limbStart(m: *const Model, body: u32) u32 {
+    var current: u32 = body;
+    var topmost: u32 = body;
+    while (current != world_body) {
+        const parent: u32 = m.body_parent[current];
+        if (childCount(m, parent) > 1) {
+            return current;
+        }
+        topmost = current;
+        current = parent;
+    }
+    return topmost;
+}
+
+/// EACH DOF's LIMB: the limb its joint's body belongs to (`limbStart`), the limbs numbered in the order their first
+/// dofs come; the free root's dofs belong to none (`no_limb`). Geno has six, in his model's order the spine (12 dofs),
+/// the neck with the head (9), the right arm, the left arm, the right leg and the left leg (12 each); the Go1 its four
+/// legs; an arm on a fixed base one. Fills `limb_of_dof` (a number per dof) and returns how many limbs;
+/// `limb_starting_at` is scratch, a number per body: the number of the limb that starts there, once one has.
+pub fn dofLimbs(m: *const Model, limb_of_dof: []u32, limb_starting_at: []u32) u32 {
+    const sized: bool = limb_of_dof.len == m.dof_count and limb_starting_at.len == m.body_count;
+    assertf(sized, @src(), "dofLimbs: {d} dofs, {d} bodies", .{ limb_of_dof.len, limb_starting_at.len });
+    @memset(limb_starting_at, no_limb);
+    const root_dofs: u32 = rootDofCount(m);
+    var limb_count: u32 = 0;
+    for (0..m.joint_count) |joint| {
+        const first_dof: u32 = m.joint_first_dof[joint];
+        const dof_count: u32 = m.joint_type[joint].dofCount();
+        const start: u32 = limbStart(m, m.joint_body[joint]);
+        for (first_dof..first_dof + dof_count) |dof| {
+            if (dof < root_dofs) {
+                limb_of_dof[dof] = no_limb;
+                continue;
+            }
+            if (limb_starting_at[start] == no_limb) {
+                limb_starting_at[start] = limb_count;
+                limb_count += 1;
+            }
+            limb_of_dof[dof] = limb_starting_at[start];
+        }
+    }
+    return limb_count;
 }
 
 /// Build a `Model` from a spec.
@@ -1982,95 +2244,100 @@ fn buildFromSpec(gpa: Allocator, spec: ModelSpec) !Model {
     var m: Model = .{
         .arena = arena,
         .opt = spec.options,
-        .nbody = nbody,
-        .njnt = njnt,
-        .nsite = nsite,
-        .ngeom = ngeom,
-        .nq = nq,
-        .nv = nv,
-        .nu = nu,
-        .na = na,
+        .body_count = nbody,
+        .joint_count = njnt,
+        .site_count = nsite,
+        .geom_count = ngeom,
+        .coordinate_count = nq,
+        .dof_count = nv,
+        .actuator_count = nu,
+        .activation_count = na,
         .constraint_capacity = constraint_capacity,
-        .mass_nonzero_count = 0, // filled once the dof tree is known
+        .mass_entry_count = 0, // filled once the dof tree is known
         .body_parent = try a.alloc(u32, nbody),
         .body_root = try a.alloc(u32, nbody),
-        .body_pos = try a.alloc(Vec, nbody),
-        .body_rot = try a.alloc(Quat, nbody),
-        .body_ipos = try a.alloc(Vec, nbody),
-        .body_inertia = try a.alloc(Inertia, nbody),
+        .body_rest_position = try a.alloc(Vec, nbody),
+        .body_rest_rotation = try a.alloc(Quat, nbody),
+        .body_centre_of_mass_offset = try a.alloc(Vec, nbody),
+        .body_local_inertia = try a.alloc(Inertia, nbody),
         .body_mass = try a.alloc(f32, nbody),
+        .body_translation_inverse_weight = try a.alloc(f32, nbody),
+        .body_rotation_inverse_weight = try a.alloc(f32, nbody),
         .body_subtree_mass = try a.alloc(f32, nbody),
         .body_subtree_count = try a.alloc(u32, nbody),
-        .body_jnt_adr = try a.alloc(u32, nbody),
-        .body_jnt_num = try a.alloc(u32, nbody),
-        .body_dof_adr = try a.alloc(u32, nbody),
-        .body_dof_num = try a.alloc(u32, nbody),
-        .jnt_type = try a.alloc(JointType, njnt),
-        .jnt_body = try a.alloc(u32, njnt),
-        .jnt_axis = try a.alloc(Vec, njnt),
-        .jnt_pos = try a.alloc(Vec, njnt),
-        .jnt_qpos_adr = try a.alloc(u32, njnt),
-        .jnt_dof_adr = try a.alloc(u32, njnt),
-        .jnt_range = try a.alloc(?[2]f32, njnt),
-        .jnt_limit_softness = try a.alloc(Softness, njnt),
-        .jnt_limit_impedance = try a.alloc(Impedance, njnt),
-        .jnt_limit_margin = try a.alloc(f32, njnt),
-        .jnt_damping = try a.alloc(f32, njnt),
+        .body_first_joint = try a.alloc(u32, nbody),
+        .body_joint_count = try a.alloc(u32, nbody),
+        .body_first_dof = try a.alloc(u32, nbody),
+        .body_dof_count = try a.alloc(u32, nbody),
+        .joint_type = try a.alloc(JointType, njnt),
+        .joint_body = try a.alloc(u32, njnt),
+        .joint_local_axis = try a.alloc(Vec, njnt),
+        .joint_local_anchor = try a.alloc(Vec, njnt),
+        .joint_first_coordinate = try a.alloc(u32, njnt),
+        .joint_first_dof = try a.alloc(u32, njnt),
+        .joint_range = try a.alloc(?[2]f32, njnt),
+        .joint_limit_softness = try a.alloc(Softness, njnt),
+        .joint_limit_impedance = try a.alloc(Impedance, njnt),
+        .joint_limit_margin = try a.alloc(f32, njnt),
+        .joint_damping = try a.alloc(f32, njnt),
         .has_dof_damping = false, // set once the joints are read
-        .jnt_stiffness = try a.alloc(f32, njnt),
-        .jnt_ref = try a.alloc(f32, njnt),
+        .joint_stiffness = try a.alloc(f32, njnt),
+        .joint_reference_position = try a.alloc(f32, njnt),
         .dof_parent = try a.alloc(u32, nv),
         .dof_body = try a.alloc(u32, nv),
-        .dof_jnt = try a.alloc(u32, nv),
+        .dof_joint = try a.alloc(u32, nv),
         .dof_armature = try a.alloc(f32, nv),
-        .mass_row_nonzeros = try a.alloc(u32, nv),
+        .dof_inverse_weight = try a.alloc(f32, nv),
+        .dof_limb = try a.alloc(u32, nv),
+        .limb_count = 0, // counted once the tree is whole
+        .mass_row_entry_count = try a.alloc(u32, nv),
         .mass_row_start = try a.alloc(u32, nv),
-        .mass_col_index = &.{}, // sized after the chains are known
+        .mass_entry_column = &.{}, // sized after the chains are known
         .site_body = try a.alloc(u32, nsite),
-        .site_pos = try a.alloc(Vec, nsite),
-        .site_rot = try a.alloc(Quat, nsite),
+        .site_local_position = try a.alloc(Vec, nsite),
+        .site_local_rotation = try a.alloc(Quat, nsite),
         .geom_friction = try a.alloc(f32, ngeom),
         .geom_body = try a.alloc(u32, ngeom),
         .geom_shape = try a.alloc(GeomShape, ngeom),
-        .geom_pos = try a.alloc(Vec, ngeom),
-        .geom_rot = try a.alloc(Quat, ngeom),
-        .nsensor = nsensor,
-        .nsensordata = nsensordata,
+        .geom_local_position = try a.alloc(Vec, ngeom),
+        .geom_local_rotation = try a.alloc(Quat, ngeom),
+        .sensor_count = nsensor,
+        .sensor_value_count = nsensordata,
         .sensor_kind = try a.alloc(SensorKind, nsensor),
         .sensor_target = try a.alloc(u32, nsensor),
-        .sensor_adr = try a.alloc(u32, nsensor),
-        .neq = neq,
+        .sensor_first_value = try a.alloc(u32, nsensor),
+        .equality_count = neq,
         .equalities = try a.alloc(Equality, neq),
-        .ntendon = ntendon,
+        .tendon_count = ntendon,
         .tendon_jacobian = try a.alloc(f32, ntendon * nv),
         .tendon_stiffness = try a.alloc(f32, ntendon),
         .tendon_damping = try a.alloc(f32, ntendon),
         .tendon_rest_length = try a.alloc(f32, ntendon),
-        .act_kind = try a.alloc(TransmissionKind, nu),
-        .act_target = try a.alloc(u32, nu),
-        .act_dof = try a.alloc(u32, nu),
-        .act_gear = try a.alloc(f32, nu),
-        .act_gain = try a.alloc(f32, nu),
-        .act_bias = try a.alloc([3]f32, nu),
-        .act_activation = try a.alloc(Activation, nu),
-        .act_state_adr = try a.alloc(u32, nu),
-        .act_ctrl_range = try a.alloc(?[2]f32, nu),
-        .act_force_range = try a.alloc(?[2]f32, nu),
-        .qpos0 = try a.alloc(f32, nq),
+        .actuator_kind = try a.alloc(TransmissionKind, nu),
+        .actuator_target = try a.alloc(u32, nu),
+        .actuator_dof = try a.alloc(u32, nu),
+        .actuator_gear = try a.alloc(f32, nu),
+        .actuator_gain = try a.alloc(f32, nu),
+        .actuator_bias = try a.alloc([3]f32, nu),
+        .actuator_activation_dynamics = try a.alloc(Activation, nu),
+        .actuator_activation_index = try a.alloc(u32, nu),
+        .actuator_control_range = try a.alloc(?[2]f32, nu),
+        .actuator_force_range = try a.alloc(?[2]f32, nu),
+        .reference_joint_positions = try a.alloc(f32, nq),
     };
 
     // ---- the world body ----
     m.body_parent[world_body] = world_body; // its own parent, so walks terminate
     m.body_root[world_body] = world_body;
-    m.body_pos[world_body] = vec_zero;
-    m.body_rot[world_body] = quat_identity;
-    m.body_ipos[world_body] = vec_zero;
-    m.body_inertia[world_body] = .zero;
+    m.body_rest_position[world_body] = vec_zero;
+    m.body_rest_rotation[world_body] = quat_identity;
+    m.body_centre_of_mass_offset[world_body] = vec_zero;
+    m.body_local_inertia[world_body] = .zero;
     m.body_mass[world_body] = 0;
-    m.body_jnt_adr[world_body] = 0;
-    m.body_jnt_num[world_body] = 0;
-    m.body_dof_adr[world_body] = 0;
-    m.body_dof_num[world_body] = 0;
+    m.body_first_joint[world_body] = 0;
+    m.body_joint_count[world_body] = 0;
+    m.body_first_dof[world_body] = 0;
+    m.body_dof_count[world_body] = 0;
 
     // ---- bodies, joints, geoms, sites ----
     var jnt_n: u32 = 0;
@@ -2084,8 +2351,8 @@ fn buildFromSpec(gpa: Allocator, spec: ModelSpec) !Model {
         m.body_parent[bi] = if (b.parent) |p| try bodyIndexByName(spec, p) else world_body;
         // A child of the world roots its own tree; everyone else inherits their parent's.
         m.body_root[bi] = if (m.body_parent[bi] == world_body) bi else m.body_root[m.body_parent[bi]];
-        m.body_pos[bi] = b.pos;
-        m.body_rot[bi] = b.rot;
+        m.body_rest_position[bi] = b.pos;
+        m.body_rest_rotation[bi] = b.rot;
 
         // Mass properties: stated outright if the model says so, otherwise summed from the
         // geoms. Real robot models state them (section 4i), hand-written ones usually do not.
@@ -2094,12 +2361,12 @@ fn buildFromSpec(gpa: Allocator, spec: ModelSpec) !Model {
         else
             geomsToBodyMass(b.geoms);
         m.body_mass[bi] = mass_props.mass;
-        m.body_ipos[bi] = mass_props.com;
-        m.body_inertia[bi] = mass_props.inertia;
+        m.body_centre_of_mass_offset[bi] = mass_props.com;
+        m.body_local_inertia[bi] = mass_props.inertia;
 
-        m.body_jnt_adr[bi] = jnt_n;
-        m.body_jnt_num[bi] = @intCast(b.joints.len);
-        m.body_dof_adr[bi] = dof_n;
+        m.body_first_joint[bi] = jnt_n;
+        m.body_joint_count[bi] = @intCast(b.joints.len);
+        m.body_first_dof[bi] = dof_n;
 
         // Every DOF on this body chains onto the previous one, ACROSS joints as well as
         // within them - three hinges on one body are three links in one chain, not three
@@ -2107,35 +2374,35 @@ fn buildFromSpec(gpa: Allocator, spec: ModelSpec) !Model {
         var prev_dof: u32 = lastDofOf(&m, m.body_parent[bi]);
         var body_dofs: u32 = 0;
         for (b.joints) |j| {
-            m.jnt_type[jnt_n] = j.kind;
-            m.jnt_body[jnt_n] = bi;
-            m.jnt_axis[jnt_n] = switch (j.kind) {
+            m.joint_type[jnt_n] = j.kind;
+            m.joint_body[jnt_n] = bi;
+            m.joint_local_axis[jnt_n] = switch (j.kind) {
                 .slide, .hinge => normalize3(j.axis),
                 .free, .ball => vec_zero, // no single axis; the DOFs span all of them
             };
-            m.jnt_pos[jnt_n] = j.pos;
-            m.jnt_qpos_adr[jnt_n] = qpos_n;
-            m.jnt_dof_adr[jnt_n] = dof_n;
+            m.joint_local_anchor[jnt_n] = j.pos;
+            m.joint_first_coordinate[jnt_n] = qpos_n;
+            m.joint_first_dof[jnt_n] = dof_n;
             // A range is a limit on ONE coordinate - the limit rows below bound `pos[qpos_adr]` along one DOF
             // - which is what a hinge's or a slide's range means. A ball's range means something else: in
             // MuJoCo, a cone on its TOTAL turn. Applied as a scalar it would bound the quaternion's first
             // number instead, and pin the joint wherever that number wants to go negative (measured: a servo
             // on Geno's 23 balls stalled 0.67 rad short of a pose its own captures reach). Until cone limits
             // exist, a ball's or a free joint's range is not applied; the model text keeps it for them.
-            m.jnt_range[jnt_n] = switch (j.kind) {
+            m.joint_range[jnt_n] = switch (j.kind) {
                 .slide, .hinge => j.range,
                 .free, .ball => null,
             };
-            m.jnt_limit_softness[jnt_n] = j.limit_softness;
-            m.jnt_limit_impedance[jnt_n] = j.limit_impedance;
-            m.jnt_limit_margin[jnt_n] = j.limit_margin;
-            m.jnt_damping[jnt_n] = j.damping;
+            m.joint_limit_softness[jnt_n] = j.limit_softness;
+            m.joint_limit_impedance[jnt_n] = j.limit_impedance;
+            m.joint_limit_margin[jnt_n] = j.limit_margin;
+            m.joint_damping[jnt_n] = j.damping;
             // * ONE FLAG FOR THE WHOLE MODEL, decided at build time - see `dampedVelocityStep`.
             if (j.damping != 0) {
                 m.has_dof_damping = true;
             }
-            m.jnt_stiffness[jnt_n] = j.stiffness;
-            m.jnt_ref[jnt_n] = j.ref;
+            m.joint_stiffness[jnt_n] = j.stiffness;
+            m.joint_reference_position[jnt_n] = j.ref;
 
             // qpos0: everything rests at zero except a quaternion, which rests at identity.
             // zm stores a quat as (x, y, z, w), so the w lane is the one that starts at 1.
@@ -2145,30 +2412,30 @@ fn buildFromSpec(gpa: Allocator, spec: ModelSpec) !Model {
                     //
                     // For every other joint the body's `pos`/`rot` is a fixed offset from the
                     // parent and the joint moves relative to it. A free joint HAS no fixed
-                    // offset - its seven coordinates ARE the body's pose - so leaving `qpos0`
+                    // offset - its seven coordinates ARE the body's pose - so leaving `reference_joint_positions`
                     // at zero silently discards wherever the model said the body was.
                     //
                     // Found by stacking five crates and watching all five appear at the
                     // origin on step zero, already interpenetrating. Nothing warned: the
                     // model was valid, the simulation stable, and every body simply in the
                     // wrong place. MuJoCo does the same thing - `qpos0` for a free joint is
-                    // seeded from `body_pos`/`body_quat`.
-                    m.qpos0[qpos_n + 0] = b.pos[0];
-                    m.qpos0[qpos_n + 1] = b.pos[1];
-                    m.qpos0[qpos_n + 2] = b.pos[2];
-                    m.qpos0[qpos_n + 3] = b.rot[0];
-                    m.qpos0[qpos_n + 4] = b.rot[1];
-                    m.qpos0[qpos_n + 5] = b.rot[2];
-                    m.qpos0[qpos_n + 6] = b.rot[3];
+                    // seeded from `body_rest_position`/`body_quat`.
+                    m.reference_joint_positions[qpos_n + 0] = b.pos[0];
+                    m.reference_joint_positions[qpos_n + 1] = b.pos[1];
+                    m.reference_joint_positions[qpos_n + 2] = b.pos[2];
+                    m.reference_joint_positions[qpos_n + 3] = b.rot[0];
+                    m.reference_joint_positions[qpos_n + 4] = b.rot[1];
+                    m.reference_joint_positions[qpos_n + 5] = b.rot[2];
+                    m.reference_joint_positions[qpos_n + 6] = b.rot[3];
                 },
                 .ball => {
                     for (0..4) |k| {
-                        m.qpos0[qpos_n + k] = 0;
+                        m.reference_joint_positions[qpos_n + k] = 0;
                     }
-                    m.qpos0[qpos_n + 3] = 1; // w
+                    m.reference_joint_positions[qpos_n + 3] = 1; // w
                 },
                 .slide, .hinge => {
-                    m.qpos0[qpos_n] = j.ref;
+                    m.reference_joint_positions[qpos_n] = j.ref;
                 },
             }
 
@@ -2176,7 +2443,7 @@ fn buildFromSpec(gpa: Allocator, spec: ModelSpec) !Model {
             for (0..ndof) |k| {
                 const d: u32 = dof_n + @as(u32, @intCast(k));
                 m.dof_body[d] = bi;
-                m.dof_jnt[d] = jnt_n;
+                m.dof_joint[d] = jnt_n;
                 m.dof_parent[d] = prev_dof;
                 prev_dof = d;
                 // Armature: an explicit value, or a small fraction of the body's own
@@ -2189,20 +2456,20 @@ fn buildFromSpec(gpa: Allocator, spec: ModelSpec) !Model {
             body_dofs += ndof;
             jnt_n += 1;
         }
-        m.body_dof_num[bi] = body_dofs;
+        m.body_dof_count[bi] = body_dofs;
 
         for (b.sites) |s| {
             m.site_body[site_n] = bi;
-            m.site_pos[site_n] = s.pos;
-            m.site_rot[site_n] = s.rot;
+            m.site_local_position[site_n] = s.pos;
+            m.site_local_rotation[site_n] = s.rot;
             site_n += 1;
         }
         for (b.geoms) |g| {
             m.geom_body[geom_n] = bi;
             m.geom_friction[geom_n] = g.friction;
             m.geom_shape[geom_n] = g.shape;
-            m.geom_pos[geom_n] = g.pos;
-            m.geom_rot[geom_n] = g.rot;
+            m.geom_local_position[geom_n] = g.pos;
+            m.geom_local_rotation[geom_n] = g.rot;
             geom_n += 1;
         }
     }
@@ -2248,7 +2515,7 @@ fn buildFromSpec(gpa: Allocator, spec: ModelSpec) !Model {
 
     for (spec.sensors, 0..) |sensor, si| {
         m.sensor_kind[si] = sensor.kind;
-        m.sensor_adr[si] = sensor_adr;
+        m.sensor_first_value[si] = sensor_adr;
         m.sensor_target[si] = switch (sensor.kind) {
             .joint_pos, .joint_vel => try jointIndexByName(spec, sensor.target),
             .tendon_pos, .tendon_vel => try tendonIndexByName(spec, sensor.target),
@@ -2272,7 +2539,7 @@ fn buildFromSpec(gpa: Allocator, spec: ModelSpec) !Model {
             const ji: u32 = try jointIndexByName(spec, tj.name);
             // One nonzero per joint the tendon touches, at that joint's DOF. Accumulated
             // rather than assigned, so naming the same joint twice sums as it should.
-            m.tendon_jacobian[ti * nv + m.jnt_dof_adr[ji]] += tj.coefficient;
+            m.tendon_jacobian[ti * nv + m.joint_first_dof[ji]] += tj.coefficient;
         }
         m.tendon_stiffness[ti] = tendon.stiffness;
         m.tendon_damping[ti] = tendon.damping;
@@ -2285,33 +2552,33 @@ fn buildFromSpec(gpa: Allocator, spec: ModelSpec) !Model {
         switch (act.on) {
             .joint => |t| {
                 const ji: u32 = try jointIndexByName(spec, t.name);
-                m.act_kind[ai] = .joint;
-                m.act_target[ai] = ji;
-                m.act_dof[ai] = m.jnt_dof_adr[ji];
-                m.act_gear[ai] = t.gear;
+                m.actuator_kind[ai] = .joint;
+                m.actuator_target[ai] = ji;
+                m.actuator_dof[ai] = m.joint_first_dof[ji];
+                m.actuator_gear[ai] = t.gear;
             },
             .tendon => |t| {
-                m.act_kind[ai] = .tendon;
-                m.act_target[ai] = try tendonIndexByName(spec, t.name);
-                m.act_dof[ai] = no_dof; // spread across DOFs, not tied to one
-                m.act_gear[ai] = t.gear;
+                m.actuator_kind[ai] = .tendon;
+                m.actuator_target[ai] = try tendonIndexByName(spec, t.name);
+                m.actuator_dof[ai] = no_dof; // spread across DOFs, not tied to one
+                m.actuator_gear[ai] = t.gear;
             },
         }
         const co: ActuatorSpec.Coefficients = act.coefficients();
         // `gear` scales the whole law, so it multiplies both gain and bias: an actuator
         // geared 10:1 produces ten times the force for the same control AND ten times the
         // restoring force for the same position error.
-        m.act_gain[ai] = co.gain * m.act_gear[ai];
+        m.actuator_gain[ai] = co.gain * m.actuator_gear[ai];
         inline for (0..3) |k| {
-            m.act_bias[ai][k] = co.bias[k] * m.act_gear[ai];
+            m.actuator_bias[ai][k] = co.bias[k] * m.actuator_gear[ai];
         }
-        m.act_activation[ai] = act.activation;
-        m.act_ctrl_range[ai] = act.ctrl_range;
-        m.act_force_range[ai] = act.force_range;
+        m.actuator_activation_dynamics[ai] = act.activation;
+        m.actuator_control_range[ai] = act.ctrl_range;
+        m.actuator_force_range[ai] = act.force_range;
         if (act.activation == .none) {
-            m.act_state_adr[ai] = no_dof;
+            m.actuator_activation_index[ai] = no_dof;
         } else {
-            m.act_state_adr[ai] = state_n;
+            m.actuator_activation_index[ai] = state_n;
             state_n += 1;
         }
     }
@@ -2334,22 +2601,30 @@ fn buildFromSpec(gpa: Allocator, spec: ModelSpec) !Model {
         while (j != no_dof) : (j = m.dof_parent[j]) {
             n += 1;
         }
-        m.mass_row_nonzeros[i] = n;
+        m.mass_row_entry_count[i] = n;
         m.mass_row_start[i] = total;
         total += n;
     }
-    m.mass_nonzero_count = total;
-    m.mass_col_index = try a.alloc(u32, total);
+    m.mass_entry_count = total;
+    m.mass_entry_column = try a.alloc(u32, total);
     for (0..nv) |i| {
         const adr: u32 = m.mass_row_start[i];
-        var slot: u32 = m.mass_row_nonzeros[i]; // fill backwards: diagonal lands last
+        var slot: u32 = m.mass_row_entry_count[i]; // fill backwards: diagonal lands last
         var j: u32 = @intCast(i);
         while (j != no_dof) : (j = m.dof_parent[j]) {
             slot -= 1;
-            m.mass_col_index[adr + slot] = j;
+            m.mass_entry_column[adr + slot] = j;
         }
     }
 
+    // ---- each dof's limb, from the whole tree ----
+    const limb_starting_at: []u32 = try gpa.alloc(u32, m.body_count);
+    defer gpa.free(limb_starting_at);
+    m.limb_count = dofLimbs(&m, m.dof_limb, limb_starting_at);
+
+    // ---- the reference pose's inverse weights (MuJoCo's `setInertia0`, last in its `mj_setConst`) ----
+    // lint:off decl-order: a cycle - the model is measured by the dynamics, which take the Model defined above
+    try refreshReferenceInverseWeights(gpa, &m);
     return m;
 }
 
@@ -2861,14 +3136,14 @@ pub fn Spec(comptime spec: ModelSpec) type {
 
         pub const nbody: u32 = @as(u32, spec.bodies.len) + 1; // +1 for the world
         pub const njnt: u32 = counts.njnt;
-        pub const nsite: u32 = counts.nsite;
-        pub const ngeom: u32 = counts.ngeom;
+        pub const nsite: u32 = counts.site_count;
+        pub const ngeom: u32 = counts.geom_count;
         pub const nq: u32 = counts.nq;
         pub const nv: u32 = counts.nv;
         /// Number of actuators, and therefore of controls.
         pub const nu: u32 = @intCast(spec.actuators.len);
         /// Number of ACTIVATION states - only actuators with internal dynamics have one.
-        pub const na: u32 = counts.na;
+        pub const na: u32 = counts.activation_count;
         /// Number of tendons.
         pub const ntendon: u32 = @intCast(spec.tendons.len);
         /// Number of sensors, and the total width of their readings.
@@ -2982,6 +3257,214 @@ pub const Contact = struct {
     impedance: Impedance = .{},
 };
 
+// ==================================================================================================================
+// CONTACTS AGAINST A PLANE - MuJoCo's own functions (`mjc_PlaneSphere`, `mjc_PlaneCapsule`, `mjc_PlaneBox` in its
+// engine_collision_primitive.c), written once for both engines: robot.zig calls them for a robot on a flat floor, and
+// robotgpu's collision kernel calls the same ones, so training and play stand on the same contacts.
+// ==================================================================================================================
+
+/// A plane in the world: a point on it, and its unit normal pointing out of it - for a floor, up.
+pub const Plane = struct {
+    point: Vec,
+    normal: Vec,
+};
+
+/// One contact a primitive makes with a plane - MuJoCo's `mjPreContact`: where it is (halfway between the two
+/// surfaces), how far apart they are (negative while they overlap), and the first tangent its frame should take, or
+/// zero to let `contactFrame` choose one.
+pub const PlaneContact = struct {
+    position: Vec,
+    distance: f32,
+    tangent_hint: Vec = vec_zero,
+};
+
+/// The plane against a sphere at `center` (MuJoCo's `mjraw_PlaneSphere`): a contact while the sphere's surface is
+/// within `margin` of the plane - its distance the centre's height over the plane less the radius, its position the
+/// midpoint between the sphere's lowest point and the plane.
+pub fn planeSphere(plane: Plane, center: Vec, radius: f32, margin: f32) ?PlaneContact {
+    const offset: Vec = center - plane.point;
+    const center_height: f32 = dot3(offset, plane.normal);
+    if (center_height > margin + radius) {
+        return null;
+    }
+    const distance: f32 = center_height - radius;
+    const back: f32 = -distance / 2.0 - radius;
+    const contact: PlaneContact = .{ .position = center + splat(back) * plane.normal, .distance = distance };
+    return contact;
+}
+
+/// The plane against a capsule (MuJoCo's `mjc_PlaneCapsule`): the sphere test at each end of its segment - the end
+/// along `axis` first - each contact's frame turned to the capsule's axis, so the two lie along the capsule. `axis` is
+/// the segment's unit direction in the world (zimr's capsule lies along its local Y), `half_length` half the segment.
+pub fn planeCapsule(
+    plane: Plane,
+    center: Vec,
+    axis: Vec,
+    half_length: f32,
+    radius: f32,
+    margin: f32,
+) [2]?PlaneContact {
+    const segment: Vec = splat(half_length) * axis;
+    var contacts: [2]?PlaneContact = .{
+        planeSphere(plane, center + segment, radius, margin),
+        planeSphere(plane, center - segment, radius, margin),
+    };
+    for (&contacts) |*slot| {
+        if (slot.*) |*contact| {
+            contact.tangent_hint = axis;
+        }
+    }
+    return contacts;
+}
+
+/// The plane against a box (MuJoCo's `mjc_PlaneBox`): its eight corners in index order - bit 0 picks the sign of x,
+/// bit 1 of y, bit 2 of z - each a contact while it lies on the box's lower half and within `margin` of the plane, at
+/// most four, the first four in that order. A contact sits at its corner moved back along the normal by half its
+/// distance.
+pub fn planeBox(
+    plane: Plane,
+    center: Vec,
+    rotation: Quat,
+    half_extent: Vec,
+    margin: f32,
+) [4]?PlaneContact {
+    const offset: Vec = center - plane.point;
+    const center_height: f32 = dot3(offset, plane.normal);
+    var contacts: [4]?PlaneContact = @splat(null);
+    var count: usize = 0;
+    for (0..8) |corner| {
+        const x: f32 = if (corner & 1 != 0) half_extent[0] else -half_extent[0];
+        const y: f32 = if (corner & 2 != 0) half_extent[1] else -half_extent[1];
+        const z: f32 = if (corner & 4 != 0) half_extent[2] else -half_extent[2];
+        const corner_offset: Vec = rotate(rotation, vec(x, y, z));
+        const corner_height: f32 = dot3(plane.normal, corner_offset);
+        // Too far from the plane, or on the box's upper half: no contact from this corner.
+        if (center_height + corner_height > margin or corner_height > 0) {
+            continue;
+        }
+        const distance: f32 = center_height + corner_height;
+        const back: f32 = -distance / 2.0;
+        contacts[count] = .{ .position = center + corner_offset + splat(back) * plane.normal, .distance = distance };
+        count += 1;
+        if (count == 4) {
+            break;
+        }
+    }
+    return contacts;
+}
+
+/// The plane against a cylinder (MuJoCo's `mjc_PlaneCylinder`): up to four contacts on its rims, in MuJoCo's order,
+/// the first deciding whether there are any.
+///
+///     FIRST    the deepest point - on the rim of the cap nearer the plane, on the side toward it: the cylinder's
+///              center, plus half its axis toward the plane, plus its radius toward the plane
+///     SECOND   the same side of the other cap's rim
+///     A, B     two more points on the nearer cap's rim, a third of the way round either side of the first - with it
+///              an equilateral triangle, so a cylinder resting on its cap stands on three points
+///
+/// Each is a contact only when it lies within `margin`, and none is when the first does not: no point of the cylinder
+/// is nearer the plane than the first. A and B lie at one height, so they are tested together. The rim's direction
+/// toward the plane is the plane's downward normal with its part along the axis removed, scaled to the radius; when the
+/// axis is perpendicular to the plane that part is all of it - the cap lies flat, every rim point as deep - and the
+/// cylinder's own x axis, `side`, is taken instead, as MuJoCo takes its local x. Each contact lies halfway between the
+/// two surfaces, its frame left to `contactFrame` (MuJoCo leaves the tangent zero). `axis` is the cylinder's unit
+/// direction in the world (zimr's cylinder lies along its local Y), `side` its local X in the world, `half_length` half
+/// its length. The arithmetic follows MuJoCo's, operation by operation.
+pub fn planeCylinder(
+    plane: Plane,
+    center: Vec,
+    axis: Vec,
+    side: Vec,
+    half_length: f32,
+    radius: f32,
+    margin: f32,
+) [4]?PlaneContact {
+    var contacts: [4]?PlaneContact = .{ null, null, null, null };
+    const normal: Vec = plane.normal;
+    // The axis turned to point toward the plane: its part along the normal made negative.
+    const axis_along_normal_as_given: f32 = dot3(normal, axis);
+    const turn_axis: bool = axis_along_normal_as_given > 0;
+    const unit_axis: Vec = if (turn_axis) -axis else axis;
+    const axis_along_normal: f32 = if (turn_axis) -axis_along_normal_as_given else axis_along_normal_as_given;
+    const center_height: f32 = dot3(center - plane.point, normal);
+    // The rim's direction toward the plane: the downward normal less its part along the axis, scaled to the radius -
+    // or, with the cap lying flat, the cylinder's own x axis. MuJoCo's smallest length, mjMINVAL, decides which.
+    const smallest_length: f32 = 1.0e-15;
+    const rim_direction: Vec = splat(axis_along_normal) * unit_axis - normal;
+    const rim_length_squared: f32 = dot3(rim_direction, rim_direction);
+    const toward_rim: Vec = if (rim_length_squared >= smallest_length * smallest_length)
+        rim_direction * splat(radius / @sqrt(rim_length_squared))
+    else
+        side * splat(radius);
+    const rim_along_normal: f32 = dot3(toward_rim, normal);
+    const half_axis: Vec = unit_axis * splat(half_length);
+    const half_axis_along_normal: f32 = axis_along_normal * half_length;
+    // FIRST: the deepest point. Above the margin, no point of the cylinder is within it.
+    const first_distance: f32 = center_height + half_axis_along_normal + rim_along_normal;
+    if (first_distance > margin) {
+        return contacts;
+    }
+    const first_on_rim: Vec = center + toward_rim + half_axis;
+    contacts[0] = .{ .position = first_on_rim + normal * splat(-first_distance * 0.5), .distance = first_distance };
+    // SECOND: the same side of the other cap's rim.
+    const second_distance: f32 = center_height - half_axis_along_normal + rim_along_normal;
+    if (second_distance <= margin) {
+        const second_on_rim: Vec = center + toward_rim - half_axis;
+        const second_position: Vec = second_on_rim + normal * splat(-second_distance * 0.5);
+        contacts[1] = .{ .position = second_position, .distance = second_distance };
+    }
+    // A AND B: the nearer cap's rim a third of the way round either side - their height along the normal half the
+    // first's, the other way, as cos(120 degrees) is -1/2.
+    const triangle_rim_along_normal: f32 = -rim_along_normal * 0.5;
+    const triangle_distance: f32 = center_height + half_axis_along_normal + triangle_rim_along_normal;
+    if (triangle_distance > margin) {
+        return contacts;
+    }
+    // Sideways along the cap, perpendicular to both the axis and the first's direction, sin(120 degrees) of the radius
+    // long: MuJoCo's normalisation, a multiplication by the inverse length.
+    const sideways_direction: Vec = cross(toward_rim, half_axis);
+    const sideways_length: f32 = length3(sideways_direction);
+    const unit_sideways: Vec = if (sideways_length < smallest_length)
+        vec(1, 0, 0)
+    else
+        sideways_direction * splat(1.0 / sideways_length);
+    const sideways: Vec = unit_sideways * splat(radius * @sqrt(@as(f32, 3.0)) / 2.0);
+    const back_along_rim: Vec = toward_rim * splat(-0.5);
+    const below_triangle: Vec = normal * splat(-triangle_distance * 0.5);
+    const point_a: Vec = center + sideways + half_axis + back_along_rim;
+    const point_b: Vec = center - sideways + half_axis + back_along_rim;
+    contacts[2] = .{ .position = point_a + below_triangle, .distance = triangle_distance };
+    contacts[3] = .{ .position = point_b + below_triangle, .distance = triangle_distance };
+    return contacts;
+}
+
+/// A contact's two tangents from its normal (MuJoCo's `mju_makeFrame`): the first the hint when it has one (a squared
+/// length of at least 1/4), else the world's y - or its z when the normal is too close to y - made orthogonal to the
+/// normal and of unit length; the second the normal crossed with the first.
+pub fn contactFrame(normal: Vec, tangent_hint: Vec) [2]Vec {
+    const x_axis: Vec = normalize3(normal);
+    const hinted: bool = dot3(tangent_hint, tangent_hint) >= 0.25;
+    const near_y: bool = x_axis[1] >= 0.5 or x_axis[1] <= -0.5;
+    const fallback: Vec = if (near_y) vec(0, 0, 1) else vec(0, 1, 0);
+    const y_start: Vec = if (hinted) tangent_hint else fallback;
+    const y_axis: Vec = normalize3(y_start - splat(dot3(x_axis, y_start)) * x_axis);
+    const z_axis: Vec = cross(x_axis, y_axis);
+    return .{ y_axis, z_axis };
+}
+
+/// How many contacts a shape makes with a plane at most - its SLOTS: a sphere 1, a capsule 2 (its two ends), a box 4
+/// (its first four lower corners), a cylinder 4 (its deepest rim point, the other cap's, two more round the nearer
+/// cap); a hull none, as no plane function takes it - `pushFloorContacts` refuses one.
+pub fn floorSlotsOf(shape: GeomShape) u32 {
+    return switch (shape) {
+        .sphere => 1,
+        .capsule => 2,
+        .box => 4,
+        .cylinder => 4,
+        .hull => 0,
+    };
+}
+
 /// Accept either a generated enum or a plain index, so a comptime-specified model and a
 /// runtime-loaded one share the same API. The enum's tag value IS the index, by
 /// construction in `NamesEnum`.
@@ -3020,17 +3503,17 @@ pub const Data = struct {
     teleported: bool = false,
 
     // ---- state: the only inputs the user owns ----
-    /// Generalized position, length `nq`. Quaternion blocks are unit-norm.
-    pos: []f32,
-    /// Generalized velocity, length `nv`. NOT the derivative of `pos` - see the header.
-    vel: []f32,
-    /// Generalized acceleration, length `nv`. The output of forward dynamics.
-    acc: []f32,
-    /// Actuator controls, length `nu`. What the user commands.
-    ctrl: []f32,
-    /// Actuator activations, length `na`. The internal state of stateful actuators - a
+    /// Generalized position, length `coordinate_count`. Quaternion blocks are unit-norm.
+    joint_positions: []f32,
+    /// Generalized velocity, length `dof_count`. NOT the derivative of `pos` - see the header.
+    joint_velocities: []f32,
+    /// Generalized acceleration, length `dof_count`. The output of forward dynamics.
+    joint_accelerations: []f32,
+    /// Actuator controls, length `actuator_count`. What the user commands.
+    controls: []f32,
+    /// Actuator activations, length `activation_count`. The internal state of stateful actuators - a
     /// genuine third dynamic variable alongside position and velocity.
-    act: []f32,
+    activations: []f32,
     /// Scratch for the implicit integrator: the dense `M - h*D` system, its pivots, and
     /// the right-hand side. Sized once, like everything else.
     implicit_matrix: []f32,
@@ -3041,57 +3524,57 @@ pub const Data = struct {
     sensor_data: []f32,
     /// Per-body spatial acceleration in the shared frame, written by `bodyAccelerations`.
     /// Only the accelerometer needs it, so it is computed on demand.
-    body_acc: []Motion,
+    body_accelerations: []Motion,
     /// Tendon lengths and their rates, written by `tendonLengths`.
     tendon_length: []f32,
     tendon_velocity: []f32,
     /// Per-actuator transmission coordinate and its rate, written by `transmission`.
-    act_length: []f32,
-    act_velocity: []f32,
+    actuator_lengths: []f32,
+    actuator_velocities: []f32,
     /// Per-actuator scalar force, written by `actuation`.
-    act_force: []f32,
-    /// Rate of change of each activation state, length `na`.
+    actuator_forces: []f32,
+    /// Rate of change of each activation state, length `activation_count`.
     ///
     /// Separate from `act` on purpose. `actuation` COMPUTES this and the integrator APPLIES
     /// it, exactly once per step - because RK4 evaluates the dynamics four times, and an
     /// `actuation` that advanced `act` itself would advance it four times per step.
-    act_dot: []f32,
+    activation_rates: []f32,
 
     // ---- written by `kinematics` (phase 1) ----
     /// World pose of each body's frame.
-    body_xpos: []Vec,
-    body_xrot: []Quat,
+    body_positions: []Vec,
+    body_orientations: []Quat,
     /// World position of each body's centre of mass.
-    body_xipos: []Vec,
+    body_centres_of_mass: []Vec,
     /// World pose of each site.
-    site_xpos: []Vec,
-    site_xrot: []Quat,
+    site_positions: []Vec,
+    site_orientations: []Quat,
     /// World position and axis of each joint's anchor.
-    jnt_xanchor: []Vec,
-    jnt_xaxis: []Vec,
+    joint_anchors: []Vec,
+    joint_axes: []Vec,
 
     // ---- written by `comPos` (phase 1) ----
     /// Centre of mass of each body's subtree, in world space. The frame every spatial
     /// quantity below is expressed in - global orientation, translated here for accuracy.
-    subtree_com: []Vec,
+    subtree_centres_of_mass: []Vec,
     /// Each DOF's motion axis as a spatial vector, in that shared frame.
-    cdof: []Motion,
+    dof_axes: []Motion,
     /// Each body's inertia, in that shared frame.
-    cinert: []Inertia,
+    body_inertias: []Inertia,
 
     // ---- written by `crb` / `factorM` (phase 2) ----
     /// Composite inertia of each body's subtree.
-    crb: []Inertia,
-    /// Lower triangle of M, packed by the model's sparsity tables. Length `mass_nonzero_count`.
+    composite_inertias: []Inertia,
+    /// Lower triangle of M, packed by the model's sparsity tables. Length `mass_entry_count`.
     mass_matrix: []f32,
     /// The L^TDL factorization, same packing.
-    qLD: []f32,
+    mass_factor: []f32,
     /// Reciprocals of D, so the solve multiplies instead of dividing.
-    qLDiagInv: []f32,
+    mass_factor_inverse_diagonal: []f32,
 
     // ---- written by `comVel` / `rne` (phase 3) ----
-    cvel: []Motion,
-    cdof_dot: []Motion,
+    body_velocities: []Motion,
+    dof_axis_rates: []Motion,
     /// Per-body scratch for `rne`. Kept here rather than allocated per call so the hot
     /// path never touches an allocator, and so `Data` remains the single description of
     /// everything a simulation instance owns.
@@ -3100,12 +3583,12 @@ pub const Data = struct {
     /// * ALLOCATED ONLY FOR `.implicit`. On a humanoid that is 17 x 27 x four arrays of 16
     /// bytes ~ 29 kB, which is nothing - but it is also completely dead weight for the three
     /// integrators that never touch it, and a model built for `.euler` should not carry it.
-    deriv_cacc: []Motion,
-    deriv_cfrc: []Force,
-    deriv_cvel: []Motion,
-    deriv_cdof_dot: []Motion,
-    rne_cacc: []Motion,
-    rne_cfrc: []Force,
+    derivative_body_accelerations: []Motion,
+    derivative_subtree_forces: []Force,
+    derivative_body_velocities: []Motion,
+    derivative_dof_axis_rates: []Motion,
+    body_bias_accelerations: []Motion,
+    subtree_bias_forces: []Force,
     /// Scratch for the RK4 integrator: the state at the start of the step, the current
     /// stage's slopes, and the weighted accumulation. Sized once, like everything else.
     rk_pos0: []f32,
@@ -3115,7 +3598,7 @@ pub const Data = struct {
     rk_vel_sum: []f32,
     rk_acc_sum: []f32,
     /// Coriolis, centrifugal and gravitational forces: the `c` of the equation of motion.
-    bias_force: []f32,
+    bias_joint_forces: []f32,
 
     // ---- forces the user, the springs and the actuators apply ----
     /// Extra generalized forces the caller applies. **PERSISTENT: nothing clears this for you.**
@@ -3135,9 +3618,9 @@ pub const Data = struct {
     /// **If you switch controllers, or drive `ctrl` after anything wrote here, clear it.** It is
     /// deliberately NOT cleared by `step`, because a caller applying a steady external force
     /// (wind, a tether, a thruster) sets it once and expects it to hold.
-    applied_force: []f32,
+    applied_joint_forces: []f32,
     /// Joint springs and dampers, written by `passive`.
-    passive_force: []f32,
+    passive_joint_forces: []f32,
 
     // ---- constraints, written by `makeConstraints` (phase 6) ----
     /// How many rows are ACTIVE this step. Everything below is valid for `[0, constraint_count)` only;
@@ -3147,7 +3630,7 @@ pub const Data = struct {
     /// What each row is, and which joint (or later geom pair) produced it.
     constraint_kind: []ConstraintKind,
     constraint_source: []u32,
-    /// Row-major `constraint_capacity x nv` Jacobian. Dense because `nv` is small and a row is one
+    /// Row-major `constraint_capacity x nv` Jacobian. Dense because `dof_count` is small and a row is one
     /// contiguous run; the sparsity that matters is that most ROWS are absent, not that
     /// entries within a row are zero.
     constraint_jacobian: []f32,
@@ -3157,12 +3640,16 @@ pub const Data = struct {
     constraint_target_acc: []f32,
     /// Diagonal regularizer `R = (1-d)/d * A_hat`. Softness, made numerical.
     constraint_regularizer: []f32,
-    /// Constraint-space inertia diagonal `A_hat = (J M^-1 J^T)_ii`, computed exactly.
+    /// The inverse inertia each row's softness was measured against (`Options.constraint_inertia`): exactly
+    /// `(J M^-1 J^T)_ii`, or MuJoCo's approximation from the reference pose (`constraint_reference_inertia`).
     constraint_inertia: []f32,
     /// Constraint velocity `J*v`, kept because both `aref` and the solver want it.
     constraint_velocity: []f32,
-    /// World-space direction of each contact row. See where it is filled in.
-    constraint_direction: []Vec,
+    /// MuJoCo's approximate inverse inertia for each row (`mj_diagApprox`), recorded by the row's maker from the
+    /// reference pose's inverse weights: a limit, its joint's; a contact edge, its two bodies' translation weights
+    /// times 1 + mu^2; a connect, the two bodies' translation weights; a weld's rotation rows, their rotation
+    /// weights; a joint coupling, its joints'.
+    constraint_reference_inertia: []f32,
     /// A stable identity for each row, so a force can be carried across steps.
     ///
     /// * ROW INDEX IS NOT IDENTITY. Rows are rebuilt every step and their order shifts as
@@ -3179,7 +3666,11 @@ pub const Data = struct {
     // `forgetWarmStart` - see below.
     /// The unconstrained acceleration, saved so a warm start that turns out to be worse
     /// than starting from zero can be undone. See the cost check in `solveConstraints`.
-    free_acc: []f32,
+    smooth_joint_accelerations: []f32,
+    /// The last step's accelerations, where Newton starts when they cost less than the free acceleration - MuJoCo's
+    /// `qacc_warmstart`. Saved as `step` finishes its solve (not by `forward` alone, as in MuJoCo), cleared by
+    /// `forgetWarmStart`.
+    warmstart_accelerations: []f32,
     /// Whether the last solve THREW AWAY its warm start because the cost check said zero
     /// was better. A diagnostic, and the thing a test can assert on: the guard's benefit is
     /// fewer iterations, and asserting an iteration count would pin a number that any
@@ -3215,10 +3706,13 @@ pub const Data = struct {
     momentum_prev: []f32,
     momentum_extrapolated: []f32,
     /// The same forces mapped back into joint coordinates: `J^Tf`.
-    constraint_joint_force: []f32,
+    constraint_joint_forces: []f32,
     /// How many sweeps the last solve took. A cheap health signal - if this sits at
     /// `max_iterations`, the solver is not converging and the answer is approximate.
     solver_iterations: u32,
+    /// Newton's line searches over the last solve: the points they evaluated, each a pass over the rows - with
+    /// `solver_iterations`, what the solve cost (MuJoCo's `neval`, summed over the rounds). Zero for Gauss-Seidel.
+    solver_line_evaluations: u32 = 0,
     /// `M^-1J^T` for each row - the joint-space acceleration a unit force on that row
     /// produces. Row-major `constraint_capacity x nv`.
     ///
@@ -3231,13 +3725,21 @@ pub const Data = struct {
     newton_hessian: []f32,
     newton_gradient: []f32,
     newton_step: []f32,
-    newton_trial: []f32,
+    /// The inertia's part of Newton's gradient, M (a - a_free), kept between rounds: moved by alpha M s with each step
+    /// rather than multiplied out again (MuJoCo Warp's `Ma`, less the smooth forces). `newton_residual` is kept the
+    /// same way: each row's J a - aref, moved by alpha J s.
+    newton_inertia_gradient: []f32,
     newton_scratch: []f32,
     newton_mv: []f32,
     newton_residual: []f32,
     newton_active: []bool,
+    /// Each row on Newton's search line: its rate along the step (J s), its weight D = 1/R and whether it may only
+    /// push (`SearchLine`).
+    newton_row_rate: []f32,
+    newton_row_weight: []f32,
+    newton_row_unilateral: []bool,
     constraint_inv_inertia_jacobian: []f32,
-    actuator_force: []f32,
+    actuator_joint_forces: []f32,
 
     pub fn init(gpa: Allocator, m: *const Model) !Data {
         const arena: *ArenaAllocator = try gpa.create(ArenaAllocator);
@@ -3249,51 +3751,51 @@ pub const Data = struct {
         // * THE CORIOLIS-DERIVATIVE SCRATCH IS ONLY FOR `.implicit`. See `Data.deriv_cacc`:
         // `nbody x nv` six-vectors is small in absolute terms and entirely dead weight for the
         // three integrators that never form that matrix.
-        const deriv_scratch: usize = if (m.opt.integrator == .implicit) m.nbody * m.nv else 0;
+        const deriv_scratch: usize = if (m.opt.integrator == .implicit) m.body_count * m.dof_count else 0;
 
         // Same reasoning for Newton: an `nv x nv` Hessian is small in absolute terms and
         // entirely dead weight for a model that solves with PGS.
-        const deriv_dof_scratch: usize = if (m.opt.integrator == .implicit) m.nv * m.nv else 0;
-        const newton_nv: usize = if (m.opt.solver.algorithm == .newton) m.nv else 0;
+        const deriv_dof_scratch: usize = if (m.opt.integrator == .implicit) m.dof_count * m.dof_count else 0;
+        const newton_nv: usize = if (m.opt.solver.algorithm == .newton) m.dof_count else 0;
         const newton_rows: usize = if (m.opt.solver.algorithm == .newton) m.constraint_capacity else 0;
 
         var d: Data = .{
             .arena = arena,
-            .pos = try a.alloc(f32, m.nq),
-            .vel = try a.alloc(f32, m.nv),
-            .acc = try a.alloc(f32, m.nv),
-            .ctrl = try a.alloc(f32, m.nu),
-            .act = try a.alloc(f32, m.na),
-            .implicit_matrix = try a.alloc(f32, m.nv * m.nv),
-            .implicit_pivot = try a.alloc(u32, m.nv),
-            .implicit_rhs = try a.alloc(f32, m.nv),
-            .sensor_data = try a.alloc(f32, m.nsensordata),
-            .body_acc = try a.alloc(Motion, m.nbody),
-            .tendon_length = try a.alloc(f32, m.ntendon),
-            .tendon_velocity = try a.alloc(f32, m.ntendon),
-            .act_length = try a.alloc(f32, m.nu),
-            .act_velocity = try a.alloc(f32, m.nu),
-            .act_force = try a.alloc(f32, m.nu),
-            .act_dot = try a.alloc(f32, m.na),
-            .body_xpos = try a.alloc(Vec, m.nbody),
-            .body_xrot = try a.alloc(Quat, m.nbody),
-            .body_xipos = try a.alloc(Vec, m.nbody),
-            .site_xpos = try a.alloc(Vec, m.nsite),
-            .site_xrot = try a.alloc(Quat, m.nsite),
-            .jnt_xanchor = try a.alloc(Vec, m.njnt),
-            .jnt_xaxis = try a.alloc(Vec, m.njnt),
-            .subtree_com = try a.alloc(Vec, m.nbody),
-            .cdof = try a.alloc(Motion, m.nv),
-            .cinert = try a.alloc(Inertia, m.nbody),
-            .crb = try a.alloc(Inertia, m.nbody),
-            .mass_matrix = try a.alloc(f32, m.mass_nonzero_count),
-            .qLD = try a.alloc(f32, m.mass_nonzero_count),
-            .qLDiagInv = try a.alloc(f32, m.nv),
-            .cvel = try a.alloc(Motion, m.nbody),
-            .cdof_dot = try a.alloc(Motion, m.nv),
-            .deriv_cacc = try a.alloc(Motion, deriv_scratch),
-            .deriv_cfrc = try a.alloc(Force, deriv_scratch),
-            .deriv_cvel = try a.alloc(Motion, deriv_scratch),
+            .joint_positions = try a.alloc(f32, m.coordinate_count),
+            .joint_velocities = try a.alloc(f32, m.dof_count),
+            .joint_accelerations = try a.alloc(f32, m.dof_count),
+            .controls = try a.alloc(f32, m.actuator_count),
+            .activations = try a.alloc(f32, m.activation_count),
+            .implicit_matrix = try a.alloc(f32, m.dof_count * m.dof_count),
+            .implicit_pivot = try a.alloc(u32, m.dof_count),
+            .implicit_rhs = try a.alloc(f32, m.dof_count),
+            .sensor_data = try a.alloc(f32, m.sensor_value_count),
+            .body_accelerations = try a.alloc(Motion, m.body_count),
+            .tendon_length = try a.alloc(f32, m.tendon_count),
+            .tendon_velocity = try a.alloc(f32, m.tendon_count),
+            .actuator_lengths = try a.alloc(f32, m.actuator_count),
+            .actuator_velocities = try a.alloc(f32, m.actuator_count),
+            .actuator_forces = try a.alloc(f32, m.actuator_count),
+            .activation_rates = try a.alloc(f32, m.activation_count),
+            .body_positions = try a.alloc(Vec, m.body_count),
+            .body_orientations = try a.alloc(Quat, m.body_count),
+            .body_centres_of_mass = try a.alloc(Vec, m.body_count),
+            .site_positions = try a.alloc(Vec, m.site_count),
+            .site_orientations = try a.alloc(Quat, m.site_count),
+            .joint_anchors = try a.alloc(Vec, m.joint_count),
+            .joint_axes = try a.alloc(Vec, m.joint_count),
+            .subtree_centres_of_mass = try a.alloc(Vec, m.body_count),
+            .dof_axes = try a.alloc(Motion, m.dof_count),
+            .body_inertias = try a.alloc(Inertia, m.body_count),
+            .composite_inertias = try a.alloc(Inertia, m.body_count),
+            .mass_matrix = try a.alloc(f32, m.mass_entry_count),
+            .mass_factor = try a.alloc(f32, m.mass_entry_count),
+            .mass_factor_inverse_diagonal = try a.alloc(f32, m.dof_count),
+            .body_velocities = try a.alloc(Motion, m.body_count),
+            .dof_axis_rates = try a.alloc(Motion, m.dof_count),
+            .derivative_body_accelerations = try a.alloc(Motion, deriv_scratch),
+            .derivative_subtree_forces = try a.alloc(Force, deriv_scratch),
+            .derivative_body_velocities = try a.alloc(Motion, deriv_scratch),
             // ** INDEXED PER DOF, NOT PER BODY - so `nv x nv`, where the three above are
             // `nbody x nv`. Sized with the others it overflowed on the first free joint: for a
             // 7-DOF model with three bodies the buffer held 21 and the code reached 48.
@@ -3301,34 +3803,35 @@ pub const Data = struct {
             // * AND A ReleaseFast PROBE DID NOT NOTICE. Bounds checks are off there, so the
             // writes landed in whatever followed and the numbers still looked right. The test
             // suite, which builds with safety on, caught it on the first run.
-            .deriv_cdof_dot = try a.alloc(Motion, deriv_dof_scratch),
-            .rne_cacc = try a.alloc(Motion, m.nbody),
-            .rne_cfrc = try a.alloc(Force, m.nbody),
-            .rk_pos0 = try a.alloc(f32, m.nq),
-            .rk_vel0 = try a.alloc(f32, m.nv),
-            .rk_vel_stage = try a.alloc(f32, m.nv),
-            .rk_acc_stage = try a.alloc(f32, m.nv),
-            .rk_vel_sum = try a.alloc(f32, m.nv),
-            .rk_acc_sum = try a.alloc(f32, m.nv),
-            .bias_force = try a.alloc(f32, m.nv),
-            .applied_force = try a.alloc(f32, m.nv),
-            .passive_force = try a.alloc(f32, m.nv),
+            .derivative_dof_axis_rates = try a.alloc(Motion, deriv_dof_scratch),
+            .body_bias_accelerations = try a.alloc(Motion, m.body_count),
+            .subtree_bias_forces = try a.alloc(Force, m.body_count),
+            .rk_pos0 = try a.alloc(f32, m.coordinate_count),
+            .rk_vel0 = try a.alloc(f32, m.dof_count),
+            .rk_vel_stage = try a.alloc(f32, m.dof_count),
+            .rk_acc_stage = try a.alloc(f32, m.dof_count),
+            .rk_vel_sum = try a.alloc(f32, m.dof_count),
+            .rk_acc_sum = try a.alloc(f32, m.dof_count),
+            .bias_joint_forces = try a.alloc(f32, m.dof_count),
+            .applied_joint_forces = try a.alloc(f32, m.dof_count),
+            .passive_joint_forces = try a.alloc(f32, m.dof_count),
             .constraint_count = 0,
             .constraint_kind = try a.alloc(ConstraintKind, m.constraint_capacity),
             .constraint_source = try a.alloc(u32, m.constraint_capacity),
-            .constraint_jacobian = try a.alloc(f32, m.constraint_capacity * m.nv),
+            .constraint_jacobian = try a.alloc(f32, m.constraint_capacity * m.dof_count),
             .constraint_violation = try a.alloc(f32, m.constraint_capacity),
             .constraint_target_acc = try a.alloc(f32, m.constraint_capacity),
             .constraint_regularizer = try a.alloc(f32, m.constraint_capacity),
             .constraint_inertia = try a.alloc(f32, m.constraint_capacity),
             .constraint_velocity = try a.alloc(f32, m.constraint_capacity),
-            .constraint_direction = try a.alloc(Vec, m.constraint_capacity),
+            .constraint_reference_inertia = try a.alloc(f32, m.constraint_capacity),
             .momentum_prev = try a.alloc(f32, m.constraint_capacity),
             .momentum_extrapolated = try a.alloc(f32, m.constraint_capacity),
             .constraint_key = try a.alloc(u64, m.constraint_capacity),
             .warm_key = try a.alloc(u64, m.constraint_capacity),
             .warm_force = try a.alloc(f32, m.constraint_capacity),
-            .free_acc = try a.alloc(f32, m.nv),
+            .smooth_joint_accelerations = try a.alloc(f32, m.dof_count),
+            .warmstart_accelerations = try a.alloc(f32, m.dof_count),
             .warm_count = 0,
             .warm_start_rejected = false,
             .constraint_softness = try a.alloc(Softness, m.constraint_capacity),
@@ -3336,7 +3839,7 @@ pub const Data = struct {
             // ---- `max_contacts + ngeom`, AND THE SECOND TERM IS NOT PADDING ----
             //
             // A collision bridge pushes from TWO arrays: its persistent contact events, sized
-            // `max_contacts`, and its continuous-sweep hits, sized `ngeom` - one per geom that
+            // `max_contacts`, and its continuous-sweep hits, sized `geom_count` - one per geom that
             // moved far enough in a step to need a sweep. `harvest` pushes both into THIS
             // buffer.
             //
@@ -3347,24 +3850,27 @@ pub const Data = struct {
             //
             // The `+ ngeom` is what makes `pushContact`'s assert unreachable in normal operation
             // rather than latent in it.
-            .contacts = try a.alloc(Contact, m.opt.max_contacts + m.ngeom),
+            .contacts = try a.alloc(Contact, m.opt.max_contacts + m.geom_count),
             .contact_count = 0,
-            .pair_jac_a = try a.alloc(Vec, m.nv),
-            .pair_jac_b = try a.alloc(Vec, m.nv),
-            .contact_projected = try a.alloc(f32, 3 * m.nv),
+            .pair_jac_a = try a.alloc(Vec, m.dof_count),
+            .pair_jac_b = try a.alloc(Vec, m.dof_count),
+            .contact_projected = try a.alloc(f32, 3 * m.dof_count),
             .constraint_force = try a.alloc(f32, m.constraint_capacity),
-            .constraint_joint_force = try a.alloc(f32, m.nv),
+            .constraint_joint_forces = try a.alloc(f32, m.dof_count),
             .solver_iterations = 0,
             .newton_hessian = try a.alloc(f32, newton_nv * newton_nv),
             .newton_gradient = try a.alloc(f32, newton_nv),
             .newton_step = try a.alloc(f32, newton_nv),
-            .newton_trial = try a.alloc(f32, newton_nv),
+            .newton_inertia_gradient = try a.alloc(f32, newton_nv),
             .newton_scratch = try a.alloc(f32, newton_nv),
             .newton_mv = try a.alloc(f32, newton_nv),
             .newton_residual = try a.alloc(f32, newton_rows),
             .newton_active = try a.alloc(bool, newton_rows),
-            .constraint_inv_inertia_jacobian = try a.alloc(f32, m.constraint_capacity * m.nv),
-            .actuator_force = try a.alloc(f32, m.nv),
+            .newton_row_rate = try a.alloc(f32, newton_rows),
+            .newton_row_weight = try a.alloc(f32, newton_rows),
+            .newton_row_unilateral = try a.alloc(bool, newton_rows),
+            .constraint_inv_inertia_jacobian = try a.alloc(f32, m.constraint_capacity * m.dof_count),
+            .actuator_joint_forces = try a.alloc(f32, m.dof_count),
             .stage = .stale,
         };
         d.reset(m);
@@ -3383,49 +3889,49 @@ pub const Data = struct {
     pub fn reset(self: *Data, m: *const Model) void {
         self.stage = .stale;
         self.teleported = true;
-        @memcpy(self.pos, m.qpos0);
-        @memset(self.vel, 0);
-        @memset(self.acc, 0);
-        @memset(self.ctrl, 0);
-        @memset(self.act, 0);
+        @memcpy(self.joint_positions, m.reference_joint_positions);
+        @memset(self.joint_velocities, 0);
+        @memset(self.joint_accelerations, 0);
+        @memset(self.controls, 0);
+        @memset(self.activations, 0);
         @memset(self.implicit_matrix, 0);
         @memset(self.implicit_pivot, 0);
         @memset(self.implicit_rhs, 0);
         @memset(self.sensor_data, 0);
-        @memset(self.body_acc, Motion.zero);
+        @memset(self.body_accelerations, Motion.zero);
         @memset(self.tendon_length, 0);
         @memset(self.tendon_velocity, 0);
-        @memset(self.act_length, 0);
-        @memset(self.act_velocity, 0);
-        @memset(self.act_force, 0);
-        @memset(self.act_dot, 0);
-        @memset(self.body_xpos, vec_zero);
-        @memset(self.body_xrot, quat_identity);
-        @memset(self.body_xipos, vec_zero);
-        @memset(self.site_xpos, vec_zero);
-        @memset(self.site_xrot, quat_identity);
-        @memset(self.jnt_xanchor, vec_zero);
-        @memset(self.jnt_xaxis, vec_zero);
-        @memset(self.subtree_com, vec_zero);
-        @memset(self.cdof, Motion.zero);
-        @memset(self.cinert, Inertia.zero);
-        @memset(self.crb, Inertia.zero);
+        @memset(self.actuator_lengths, 0);
+        @memset(self.actuator_velocities, 0);
+        @memset(self.actuator_forces, 0);
+        @memset(self.activation_rates, 0);
+        @memset(self.body_positions, vec_zero);
+        @memset(self.body_orientations, quat_identity);
+        @memset(self.body_centres_of_mass, vec_zero);
+        @memset(self.site_positions, vec_zero);
+        @memset(self.site_orientations, quat_identity);
+        @memset(self.joint_anchors, vec_zero);
+        @memset(self.joint_axes, vec_zero);
+        @memset(self.subtree_centres_of_mass, vec_zero);
+        @memset(self.dof_axes, Motion.zero);
+        @memset(self.body_inertias, Inertia.zero);
+        @memset(self.composite_inertias, Inertia.zero);
         @memset(self.mass_matrix, 0);
-        @memset(self.qLD, 0);
-        @memset(self.qLDiagInv, 0);
-        @memset(self.cvel, Motion.zero);
-        @memset(self.cdof_dot, Motion.zero);
-        @memset(self.rne_cacc, Motion.zero);
-        @memset(self.rne_cfrc, Force.zero);
+        @memset(self.mass_factor, 0);
+        @memset(self.mass_factor_inverse_diagonal, 0);
+        @memset(self.body_velocities, Motion.zero);
+        @memset(self.dof_axis_rates, Motion.zero);
+        @memset(self.body_bias_accelerations, Motion.zero);
+        @memset(self.subtree_bias_forces, Force.zero);
         @memset(self.rk_pos0, 0);
         @memset(self.rk_vel0, 0);
         @memset(self.rk_vel_stage, 0);
         @memset(self.rk_acc_stage, 0);
         @memset(self.rk_vel_sum, 0);
         @memset(self.rk_acc_sum, 0);
-        @memset(self.bias_force, 0);
-        @memset(self.applied_force, 0);
-        @memset(self.passive_force, 0);
+        @memset(self.bias_joint_forces, 0);
+        @memset(self.applied_joint_forces, 0);
+        @memset(self.passive_joint_forces, 0);
         self.constraint_count = 0;
         self.contact_count = 0;
         @memset(self.constraint_jacobian, 0);
@@ -3437,16 +3943,18 @@ pub const Data = struct {
         @memset(self.constraint_force, 0);
         @memset(self.momentum_prev, 0);
         @memset(self.momentum_extrapolated, 0);
-        @memset(self.constraint_direction, vec_zero);
+        @memset(self.constraint_reference_inertia, 0);
         @memset(self.constraint_key, 0);
         @memset(self.warm_key, 0);
         @memset(self.warm_force, 0);
-        @memset(self.free_acc, 0);
+        @memset(self.smooth_joint_accelerations, 0);
+        @memset(self.warmstart_accelerations, 0);
         self.warm_count = 0;
-        @memset(self.constraint_joint_force, 0);
+        @memset(self.constraint_joint_forces, 0);
         self.solver_iterations = 0;
+        self.solver_line_evaluations = 0;
         @memset(self.constraint_inv_inertia_jacobian, 0);
-        @memset(self.actuator_force, 0);
+        @memset(self.actuator_joint_forces, 0);
     }
 
     /// Read a scalar joint's position. Only valid for hinge and slide - a ball or free
@@ -3454,12 +3962,12 @@ pub const Data = struct {
     pub fn jointPos(self: *const Data, m: *const Model, joint: anytype) f32 {
         const ji: u32 = jointIndex(joint);
         assertf(
-            m.jnt_type[ji] == .hinge or m.jnt_type[ji] == .slide,
+            m.joint_type[ji] == .hinge or m.joint_type[ji] == .slide,
             @src(),
             "jointPos on a {s} joint, which has {d} position coordinates",
-            .{ @tagName(m.jnt_type[ji]), m.jnt_type[ji].posCount() },
+            .{ @tagName(m.joint_type[ji]), m.joint_type[ji].posCount() },
         );
-        return self.pos[m.jnt_qpos_adr[ji]];
+        return self.joint_positions[m.joint_first_coordinate[ji]];
     }
 
     /// Set a scalar joint's position. Same restriction as `jointPos`. Writing state
@@ -3468,12 +3976,12 @@ pub const Data = struct {
         self.stage = .stale;
         const ji: u32 = jointIndex(joint);
         assertf(
-            m.jnt_type[ji] == .hinge or m.jnt_type[ji] == .slide,
+            m.joint_type[ji] == .hinge or m.joint_type[ji] == .slide,
             @src(),
             "setJointPos on a {s} joint, which has {d} position coordinates",
-            .{ @tagName(m.jnt_type[ji]), m.jnt_type[ji].posCount() },
+            .{ @tagName(m.joint_type[ji]), m.joint_type[ji].posCount() },
         );
-        self.pos[m.jnt_qpos_adr[ji]] = value;
+        self.joint_positions[m.joint_first_coordinate[ji]] = value;
     }
 
     /// Drop all contacts. Call once per step before pushing the new set - or use
@@ -3488,7 +3996,7 @@ pub const Data = struct {
     /// for a different set of inertias.
     ///
     /// Found by putting a live mass slider on `robot_3d`. Dragging a crate from 0.8 kg to
-    /// 92 kg re-scales `body_inertia` between one step and the next, and the seeded forces -
+    /// 92 kg re-scales `body_local_inertia` between one step and the next, and the seeded forces -
     /// correct for a body a hundred times lighter - arrived as an enormous impulse. **Peak
     /// contact force 48 kN, crates at 35 m/s, and then `factorM: pivot 34 is negative`,
     /// which is the mass matrix having been corrupted by what came before it.**
@@ -3502,6 +4010,7 @@ pub const Data = struct {
         @memset(self.warm_key, 0);
         @memset(self.warm_force, 0);
         self.warm_count = 0;
+        @memset(self.warmstart_accelerations, 0);
     }
 
     pub fn clearContacts(self: *Data) void {
@@ -3549,7 +4058,7 @@ pub const Data = struct {
     /// Read a scalar joint's velocity.
     pub fn jointVel(self: *const Data, m: *const Model, joint: anytype) f32 {
         const ji: u32 = jointIndex(joint);
-        return self.vel[m.jnt_dof_adr[ji]];
+        return self.joint_velocities[m.joint_first_dof[ji]];
     }
 
     /// Set a scalar joint's velocity. Invalidates everything derived from it.
@@ -3559,7 +4068,7 @@ pub const Data = struct {
             self.stage = .position;
         }
         const ji: u32 = jointIndex(joint);
-        self.vel[m.jnt_dof_adr[ji]] = value;
+        self.joint_velocities[m.joint_first_dof[ji]] = value;
     }
 };
 
@@ -3578,10 +4087,60 @@ pub const JointMotion = struct {
     axis: Vec,
 };
 
-/// A JOINT'S POSITION COORDINATES as `moveByJoint` takes them, four floats whatever the joint: a ball's quaternion
-/// (x y z w), or a hinge's angle or a slide's distance in the first lane, the other three unused - so one function
-/// serves every joint, with no lane count that varies (which a GPU kernel could not index).
-pub const JointCoordinates = Vec;
+/// Joint `joint`'s coordinates (`JointCoordinates`), read from a model's whole run `pos`: as many as its type has,
+/// each type's loads written out.
+pub fn readJointCoordinates(
+    m: *const Model,
+    joint: usize,
+    pos: []const f32,
+) JointCoordinates {
+    const first: u32 = m.joint_first_coordinate[joint];
+    return switch (m.joint_type[joint]) {
+        .slide, .hinge => .ofSingle(pos[first]),
+        .ball => .ofBall(.{ pos[first], pos[first + 1], pos[first + 2], pos[first + 3] }),
+        .free => .ofFree(
+            vec(pos[first], pos[first + 1], pos[first + 2]),
+            .{ pos[first + 3], pos[first + 4], pos[first + 5], pos[first + 6] },
+        ),
+    };
+}
+
+/// `coordinates` written into joint `joint`'s place in a model's whole run `pos`: as many as its type has.
+pub fn writeJointCoordinates(
+    m: *const Model,
+    joint: usize,
+    coordinates: JointCoordinates,
+    pos: []f32,
+) void {
+    const first: u32 = m.joint_first_coordinate[joint];
+    const count: u32 = m.joint_type[joint].posCount();
+    @memcpy(pos[first..][0..count], coordinates.numbers[0..count]);
+}
+
+/// Joint `joint`'s velocity (`JointVelocity`), read from a model's whole run `vel`: as many numbers as it has dofs.
+pub fn readJointVelocity(m: *const Model, joint: usize, vel: []const f32) JointVelocity {
+    const first: u32 = m.joint_first_dof[joint];
+    return switch (m.joint_type[joint]) {
+        .slide, .hinge => .ofSingle(vel[first]),
+        .ball => .ofBall(vec(vel[first], vel[first + 1], vel[first + 2])),
+        .free => .ofFree(
+            vec(vel[first], vel[first + 1], vel[first + 2]),
+            vec(vel[first + 3], vel[first + 4], vel[first + 5]),
+        ),
+    };
+}
+
+/// `velocity` written into joint `joint`'s place in a model's whole run `vel`: as many numbers as it has dofs.
+pub fn writeJointVelocity(
+    m: *const Model,
+    joint: usize,
+    velocity: JointVelocity,
+    vel: []f32,
+) void {
+    const first: u32 = m.joint_first_dof[joint];
+    const count: u32 = m.joint_type[joint].dofCount();
+    @memcpy(vel[first..][0..count], velocity.numbers[0..count]);
+}
 
 /// A FREE joint's body pose: its seven coordinates ARE the body's world position and orientation, the quaternion
 /// normalised - nothing to compose. Shared with robotgpu's kinematics kernel, as `moveByJoint` is.
@@ -3602,8 +4161,8 @@ pub fn freeJointPose(position: Vec, orientation: Quat) Pose {
 ///     ball     the body turns by the quaternion q                   moves back so the anchor stays where it was
 ///
 /// `coordinates` holds the joint's position coordinates (`JointCoordinates`), and `rest_coordinate` a hinge's or
-/// slide's value in the reference pose (`qpos0`), which its angle or distance is measured from. Never a free joint
-/// (`freeJointPose`).
+/// slide's value in the reference pose (`reference_joint_positions`), which its angle or distance is measured from.
+/// Never a free joint (`freeJointPose`).
 pub fn moveByJoint(
     pose: Pose,
     joint_type: JointType,
@@ -3619,13 +4178,13 @@ pub fn moveByJoint(
     switch (joint_type) {
         .slide => {
             // Sliding moves the body and leaves its orientation alone, so no off-centre correction applies.
-            pos += axis * splat(coordinates[0] - rest_coordinate);
+            pos += axis * splat(coordinates.single() - rest_coordinate);
         },
         .hinge, .ball => {
             const local: Quat = if (joint_type == .ball)
-                normalizeQuat(coordinates)
+                normalizeQuat(coordinates.ballOrientation())
             else
-                zm.quatFromNormAxisAngle(local_axis, coordinates[0] - rest_coordinate);
+                zm.quatFromNormAxisAngle(local_axis, coordinates.single() - rest_coordinate);
             rot = qmul(rot, local);
             // Off-centre correction: put the origin back where it must be for the anchor not to have moved.
             pos = anchor - rotate(rot, local_anchor);
@@ -3656,65 +4215,74 @@ pub fn kinematics(m: *const Model, d: *Data) void {
     const zone: profiler.Zone = profiler.zoneNamed(@src(), "robot.kinematics");
     defer zone.end();
     // The world never moves.
-    d.body_xpos[world_body] = vec_zero;
-    d.body_xrot[world_body] = quat_identity;
-    d.body_xipos[world_body] = vec_zero;
+    d.body_positions[world_body] = vec_zero;
+    d.body_orientations[world_body] = quat_identity;
+    d.body_centres_of_mass[world_body] = vec_zero;
 
-    for (1..m.nbody) |bi| {
+    for (1..m.body_count) |bi| {
         const parent: u32 = m.body_parent[bi];
-        const jnt_adr: u32 = m.body_jnt_adr[bi];
-        const jnt_num: u32 = m.body_jnt_num[bi];
-        const is_free_body: bool = jnt_num == 1 and m.jnt_type[jnt_adr] == .free;
+        const jnt_adr: u32 = m.body_first_joint[bi];
+        const jnt_num: u32 = m.body_joint_count[bi];
+        const is_free_body: bool = jnt_num == 1 and m.joint_type[jnt_adr] == .free;
 
         const body_pose: Pose = if (is_free_body) free: {
             // A free joint IS the body's world pose; there is nothing to compose.
-            const qadr: u32 = m.jnt_qpos_adr[jnt_adr];
-            const position: Vec = vec(d.pos[qadr], d.pos[qadr + 1], d.pos[qadr + 2]);
-            const orientation: Quat = .{ d.pos[qadr + 3], d.pos[qadr + 4], d.pos[qadr + 5], d.pos[qadr + 6] };
+            const qadr: u32 = m.joint_first_coordinate[jnt_adr];
+            const position: Vec = vec(
+                d.joint_positions[qadr],
+                d.joint_positions[qadr + 1],
+                d.joint_positions[qadr + 2],
+            );
+            const orientation: Quat = .{
+                d.joint_positions[qadr + 3],
+                d.joint_positions[qadr + 4],
+                d.joint_positions[qadr + 5],
+                d.joint_positions[qadr + 6],
+            };
             const free_pose: Pose = freeJointPose(position, orientation);
-            d.jnt_xanchor[jnt_adr] = free_pose.pos;
-            d.jnt_xaxis[jnt_adr] = m.jnt_axis[jnt_adr];
+            d.joint_anchors[jnt_adr] = free_pose.pos;
+            d.joint_axes[jnt_adr] = m.joint_local_axis[jnt_adr];
             break :free free_pose;
         } else jointed: {
             // Start at the body's rest pose relative to its parent, then let each joint move the pose built so far
             // (`moveByJoint`), in its declared order.
-            const parent_pose: Pose = .{ .pos = d.body_xpos[parent], .rot = d.body_xrot[parent] };
-            const rest: Pose = parent_pose.compose(.{ .pos = m.body_pos[bi], .rot = m.body_rot[bi] });
+            const parent_pose: Pose = .{ .pos = d.body_positions[parent], .rot = d.body_orientations[parent] };
+            const rest: Pose = parent_pose.compose(.{
+                .pos = m.body_rest_position[bi],
+                .rot = m.body_rest_rotation[bi],
+            });
             var pose: Pose = rest;
             for (jnt_adr..jnt_adr + jnt_num) |ji| {
-                const qadr: u32 = m.jnt_qpos_adr[ji];
-                const joint_type: JointType = m.jnt_type[ji];
-                // A ball's four coordinates; a hinge's or slide's one - never reading past it, past `qpos`'s end.
-                const coordinates: JointCoordinates = if (joint_type == .ball)
-                    .{ d.pos[qadr], d.pos[qadr + 1], d.pos[qadr + 2], d.pos[qadr + 3] }
-                else
-                    .{ d.pos[qadr], 0, 0, 0 };
-                const local_axis: Vec = m.jnt_axis[ji];
-                const local_anchor: Vec = m.jnt_pos[ji];
-                const rest_coordinate: f32 = m.qpos0[qadr];
+                const qadr: u32 = m.joint_first_coordinate[ji];
+                const joint_type: JointType = m.joint_type[ji];
+                // As many coordinates as the joint has - never reading past them, past `qpos`'s end.
+                const coordinates: JointCoordinates = readJointCoordinates(m, ji, d.joint_positions);
+                const local_axis: Vec = m.joint_local_axis[ji];
+                const local_anchor: Vec = m.joint_local_anchor[ji];
+                const rest_coordinate: f32 = m.reference_joint_positions[qadr];
                 const motion: JointMotion =
                     moveByJoint(pose, joint_type, local_axis, local_anchor, coordinates, rest_coordinate);
                 pose = motion.pose;
-                d.jnt_xanchor[ji] = motion.anchor;
-                d.jnt_xaxis[ji] = motion.axis;
+                d.joint_anchors[ji] = motion.anchor;
+                d.joint_axes[ji] = motion.axis;
             }
             break :jointed pose;
         };
 
-        d.body_xrot[bi] = normalizeQuat(body_pose.rot);
-        d.body_xpos[bi] = body_pose.pos;
+        d.body_orientations[bi] = normalizeQuat(body_pose.rot);
+        d.body_positions[bi] = body_pose.pos;
         // The centre of mass, which is what the dynamics actually care about.
-        d.body_xipos[bi] = body_pose.pos + rotate(d.body_xrot[bi], m.body_ipos[bi]);
+        d.body_centres_of_mass[bi] = body_pose.pos + rotate(d.body_orientations[bi], m.body_centre_of_mass_offset[bi]);
     }
 
     // Sites ride along on their bodies. They are massless frames, so this is the only
     // place they cost anything.
-    for (0..m.nsite) |si| {
+    for (0..m.site_count) |si| {
         const bi: u32 = m.site_body[si];
-        const body_pose: Pose = .{ .pos = d.body_xpos[bi], .rot = d.body_xrot[bi] };
-        const world: Pose = body_pose.compose(.{ .pos = m.site_pos[si], .rot = m.site_rot[si] });
-        d.site_xpos[si] = world.pos;
-        d.site_xrot[si] = world.rot;
+        const body_pose: Pose = .{ .pos = d.body_positions[bi], .rot = d.body_orientations[bi] };
+        const world: Pose = body_pose.compose(.{ .pos = m.site_local_position[si], .rot = m.site_local_rotation[si] });
+        d.site_positions[si] = world.pos;
+        d.site_orientations[si] = world.rot;
     }
 
     d.stage = .position;
@@ -3739,9 +4307,44 @@ fn worldAxis(comptime k: usize) Vec {
     };
 }
 
-/// Column `k` of a body's world rotation - its local X, Y or Z axis in world space.
-fn bodyAxis(rot: Quat, comptime k: usize) Vec {
-    return rotate(rot, worldAxis(k));
+/// `worldAxis` for an index known only at run time - the same three vectors, through the same function.
+fn worldAxisAt(index: u32) Vec {
+    return switch (index) {
+        0 => worldAxis(0),
+        1 => worldAxis(1),
+        else => worldAxis(2),
+    };
+}
+
+/// THE MOTION AXIS OF ONE DOF - its `dof_axes`: the spatial motion a unit velocity of the dof produces, in the frame of
+/// its tree's centre of mass. Dof `index_in_joint` of a joint of `joint_type`:
+///
+///     slide     along the joint's axis                      a pure translation: no angular part, no anchor
+///     hinge     about the joint's axis                      (`dofAboutAxis`, the frame's origin `offset` from it)
+///     ball      about the body's own axis `index_in_joint`  the CHILD frame's axes - the columns of the body's world
+///                                                           rotation - where a ball joint's velocity is defined, and
+///                                                           on whose side `integratePos` composes its increment
+///                                                           (`rotateQuatByAngularVel`)
+///     free      first along the world's three axes, then about the body's own three, exactly as a ball
+///
+/// `joint_axis` is the joint's axis in the world, `body_rotation` its body's orientation, `offset` the frame's origin
+/// minus the joint's anchor. Shared with robotgpu's dof-axis kernel.
+pub fn dofMotionAxis(
+    joint_type: JointType,
+    index_in_joint: u32,
+    joint_axis: Vec,
+    body_rotation: Quat,
+    offset: Vec,
+) Motion {
+    return switch (joint_type) {
+        .slide => .{ .ang = vec_zero, .lin = joint_axis },
+        .hinge => dofAboutAxis(joint_axis, offset),
+        .ball => dofAboutAxis(rotate(body_rotation, worldAxisAt(index_in_joint)), offset),
+        .free => if (index_in_joint < 3)
+            .{ .ang = vec_zero, .lin = worldAxisAt(index_in_joint) }
+        else
+            dofAboutAxis(rotate(body_rotation, worldAxisAt(index_in_joint - 3)), offset),
+    };
 }
 
 /// Build the shared frame each kinematic tree's dynamics are expressed in, and put every
@@ -3760,7 +4363,7 @@ fn bodyAxis(rot: Quat, comptime k: usize) Vec {
 /// `m*d^2` parallel-axis term. MuJoCo does this at f64; we are at f32 and need it more.
 ///
 /// The frame is per TREE, not per body - every body in one tree shares its root's subtree
-/// com, which is what makes their inertias summable. `subtree_com` is computed for every
+/// com, which is what makes their inertias summable. `subtree_centres_of_mass` is computed for every
 /// body anyway because sensors and the phase-3 `subtreeVel` want it.
 pub fn comPos(m: *const Model, d: *Data) void {
     const zone: profiler.Zone = profiler.zoneNamed(@src(), "robot.comPos");
@@ -3771,72 +4374,50 @@ pub fn comPos(m: *const Model, d: *Data) void {
     // Start each body holding its own first moment (mass x com), add children into
     // parents walking backwards, then divide out the subtree mass. Backwards works
     // because a parent always has a lower index than its children.
-    for (0..m.nbody) |bi| {
-        d.subtree_com[bi] = d.body_xipos[bi] * splat(m.body_mass[bi]);
+    for (0..m.body_count) |bi| {
+        d.subtree_centres_of_mass[bi] = d.body_centres_of_mass[bi] * splat(m.body_mass[bi]);
     }
-    var bi: u32 = m.nbody;
+    var bi: u32 = m.body_count;
     while (bi > 1) {
         bi -= 1;
-        d.subtree_com[m.body_parent[bi]] += d.subtree_com[bi];
+        d.subtree_centres_of_mass[m.body_parent[bi]] += d.subtree_centres_of_mass[bi];
     }
-    for (0..m.nbody) |i| {
+    for (0..m.body_count) |i| {
         const sub_mass: f32 = m.body_subtree_mass[i];
         // A massless subtree has no centre of mass to speak of; its own origin is the
         // only answer that stays finite, and nothing downstream weights it anyway.
-        d.subtree_com[i] = if (sub_mass > min_mass)
-            d.subtree_com[i] / splat(sub_mass)
+        d.subtree_centres_of_mass[i] = if (sub_mass > min_mass)
+            d.subtree_centres_of_mass[i] / splat(sub_mass)
         else
-            d.body_xipos[i];
+            d.body_centres_of_mass[i];
     }
 
     // ---- body inertias, in the shared frame ----
-    d.cinert[world_body] = .zero;
-    for (1..m.nbody) |i| {
-        const frame_origin: Vec = d.subtree_com[m.body_root[i]];
+    d.body_inertias[world_body] = .zero;
+    for (1..m.body_count) |i| {
+        const frame_origin: Vec = d.subtree_centres_of_mass[m.body_root[i]];
         // Rotate the body-frame tensor into world orientation, then translate from the
         // body's centre of mass out to the shared origin. Note the order: rotating a
         // translated inertia is not the same as translating a rotated one.
-        d.cinert[i] = m.body_inertia[i]
-            .rotated(d.body_xrot[i])
-            .translate(d.body_xipos[i] - frame_origin);
+        d.body_inertias[i] = m.body_local_inertia[i]
+            .rotated(d.body_orientations[i])
+            .translate(d.body_centres_of_mass[i] - frame_origin);
     }
 
     // ---- dof motion axes, in the same frame ----
-    for (0..m.njnt) |ji| {
-        const body: u32 = m.jnt_body[ji];
-        const frame_origin: Vec = d.subtree_com[m.body_root[body]];
+    for (0..m.joint_count) |ji| {
+        const body: u32 = m.joint_body[ji];
+        const frame_origin: Vec = d.subtree_centres_of_mass[m.body_root[body]];
         // From the frame's origin TO the joint anchor: a rotation about the anchor moves
         // the origin by `axis x offset`, which is the linear half of the motion vector.
-        const offset: Vec = frame_origin - d.jnt_xanchor[ji];
-        const dof_adr: u32 = m.jnt_dof_adr[ji];
+        const offset: Vec = frame_origin - d.joint_anchors[ji];
+        const dof_adr: u32 = m.joint_first_dof[ji];
 
-        switch (m.jnt_type[ji]) {
-            .slide => {
-                // Pure translation: no angular part, and no dependence on the anchor.
-                d.cdof[dof_adr] = .{ .ang = vec_zero, .lin = d.jnt_xaxis[ji] };
-            },
-            .hinge => {
-                d.cdof[dof_adr] = dofAboutAxis(d.jnt_xaxis[ji], offset);
-            },
-            .ball => {
-                // Three rotations about the body's own axes, taken as the columns of its
-                // world rotation. Using the CHILD frame matters: a ball joint's velocity
-                // is defined there, and `integratePos` composes its increment on the same
-                // side (see `rotateQuatByAngularVel`).
-                inline for (0..3) |k| {
-                    d.cdof[dof_adr + k] = dofAboutAxis(bodyAxis(d.body_xrot[body], k), offset);
-                }
-            },
-            .free => {
-                // Translation first: the three world axes, no angular part.
-                inline for (0..3) |k| {
-                    d.cdof[dof_adr + k] = .{ .ang = vec_zero, .lin = worldAxis(k) };
-                }
-                // Then rotation, exactly as for a ball joint.
-                inline for (0..3) |k| {
-                    d.cdof[dof_adr + 3 + k] = dofAboutAxis(bodyAxis(d.body_xrot[body], k), offset);
-                }
-            },
+        const joint_type: JointType = m.joint_type[ji];
+        var index_in_joint: u32 = 0;
+        while (index_in_joint < joint_type.dofCount()) : (index_in_joint += 1) {
+            d.dof_axes[dof_adr + index_in_joint] =
+                dofMotionAxis(joint_type, index_in_joint, d.joint_axes[ji], d.body_orientations[body], offset);
         }
     }
 }
@@ -3857,8 +4438,8 @@ pub fn comPos(m: *const Model, d: *Data) void {
 /// A spatial tendon would compute both quantities geometrically here and everything after
 /// would be unchanged - that separation is the point of section 7's transmission/force split.
 pub fn tendonLengths(m: *const Model, d: *Data) void {
-    for (0..m.ntendon) |ti| {
-        const coefficients: []const f32 = m.tendon_jacobian[ti * m.nv ..][0..m.nv];
+    for (0..m.tendon_count) |ti| {
+        const coefficients: []const f32 = m.tendon_jacobian[ti * m.dof_count ..][0..m.dof_count];
         var total_length: f32 = 0;
         var velocity: f32 = 0;
         for (coefficients, 0..) |coefficient, dof| {
@@ -3870,8 +4451,8 @@ pub fn tendonLengths(m: *const Model, d: *Data) void {
             // The hop through the owning joint is what translates between them, and it is
             // exact here because `Spec()` only lets a tendon touch scalar joints, whose
             // single DOF and single position coordinate correspond one to one.
-            total_length += coefficient * d.pos[m.jnt_qpos_adr[m.dof_jnt[dof]]];
-            velocity += coefficient * d.vel[dof];
+            total_length += coefficient * d.joint_positions[m.joint_first_coordinate[m.dof_joint[dof]]];
+            velocity += coefficient * d.joint_velocities[dof];
         }
         d.tendon_length[ti] = total_length;
         d.tendon_velocity[ti] = velocity;
@@ -3895,6 +4476,21 @@ pub fn tendonLengths(m: *const Model, d: *Data) void {
 // is the ancestor relation the model tabulated at build time.
 // =============================================================================
 
+/// THE FORCE ONE DOF'S UNIT ACCELERATION DEMANDS of everything it moves: the composite inertia of the subtree below
+/// the dof's body - all of it moves with the dof - times the dof's motion axis. It is one column of the mass matrix, as
+/// a spatial force (`forceAlongDof` reads the column's entries off it). Shared with robotgpu's mass-matrix kernel.
+pub fn dofUnitForce(composite_inertia: Inertia, dof_motion: Motion) Force {
+    return composite_inertia.mul(dof_motion);
+}
+
+/// THE SHARE OF A SPATIAL FORCE ONE DOF FEELS: the force along the dof's motion axis - the power the force delivers per
+/// unit of the dof's velocity. Against `dofUnitForce` of dof i it is the mass matrix's entry M[i][j], for dof j on i's
+/// chain of ancestors; against a body's net force it is that dof's generalized force (`rne`). Shared with robotgpu's
+/// mass-matrix and RNE kernels.
+pub fn forceAlongDof(dof_motion: Motion, force: Force) f32 {
+    return dot6(dof_motion, force);
+}
+
 /// Composite Rigid Body: build the joint-space inertia matrix M.
 ///
 /// THE IDEA, which is genuinely simple once seen. Suppose only DOF `i` accelerates and
@@ -3909,7 +4505,7 @@ pub fn tendonLengths(m: *const Model, d: *Data) void {
 /// composite inertias (a backward sum, cheap because `comPos` put them in a shared frame)
 /// and visiting only the `j` that can be nonzero (the ancestor chain).
 ///
-/// COST. The outer loop is `nv`; the inner walks one ancestor chain. For a chain robot
+/// COST. The outer loop is `dof_count`; the inner walks one ancestor chain. For a chain robot
 /// that is O(nv^2) entries but each is a 6-vector dot - and for a tree with branches it is
 /// far less, because siblings never interact. This is why the sparsity is not an
 /// optimisation bolted on afterwards: it is the shape of the physics.
@@ -3922,28 +4518,28 @@ pub fn crb(m: *const Model, d: *Data) void {
     // Start each body holding its own inertia, then fold children into parents walking
     // backwards. Because a parent always has a lower index, one reverse pass suffices.
     //
-    // This sum is only legal because every `cinert` is expressed in the same frame - the
+    // This sum is only legal because every `body_inertias` is expressed in the same frame - the
     // shared subtree-COM frame `comPos` built. That is the payoff for the whole previous
     // section, collected here in three lines.
-    @memcpy(d.crb, d.cinert);
-    var bi: u32 = m.nbody;
+    @memcpy(d.composite_inertias, d.body_inertias);
+    var bi: u32 = m.body_count;
     while (bi > 1) {
         bi -= 1;
         const parent: u32 = m.body_parent[bi];
         // Do not fold into the world: it is not a real body and its inertia is meaningless.
         if (parent != world_body) {
-            d.crb[parent] = d.crb[parent].add(d.crb[bi]);
+            d.composite_inertias[parent] = d.composite_inertias[parent].add(d.composite_inertias[bi]);
         }
     }
 
     // ---- one row of M per DOF ----
-    for (0..m.nv) |i| {
+    for (0..m.dof_count) |i| {
         const row: u32 = m.mass_row_start[i];
-        const nnz: u32 = m.mass_row_nonzeros[i];
+        const nnz: u32 = m.mass_row_entry_count[i];
 
         // The force this DOF's unit acceleration generates, given everything below it
         // moves with it.
-        const force: Force = d.crb[m.dof_body[i]].mul(d.cdof[i]);
+        const force: Force = dofUnitForce(d.composite_inertias[m.dof_body[i]], d.dof_axes[i]);
 
         // Walk the ancestor chain, writing backwards. The row is stored root-first with
         // the diagonal LAST (see `Model.mass_col_index`), and walking UP from `i` visits the
@@ -3953,7 +4549,7 @@ pub fn crb(m: *const Model, d: *Data) void {
         var j: u32 = @intCast(i);
         while (j != no_dof) : (j = m.dof_parent[j]) {
             slot -= 1;
-            d.mass_matrix[row + slot] = dot6(d.cdof[j], force);
+            d.mass_matrix[row + slot] = forceAlongDof(d.dof_axes[j], force);
         }
 
         // Armature is rotor inertia reflected through a gearbox: a real physical mass that
@@ -3972,61 +4568,213 @@ pub fn crb(m: *const Model, d: *Data) void {
 pub fn massMatrixDense(m: *const Model, d: *const Data, out: []f32) void {
     d.requireStage(.position, "massMatrixDense");
     assertf(
-        out.len == m.nv * m.nv,
+        out.len == m.dof_count * m.dof_count,
         @src(),
         "massMatrixDense wants an {d}x{d} buffer, got {d} entries",
-        .{ m.nv, m.nv, out.len },
+        .{ m.dof_count, m.dof_count, out.len },
     );
     @memset(out, 0);
-    for (0..m.nv) |i| {
+    for (0..m.dof_count) |i| {
         const row: u32 = m.mass_row_start[i];
-        for (0..m.mass_row_nonzeros[i]) |k| {
-            const j: u32 = m.mass_col_index[row + k];
+        for (0..m.mass_row_entry_count[i]) |k| {
+            const j: u32 = m.mass_entry_column[row + k];
             const value: f32 = d.mass_matrix[row + k];
             // M is symmetric, and only the lower triangle is stored: mirror as we expand.
-            out[i * m.nv + j] = value;
-            out[j * m.nv + i] = value;
+            out[i * m.dof_count + j] = value;
+            out[j * m.dof_count + i] = value;
         }
     }
 }
 
-/// Factorize the mass matrix as `M = L^T*D*L`, in place and without fill-in.
-///
-/// WHY FACTOR AT ALL. Forward dynamics needs `M^-1(tau + J^Tf - c)`, and a constraint solver
-/// needs `M^-1J^T` for every constraint row. Inverting `M` outright would be both slower and
-/// numerically worse; factoring once per step turns every later `M^-1x` into two cheap
-/// back-substitutions.
-///
-/// * WHY THERE IS NO FILL-IN, which is the good part. Ordinary sparse elimination creates
-/// new nonzeros: eliminating a variable couples everything it touched, and the matrix
-/// gradually fills up. Here it cannot, and the reason is structural.
-///
-/// Row `k` of `M` holds `k`'s ancestor chain. Row `i`, for any `i` ON that chain, holds
-/// `i`'s ancestor chain - which is a PREFIX of `k`'s, because `i`'s path to the root is
-/// the tail of `k`'s. Eliminating `k` only ever updates rows whose sparsity pattern is
-/// already contained in `k`'s. Nothing new can appear.
-///
-/// And since rows are stored root-first, a prefix in the tree is a prefix in MEMORY: the
-/// update to row `i` is a contiguous run starting at `i`'s row address, aligned element for
-/// element with the head of row `k`. No index translation, no scatter. That alignment is
-/// why section 5 chose root-first-with-the-diagonal-last, several phases before anything used it.
-///
-/// The loop runs BACKWARD over rows because elimination proceeds from the leaves inward -
-/// a DOF can only be eliminated once everything that depends on it is gone, and children
-/// always have higher indices than their parents.
-/// How many velocity coordinates a joint kind carries.
-fn dofWidth(kind: JointType) u32 {
-    return switch (kind) {
-        .free => 6,
-        .ball => 3,
-        .hinge, .slide => 1,
+/// Refuse, at compile time, a storage for `factorLdlInPlace` that lacks one of the methods it calls: the model's
+/// sparsity (`rowStart`, `rowEntries`, `column`) and the factor being built (`factor`, `setFactor`, `setInversePivot`).
+/// Two storages provide them: robot.zig's own arrays (`MassFactorArrays`) and one world of robotgpu's arenas.
+fn requireMassFactorStorage(comptime Storage: type) void {
+    const methods = [_][]const u8{ "rowStart", "rowEntries", "column", "factor", "setFactor", "setInversePivot" };
+    for (methods) |method| {
+        if (!@hasDecl(Storage, method)) {
+            @compileError(@typeName(Storage) ++ " lacks `" ++ method ++ "`, which the mass matrix's factorisation " ++
+                "reads its storage through (see robot.zig's MassFactorArrays)");
+        }
+    }
+}
+
+/// Refuse, at compile time, a storage for `solveLdl` that lacks one of the methods it calls: the model's sparsity, the
+/// factor and its inverse pivots (`factor`, `inversePivot`), and the vector solved in place (`solution`,
+/// `setSolution`). Two storages provide them: robot.zig's own arrays (`MassSolveArrays`) and one world of robotgpu's.
+fn requireMassSolveStorage(comptime Storage: type) void {
+    const methods = [_][]const u8{
+        "rowStart", "rowEntries", "column", "factor", "inversePivot", "solution", "setSolution",
     };
+    for (methods) |method| {
+        if (!@hasDecl(Storage, method)) {
+            @compileError(@typeName(Storage) ++ " lacks `" ++ method ++ "`, which the mass matrix's solve reads its " ++
+                "storage through (see robot.zig's MassSolveArrays)");
+        }
+    }
+}
+
+/// robot.zig's own arrays as a factorisation's storage: the model's sparsity tables, the factor in `Data.qLD`, the
+/// inverse pivots in `Data.qLDiagInv`.
+const MassFactorArrays = struct {
+    model: *const Model,
+    data: *Data,
+
+    pub fn rowStart(arrays: MassFactorArrays, dof: u32) u32 {
+        return arrays.model.mass_row_start[dof];
+    }
+    pub fn rowEntries(arrays: MassFactorArrays, dof: u32) u32 {
+        return arrays.model.mass_row_entry_count[dof];
+    }
+    pub fn column(arrays: MassFactorArrays, entry: u32) u32 {
+        return arrays.model.mass_entry_column[entry];
+    }
+    pub fn factor(arrays: MassFactorArrays, entry: u32) f32 {
+        return arrays.data.mass_factor[entry];
+    }
+    pub fn setFactor(arrays: MassFactorArrays, entry: u32, value: f32) void {
+        arrays.data.mass_factor[entry] = value;
+    }
+    pub fn setInversePivot(arrays: MassFactorArrays, dof: u32, value: f32) void {
+        arrays.data.mass_factor_inverse_diagonal[dof] = value;
+    }
+};
+
+/// robot.zig's own arrays as a solve's storage: the model's sparsity tables, the factor and inverse pivots `factorM`
+/// left in `Data`, and the vector `x`, solved in place.
+const MassSolveArrays = struct {
+    model: *const Model,
+    data: *const Data,
+    x: []f32,
+
+    pub fn rowStart(arrays: MassSolveArrays, dof: u32) u32 {
+        return arrays.model.mass_row_start[dof];
+    }
+    pub fn rowEntries(arrays: MassSolveArrays, dof: u32) u32 {
+        return arrays.model.mass_row_entry_count[dof];
+    }
+    pub fn column(arrays: MassSolveArrays, entry: u32) u32 {
+        return arrays.model.mass_entry_column[entry];
+    }
+    pub fn factor(arrays: MassSolveArrays, entry: u32) f32 {
+        return arrays.data.mass_factor[entry];
+    }
+    pub fn inversePivot(arrays: MassSolveArrays, dof: u32) f32 {
+        return arrays.data.mass_factor_inverse_diagonal[dof];
+    }
+    pub fn solution(arrays: MassSolveArrays, dof: u32) f32 {
+        return arrays.x[dof];
+    }
+    pub fn setSolution(arrays: MassSolveArrays, dof: u32, value: f32) void {
+        arrays.x[dof] = value;
+    }
+};
+
+/// THE SPARSE LDL^T FACTORISATION OF THE MASS MATRIX, `M = L^T*D*L`, in place over a copy of M in `storage` -
+/// robot.zig's arrays, or one world of robotgpu's, so both engines factor with the same arithmetic in the same order.
+///
+/// * WHY FACTOR AT ALL. Forward dynamics needs `M^-1(tau + J^Tf - c)`, and a constraint solver needs `M^-1J^T` for
+/// every constraint row. Inverting `M` outright would be both slower and numerically worse; factoring once per step
+/// turns every later `M^-1x` into two cheap back-substitutions (`solveLdl`).
+///
+/// * WHY THERE IS NO FILL-IN, which is the good part. Ordinary sparse elimination creates new nonzeros: eliminating a
+/// variable couples everything it touched, and the matrix gradually fills up. Here it cannot, and the reason is
+/// structural. Row `k` of `M` holds `k`'s ancestor chain. Row `i`, for any `i` ON that chain, holds `i`'s ancestor
+/// chain - which is a PREFIX of `k`'s, because `i`'s path to the root is the tail of `k`'s. Eliminating `k` only ever
+/// updates rows whose sparsity pattern is already contained in `k`'s. Nothing new can appear.
+///
+/// * AND SINCE ROWS ARE STORED ROOT-FIRST, a prefix in the tree is a prefix in MEMORY: the update to row `i` is a
+/// contiguous run starting at `i`'s row address, aligned element for element with the head of row `k`. No index
+/// translation, no scatter. That alignment is why section 5 chose root-first-with-the-diagonal-last, several phases
+/// before anything used it.
+///
+/// Rows run BACKWARD, from the leaves inward - a dof can be eliminated only once every dof below it is, and children
+/// always have higher indices than their parents: row k's pivot is inverted, row k is eliminated from every ancestor
+/// row, and row k's off-diagonal part is scaled, so L has a unit diagonal:
+///
+///     for k from the last dof down to 0:
+///       inverse_pivot[k] = 1 / F[k][k]
+///       for each ancestor i of k (row k's entries, right to left):
+///         row i  +=  (-F[k][i] * inverse_pivot[k]) * (the head of row k)
+///       row k's off-diagonal  *=  inverse_pivot[k]
+pub inline fn factorLdlInPlace(storage: anytype, dof_count: u32) void {
+    comptime requireMassFactorStorage(@TypeOf(storage));
+    var k: u32 = dof_count;
+    while (k > 0) {
+        k -= 1;
+        const start: u32 = storage.rowStart(k);
+        const diagonal: u32 = start + storage.rowEntries(k) - 1;
+        const pivot: f32 = storage.factor(diagonal);
+        // M is positive definite, so every pivot is positive - armature guarantees it even for a massless-looking
+        // dof. A non-positive pivot means the model is degenerate (a zero-mass body, or an inertia gone bad upstream).
+        assertf(pivot > 0.0, @src(), "factorM: pivot {d} is {d}, but M must be positive definite " ++
+            "(a zero-mass body, or armature left at zero?)", .{ k, pivot });
+        const inverse_pivot: f32 = 1.0 / pivot;
+        storage.setInversePivot(k, inverse_pivot);
+        var entry: u32 = diagonal;
+        while (entry > start) {
+            entry -= 1;
+            const ancestor: u32 = storage.column(entry);
+            const scale: f32 = -storage.factor(entry) * inverse_pivot;
+            const ancestor_start: u32 = storage.rowStart(ancestor);
+            const ancestor_entries: u32 = storage.rowEntries(ancestor);
+            var offset: u32 = 0;
+            while (offset < ancestor_entries) : (offset += 1) {
+                const updated: f32 = storage.factor(ancestor_start + offset) + scale * storage.factor(start + offset);
+                storage.setFactor(ancestor_start + offset, updated);
+            }
+        }
+        var off_diagonal: u32 = start;
+        while (off_diagonal < diagonal) : (off_diagonal += 1) {
+            storage.setFactor(off_diagonal, storage.factor(off_diagonal) * inverse_pivot);
+        }
+    }
+}
+
+/// THE SOLVE M x = b WITH THE FACTOR (`factorLdlInPlace`), in place over b in `storage`: L^T backward - each dof's
+/// value pushed into its ancestors' - then the inverse pivots, then L forward - each dof's value pulled from its
+/// ancestors'. A root dof has no ancestors, and a zero value nothing to push.
+pub inline fn solveLdl(storage: anytype, dof_count: u32) void {
+    comptime requireMassSolveStorage(@TypeOf(storage));
+    var k: u32 = dof_count;
+    while (k > 0) {
+        k -= 1;
+        const row_entries: u32 = storage.rowEntries(k);
+        const value: f32 = storage.solution(k);
+        if (row_entries == 1 or value == 0.0) {
+            continue;
+        }
+        const start: u32 = storage.rowStart(k);
+        var entry: u32 = start;
+        while (entry < start + row_entries - 1) : (entry += 1) {
+            const ancestor: u32 = storage.column(entry);
+            storage.setSolution(ancestor, storage.solution(ancestor) - storage.factor(entry) * value);
+        }
+    }
+    var dof: u32 = 0;
+    while (dof < dof_count) : (dof += 1) {
+        storage.setSolution(dof, storage.solution(dof) * storage.inversePivot(dof));
+    }
+    dof = 0;
+    while (dof < dof_count) : (dof += 1) {
+        const row_entries: u32 = storage.rowEntries(dof);
+        if (row_entries == 1) {
+            continue;
+        }
+        const start: u32 = storage.rowStart(dof);
+        var pulled: f32 = 0;
+        var entry: u32 = start;
+        while (entry < start + row_entries - 1) : (entry += 1) {
+            pulled += storage.factor(entry) * storage.solution(storage.column(entry));
+        }
+        storage.setSolution(dof, storage.solution(dof) - pulled);
+    }
 }
 
 /// Factor `M + damping_dt * diag(B)`.
 ///
 /// * THE DAMPING GOES ON THE FACTORISATION, NOT ON `mass_matrix`. That array is read by the
-/// constraint solver and by `massDiagonal`, and must keep meaning inertia; `qLD` is scratch
+/// constraint solver and by `massDiagonal`, and must keep meaning inertia; `mass_factor` is scratch
 /// this function overwrites every time it runs. `damping_dt = 0` is the plain mass matrix and
 /// is what every caller outside the integrator wants.
 pub fn factorMDamped(m: *const Model, d: *Data, damping_dt: f32) void {
@@ -4052,61 +4800,24 @@ pub fn factorMDamped(m: *const Model, d: *Data, damping_dt: f32) void {
     );
     defer zone.end();
     d.requireStage(.position, "factorM");
-    @memcpy(d.qLD, d.mass_matrix);
+    @memcpy(d.mass_factor, d.mass_matrix);
     if (damping_dt != 0) {
-        for (0..m.njnt) |j| {
-            const damping: f32 = m.jnt_damping[j];
+        for (0..m.joint_count) |j| {
+            const damping: f32 = m.joint_damping[j];
             if (damping == 0) {
                 continue;
             }
-            const first: u32 = m.jnt_dof_adr[j];
-            for (0..dofWidth(m.jnt_type[j])) |k| {
+            const first: u32 = m.joint_first_dof[j];
+            for (0..m.joint_type[j].dofCount()) |k| {
                 const v: u32 = first + @as(u32, @intCast(k));
                 // The diagonal is the last slot in the row - see `massDiagonal`.
-                d.qLD[m.mass_row_start[v] + m.mass_row_nonzeros[v] - 1] += damping_dt * damping;
+                d.mass_factor[m.mass_row_start[v] + m.mass_row_entry_count[v] - 1] += damping_dt * damping;
             }
         }
     }
 
-    var k: u32 = m.nv;
-    while (k > 0) {
-        k -= 1;
-        const start: u32 = m.mass_row_start[k];
-        const diag: u32 = start + m.mass_row_nonzeros[k] - 1;
-
-        // M is positive definite, so every pivot is positive - armature guarantees it even
-        // for a massless-looking DOF. A non-positive pivot means the model is degenerate
-        // (a zero-mass body, or an inertia that has gone bad upstream) and every number
-        // after this point would be meaningless.
-        assertf(
-            d.qLD[diag] > 0.0,
-            @src(),
-            "factorM: pivot {d} is {d}, but M must be positive definite " ++
-                "(a zero-mass body, or armature left at zero?)",
-            .{ k, d.qLD[diag] },
-        );
-        const inv_pivot: f32 = 1.0 / d.qLD[diag];
-        d.qLDiagInv[k] = inv_pivot;
-
-        // Eliminate row k from every ancestor row above it.
-        var adr: u32 = diag;
-        while (adr > start) {
-            adr -= 1;
-            const i: u32 = m.mass_col_index[adr];
-            const scale: f32 = -d.qLD[adr] * inv_pivot;
-            // Row i's pattern is a prefix of row k's, so this is element-wise over
-            // `rownnz[i]` contiguous entries of each. See the note above.
-            const dst: u32 = m.mass_row_start[i];
-            for (0..m.mass_row_nonzeros[i]) |t| {
-                d.qLD[dst + t] += scale * d.qLD[start + t];
-            }
-        }
-
-        // Normalize row k's off-diagonal part, so L has a unit diagonal.
-        for (start..diag) |t| {
-            d.qLD[t] *= inv_pivot;
-        }
-    }
+    const arrays: MassFactorArrays = .{ .model = m, .data = d };
+    factorLdlInPlace(arrays, m.dof_count);
 
     d.stage = .position;
 }
@@ -4122,45 +4833,11 @@ pub fn factorM(m: *const Model, d: *Data) void {
 /// chains - no iteration, no tolerance, no convergence. The chain structure that made `M`
 /// cheap to build makes it cheap to invert.
 pub fn solveM(m: *const Model, d: *const Data, x: []f32) void {
-    assertf(x.len == m.nv, @src(), "solveM wants {d} entries, got {d}", .{ m.nv, x.len });
+    assertf(x.len == m.dof_count, @src(), "solveM wants {d} entries, got {d}", .{ m.dof_count, x.len });
 
     // x <- L^-T x. Backward: each DOF pushes its value onto its ancestors.
-    var k: u32 = m.nv;
-    while (k > 0) {
-        k -= 1;
-        const nnz: u32 = m.mass_row_nonzeros[k];
-        if (nnz == 1) {
-            continue; // a root DOF has no ancestors to push to
-        }
-        const xk: f32 = x[k];
-        if (xk == 0.0) {
-            continue; // nothing to propagate
-        }
-        const start: u32 = m.mass_row_start[k];
-        for (start..start + nnz - 1) |adr| {
-            x[m.mass_col_index[adr]] -= d.qLD[adr] * xk;
-        }
-    }
-
-    // x <- D^-1 x. The reciprocals were stored during factorization so this multiplies.
-    for (0..m.nv) |i| {
-        x[i] *= d.qLDiagInv[i];
-    }
-
-    // x <- L^-1 x. Forward: each DOF pulls back the contributions of its ancestors, which
-    // are already final because a parent always has a lower index.
-    for (0..m.nv) |i| {
-        const nnz: u32 = m.mass_row_nonzeros[i];
-        if (nnz == 1) {
-            continue;
-        }
-        const start: u32 = m.mass_row_start[i];
-        var acc: f32 = 0;
-        for (start..start + nnz - 1) |adr| {
-            acc += d.qLD[adr] * x[m.mass_col_index[adr]];
-        }
-        x[i] -= acc;
-    }
+    const arrays: MassSolveArrays = .{ .model = m, .data = d, .x = x };
+    solveLdl(arrays, m.dof_count);
 }
 
 /// A cheap estimate of `M`'s condition number: the spread of the factorization's diagonal.
@@ -4174,14 +4851,14 @@ pub fn solveM(m: *const Model, d: *const Data, x: []f32) void {
 /// or diverges with no obvious cause. If this number is large and something looks wrong,
 /// that is the answer. See section 1.1 of the port plan for the fix, which is narrow.
 pub fn conditionEstimate(m: *const Model, d: *const Data) f32 {
-    if (m.nv == 0) {
+    if (m.dof_count == 0) {
         return 1.0;
     }
     var lo: f32 = zm.floatMax(f32);
     var hi: f32 = 0;
-    for (0..m.nv) |i| {
+    for (0..m.dof_count) |i| {
         // qLDiagInv is 1/D, so the extremes swap.
-        const dval: f32 = 1.0 / d.qLDiagInv[i];
+        const dval: f32 = 1.0 / d.mass_factor_inverse_diagonal[i];
         lo = @min(lo, dval);
         hi = @max(hi, dval);
     }
@@ -4197,6 +4874,35 @@ pub fn conditionEstimate(m: *const Model, d: *const Data) f32 {
 // only ever wants their sum.
 // =============================================================================
 
+/// Refuse, at compile time, a storage for `velocityThroughJoint` that lacks one of the methods it calls: each dof's
+/// motion axis (`dofAxis`) and rate (`dofRate`), and where the rate of change of its axis goes (`setDofAxisRate`).
+/// Two storages provide them: robot.zig's own arrays (`VelocityArrays`) and one world of robotgpu's arenas.
+fn requireVelocityStorage(comptime Storage: type) void {
+    const methods = [_][]const u8{ "dofAxis", "dofRate", "setDofAxisRate" };
+    for (methods) |method| {
+        if (!@hasDecl(Storage, method)) {
+            @compileError(@typeName(Storage) ++ " lacks `" ++ method ++ "`, which the velocity pass reads its " ++
+                "storage through (see robot.zig's VelocityArrays)");
+        }
+    }
+}
+
+/// robot.zig's own arrays as the velocity pass's storage: each dof's motion axis (`Data.cdof`), its rate
+/// (`Data.vel`), and the rate of change of its axis (`Data.cdof_dot`).
+const VelocityArrays = struct {
+    data: *Data,
+
+    pub fn dofAxis(arrays: VelocityArrays, dof: u32) Motion {
+        return arrays.data.dof_axes[dof];
+    }
+    pub fn dofRate(arrays: VelocityArrays, dof: u32) f32 {
+        return arrays.data.joint_velocities[dof];
+    }
+    pub fn setDofAxisRate(arrays: VelocityArrays, dof: u32, axis_rate: Motion) void {
+        arrays.data.dof_axis_rates[dof] = axis_rate;
+    }
+};
+
 /// The three rotational DOFs of a ball joint (or a free joint's rotation half).
 ///
 /// * ALL THREE differentiate against the SAME velocity - the one before ANY of them has
@@ -4207,13 +4913,61 @@ pub fn conditionEstimate(m: *const Model, d: *const Data) f32 {
 ///
 /// A scalar joint cannot show this bug, because there is nothing to be out of order with -
 /// which is exactly why it survives a test suite built on hinge models.
-fn rotationTriple(d: *Data, dof: u32, vel: *Motion) void {
-    const snapshot: Motion = vel.*;
+inline fn rotationTriple(
+    storage: anytype,
+    first_dof: u32,
+    velocity_so_far: Motion,
+) Motion {
+    comptime requireVelocityStorage(@TypeOf(storage));
+    const snapshot: Motion = velocity_so_far;
     inline for (0..3) |k| {
-        d.cdof_dot[dof + k] = crossMotion(snapshot, d.cdof[dof + k]);
+        const dof: u32 = first_dof + @as(u32, k);
+        storage.setDofAxisRate(dof, crossMotion(snapshot, storage.dofAxis(dof)));
     }
+    var velocity: Motion = velocity_so_far;
     inline for (0..3) |k| {
-        vel.* = vel.add(d.cdof[dof + k].scale(d.vel[dof + k]));
+        const dof: u32 = first_dof + @as(u32, k);
+        velocity = velocity.add(storage.dofAxis(dof).scale(storage.dofRate(dof)));
+    }
+    return velocity;
+}
+
+/// A BODY'S VELOCITY CARRIED THROUGH ONE OF ITS JOINTS, over `storage` - robot.zig's arrays, or one world of
+/// robotgpu's, so both engines compute velocities with the same arithmetic in the same order. `velocity_so_far` is the
+/// parent's velocity plus any earlier joints' on this body; the result adds this joint's, and each of the joint's dofs
+/// gets the rate its motion axis is dragged at, `crossMotion(velocity_so_far, axis)` - against the velocity BEFORE
+/// this joint's own contribution, since a dof's own motion cannot drag its own axis:
+///
+///     hinge, slide    axis_rate = velocity_so_far x axis;        velocity += axis * rate
+///     ball            the three rotations, each against the same velocity (`rotationTriple`)
+///     free            three world translations, whose axes nothing rotates (rate zero), then the three rotations
+pub inline fn velocityThroughJoint(
+    storage: anytype,
+    joint_type: JointType,
+    first_dof: u32,
+    velocity_so_far: Motion,
+) Motion {
+    comptime requireVelocityStorage(@TypeOf(storage));
+    switch (joint_type) {
+        .slide, .hinge => {
+            const axis: Motion = storage.dofAxis(first_dof);
+            storage.setDofAxisRate(first_dof, crossMotion(velocity_so_far, axis));
+            return velocity_so_far.add(axis.scale(storage.dofRate(first_dof)));
+        },
+        .ball => {
+            return rotationTriple(storage, first_dof, velocity_so_far);
+        },
+        .free => {
+            // The three translation axes are GLOBAL, so nothing can rotate them: their rate of change is exactly zero,
+            // whatever the body is doing. Then the rotations, which DO see the translation velocity.
+            var velocity: Motion = velocity_so_far;
+            inline for (0..3) |k| {
+                const dof: u32 = first_dof + @as(u32, k);
+                storage.setDofAxisRate(dof, .zero);
+                velocity = velocity.add(storage.dofAxis(dof).scale(storage.dofRate(dof)));
+            }
+            return rotationTriple(storage, first_dof + 3, velocity);
+        },
     }
 }
 
@@ -4222,7 +4976,7 @@ fn rotationTriple(d: *Data, dof: u32, vel: *Motion) void {
 /// A child's velocity is its parent's plus whatever its own joints contribute - one
 /// forward pass, accumulating down the tree. That part is obvious.
 ///
-/// The interesting output is `cdof_dot`. A DOF's motion axis is not fixed in space: if a
+/// The interesting output is `dof_axis_rates`. A DOF's motion axis is not fixed in space: if a
 /// body is already rotating, its joint axis is being carried along, and an axis that moves
 /// contributes acceleration even at constant joint velocity. That contribution IS the
 /// centrifugal and Coriolis terms, and `crossMotion(cvel, cdof)` is exactly how fast the
@@ -4237,38 +4991,43 @@ pub fn comVel(m: *const Model, d: *Data) void {
     const zone: profiler.Zone = profiler.zoneNamed(@src(), "robot.comVel");
     defer zone.end();
     d.requireStage(.position, "comVel");
-    d.cvel[world_body] = .zero;
+    const arrays: VelocityArrays = .{ .data = d };
+    d.body_velocities[world_body] = .zero;
 
-    for (1..m.nbody) |bi| {
-        var vel: Motion = d.cvel[m.body_parent[bi]];
-        const jnt_adr: u32 = m.body_jnt_adr[bi];
+    for (1..m.body_count) |bi| {
+        var vel: Motion = d.body_velocities[m.body_parent[bi]];
+        const jnt_adr: u32 = m.body_first_joint[bi];
 
         // Walk JOINTS, not DOFs. The distinction is invisible for scalar joints and
         // load-bearing for ball and free ones - see the note on `rotationTriple`.
-        for (jnt_adr..jnt_adr + m.body_jnt_num[bi]) |ji| {
-            const dof: u32 = m.jnt_dof_adr[ji];
-            switch (m.jnt_type[ji]) {
-                .slide, .hinge => {
-                    d.cdof_dot[dof] = crossMotion(vel, d.cdof[dof]);
-                    vel = vel.add(d.cdof[dof].scale(d.vel[dof]));
-                },
-                .ball => rotationTriple(d, dof, &vel),
-                .free => {
-                    // The three translation axes are GLOBAL, so nothing can rotate them:
-                    // their rate of change is exactly zero, whatever the body is doing.
-                    inline for (0..3) |k| {
-                        d.cdof_dot[dof + k] = .zero;
-                        vel = vel.add(d.cdof[dof + k].scale(d.vel[dof + k]));
-                    }
-                    // Then the rotations, which DO see the translation velocity.
-                    rotationTriple(d, dof + 3, &vel);
-                },
-            }
+        for (jnt_adr..jnt_adr + m.body_joint_count[bi]) |ji| {
+            vel = velocityThroughJoint(arrays, m.joint_type[ji], m.joint_first_dof[ji], vel);
         }
-        d.cvel[bi] = vel;
+        d.body_velocities[bi] = vel;
     }
 
     d.stage = .velocity;
+}
+
+test "robot: robot.zig's own storages provide what the shared passes read them through" {
+    comptime requireMassFactorStorage(MassFactorArrays);
+    comptime requireMassSolveStorage(MassSolveArrays);
+    comptime requireVelocityStorage(VelocityArrays);
+}
+
+/// ONE BODY'S FORCE IN RNE - Newton-Euler for a rigid body, in spatial form: what the body needs to move with
+/// `acceleration` while it moves with `velocity`, `inertia` its spatial inertia:
+///
+///     f = I a + v x* (I v)
+///
+/// the first term the force that accelerates it, the second the gyroscopic and centrifugal force its own motion
+/// carries. Shared with robotgpu's RNE kernel.
+pub fn bodyNewtonEulerForce(
+    inertia: Inertia,
+    acceleration: Motion,
+    velocity: Motion,
+) Force {
+    return inertia.mul(acceleration).add(crossForce(velocity, inertia.mul(velocity)));
 }
 
 /// Recursive Newton-Euler: the inverse dynamics of the tree.
@@ -4305,32 +5064,32 @@ fn rne(m: *const Model, d: *Data, out: []f32) void {
 
     // Scratch, sized by the model. Both are per-body spatial quantities that never leave
     // this function, so they live in `Data` rather than being allocated per call.
-    const cacc: []Motion = d.rne_cacc;
-    const cfrc: []Force = d.rne_cfrc;
+    const cacc: []Motion = d.body_bias_accelerations;
+    const cfrc: []Force = d.subtree_bias_forces;
 
     // The world accelerates upward at g, so everything hanging off it feels weight.
     cacc[world_body] = .{ .ang = vec_zero, .lin = -m.opt.gravity };
     cfrc[world_body] = .zero;
 
     // ---- forward: accelerations, then the force each body needs ----
-    for (1..m.nbody) |bi| {
+    for (1..m.body_count) |bi| {
         var a: Motion = cacc[m.body_parent[bi]];
-        const dof_adr: u32 = m.body_dof_adr[bi];
-        for (0..m.body_dof_num[bi]) |k| {
+        const dof_adr: u32 = m.body_first_dof[bi];
+        for (0..m.body_dof_count[bi]) |k| {
             const dof: u32 = dof_adr + @as(u32, @intCast(k));
             // The moving-axis term: even at constant joint velocity, a rotating axis
             // accelerates whatever is attached to it.
-            a = a.add(d.cdof_dot[dof].scale(d.vel[dof]));
+            a = a.add(d.dof_axis_rates[dof].scale(d.joint_velocities[dof]));
         }
         cacc[bi] = a;
 
-        const inertia: Inertia = d.cinert[bi];
+        const inertia: Inertia = d.body_inertias[bi];
         // Newton-Euler for a rigid body, in spatial form.
-        cfrc[bi] = inertia.mul(a).add(crossForce(d.cvel[bi], inertia.mul(d.cvel[bi])));
+        cfrc[bi] = bodyNewtonEulerForce(inertia, a, d.body_velocities[bi]);
     }
 
     // ---- backward: a joint carries everything below it ----
-    var bi: u32 = m.nbody;
+    var bi: u32 = m.body_count;
     while (bi > 1) {
         bi -= 1;
         const parent: u32 = m.body_parent[bi];
@@ -4340,8 +5099,8 @@ fn rne(m: *const Model, d: *Data, out: []f32) void {
     }
 
     // ---- project onto each DOF's axis ----
-    for (0..m.nv) |i| {
-        out[i] = dot6(d.cdof[i], cfrc[m.dof_body[i]]);
+    for (0..m.dof_count) |i| {
+        out[i] = forceAlongDof(d.dof_axes[i], cfrc[m.dof_body[i]]);
     }
 }
 
@@ -4350,7 +5109,86 @@ fn rne(m: *const Model, d: *Data, out: []f32) void {
 pub fn biasForce(m: *const Model, d: *Data) void {
     const zone: profiler.Zone = profiler.zoneNamed(@src(), "robot.rne");
     defer zone.end();
-    rne(m, d, d.bias_force);
+    rne(m, d, d.bias_joint_forces);
+}
+
+/// Refuse, at compile time, a storage for `multiplyByMassMatrix` that lacks one of the methods it calls: the model's
+/// sparsity (`rowStart`, `rowEntries`, `column`), the matrix's stored entries (`massEntry`), and the vectors - the
+/// one multiplied (`input`) and the product, built in place (`output`, `setOutput`). Two storages provide them:
+/// robot.zig's own arrays (`MassProductArrays`) and one world of robotgpu's arenas.
+fn requireMassProductStorage(comptime Storage: type) void {
+    const methods = [_][]const u8{ "rowStart", "rowEntries", "column", "massEntry", "input", "output", "setOutput" };
+    for (methods) |method| {
+        if (!@hasDecl(Storage, method)) {
+            @compileError(@typeName(Storage) ++ " lacks `" ++ method ++ "`, which the mass-matrix product reads its " ++
+                "storage through (see robot.zig's MassProductArrays)");
+        }
+    }
+}
+
+/// robot.zig's own arrays as the product's storage: the model's sparsity tables, `Data.mass_matrix`, the vector `x`
+/// multiplied and the vector `out` the product is built in.
+const MassProductArrays = struct {
+    model: *const Model,
+    data: *const Data,
+    x: []const f32,
+    out: []f32,
+
+    pub fn rowStart(arrays: MassProductArrays, dof: u32) u32 {
+        return arrays.model.mass_row_start[dof];
+    }
+    pub fn rowEntries(arrays: MassProductArrays, dof: u32) u32 {
+        return arrays.model.mass_row_entry_count[dof];
+    }
+    pub fn column(arrays: MassProductArrays, entry: u32) u32 {
+        return arrays.model.mass_entry_column[entry];
+    }
+    pub fn massEntry(arrays: MassProductArrays, entry: u32) f32 {
+        return arrays.data.mass_matrix[entry];
+    }
+    pub fn input(arrays: MassProductArrays, dof: u32) f32 {
+        return arrays.x[dof];
+    }
+    pub fn output(arrays: MassProductArrays, dof: u32) f32 {
+        return arrays.out[dof];
+    }
+    pub fn setOutput(arrays: MassProductArrays, dof: u32, value: f32) void {
+        arrays.out[dof] = value;
+    }
+};
+
+/// THE PRODUCT `out = M x` WITH THE MASS MATRIX, over `storage` - robot.zig's arrays, or one world of robotgpu's, so
+/// both engines multiply with the same arithmetic in the same order. Only M's lower triangle is stored, row by row
+/// along each dof's chain of ancestors, so each stored entry is used twice: once for its own row, and once mirrored
+/// into its column - an ancestor's row. The mirrored additions land in rows already visited or still to come, so the
+/// result depends on the order of the loop, which this function fixes:
+///
+///     out = 0
+///     for each row i, for each stored entry M[i][j] (j on i's chain, the diagonal last):
+///       out[i] += M[i][j] * x[j]
+///       out[j] += M[i][j] * x[i]          when j is not i
+pub inline fn multiplyByMassMatrix(storage: anytype, dof_count: u32) void {
+    comptime requireMassProductStorage(@TypeOf(storage));
+    var cleared_dof: u32 = 0;
+    while (cleared_dof < dof_count) : (cleared_dof += 1) {
+        storage.setOutput(cleared_dof, 0);
+    }
+    var row_dof: u32 = 0;
+    while (row_dof < dof_count) : (row_dof += 1) {
+        const start: u32 = storage.rowStart(row_dof);
+        const entries: u32 = storage.rowEntries(row_dof);
+        var offset: u32 = 0;
+        while (offset < entries) : (offset += 1) {
+            const column_dof: u32 = storage.column(start + offset);
+            const value: f32 = storage.massEntry(start + offset);
+            const own_row: f32 = storage.output(row_dof) + value * storage.input(column_dof);
+            storage.setOutput(row_dof, own_row);
+            if (column_dof != row_dof) {
+                const mirrored: f32 = storage.output(column_dof) + value * storage.input(row_dof);
+                storage.setOutput(column_dof, mirrored);
+            }
+        }
+    }
 }
 
 /// Multiply by the mass matrix: `out = M*x`.
@@ -4360,19 +5198,13 @@ pub fn biasForce(m: *const Model, d: *Data) void {
 /// extra accumulate here, which is a good trade.
 pub fn mulM(m: *const Model, d: *const Data, x: []const f32, out: []f32) void {
     d.requireStage(.position, "mulM");
-    assertf(x.len == m.nv and out.len == m.nv, @src(), "mulM wants {d}-vectors", .{m.nv});
-    @memset(out, 0);
-    for (0..m.nv) |i| {
-        const row: u32 = m.mass_row_start[i];
-        for (0..m.mass_row_nonzeros[i]) |k| {
-            const j: u32 = m.mass_col_index[row + k];
-            const value: f32 = d.mass_matrix[row + k];
-            out[i] += value * x[j];
-            if (j != i) {
-                out[j] += value * x[i];
-            }
-        }
-    }
+    assertf(x.len == m.dof_count and out.len == m.dof_count, @src(), "mulM wants {d}-vectors", .{m.dof_count});
+    const arrays: MassProductArrays = .{ .model = m, .data = d, .x = x, .out = out };
+    multiplyByMassMatrix(arrays, m.dof_count);
+}
+
+test "robot: robot.zig's arrays provide what the mass-matrix product reads them through" {
+    comptime requireMassProductStorage(MassProductArrays);
 }
 
 /// Inverse dynamics: the joint forces that would produce acceleration `acc`.
@@ -4389,9 +5221,137 @@ pub fn mulM(m: *const Model, d: *const Data, x: []const f32, out: []f32) void {
 pub fn inverseDynamics(m: *const Model, d: *Data, acc: []const f32, out: []f32) void {
     d.requireStage(.velocity, "inverseDynamics");
     mulM(m, d, acc, out);
-    for (0..m.nv) |i| {
-        out[i] += d.bias_force[i];
+    for (0..m.dof_count) |i| {
+        out[i] += d.bias_joint_forces[i];
     }
+}
+
+/// THE IMPLICIT SPRING: the acceleration a critically damped (for `damping` 1) spring of `frequency` Hz asks of one
+/// joint over a step of `dt`, evaluated IMPLICITLY - at the end of the step - and damped toward a target moving at
+/// `target_velocity`.
+///
+/// *** WHY IMPLICIT. The explicit spring a = w^2e - 2 zeta wv, stepped by semi-implicit Euler, is
+/// stable only while h^2 + 4 zeta h < 4 with h = w*dt: for zeta = 1, h < 2sqrt2 - 2 ~ 0.83, which at 60 Hz
+/// caps the spring at w ~ 50 rad/s - 7.9 Hz. Asking for the spring at the END of the step,
+///     a = w^2(e - dt*v - dt^2*a) - 2 zeta w(v + dt*a - target_velocity),
+/// and solving for a gives the lines below: backward Euler, stable for EVERY frequency. Stiffness
+/// then degrades gracefully toward "reach the target in a step or two" instead of blowing up -
+/// the same idea as Tan et al.'s stable PD, and the reason Jolt's frequency-stated springs
+/// (zimrphysics' motors) are stable at any setting. Feed the result to inverse dynamics.
+///
+/// *** WHY THE TARGET'S VELOCITY. `position_error` already points at where the target will BE at the end of the step,
+/// so the body's own motion is all that needs predicting; the damper acts on the velocity RELATIVE to the target's.
+/// Critically damped at 20 Hz, a spring damped toward zero instead keeps about 1.5% of a joint's velocity after one
+/// 1/60 s step, so every fast limb following a clip is braked all the time, and a body launched in stride is stopped
+/// in a frame. With `target_velocity` zero it is that spring (`stableSpringAccel`).
+pub fn stableSpringAccelToward(
+    position_error: f32,
+    velocity: f32,
+    target_velocity: f32,
+    frequency: f32,
+    damping: f32,
+    dt: f32,
+) f32 {
+    const angular_frequency: f32 = 2.0 * pi * frequency;
+    // How far the spring turns in one step - the h of the stability bound above.
+    const phase_per_step: f32 = angular_frequency * dt;
+    // The spring's pull toward the error left at the step's end, and the damper's against the velocity relative
+    // to the target's; then the implicit solve's divisor.
+    const error_at_step_end: f32 = position_error - dt * velocity;
+    const spring_pull: f32 = angular_frequency * angular_frequency * error_at_step_end;
+    const relative_velocity: f32 = velocity - target_velocity;
+    const damper_pull: f32 = 2.0 * damping * angular_frequency * relative_velocity;
+    const implicit_divisor: f32 = 1.0 + 2.0 * damping * phase_per_step + phase_per_step * phase_per_step;
+    return (spring_pull - damper_pull) / implicit_divisor;
+}
+
+/// THE FREE ROOT's ACCELERATION from its 6 x 6 block system - `system`'s rows are M_rr's with the right-hand side
+/// -(c_r + M_rj a_j) as their seventh number (`floatingBaseTorques`) - by Gaussian elimination with partial pivoting
+/// (the largest pivot in each column, rows swapped to bring it up), then back substitution. A function of values, so
+/// robotgpu's servo kernel solves a world's root as robot.zig solves a model's.
+pub fn rootBlockAcceleration(system: [6][7]f32) [6]f32 {
+    var block: [6][7]f32 = system;
+    for (0..6) |col| {
+        var pivot: usize = col;
+        for (col + 1..6) |r| {
+            if (@abs(block[r][col]) > @abs(block[pivot][col])) {
+                pivot = r;
+            }
+        }
+        const swapped: [7]f32 = block[col];
+        block[col] = block[pivot];
+        block[pivot] = swapped;
+        for (col + 1..6) |r| {
+            const factor: f32 = block[r][col] / block[col][col];
+            for (col..7) |c| {
+                block[r][c] -= factor * block[col][c];
+            }
+        }
+    }
+    var root_accel: [6]f32 = undefined;
+    var row: usize = 6;
+    while (row > 0) {
+        row -= 1;
+        var value: f32 = block[row][6];
+        for (row + 1..6) |c| {
+            value -= block[row][c] * root_accel[c];
+        }
+        root_accel[row] = value / block[row][row];
+    }
+    return root_accel;
+}
+
+/// FLOATING-BASE INVERSE DYNAMICS: the joint torques that give a model with a free root the joint accelerations
+/// `accel` asks for (its root's entries ignored), the root left free to respond.
+///
+/// Why not simply the joint rows of M a + c: those assume the root does not accelerate - they are a fixed base's
+/// torques. A free root does accelerate, every joint torque pushing back on it, and a free body driven by torques that
+/// assume otherwise diverges. The root has no actuator, so its own rows of the equation of motion carry no torque:
+///
+///     M_rr a_r + M_rj a_j + c_r = 0    ->    a_r = -M_rr^-1 (c_r + M_rj a_j)          (`rootBlockAcceleration`)
+///
+/// and the torques are the joint rows of M a + c with that a_r (`inverseDynamics`). Contacts are left out - they are
+/// unknown until the step solves them - so the torques are exact in flight and an approximation in contact. `d` must
+/// be forward-current (its mass matrix and bias forces at its state); the root must be joint 0, a free joint (6 dofs
+/// from 0). `dense` holds nv x nv numbers, `full` nv, and `out` receives nv torques.
+pub fn floatingBaseTorques(
+    m: *const Model,
+    d: *Data,
+    accel: []const f32,
+    dense: []f32,
+    full: []f32,
+    out: []f32,
+) void {
+    const nv: usize = m.dof_count;
+    assertf(m.joint_type[0] == .free and m.joint_first_dof[0] == 0, @src(), "root must be joint 0, free", .{});
+    massMatrixDense(m, d, dense);
+    var block: [6][7]f32 = undefined;
+    for (0..6) |r| {
+        var rhs: f32 = -d.bias_joint_forces[r];
+        for (6..nv) |j| {
+            rhs -= dense[r * nv + j] * accel[j];
+        }
+        for (0..6) |c| {
+            block[r][c] = dense[r * nv + c];
+        }
+        block[r][6] = rhs;
+    }
+    const root_accel: [6]f32 = rootBlockAcceleration(block);
+    @memcpy(full[0..6], &root_accel);
+    @memcpy(full[6..nv], accel[6..nv]);
+    inverseDynamics(m, d, full, out);
+}
+
+/// The implicit spring with its target at rest - `stableSpringAccelToward` at a zero target velocity, to the bit
+/// (v - 0 is v): the zero-velocity spring of DReCon.
+pub fn stableSpringAccel(
+    position_error: f32,
+    velocity: f32,
+    frequency: f32,
+    damping: f32,
+    dt: f32,
+) f32 {
+    return stableSpringAccelToward(position_error, velocity, 0.0, frequency, damping, dt);
 }
 
 /// Forward dynamics: solve for the acceleration, given the forces.
@@ -4406,10 +5366,14 @@ pub fn inverseDynamics(m: *const Model, d: *Data, acc: []const f32, out: []f32) 
 /// a torque-controlled arm.
 pub fn forwardDynamics(m: *const Model, d: *Data) void {
     d.requireStage(.velocity, "forwardDynamics");
-    for (0..m.nv) |i| {
-        d.acc[i] = d.applied_force[i] + d.actuator_force[i] + d.passive_force[i] - d.bias_force[i];
+    for (0..m.dof_count) |i| {
+        const applied_force: f32 = d.applied_joint_forces[i];
+        const actuator_force: f32 = d.actuator_joint_forces[i];
+        const passive_force: f32 = d.passive_joint_forces[i];
+        const bias_force: f32 = d.bias_joint_forces[i];
+        d.joint_accelerations[i] = applied_force + actuator_force + passive_force - bias_force;
     }
-    solveM(m, d, d.acc);
+    solveM(m, d, d.joint_accelerations);
     d.stage = .force;
 }
 
@@ -4434,15 +5398,15 @@ pub fn forwardDynamics(m: *const Model, d: *Data) void {
 /// asks for it. Damping applies to every DOF of every joint type, which is the part models
 /// actually use.
 pub fn passive(m: *const Model, d: *Data) void {
-    @memset(d.passive_force, 0);
+    @memset(d.passive_joint_forces, 0);
 
     // Tendon springs and dampers. Same J^T spreading as an actuator's: a tendon's spring
     // acts on its LENGTH, and that scalar force reaches the joints through the
     // coefficients. Requires `tendonLengths` to have run, which `forward` guarantees by
     // ordering `actuation` after `passive`... so do it here rather than depend on that.
-    if (m.ntendon > 0) {
+    if (m.tendon_count > 0) {
         tendonLengths(m, d);
-        for (0..m.ntendon) |ti| {
+        for (0..m.tendon_count) |ti| {
             const stiffness: f32 = m.tendon_stiffness[ti];
             const damping: f32 = m.tendon_damping[ti];
             if (stiffness == 0.0 and damping == 0.0) {
@@ -4450,32 +5414,34 @@ pub fn passive(m: *const Model, d: *Data) void {
             }
             const force: f32 = -stiffness * (d.tendon_length[ti] - m.tendon_rest_length[ti]) -
                 damping * d.tendon_velocity[ti];
-            const coefficients: []const f32 = m.tendon_jacobian[ti * m.nv ..][0..m.nv];
-            for (d.passive_force, coefficients) |*q, coefficient| {
+            const coefficients: []const f32 = m.tendon_jacobian[ti * m.dof_count ..][0..m.dof_count];
+            for (d.passive_joint_forces, coefficients) |*q, coefficient| {
                 q.* += force * coefficient;
             }
         }
     }
 
-    for (0..m.njnt) |ji| {
-        const dof_adr: u32 = m.jnt_dof_adr[ji];
-        const ndof: u32 = m.jnt_type[ji].dofCount();
+    for (0..m.joint_count) |ji| {
+        const dof_adr: u32 = m.joint_first_dof[ji];
+        const ndof: u32 = m.joint_type[ji].dofCount();
 
         // Damping opposes motion, on every DOF the joint owns.
-        const damping: f32 = m.jnt_damping[ji];
+        const damping: f32 = m.joint_damping[ji];
         if (damping != 0.0) {
             for (dof_adr..dof_adr + ndof) |dof| {
-                d.passive_force[dof] -= damping * d.vel[dof];
+                d.passive_joint_forces[dof] -= damping * d.joint_velocities[dof];
             }
         }
 
         // Stiffness pulls the coordinate back toward `ref`.
-        const stiffness: f32 = m.jnt_stiffness[ji];
+        const stiffness: f32 = m.joint_stiffness[ji];
         if (stiffness != 0.0) {
-            switch (m.jnt_type[ji]) {
+            switch (m.joint_type[ji]) {
                 .hinge, .slide => {
-                    const qadr: u32 = m.jnt_qpos_adr[ji];
-                    d.passive_force[dof_adr] -= stiffness * (d.pos[qadr] - m.jnt_ref[ji]);
+                    const qadr: u32 = m.joint_first_coordinate[ji];
+                    const joint_position: f32 = d.joint_positions[qadr];
+                    const spring_reference: f32 = m.joint_reference_position[ji];
+                    d.passive_joint_forces[dof_adr] -= stiffness * (joint_position - spring_reference);
                 },
                 .ball, .free => {}, // see the limitation above
             }
@@ -4498,17 +5464,17 @@ pub fn passive(m: *const Model, d: *Data) void {
 /// transmission from force generation.
 pub fn transmission(m: *const Model, d: *Data) void {
     tendonLengths(m, d);
-    for (0..m.nu) |ai| {
-        switch (m.act_kind[ai]) {
+    for (0..m.actuator_count) |ai| {
+        switch (m.actuator_kind[ai]) {
             .joint => {
-                const ji: u32 = m.act_target[ai];
-                d.act_length[ai] = d.pos[m.jnt_qpos_adr[ji]];
-                d.act_velocity[ai] = d.vel[m.jnt_dof_adr[ji]];
+                const ji: u32 = m.actuator_target[ai];
+                d.actuator_lengths[ai] = d.joint_positions[m.joint_first_coordinate[ji]];
+                d.actuator_velocities[ai] = d.joint_velocities[m.joint_first_dof[ji]];
             },
             .tendon => {
-                const ti: u32 = m.act_target[ai];
-                d.act_length[ai] = d.tendon_length[ti];
-                d.act_velocity[ai] = d.tendon_velocity[ti];
+                const ti: u32 = m.actuator_target[ai];
+                d.actuator_lengths[ai] = d.tendon_length[ti];
+                d.actuator_velocities[ai] = d.tendon_velocity[ti];
             },
         }
     }
@@ -4529,46 +5495,46 @@ pub fn transmission(m: *const Model, d: *Data) void {
 pub fn actuation(m: *const Model, d: *Data, dt: f32) void {
     d.requireStage(.velocity, "actuation");
     transmission(m, d);
-    @memset(d.actuator_force, 0);
+    @memset(d.actuator_joint_forces, 0);
 
-    for (0..m.nu) |ai| {
+    for (0..m.actuator_count) |ai| {
         // Controls saturate. A model without a limit will happily command a thousand
         // newton-metres, and the resulting motion is not informative about anything.
-        var u: f32 = d.ctrl[ai];
-        if (m.act_ctrl_range[ai]) |r| {
+        var u: f32 = d.controls[ai];
+        if (m.actuator_control_range[ai]) |r| {
             u = clamp(u, r[0], r[1]);
         }
 
         // ---- 1. activation RATE (integrated later, once) ----
-        const state: u32 = m.act_state_adr[ai];
-        const input: f32 = switch (m.act_activation[ai]) {
+        const state: u32 = m.actuator_activation_index[ai];
+        const input: f32 = switch (m.actuator_activation_dynamics[ai]) {
             .none => u,
             .integrator => blk: {
-                d.act_dot[state] = u;
-                break :blk d.act[state];
+                d.activation_rates[state] = u;
+                break :blk d.activations[state];
             },
             .filter => |f| blk: {
-                d.act_dot[state] = (u - d.act[state]) / f.time_const_s;
-                break :blk d.act[state];
+                d.activation_rates[state] = (u - d.activations[state]) / f.time_const_s;
+                break :blk d.activations[state];
             },
             .filter_exact => |f| blk: {
                 // The exact update is `w += (u - w)(1 - e^{-dt/tau})`, which is stable for
                 // ANY positive tau where the Euler form above diverges once tau < dt. Reported
                 // as the equivalent rate so the integrator stays uniform.
                 const alpha: f32 = 1.0 - @exp(-dt / f.time_const_s);
-                d.act_dot[state] = (u - d.act[state]) * alpha / dt;
-                break :blk d.act[state];
+                d.activation_rates[state] = (u - d.activations[state]) * alpha / dt;
+                break :blk d.activations[state];
             },
         };
 
         // ---- 2. the affine force law ----
-        const bias: [3]f32 = m.act_bias[ai];
-        var force: f32 = m.act_gain[ai] * input +
-            bias[0] + bias[1] * d.act_length[ai] + bias[2] * d.act_velocity[ai];
-        if (m.act_force_range[ai]) |r| {
+        const bias: [3]f32 = m.actuator_bias[ai];
+        var force: f32 = m.actuator_gain[ai] * input +
+            bias[0] + bias[1] * d.actuator_lengths[ai] + bias[2] * d.actuator_velocities[ai];
+        if (m.actuator_force_range[ai]) |r| {
             force = clamp(force, r[0], r[1]);
         }
-        d.act_force[ai] = force;
+        d.actuator_forces[ai] = force;
 
         // ---- 3. through the transmission into joint coordinates ----
         //
@@ -4577,11 +5543,12 @@ pub fn actuation(m: *const Model, d: *Data, dt: f32) void {
         // accumulate. For a tendon the moment arm IS the coefficient vector, so one scalar
         // force spreads across every DOF the tendon touches - which is exactly how a real
         // tendon distributes tension along its path.
-        switch (m.act_kind[ai]) {
-            .joint => d.actuator_force[m.act_dof[ai]] += force,
+        switch (m.actuator_kind[ai]) {
+            .joint => d.actuator_joint_forces[m.actuator_dof[ai]] += force,
             .tendon => {
-                const coefficients: []const f32 = m.tendon_jacobian[m.act_target[ai] * m.nv ..][0..m.nv];
-                for (d.actuator_force, coefficients) |*q, coefficient| {
+                const tendon_row_start: u32 = m.actuator_target[ai] * m.dof_count;
+                const coefficients: []const f32 = m.tendon_jacobian[tendon_row_start..][0..m.dof_count];
+                for (d.actuator_joint_forces, coefficients) |*q, coefficient| {
                     q.* += force * coefficient;
                 }
             },
@@ -4592,8 +5559,8 @@ pub fn actuation(m: *const Model, d: *Data, dt: f32) void {
 /// Set an actuator's control by name (or index).
 pub fn setCtrl(m: *const Model, d: *Data, actuator: anytype, value: f32) void {
     const ai: u32 = siteIndex(actuator); // same enum-or-index rule
-    assertf(ai < m.nu, @src(), "actuator {d} out of range ({d} actuators)", .{ ai, m.nu });
-    d.ctrl[ai] = value;
+    assertf(ai < m.actuator_count, @src(), "actuator {d} out of range ({d} actuators)", .{ ai, m.actuator_count });
+    d.controls[ai] = value;
 }
 
 // =============================================================================
@@ -4643,23 +5610,121 @@ pub fn jacPoint(
 ) void {
     d.requireStage(.position, "jacPoint");
     if (jac_p) |jp| {
-        assertf(jp.len == m.nv, @src(), "jac_p wants {d} columns, got {d}", .{ m.nv, jp.len });
+        assertf(jp.len == m.dof_count, @src(), "jac_p wants {d} columns, got {d}", .{ m.dof_count, jp.len });
         @memset(jp, vec_zero);
     }
     if (jac_r) |jr| {
-        assertf(jr.len == m.nv, @src(), "jac_r wants {d} columns, got {d}", .{ m.nv, jr.len });
+        assertf(jr.len == m.dof_count, @src(), "jac_r wants {d} columns, got {d}", .{ m.dof_count, jr.len });
         @memset(jr, vec_zero);
     }
 
-    const offset: Vec = point - d.subtree_com[m.body_root[body]];
+    const offset: Vec = point - d.subtree_centres_of_mass[m.body_root[body]];
     var i: u32 = lastDofOf(m, body);
     while (i != no_dof) : (i = m.dof_parent[i]) {
-        const motion: Motion = d.cdof[i];
+        const motion: Motion = d.dof_axes[i];
         if (jac_p) |jp| {
             jp[i] = motion.lin + cross(motion.ang, offset);
         }
         if (jac_r) |jr| {
             jr[i] = motion.ang;
+        }
+    }
+}
+
+/// One diagonal entry of J M^-1 J^T: with x the row of `jacobian` along `axis` (component `axis` of each column), the
+/// number x . M^-1 x - how fast the mechanism accelerates along that row per unit of force on it.
+fn inverseInertiaAlong(
+    m: *const Model,
+    d: *const Data,
+    jacobian: []const Vec,
+    comptime axis: usize,
+    row: []f32,
+    solved: []f32,
+) f32 {
+    for (row, jacobian) |*entry, column| {
+        entry.* = column[axis];
+    }
+    @memcpy(solved, row);
+    solveM(m, d, solved);
+    var inverse_inertia: f32 = 0;
+    for (row, solved) |x, inverse_inertia_x| {
+        inverse_inertia += x * inverse_inertia_x;
+    }
+    return inverse_inertia;
+}
+
+/// THE REFERENCE POSE'S INVERSE WEIGHTS - MuJoCo's `body_invweight0` and `dof_invweight0` (`setInertia0` in its
+/// engine_setconst.c): how easily each body, and each joint, moves when pushed, measured once at the reference pose
+/// (`reference_joint_positions`, MuJoCo's qpos0). They are MuJoCo's default inertia for a constraint row's softness
+/// (`mj_diagApprox`, `ConstraintInertia.reference_pose`): no solve per row and per step, at the price of ignoring how
+/// the pose has changed the inertia since.
+///
+///     a body      A = J M^-1 J^T, with J the Jacobian of its centre of mass - three rows of translation, three of
+///                 rotation: the mean of A's three translation diagonal entries, and the mean of its three rotation
+///                 ones
+///     a joint     the block of M^-1 on its own freedoms: a free joint's translation mean on its first three dofs and
+///                 its rotation mean on its last three; a ball's mean on all three; a hinge's or a slide's own entry
+///
+/// A body that cannot move - the world, or one welded to it - has a zero Jacobian, and so zero weights. M includes
+/// the joints' armature, as MuJoCo's does. Measured on a `Data` of its own and released before returning: the model
+/// keeps nothing from `gpa`. The model's build measures them; a caller that changes a mass, an inertia or an armature
+/// afterwards measures them again (MuJoCo's `mj_setConst`).
+pub fn refreshReferenceInverseWeights(gpa: Allocator, m: *Model) !void {
+    const nv: usize = m.dof_count;
+    var d: Data = try .init(gpa, m);
+    defer d.deinit();
+    // `Data.init` starts at the reference pose; the stages up to M's factorisation follow.
+    kinematics(m, &d);
+    comPos(m, &d);
+    crb(m, &d);
+    factorM(m, &d);
+    const translation_jacobian: []Vec = try gpa.alloc(Vec, nv);
+    defer gpa.free(translation_jacobian);
+    const rotation_jacobian: []Vec = try gpa.alloc(Vec, nv);
+    defer gpa.free(rotation_jacobian);
+    const row: []f32 = try gpa.alloc(f32, nv);
+    defer gpa.free(row);
+    const solved: []f32 = try gpa.alloc(f32, nv);
+    defer gpa.free(solved);
+    m.body_translation_inverse_weight[world_body] = 0;
+    m.body_rotation_inverse_weight[world_body] = 0;
+    for (1..m.body_count) |body| {
+        const body_index: u32 = @intCast(body);
+        jacPoint(m, &d, body_index, d.body_centres_of_mass[body], translation_jacobian, rotation_jacobian);
+        var translation_sum: f32 = 0;
+        var rotation_sum: f32 = 0;
+        inline for (0..3) |axis| {
+            translation_sum += inverseInertiaAlong(m, &d, translation_jacobian, axis, row, solved);
+            rotation_sum += inverseInertiaAlong(m, &d, rotation_jacobian, axis, row, solved);
+        }
+        m.body_translation_inverse_weight[body] = translation_sum / 3.0;
+        m.body_rotation_inverse_weight[body] = rotation_sum / 3.0;
+    }
+    // Each joint's block of M^-1: its diagonal, one solve per freedom (a unit force on that dof alone).
+    for (0..m.joint_count) |joint| {
+        const first_dof: u32 = m.joint_first_dof[joint];
+        const dof_count: u32 = switch (m.joint_type[joint]) {
+            .free => 6,
+            .ball => 3,
+            .hinge, .slide => 1,
+        };
+        var diagonal: [6]f32 = @splat(0);
+        for (0..dof_count) |k| {
+            @memset(solved, 0);
+            solved[first_dof + k] = 1;
+            solveM(m, &d, solved);
+            diagonal[k] = solved[first_dof + k];
+        }
+        const dofs: []f32 = m.dof_inverse_weight[first_dof..][0..dof_count];
+        switch (m.joint_type[joint]) {
+            .free => {
+                const translation_mean: f32 = (diagonal[0] + diagonal[1] + diagonal[2]) / 3.0;
+                const rotation_mean: f32 = (diagonal[3] + diagonal[4] + diagonal[5]) / 3.0;
+                @memset(dofs[0..3], translation_mean);
+                @memset(dofs[3..6], rotation_mean);
+            },
+            .ball => @memset(dofs, (diagonal[0] + diagonal[1] + diagonal[2]) / 3.0),
+            .hinge, .slide => dofs[0] = diagonal[0],
         }
     }
 }
@@ -4674,7 +5739,7 @@ pub fn jacBodyCom(
     jac_p: ?[]Vec,
     jac_r: ?[]Vec,
 ) void {
-    jacPoint(m, d, body, d.body_xipos[body], jac_p, jac_r);
+    jacPoint(m, d, body, d.body_centres_of_mass[body], jac_p, jac_r);
 }
 
 /// Jacobian of a site. Sites exist precisely to be named points on a body, so this is the
@@ -4688,7 +5753,7 @@ pub fn jacSite(
     jac_r: ?[]Vec,
 ) void {
     const si: u32 = siteIndex(site);
-    jacPoint(m, d, m.site_body[si], d.site_xpos[si], jac_p, jac_r);
+    jacPoint(m, d, m.site_body[si], d.site_positions[si], jac_p, jac_r);
 }
 
 /// Map a force and torque applied at a point back into joint forces: `tau += J^T*(f, t)`.
@@ -4710,7 +5775,7 @@ pub fn applyForceAtPoint(
     out: []f32,
 ) void {
     jacPoint(m, d, body, point, jac_p, jac_r);
-    for (0..m.nv) |i| {
+    for (0..m.dof_count) |i| {
         out[i] += dot3(jac_p[i], force) + dot3(jac_r[i], torque);
     }
 }
@@ -4771,7 +5836,7 @@ fn constraintKey(kind: ConstraintKind, source: u64, discriminator: usize) u64 {
 /// one gets a fix and the other keeps reporting the old answer, which is worse than either
 /// being wrong on its own.
 fn worldAnchor(d: *const Data, anchor: Anchor) Vec {
-    return d.body_xpos[anchor.body] + rotate(d.body_xrot[anchor.body], anchor.point);
+    return d.body_positions[anchor.body] + rotate(d.body_orientations[anchor.body], anchor.point);
 }
 
 fn addEqualityRows(m: *const Model, d: *Data, eq: u32) void {
@@ -4789,13 +5854,13 @@ fn addEqualityRows(m: *const Model, d: *Data, eq: u32) void {
             // `d/dq = [1 on driven, -poly'(x) on driver]`. Linear coupling makes the
             // derivative a constant, which is the case every gripper uses.
             const row: u32 = d.constraint_count;
-            const projected: []f32 = d.constraint_jacobian[row * m.nv ..][0..m.nv];
+            const projected: []f32 = d.constraint_jacobian[row * m.dof_count ..][0..m.dof_count];
             @memset(projected, 0);
             projected[couple.driven.dof] = 1;
 
             var wanted: f32 = couple.poly[0];
             if (couple.driver) |driver| {
-                const x: f32 = d.pos[driver.qpos] - driver.rest;
+                const x: f32 = d.joint_positions[driver.qpos] - driver.rest;
                 var power: f32 = x;
                 var slope: f32 = 0;
                 inline for (1..5) |k| {
@@ -4810,7 +5875,10 @@ fn addEqualityRows(m: *const Model, d: *Data, eq: u32) void {
             d.constraint_kind[row] = .connect;
             d.constraint_source[row] = eq;
             d.constraint_key[row] = constraintKey(.connect, eq, 0);
-            d.constraint_violation[row] = (d.pos[couple.driven.qpos] - couple.driven.rest) - wanted;
+            // MuJoCo's approximate inertia for a joint coupling: its joints' own weights.
+            const driver_weight: f32 = if (couple.driver) |driver| m.dof_inverse_weight[driver.dof] else 0;
+            d.constraint_reference_inertia[row] = m.dof_inverse_weight[couple.driven.dof] + driver_weight;
+            d.constraint_violation[row] = (d.joint_positions[couple.driven.qpos] - couple.driven.rest) - wanted;
             d.constraint_softness[row] = closure.softness;
             d.constraint_impedance[row] = closure.impedance;
             d.constraint_count = row + 1;
@@ -4861,12 +5929,16 @@ fn addEqualityRows(m: *const Model, d: *Data, eq: u32) void {
     // `mj_jacDifPair` for the Jacobian, three rows straight out, no projection.
     // `inline` because `Vec` is a SIMD vector and its index must be comptime - and the loop
     // is three iterations of straight-line work, so unrolling it costs nothing.
+    // MuJoCo's approximate inertia for a connect's (and a weld's position) rows: the bodies' translation weights.
+    const translation_weight: f32 =
+        m.body_translation_inverse_weight[points.a.body] + m.body_translation_inverse_weight[points.b.body];
     inline for (0..3) |axis| {
         const row: u32 = d.constraint_count;
-        const projected: []f32 = d.constraint_jacobian[row * m.nv ..][0..m.nv];
-        for (0..m.nv) |i| {
+        const projected: []f32 = d.constraint_jacobian[row * m.dof_count ..][0..m.dof_count];
+        for (0..m.dof_count) |i| {
             projected[i] = jac_b[i][axis] - jac_a[i][axis];
         }
+        d.constraint_reference_inertia[row] = translation_weight;
         d.constraint_kind[row] = .connect;
         d.constraint_source[row] = eq;
         d.constraint_key[row] = constraintKey(.connect, eq, axis);
@@ -4897,8 +5969,8 @@ fn addEqualityRows(m: *const Model, d: *Data, eq: u32) void {
     if (d.constraint_count + 3 > m.constraint_capacity) {
         return;
     }
-    const target: Quat = qmul(d.body_xrot[weld.b.body], weld.relative);
-    const misalignment: Quat = qmul(d.body_xrot[weld.a.body], conjugate(target));
+    const target: Quat = qmul(d.body_orientations[weld.b.body], weld.relative);
+    const misalignment: Quat = qmul(d.body_orientations[weld.a.body], conjugate(target));
     // * `q` AND `-q` ARE THE SAME ROTATION, and the vector part flips between them. Taking the
     // one with positive `w` picks the SHORT way round, so a weld 179 deg out corrects by 1 deg
     // rather than by 359 deg.
@@ -4908,12 +5980,17 @@ fn addEqualityRows(m: *const Model, d: *Data, eq: u32) void {
     jacPoint(m, d, points.a.body, at_a, null, jac_a);
     jacPoint(m, d, points.b.body, at_b, null, jac_b);
 
+    // MuJoCo's approximate inertia for a weld's rotation rows: the bodies' rotation weights (MuJoCo leaves the
+    // torque scale out of it, as here).
+    const rotation_weight: f32 =
+        m.body_rotation_inverse_weight[points.a.body] + m.body_rotation_inverse_weight[points.b.body];
     inline for (0..3) |axis| {
         const row: u32 = d.constraint_count;
-        const projected: []f32 = d.constraint_jacobian[row * m.nv ..][0..m.nv];
-        for (0..m.nv) |i| {
+        const projected: []f32 = d.constraint_jacobian[row * m.dof_count ..][0..m.dof_count];
+        for (0..m.dof_count) |i| {
             projected[i] = weld.torque_scale * (jac_a[i][axis] - jac_b[i][axis]);
         }
+        d.constraint_reference_inertia[row] = rotation_weight;
         d.constraint_kind[row] = .connect;
         d.constraint_source[row] = eq;
         d.constraint_key[row] = constraintKey(.connect, eq, 3 + axis);
@@ -4936,6 +6013,108 @@ fn contactBefore(_: void, a: Contact, b: Contact) bool {
         return a.body_b < b.body_b;
     }
     return a.id < b.id;
+}
+
+/// A FLOOR, as robot.zig's own contacts make it (`pushFloorContacts`): its plane, its friction and the margin within
+/// which a geom already has contacts against it.
+pub const Floor = struct {
+    plane: Plane = .{ .point = vec_zero, .normal = vec(0, 0, 1) },
+    friction: f32 = 1.0,
+    margin: f32 = 0,
+};
+
+/// One slot's contact against the floor, if the slot holds one, pushed with the floor's normal, its frame and the
+/// contact's friction - the world as `body_a`, so the normal points from the floor to `body`.
+fn pushFloorContact(
+    d: *Data,
+    ground: Floor,
+    body: u32,
+    friction: f32,
+    key: u64,
+    slot: ?PlaneContact,
+) void {
+    const contact: PlaneContact = slot orelse return;
+    const tangents: [2]Vec = contactFrame(ground.plane.normal, contact.tangent_hint);
+    d.pushContact(.{
+        .position = contact.position,
+        .normal = ground.plane.normal,
+        .tangent = tangents,
+        .distance = contact.distance,
+        .friction = .{ friction, friction },
+        .body_a = world_body,
+        .body_b = body,
+        .id = key,
+        .margin = ground.margin,
+    });
+}
+
+/// EVERY GEOM AGAINST THE FLOOR, pushed as this step's contacts (`Data.pushContact`): MuJoCo's plane functions
+/// (`planeSphere`, `planeCapsule`, `planeBox`) on each geom's pose in the world, the geoms in order and each geom's
+/// slots in theirs - the order robotgpu's collision kernel makes them in - each contact keyed by its geom and slot for
+/// Gauss-Seidel's warm start. A geom fixed to the world does not touch the floor; a contact's friction is the larger of
+/// its geom's and the floor's, MuJoCo's rule for two geoms of the same priority; its frame is `contactFrame`'s, a
+/// capsule's turned to its axis. Cylinders and hulls are not among the plane functions: a model with one moving is
+/// refused (`error.UnsupportedFloorShape`) rather than left without its contacts. `d`'s bodies must be posed - after
+/// `kinematics`, as a step leaves them.
+pub fn pushFloorContacts(
+    m: *const Model,
+    d: *Data,
+    ground: Floor,
+) error{UnsupportedFloorShape}!void {
+    for (0..m.geom_count) |geom| {
+        const body: u32 = m.geom_body[geom];
+        if (body == world_body) {
+            continue;
+        }
+        // The geom placed as kinematics places it: its body's pose composed with its own offset.
+        const body_pose: Pose = .{ .pos = d.body_positions[body], .rot = d.body_orientations[body] };
+        const offset_from_body: Pose = .{ .pos = m.geom_local_position[geom], .rot = m.geom_local_rotation[geom] };
+        const placed: Pose = body_pose.compose(offset_from_body);
+        const center: Vec = placed.pos;
+        const rotation: Quat = placed.rot;
+        const friction: f32 = @max(m.geom_friction[geom], ground.friction);
+        const geom_key: u64 = @as(u64, geom) << 3;
+        switch (m.geom_shape[geom]) {
+            .sphere => |sphere| {
+                const slot: ?PlaneContact = planeSphere(ground.plane, center, sphere.radius, ground.margin);
+                pushFloorContact(d, ground, body, friction, geom_key, slot);
+            },
+            .capsule => |capsule| {
+                // zimr's capsule lies along its local y.
+                const axis: Vec = rotate(rotation, vec(0, 1, 0));
+                const slots: [2]?PlaneContact =
+                    planeCapsule(ground.plane, center, axis, capsule.half_height, capsule.radius, ground.margin);
+                for (slots, 0..) |slot, index| {
+                    pushFloorContact(d, ground, body, friction, geom_key | index, slot);
+                }
+            },
+            .box => |box| {
+                const slots: [4]?PlaneContact =
+                    planeBox(ground.plane, center, rotation, box.half_extent, ground.margin);
+                for (slots, 0..) |slot, index| {
+                    pushFloorContact(d, ground, body, friction, geom_key | index, slot);
+                }
+            },
+            .cylinder => |cylinder| {
+                // zimr's cylinder lies along its local y; its local x is MuJoCo's, taken when its cap lies flat.
+                const axis: Vec = rotate(rotation, vec(0, 1, 0));
+                const side: Vec = rotate(rotation, vec(1, 0, 0));
+                const slots: [4]?PlaneContact = planeCylinder(
+                    ground.plane,
+                    center,
+                    axis,
+                    side,
+                    cylinder.half_height,
+                    cylinder.radius,
+                    ground.margin,
+                );
+                for (slots, 0..) |slot, index| {
+                    pushFloorContact(d, ground, body, friction, geom_key | index, slot);
+                }
+            },
+            .hull => return error.UnsupportedFloorShape,
+        }
+    }
 }
 
 /// Turn one contact into constraint rows, using a PYRAMIDAL friction cone.
@@ -4983,12 +6162,12 @@ fn addContactRows(m: *const Model, d: *Data, contact: Contact, contact_index: u3
     // Project the relative Jacobian onto the contact frame, giving one row per direction.
     const directions = [_]Vec{ contact.normal, contact.tangent[0], contact.tangent[1] };
     var projected: [3][]f32 = .{
-        d.contact_projected[0 * m.nv ..][0..m.nv],
-        d.contact_projected[1 * m.nv ..][0..m.nv],
-        d.contact_projected[2 * m.nv ..][0..m.nv],
+        d.contact_projected[0 * m.dof_count ..][0..m.dof_count],
+        d.contact_projected[1 * m.dof_count ..][0..m.dof_count],
+        d.contact_projected[2 * m.dof_count ..][0..m.dof_count],
     };
     for (directions, 0..) |direction, k| {
-        for (0..m.nv) |i| {
+        for (0..m.dof_count) |i| {
             projected[k][i] = dot3(direction, jac_b[i] - jac_a[i]);
         }
     }
@@ -5001,6 +6180,9 @@ fn addContactRows(m: *const Model, d: *Data, contact: Contact, contact_index: u3
     // `robot_physics` use zero - see the note there for why, and for what was measured
     // before arriving at it.
     const violation: f32 = contact.distance - contact.margin;
+    // The two bodies' translation weights, for MuJoCo's approximate inertia of each edge below.
+    const contact_translation_weight: f32 =
+        m.body_translation_inverse_weight[contact.body_a] + m.body_translation_inverse_weight[contact.body_b];
     for (0..2) |tangent_index| {
         const mu: f32 = contact.friction[tangent_index];
         for ([_]f32{ 1.0, -1.0 }) |sign| {
@@ -5011,19 +6193,13 @@ fn addContactRows(m: *const Model, d: *Data, contact: Contact, contact_index: u3
                 "constraint rows overflowed: {d} active, capacity {d}",
                 .{ row + 1, m.constraint_capacity },
             );
-            const base: usize = row * m.nv;
-            for (0..m.nv) |i| {
+            const base: usize = row * m.dof_count;
+            for (0..m.dof_count) |i| {
                 d.constraint_jacobian[base + i] = projected[0][i] + sign * mu * projected[tangent_index + 1][i];
             }
-            // * The row's WORLD-SPACE direction, kept because section 4h-ter needs it.
-            //
-            // Each pyramid edge is `normal + sign*mu*tangent`, a different direction per
-            // row - so the external body's resistance differs per row too, and computing it
-            // from the contact NORMAL would be right for one row in four. Storing the
-            // direction here, where it is already being formed, costs a vector and saves
-            // reconstructing it (and the chance of reconstructing it differently).
-            d.constraint_direction[row] = contact.normal +
-                splat(sign * mu) * contact.tangent[tangent_index];
+            // MuJoCo's approximate inertia for a pyramid's edge (`mj_diagApprox`): the bodies' translation weights,
+            // times 1 + mu^2 - the edge, normal + mu x tangent, is that much longer squared than the normal alone.
+            d.constraint_reference_inertia[row] = contact_translation_weight * (1.0 + mu * mu);
             d.constraint_kind[row] = .contact;
             // For a contact row this is the index into `Data.contacts`; for a limit row it
             // is the joint index. Two meanings in one array, discriminated by
@@ -5076,6 +6252,11 @@ pub fn makeConstraints(m: *const Model, d: *Data) void {
     defer zone.end();
     d.requireStage(.position, "makeConstraints");
     d.constraint_count = 0;
+    // A model whose constraints are disabled builds no rows: the projection and the solve that follow then leave the
+    // smooth acceleration as it is.
+    if (m.opt.disable_constraints) {
+        return;
+    }
 
     // -- ** EQUALITIES FIRST, BECAUSE THEY ARE THE ONLY ROWS THAT ARE NOT OPTIONAL --
     //
@@ -5088,18 +6269,18 @@ pub fn makeConstraints(m: *const Model, d: *Data) void {
     // ordered this way anyway: the reservation is a promise made in one function and kept in
     // another, and putting the unconditional rows first means a mistake in either shows up as
     // a dropped CONTACT - visible, recoverable - rather than as a limb quietly falling off.
-    for (0..m.neq) |eq| {
+    for (0..m.equality_count) |eq| {
         addEqualityRows(m, d, @intCast(eq));
     }
 
-    for (0..m.njnt) |ji| {
-        const range: [2]f32 = m.jnt_range[ji] orelse continue;
+    for (0..m.joint_count) |ji| {
+        const range: [2]f32 = m.joint_range[ji] orelse continue;
         // `Spec()` rejects a range on a ball or free joint, so a scalar coordinate is
         // guaranteed here rather than assumed.
-        const qadr: u32 = m.jnt_qpos_adr[ji];
-        const vadr: u32 = m.jnt_dof_adr[ji];
-        const q: f32 = d.pos[qadr];
-        const margin: f32 = m.jnt_limit_margin[ji];
+        const qadr: u32 = m.joint_first_coordinate[ji];
+        const vadr: u32 = m.joint_first_dof[ji];
+        const q: f32 = d.joint_positions[qadr];
+        const margin: f32 = m.joint_limit_margin[ji];
 
         // Lower end first, then upper - the order MuJoCo emits them in, which matters
         // because the fixtures compare row by row.
@@ -5120,18 +6301,20 @@ pub fn makeConstraints(m: *const Model, d: *Data) void {
             );
 
             // One nonzero entry: this joint's own DOF.
-            const base: usize = row * m.nv;
-            @memset(d.constraint_jacobian[base .. base + m.nv], 0);
+            const base: usize = row * m.dof_count;
+            @memset(d.constraint_jacobian[base .. base + m.dof_count], 0);
             d.constraint_jacobian[base + vadr] = end.jacobian;
 
             d.constraint_kind[row] = .limit;
             d.constraint_source[row] = @intCast(ji);
+            // MuJoCo's approximate inertia for a joint limit: its joint's own weight.
+            d.constraint_reference_inertia[row] = m.dof_inverse_weight[vadr];
             // Both ends of one joint share a source, so the END must be in the key too, or a
             // joint swinging from one stop to the other inherits the opposite end's force.
             d.constraint_key[row] = constraintKey(.limit, ji, if (end.jacobian > 0) 0 else 1);
             d.constraint_violation[row] = end.distance - margin;
-            d.constraint_softness[row] = m.jnt_limit_softness[ji];
-            d.constraint_impedance[row] = m.jnt_limit_impedance[ji];
+            d.constraint_softness[row] = m.joint_limit_softness[ji];
+            d.constraint_impedance[row] = m.joint_limit_impedance[ji];
             d.constraint_count = row + 1;
         }
     }
@@ -5192,14 +6375,14 @@ pub fn equalityError(m: *const Model, d: *const Data, eq: u32) f32 {
         .joint => |couple| blk: {
             var wanted: f32 = couple.poly[0];
             if (couple.driver) |driver| {
-                const x: f32 = d.pos[driver.qpos] - driver.rest;
+                const x: f32 = d.joint_positions[driver.qpos] - driver.rest;
                 var power: f32 = x;
                 inline for (1..5) |k| {
                     wanted += couple.poly[k] * power;
                     power *= x;
                 }
             }
-            break :blk (d.pos[couple.driven.qpos] - couple.driven.rest) - wanted;
+            break :blk (d.joint_positions[couple.driven.qpos] - couple.driven.rest) - wanted;
         },
     };
 }
@@ -5207,18 +6390,18 @@ pub fn equalityError(m: *const Model, d: *const Data, eq: u32) f32 {
 /// Impedance is clamped away from 0 and 1: at 0 the constraint does not exist and `R`
 /// diverges, at 1 it is perfectly rigid and `R` vanishes, and both ends are numerically
 /// hostile. MuJoCo clamps identically.
-const min_impedance: f32 = 0.0001;
+pub const min_impedance: f32 = 0.0001;
 
-const max_impedance: f32 = 0.9999;
+pub const max_impedance: f32 = 0.9999;
 
 /// Floors, so a degenerate row cannot produce an infinite or negative regularizer.
-const min_regularizer: f32 = 1.0e-10;
+pub const min_regularizer: f32 = 1.0e-10;
 
 /// Fill in `A_hat`, `R`, `J*v` and `aref` for the rows `makeConstraints` produced.
 ///
 /// * THE EXACT DIAGONAL. `A_hat_ii = (J M^-1 J^T)_ii` is the inertia the constraint actually
 /// feels - how hard it is to accelerate along its own direction. MuJoCo approximates it,
-/// evaluated once at `qpos0`, with three documented error sources and a `diagexact` flag
+/// evaluated once at `reference_joint_positions`, with three documented error sources and a `diagexact` flag
 /// for when that is not good enough. We compute it exactly: one back-substitution per row
 /// through the factorization `factorM` already produced. That costs a solve per row and
 /// removes an entire class of "why is this constraint behaving oddly" from the solver
@@ -5238,20 +6421,25 @@ pub fn projectConstraints(m: *const Model, d: *Data) void {
     defer zone.end();
     d.requireStage(.position, "projectConstraints");
 
+    // WHICH INERTIA THE SOFTNESS READS (`Options.constraint_inertia`), and whether M^-1 J^T is wanted at all.
+    // Gauss-Seidel solves on A = J M^-1 J^T itself and always wants it; Newton's Hessian and gradient use J and M
+    // directly, so with the reference pose's inertia it wants none, and the back-substitution per row is skipped.
+    const uses_reference_inertia: bool = m.opt.constraint_inertia == .reference_pose;
+    const wants_inverse_inertia_jacobian: bool = m.opt.solver.algorithm == .pgs or !uses_reference_inertia;
     for (0..d.constraint_count) |row| {
-        const jacobian: []const f32 = d.constraint_jacobian[row * m.nv ..][0..m.nv];
-        const inv_inertia_jacobian: []f32 =
-            d.constraint_inv_inertia_jacobian[row * m.nv ..][0..m.nv];
-
-        // M^-1J^T for this row: the joint-space acceleration a unit force here produces.
-        // Kept, because the solver needs it every iteration.
-        @memcpy(inv_inertia_jacobian, jacobian);
-        solveM(m, d, inv_inertia_jacobian);
-
-        // A_hat = J M^-1 J^T, exactly - contract the row back against it.
-        var diag: f32 = 0;
-        for (jacobian, inv_inertia_jacobian) |j, mj| {
-            diag += j * mj;
+        const jacobian: []const f32 = d.constraint_jacobian[row * m.dof_count ..][0..m.dof_count];
+        var exact_inertia: f32 = 0;
+        if (wants_inverse_inertia_jacobian) {
+            const inv_inertia_jacobian: []f32 =
+                d.constraint_inv_inertia_jacobian[row * m.dof_count ..][0..m.dof_count];
+            // M^-1J^T for this row: the joint-space acceleration a unit force here produces.
+            // Kept, because Gauss-Seidel needs it every iteration.
+            @memcpy(inv_inertia_jacobian, jacobian);
+            solveM(m, d, inv_inertia_jacobian);
+            // A_hat = J M^-1 J^T, exactly - contract the row back against it.
+            for (jacobian, inv_inertia_jacobian) |j, mj| {
+                exact_inertia += j * mj;
+            }
         }
         // * A row with A_hat ~ 0 is one the mechanism CANNOT MOVE ALONG - no joint motion
         // produces any acceleration in that direction. A contact's friction edges do this
@@ -5270,31 +6458,16 @@ pub fn projectConstraints(m: *const Model, d: *Data) void {
         // zeroing them here would make the values disagree with the reference for no gain.
         // The row is skipped where it actually matters: in the solver and the residual.
         //
-        // ** AND THE OTHER SIDE'S INERTIA, when the contact is against a body outside the
-        // tree (section 4h-ter).
-        //
-        // A contact constrains TWO inertias. `J M^-1 J^T` above is only the robot's share; a
-        // free body resists too, and its resistance at the contact point is
-        //
-        //     1/m  +  (r x n)^T I^-1 (r x n)
-        //
-        // - the familiar effective-mass term, translation plus the rotation the lever arm
-        // induces. Adding it makes the row describe what is actually being pushed.
-        //
-        // Both terms are ZERO for static geometry, so this reproduces the previous
-        // behaviour exactly wherever nothing supplies them. What changes is the case that
-        // was wrong: the arm braced against a 1 kg crate as though it were the floor, and
-        // now stops it with the force it takes to stop a 1 kg crate.
-        d.constraint_inertia[row] = diag;
+        // * THE OTHER SIDE OF A CONTACT IS IMMOVABLE HERE. A body outside the tree resists too, but robot.zig
+        // counts only the robot's inertia and treats that body as fixed - what this approximates, and when it
+        // matters, is set out at the top of `robot_physics.zig`.
+        const inertia: f32 = if (uses_reference_inertia) d.constraint_reference_inertia[row] else exact_inertia;
+        d.constraint_inertia[row] = inertia;
 
-        // Constraint-space velocity, wanted here and again by the solver.
-        //
-        // * RELATIVE, when the other side can move. `J*v` is the robot's velocity along the
-        // row; subtracting the external body's velocity along the same direction makes the
-        // row measure what it is actually constraining. Zero for static geometry, so nothing
-        // that was correct before changes.
+        // Constraint-space velocity J v - the robot's own along the row, the other side being fixed - wanted
+        // here and again by the solver.
         var vel: f32 = 0;
-        for (jacobian, d.vel) |j, v| {
+        for (jacobian, d.joint_velocities) |j, v| {
             vel += j * v;
         }
         d.constraint_velocity[row] = vel;
@@ -5303,7 +6476,7 @@ pub fn projectConstraints(m: *const Model, d: *Data) void {
         const soft: Softness = d.constraint_softness[row];
         const impedance: f32 = clamp(imp.at(d.constraint_violation[row]), min_impedance, max_impedance);
 
-        d.constraint_regularizer[row] = @max(min_regularizer, (1.0 - impedance) / impedance * diag);
+        d.constraint_regularizer[row] = @max(min_regularizer, (1.0 - impedance) / impedance * inertia);
 
         // Stiffness and damping of the reference spring, derived from the response the
         // model asked for rather than specified directly. `d_max` appears in both because
@@ -5467,12 +6640,435 @@ fn choleskySolve(a: []const f32, n: usize, b: []f32) void {
     }
 }
 
-/// The objective at `acc + alpha*step`, for the line search.
-fn newtonCost(m: *const Model, d: *Data, acc: []const f32, alpha: f32) f32 {
-    const nv: usize = m.nv;
+/// A POINT ON NEWTON'S SEARCH LINE a + alpha s: how much the cost there differs from the cost at alpha = 0, and the
+/// cost's first and second derivatives in alpha - its SLOPE and CURVATURE along the line.
+pub const LinePoint = struct {
+    cost_change: f32 = 0,
+    slope: f32 = 0,
+    curvature: f32 = 0,
+
+    fn plus(point: LinePoint, other: LinePoint) LinePoint {
+        const sum: LinePoint = .{
+            .cost_change = point.cost_change + other.cost_change,
+            .slope = point.slope + other.slope,
+            .curvature = point.curvature + other.curvature,
+        };
+        return sum;
+    }
+};
+
+/// One row's term at `alpha`, relative to alpha = 0 (`SearchLine.at`).
+fn rowLinePoint(
+    residual: f32,
+    rate: f32,
+    weight: f32,
+    unilateral: bool,
+    alpha: f32,
+) LinePoint {
+    const residual_cost: f32 = 0.5 * weight * residual * residual;
+    const is_active_at_zero: bool = !unilateral or residual < 0;
+    const cost_at_zero: f32 = if (is_active_at_zero) residual_cost else 0;
+    // Added back where the row turns on along the line: its cost at alpha = 0 was not counted there.
+    const turn_on_offset: f32 = residual_cost - cost_at_zero;
+    const residual_at_alpha: f32 = residual + alpha * rate;
+    const is_active_at_alpha: bool = !unilateral or residual_at_alpha < 0;
+    if (!is_active_at_alpha) {
+        const left_the_cost: LinePoint = .{ .cost_change = -cost_at_zero };
+        return left_the_cost;
+    }
+    const weighted_rate: f32 = rate * weight;
+    const curvature: f32 = rate * weighted_rate;
+    const alpha_curvature: f32 = alpha * curvature;
+    const slope_at_zero: f32 = weighted_rate * residual;
+    const active: LinePoint = .{
+        .cost_change = alpha * (slope_at_zero + 0.5 * alpha_curvature) + turn_on_offset,
+        .slope = slope_at_zero + alpha_curvature,
+        .curvature = curvature,
+    };
+    return active;
+}
+
+/// Refuse, at compile time, a rows storage for Newton's line search (`linePointAt`, `lineSlopeSize`,
+/// `searchLineOver`) that lacks one of the methods the search reads each row through: its residual at alpha = 0
+/// (`residual`, J a - aref), its rate along the step (`rate`, J s), its weight (`weight`, D = 1/R) and whether it may
+/// only push (`isUnilateral`). Two storages provide them: robot.zig's own arrays (`SearchLine`) and one world of
+/// robotgpu's workgroup memory.
+fn requireLineRows(comptime Rows: type) void {
+    const methods = [_][]const u8{ "residual", "rate", "weight", "isUnilateral" };
+    for (methods) |method| {
+        if (!@hasDecl(Rows, method)) {
+            @compileError(@typeName(Rows) ++ " lacks `" ++ method ++ "`, which Newton's line search reads its rows " ++
+                "through (see robot.zig's SearchLine)");
+        }
+    }
+}
+
+/// The point at `alpha` on Newton's search line, over the rows of `rows` (`requireLineRows`): the inertia's term first,
+///
+///     alpha s^T M (a - a_free)  +  alpha^2 1/2 s^T M s        (`inertia_slope`, `inertia_half_curvature`)
+///
+/// then each row's, in row order (`rowLinePoint`) - the cost RELATIVE TO alpha = 0, each change computed from the
+/// coefficients, never as the difference of two f32 costs, which would lose a small change in their rounding. Written
+/// once for both engines, so the CPU's points and the GPU's are the same arithmetic in the same order.
+pub inline fn linePointAt(
+    rows: anytype,
+    row_count: u32,
+    inertia_slope: f32,
+    inertia_half_curvature: f32,
+    alpha: f32,
+) LinePoint {
+    comptime requireLineRows(@TypeOf(rows));
+    const alpha_half_curvature: f32 = alpha * inertia_half_curvature;
+    var point: LinePoint = .{
+        .cost_change = alpha * alpha_half_curvature + alpha * inertia_slope,
+        .slope = 2.0 * alpha_half_curvature + inertia_slope,
+        .curvature = 2.0 * inertia_half_curvature,
+    };
+    var row: u32 = 0;
+    while (row < row_count) : (row += 1) {
+        const residual: f32 = rows.residual(row);
+        const rate: f32 = rows.rate(row);
+        const weight: f32 = rows.weight(row);
+        const is_unilateral: bool = rows.isUnilateral(row);
+        const row_point: LinePoint = rowLinePoint(residual, rate, weight, is_unilateral, alpha);
+        point = point.plus(row_point);
+    }
+    return point;
+}
+
+/// The size of the slope's terms at alpha = 0, over the rows of `rows`: an active row's slope is at most
+/// sqrt(2 cost x curvature), so sqrt(2 x the active rows' cost x their curvature) bounds the rows' together, and the
+/// inertia's is exact. The slope's own rounding is a few epsilons of this - its noise floor (`LineSearch.begin`).
+pub inline fn lineSlopeSize(rows: anytype, row_count: u32, inertia_slope: f32) f32 {
+    comptime requireLineRows(@TypeOf(rows));
+    var rows_cost: f32 = 0;
+    var rows_curvature: f32 = 0;
+    var row: u32 = 0;
+    while (row < row_count) : (row += 1) {
+        const residual: f32 = rows.residual(row);
+        const rate: f32 = rows.rate(row);
+        const weight: f32 = rows.weight(row);
+        const is_active: bool = !rows.isUnilateral(row) or residual < 0;
+        if (is_active) {
+            rows_cost += 0.5 * weight * residual * residual;
+            rows_curvature += rate * (rate * weight);
+        }
+    }
+    return @sqrt(2.0 * @max(rows_cost, 0) * @max(rows_curvature, 0)) + @abs(inertia_slope);
+}
+
+/// NEWTON'S SEARCH LINE, as coefficients: everything the cost along a + alpha s depends on, gathered once a round, so
+/// that the cost, slope and curvature at any alpha are one pass over the rows - no product with M, no new Jacobian:
+///
+///     the inertia's term      1/2 (a + alpha s - a_free)^T M (a + alpha s - a_free), less its value at alpha = 0:
+///                             alpha s^T M (a - a_free)  +  alpha^2 1/2 s^T M s
+///     a row's term            1/2 D x^2 with x = (J a - aref) + alpha J s and D = 1/R - for a row that may only
+///                             push, only while x < 0, the row pushing
+///
+/// A row is given by its residual at alpha = 0 (`row_residual`, J a - aref), its rate along the line (`row_rate`,
+/// J s), its weight D (`row_weight`, the inverse of its regulariser) and whether it may only push. The line is
+/// robot.zig's rows storage for `linePointAt` and `searchLineOver`; the GPU's is its workgroup memory.
+pub const SearchLine = struct {
+    inertia_slope: f32,
+    inertia_half_curvature: f32,
+    row_residual: []const f32,
+    row_rate: []const f32,
+    row_weight: []const f32,
+    row_unilateral: []const bool,
+
+    pub fn residual(line: SearchLine, row: u32) f32 {
+        return line.row_residual[row];
+    }
+    pub fn rate(line: SearchLine, row: u32) f32 {
+        return line.row_rate[row];
+    }
+    pub fn weight(line: SearchLine, row: u32) f32 {
+        return line.row_weight[row];
+    }
+    pub fn isUnilateral(line: SearchLine, row: u32) bool {
+        return line.row_unilateral[row];
+    }
+    pub fn rowCount(line: SearchLine) u32 {
+        return @intCast(line.row_residual.len);
+    }
+
+    /// The point at `alpha` (`linePointAt`).
+    pub fn at(line: SearchLine, alpha: f32) LinePoint {
+        return linePointAt(line, line.rowCount(), line.inertia_slope, line.inertia_half_curvature, alpha);
+    }
+
+    /// The size of the slope's terms at alpha = 0 (`lineSlopeSize`).
+    fn slopeSize(line: SearchLine) f32 {
+        return lineSlopeSize(line, line.rowCount(), line.inertia_slope);
+    }
+};
+
+/// What Newton's line search found: the step length, how much the cost falls there, whether it closed in on the
+/// line's lowest point within its iterations, and how many points it evaluated to get there - each a pass over the
+/// rows, the search's cost (MuJoCo's `neval`).
+pub const LineSearchResult = struct {
+    alpha: f32,
+    improvement: f32,
+    converged: bool,
+    points_evaluated: u32 = 0,
+};
+
+/// `numerator / denominator`, the denominator kept off zero - a Newton step in alpha on a line with no curvature.
+fn safeDivide(numerator: f32, denominator: f32) f32 {
+    const kept_off_zero: f32 = if (denominator != 0) denominator else 1.0e-15;
+    return numerator / kept_off_zero;
+}
+
+/// BOTH, AND EITHER, WITHOUT A BRANCH: `a and b` and `a or b` stop at the first operand that decides, which a GPU
+/// compiles as a branch and a merge. The line search's decisions are chains of them, and a kernel holding the chains
+/// lost SwiftShader's device - Chrome's fallback adapter - when its pipeline was created. Every operand they are given
+/// here is a comparison already made, with nothing to skip, so combining them as integers gives the same answer, the
+/// same on the CPU, with no branch.
+fn both(a: bool, b: bool) bool {
+    return (@intFromBool(a) & @intFromBool(b)) != 0;
+}
+fn either(a: bool, b: bool) bool {
+    return (@intFromBool(a) | @intFromBool(b)) != 0;
+}
+
+/// Whether `candidate` is a better end of the bracket than `end`: its slope of the same sign as `end`'s and nearer
+/// zero, so the lowest point lies between it and the other end still.
+fn isInBracket(end: LinePoint, candidate: LinePoint) bool {
+    const nearer_from_below: bool = both(end.slope < candidate.slope, candidate.slope < 0);
+    const nearer_from_above: bool = both(end.slope > candidate.slope, candidate.slope > 0);
+    return either(nearer_from_below, nearer_from_above);
+}
+
+/// NEWTON'S EXACT LINE SEARCH (MuJoCo's, as MuJoCo Warp runs it in f32), as a state that is told the points it asks
+/// for: where along the line the cost is lowest, its slope within `slope_tolerance`, and how much the cost falls there.
+///
+/// Along the line the cost is convex and quadratic piece by piece, so Newton's method in alpha is the natural search:
+/// from the point at alpha = 0, a step to -slope / curvature; taken at once if its slope is small and it lowers the
+/// cost. Otherwise the two points BRACKET the lowest point by their slopes, and each iteration tries three candidates -
+/// a Newton step from each end and the midpoint - taking the cheapest that has converged, or else moving each end to
+/// any candidate whose slope has the end's sign and is nearer zero:
+///
+///     slope  -   lo   lo_next   mid   hi_next  hi   +        the ends close in on the slope's zero
+///
+/// The search stops when a candidate converges, when neither end moves, or when an end is already within the
+/// tolerance on the side that lowers the cost; the better end that lowered the cost is the step. In f32 the slope is
+/// only known to its own rounding - eight epsilons of the size of its terms (`SearchLine.slopeSize`) - so the
+/// acceptance tolerance is never below that, and a start whose slope is below it is already the line's lowest point.
+///
+/// * WHY A STATE AND NOT A LOOP: evaluating a point is a pass over the rows, and who makes it differs - `searchLine`
+/// makes it in one loop; the GPU's kernel spreads the rows over a workgroup's invocations. The decisions between the
+/// points are the same either way, so they are written once, here: `begin` with the point at 0, `takeNewtonPoint` at
+/// `newton_alpha`, then `advance` with the points at `candidateAlphas` until `is_done` or the iterations run out.
+pub const LineSearch = struct {
+    slope_tolerance: f32,
+    accept_tolerance: f32,
+    start: LinePoint,
+    newton_alpha: f32 = 0,
+    lo: LinePoint = .{},
+    lo_alpha: f32 = 0,
+    hi: LinePoint = .{},
+    hi_alpha: f32 = 0,
+    iteration: u32 = 0,
+    is_done: bool = false,
+    result: LineSearchResult = .{ .alpha = 0, .improvement = 0, .converged = false },
+
+    /// The search from the point at alpha = 0 and the size of its slope's terms: already done, with no step, when that
+    /// slope is below its own rounding.
+    pub fn begin(start: LinePoint, slope_size: f32, slope_tolerance: f32) LineSearch {
+        // f32's epsilon, 2^-23: the gap between 1 and the next float.
+        const f32_epsilon: f32 = 0x1p-23;
+        const noise_floor: f32 = 8.0 * f32_epsilon * slope_size;
+        var search: LineSearch = .{
+            .slope_tolerance = slope_tolerance,
+            .accept_tolerance = @max(slope_tolerance, noise_floor),
+            .start = start,
+            .newton_alpha = -safeDivide(start.slope, start.curvature),
+        };
+        search.result.points_evaluated = 1;
+        if (@abs(start.slope) < noise_floor) {
+            search.is_done = true;
+            search.result.converged = true;
+        }
+        return search;
+    }
+
+    /// The point at `newton_alpha`, the first Newton step in alpha: the answer when it has converged and lowered the
+    /// cost; otherwise one end of the bracket and the start the other, the one of lower slope as `lo`.
+    pub fn takeNewtonPoint(search: *LineSearch, newton_point: LinePoint) void {
+        search.result.points_evaluated += 1;
+        if (@abs(newton_point.slope) < search.accept_tolerance and newton_point.cost_change < 0) {
+            search.is_done = true;
+            search.result.alpha = search.newton_alpha;
+            search.result.improvement = -newton_point.cost_change;
+            search.result.converged = true;
+            return;
+        }
+        const newton_is_lower: bool = newton_point.slope < search.start.slope;
+        search.lo = if (newton_is_lower) newton_point else search.start;
+        search.lo_alpha = if (newton_is_lower) search.newton_alpha else 0;
+        search.hi = if (newton_is_lower) search.start else newton_point;
+        search.hi_alpha = if (newton_is_lower) 0 else search.newton_alpha;
+    }
+
+    /// The three step lengths an iteration tries: a Newton step from each end of the bracket, and its midpoint - in
+    /// the order `advance` takes their points.
+    pub fn candidateAlphas(search: LineSearch) [3]f32 {
+        const lo_next_alpha: f32 = search.lo_alpha - safeDivide(search.lo.slope, search.lo.curvature);
+        const hi_next_alpha: f32 = search.hi_alpha - safeDivide(search.hi.slope, search.hi.curvature);
+        const mid_alpha: f32 = 0.5 * (search.lo_alpha + search.hi_alpha);
+        return .{ lo_next_alpha, hi_next_alpha, mid_alpha };
+    }
+
+    /// One iteration, given the points at `alphas` (`candidateAlphas`): the cheapest candidate that has converged
+    /// ends the search; otherwise the bracket's ends move, and the search stops when neither did or an end is within
+    /// the tolerance on the side that lowers the cost. The better end that lowered the cost is the step so far.
+    pub fn advance(search: *LineSearch, alphas: [3]f32, points: [3]LinePoint) void {
+        const lo_next_alpha: f32 = alphas[0];
+        const hi_next_alpha: f32 = alphas[1];
+        const mid_alpha: f32 = alphas[2];
+        const lo_next: LinePoint = points[0];
+        const hi_next: LinePoint = points[1];
+        const mid: LinePoint = points[2];
+        const accept: f32 = search.accept_tolerance;
+        // A candidate has converged when its slope is within the tolerance and it lowers the cost; the cheapest wins.
+        const lo_next_converged: bool = both(@abs(lo_next.slope) < accept, lo_next.cost_change < 0);
+        const hi_next_converged: bool = both(@abs(hi_next.slope) < accept, hi_next.cost_change < 0);
+        const mid_converged: bool = both(@abs(mid.slope) < accept, mid.cost_change < 0);
+        const any_converged: bool = either(either(lo_next_converged, hi_next_converged), mid_converged);
+        var lo_moved: bool = false;
+        var hi_moved: bool = false;
+        if (any_converged) {
+            // f32's largest finite number: any converged candidate's cost change is below it.
+            const largest_f32: f32 = 3.40282347e38;
+            var best: LinePoint = .{ .cost_change = largest_f32 };
+            var best_alpha: f32 = 0;
+            if (both(lo_next_converged, lo_next.cost_change < best.cost_change)) {
+                best = lo_next;
+                best_alpha = lo_next_alpha;
+            }
+            if (both(hi_next_converged, hi_next.cost_change < best.cost_change)) {
+                best = hi_next;
+                best_alpha = hi_next_alpha;
+            }
+            if (both(mid_converged, mid.cost_change < best.cost_change)) {
+                best = mid;
+                best_alpha = mid_alpha;
+            }
+            search.lo = best;
+            search.lo_alpha = best_alpha;
+            search.hi = best;
+            search.hi_alpha = best_alpha;
+        } else {
+            // Each end moves to the candidates nearer the slope's zero on its own side, in MuJoCo Warp's order; the
+            // upper end also takes a Newton step that crosses the lowest point from below, which turns a search on
+            // one side into a bracket across it.
+            if (isInBracket(search.lo, lo_next)) {
+                search.lo = lo_next;
+                search.lo_alpha = lo_next_alpha;
+                lo_moved = true;
+            }
+            if (isInBracket(search.lo, mid)) {
+                search.lo = mid;
+                search.lo_alpha = mid_alpha;
+                lo_moved = true;
+            }
+            if (isInBracket(search.lo, hi_next)) {
+                search.lo = hi_next;
+                search.lo_alpha = hi_next_alpha;
+                lo_moved = true;
+            }
+            const crosses_from_below: bool = both(search.hi.slope < 0, hi_next.slope > 0);
+            if (either(isInBracket(search.hi, hi_next), crosses_from_below)) {
+                search.hi = hi_next;
+                search.hi_alpha = hi_next_alpha;
+                hi_moved = true;
+            }
+            if (isInBracket(search.hi, mid)) {
+                search.hi = mid;
+                search.hi_alpha = mid_alpha;
+                hi_moved = true;
+            }
+            if (isInBracket(search.hi, lo_next)) {
+                search.hi = lo_next;
+                search.hi_alpha = lo_next_alpha;
+                hi_moved = true;
+            }
+        }
+        const lo: LinePoint = search.lo;
+        const hi: LinePoint = search.hi;
+        const lo_done: bool = both(both(lo.cost_change < 0, lo.slope < 0), lo.slope > -search.slope_tolerance);
+        const hi_done: bool = both(both(hi.cost_change < 0, hi.slope > 0), hi.slope < search.slope_tolerance);
+        // The better end that lowered the cost is the step so far.
+        const has_improved: bool = either(lo.cost_change < 0, hi.cost_change < 0);
+        if (has_improved) {
+            const lo_is_better: bool = lo.cost_change < hi.cost_change;
+            search.result.alpha = if (lo_is_better) search.lo_alpha else search.hi_alpha;
+            search.result.improvement = -(if (lo_is_better) lo.cost_change else hi.cost_change);
+        }
+        search.iteration += 1;
+        search.result.points_evaluated += 3;
+        const neither_moved: bool = both(!lo_moved, !hi_moved);
+        if (either(either(any_converged, neither_moved), either(lo_done, hi_done))) {
+            search.is_done = true;
+            search.result.converged = true;
+        }
+    }
+};
+
+/// NEWTON'S LINE SEARCH over the rows of `rows` (`LineSearch`, `requireLineRows`): each point a pass over the rows
+/// (`linePointAt`), the search's decisions between them `LineSearch`'s. Written once for both engines: robot.zig's
+/// arrays (`searchLine`) and one world of robotgpu's workgroup memory, where one invocation runs it.
+pub inline fn searchLineOver(
+    rows: anytype,
+    row_count: u32,
+    inertia_slope: f32,
+    inertia_half_curvature: f32,
+    slope_tolerance: f32,
+    max_iterations: u32,
+) LineSearchResult {
+    comptime requireLineRows(@TypeOf(rows));
+    const start: LinePoint = linePointAt(rows, row_count, inertia_slope, inertia_half_curvature, 0);
+    const slope_size: f32 = lineSlopeSize(rows, row_count, inertia_slope);
+    var search: LineSearch = .begin(start, slope_size, slope_tolerance);
+    if (search.is_done) {
+        return search.result;
+    }
+    const newton_point: LinePoint =
+        linePointAt(rows, row_count, inertia_slope, inertia_half_curvature, search.newton_alpha);
+    search.takeNewtonPoint(newton_point);
+    while (!search.is_done and search.iteration < max_iterations) {
+        const alphas: [3]f32 = search.candidateAlphas();
+        const points: [3]LinePoint = .{
+            linePointAt(rows, row_count, inertia_slope, inertia_half_curvature, alphas[0]),
+            linePointAt(rows, row_count, inertia_slope, inertia_half_curvature, alphas[1]),
+            linePointAt(rows, row_count, inertia_slope, inertia_half_curvature, alphas[2]),
+        };
+        search.advance(alphas, points);
+    }
+    return search.result;
+}
+
+/// The line search on the CPU, over robot.zig's arrays (`searchLineOver`).
+pub fn searchLine(
+    line: SearchLine,
+    slope_tolerance: f32,
+    max_iterations: u32,
+) LineSearchResult {
+    return searchLineOver(
+        line,
+        line.rowCount(),
+        line.inertia_slope,
+        line.inertia_half_curvature,
+        slope_tolerance,
+        max_iterations,
+    );
+}
+
+/// The objective at the accelerations `acc` - for choosing Newton's start (`solveNewton`).
+fn newtonCostAt(m: *const Model, d: *Data, acc: []const f32) f32 {
+    const nv: usize = m.dof_count;
     for (0..nv) |i| {
-        d.newton_trial[i] = acc[i] + alpha * d.newton_step[i];
-        d.newton_scratch[i] = d.newton_trial[i] - d.free_acc[i];
+        d.newton_scratch[i] = acc[i] - d.smooth_joint_accelerations[i];
     }
     // 1/2*(a - a_free)^T M (a - a_free)
     mulM(m, d, d.newton_scratch, d.newton_mv);
@@ -5480,13 +7076,12 @@ fn newtonCost(m: *const Model, d: *Data, acc: []const f32, alpha: f32) f32 {
     for (0..nv) |i| {
         cost += 0.5 * d.newton_scratch[i] * d.newton_mv[i];
     }
-    // plus the penalty on every row that is violated AT THE TRIAL POINT - re-deciding the
-    // active set here is what makes this a valid cost for a piecewise-quadratic objective.
+    // plus the penalty on every row violated AT `acc` - the active set re-decided there.
     for (0..d.constraint_count) |row| {
         const jac: []const f32 = d.constraint_jacobian[row * nv ..][0..nv];
         var value: f32 = 0;
         for (0..nv) |i| {
-            value += jac[i] * d.newton_trial[i];
+            value += jac[i] * acc[i];
         }
         const residual: f32 = value - d.constraint_target_acc[row];
         const unilateral: bool = d.constraint_kind[row].isUnilateral();
@@ -5496,6 +7091,93 @@ fn newtonCost(m: *const Model, d: *Data, acc: []const f32, alpha: f32) f32 {
         cost += 0.5 * residual * residual / d.constraint_regularizer[row];
     }
     return cost;
+}
+
+/// What a round's derivatives say to the stopping rules: the gradient's length, and the Newton decrement g^T H^-1 g
+/// (the cost's fall a full step would give, twice over, were the active set to hold).
+const NewtonRound = struct {
+    gradient_length: f32,
+    decrement: f32,
+};
+
+/// Newton's derivatives at the current accelerations, from the two products kept between rounds - each row's residual
+/// r = J a - aref (`newton_residual`) and the inertia's gradient M (a - a_free) (`newton_inertia_gradient`) - so that
+/// a round multiplies by neither J nor M to find them (MuJoCo Warp's `Jaref` and `Ma`):
+///
+///     each row     active while it may pull, or while it pushes (r < 0); its force f = -D r when active, else 0
+///     forces       J^T f, the joint forces the rows apply
+///     gradient     g = M (a - a_free) - J^T f
+///     Hessian      H = M + J^T D J over the active rows - exact, which is what buys quadratic convergence
+///     step         s = -H^-1 g, or -g should the factorisation fail
+///
+/// * THE CALLER'S CONTRACT IS FORCES, not accelerations: Gauss-Seidel's warm start, `equalityError` and every
+/// diagnostic read `constraint_force`. The forces are the gradient's ingredient and the solve's answer at once - f is
+/// the force that produces the accelerations it was computed at - so whichever round is last leaves them in place.
+fn newtonDerivatives(m: *const Model, d: *Data) NewtonRound {
+    const nv: usize = m.dof_count;
+    const rows: usize = d.constraint_count;
+    @memset(d.constraint_joint_forces, 0);
+    for (0..rows) |row| {
+        const residual: f32 = d.newton_residual[row];
+        const is_active: bool = !d.newton_row_unilateral[row] or residual < 0;
+        d.newton_active[row] = is_active;
+        const force: f32 = if (is_active) -d.newton_row_weight[row] * residual else 0;
+        d.constraint_force[row] = force;
+        if (force == 0) {
+            continue;
+        }
+        const jac: []const f32 = d.constraint_jacobian[row * nv ..][0..nv];
+        for (0..nv) |i| {
+            d.constraint_joint_forces[i] += jac[i] * force;
+        }
+    }
+    for (0..nv) |i| {
+        d.newton_gradient[i] = d.newton_inertia_gradient[i] - d.constraint_joint_forces[i];
+    }
+    const hessian: []f32 = d.newton_hessian;
+    @memset(hessian, 0);
+    for (0..nv) |i| {
+        const row_start: u32 = m.mass_row_start[i];
+        for (0..m.mass_row_entry_count[i]) |k| {
+            const j: u32 = m.mass_entry_column[row_start + k];
+            const value: f32 = d.mass_matrix[row_start + k];
+            hessian[i * nv + j] += value;
+            if (j != i) {
+                hessian[j * nv + i] += value; // only half of M is stored
+            }
+        }
+    }
+    for (0..rows) |row| {
+        if (!d.newton_active[row]) {
+            continue;
+        }
+        const weight: f32 = d.newton_row_weight[row];
+        const jac: []const f32 = d.constraint_jacobian[row * nv ..][0..nv];
+        for (0..nv) |i| {
+            if (jac[i] == 0) {
+                continue;
+            }
+            const weighted: f32 = jac[i] * weight;
+            for (0..nv) |j| {
+                hessian[i * nv + j] += weighted * jac[j];
+            }
+        }
+    }
+    const factored: bool = choleskyFactor(hessian, nv);
+    for (0..nv) |i| {
+        d.newton_step[i] = -d.newton_gradient[i];
+    }
+    if (factored) {
+        choleskySolve(hessian, nv, d.newton_step);
+    }
+    var gradient_squared: f32 = 0;
+    var decrement: f32 = 0;
+    for (0..nv) |i| {
+        gradient_squared += d.newton_gradient[i] * d.newton_gradient[i];
+        decrement -= d.newton_gradient[i] * d.newton_step[i];
+    }
+    const measures: NewtonRound = .{ .gradient_length = @sqrt(gradient_squared), .decrement = decrement };
+    return measures;
 }
 
 /// Newton's method on the constraint objective, with a line search.
@@ -5519,7 +7201,7 @@ fn newtonCost(m: *const Model, d: *Data, acc: []const f32, alpha: f32) f32 {
 ///     L(a) = 1/2*(a - a_free)^T M (a - a_free)  +  sum over active rows  1/2*(J_i*a - aref_i)^2 / R_i
 ///
 /// The first term says "stay near the acceleration you would have had"; the second penalises
-/// each violated row. `a_free` is exactly `free_acc`, already computed.
+/// each violated row. `a_free` is exactly `smooth_joint_accelerations`, already computed.
 ///
 /// * ITS GRADIENT AND HESSIAN ARE BOTH CHEAP AND EXACT:
 ///
@@ -5536,186 +7218,161 @@ fn newtonCost(m: *const Model, d: *Data, acc: []const f32, alpha: f32) f32 {
 /// violated. That makes `L` piecewise quadratic rather than quadratic, and Newton on a
 /// piecewise-quadratic needs the line search below: a full step can cross into a region where
 /// a different set of rows is active and overshoot badly.
+///
+/// -- ** MUJOCO'S ROUND: AN EXACT LINE SEARCH, SCALED STOPS, A WARM START --
+///
+/// Each round finds where the cost is lowest along the Newton step - exactly, not by halving: along the line the cost
+/// is quadratic piece by piece, so Newton's method in the step length finds it in a few evaluations, each one pass
+/// over the rows (`searchLine`). The solve stops on MuJoCo's rules, each scaled by 1 / trace(M) so that `tolerance`
+/// means the same for a light model and a heavy one: the line search found no step, or the round's improvement, the
+/// gradient's length or half the Newton decrement g^T H^-1 g fell below it.
+///
+/// * WHY SCALED RULES: an absolute rule on the gradient cannot fire in f32 at a robot's magnitudes. On MuJoCo's
+/// humanoid at its limits the gradient at the answer is 5e-4 to 3e-3, with accelerations of 1,500 to 3,200 - as
+/// converged as f32 allows, and a thousand times an absolute 1e-6. A solve under such a rule runs until its line
+/// search finds nothing lower, its round count set by rounding - the failure `tolerance`'s own documentation warns of.
+///
+/// * THE KEPT PRODUCTS (MuJoCo Warp's `Jaref` and `Ma`): each row's residual J a - aref and the inertia's gradient
+/// M (a - a_free) are multiplied out once, at the start, and then moved with each step - by alpha J s and alpha M s,
+/// which the line search needed anyway (`newtonDerivatives`). Besides two products a round, this saves rounds: J a
+/// and aref are both large on a robot at its limits, and a residual multiplied out again carries their rounding -
+/// ~1e-4 in thousands, ~0.1 in the gradient once weighted by a stiff row's D - into every round's stopping rules.
+/// Moved instead, the residual is exactly the one the line search modelled. Measured on MuJoCo's humanoid at its
+/// limits: 11 rounds over five worlds, against 16 multiplying out and 21 for a halving search to f32's floor, the
+/// answers the same to a few millionths.
+///
+/// * THE START is the last step's accelerations (`warmstart_accelerations`) unless they cost more than the free
+/// acceleration - MuJoCo's warm start (`warmstart` in its engine_forward.c), its rule and its tie-break. For Newton it
+/// pays where little changes between steps and costs where much does. Measured: a settled, standing Go1 at 500 Hz,
+/// 901 rounds warm against 1,000 cold over 1,000 steps (a start that already meets the gradient's rule takes no
+/// round); MuJoCo's humanoid stepping into its joint limits, 181 warm against 166 over 100 states; the tracker's
+/// humanoid on its get-up and dance clips at 60 Hz, contacts from zimrphysics, 4,000 steps each - 3.01 and 2.84
+/// rounds a step warm against 2.57 and 2.57 cold, 15.6 and 14.2 line-search evaluations against 11.5 and 11.8, the
+/// steps of six rounds or more 131 and 70 against 35 and 31, the mean reward 0.5742 either way. Where the motion
+/// changes, the free acceleration already has the answer's active set - every row that will push is pushing - so
+/// Newton's first step from it is nearly exact, while the warm start sits where last step's rows BALANCED, some now
+/// just clear of violation: the Hessian misses them, the first step crosses their kinks, the line search cuts it
+/// short, and more rounds finish. Lower cost is not fewer rounds. Either way the same lowest point.
 fn solveNewton(m: *const Model, d: *Data) void {
-    // ** THE WORKING SET IS SIZED AT `Data.init` FROM `opt.solver.algorithm`, and that option
-    // stays mutable afterwards. Switching to Newton on an already-built `Data` therefore hands
-    // this function empty buffers - an out-of-bounds write into whatever follows them, which is
-    // the worst possible way to learn about an ordering mistake. Naming it costs one comparison
-    // per step.
+    // ** THE WORKING SET IS SIZED AT `Data.init` FROM `opt.solver.algorithm`, and that option stays mutable
+    // afterwards. Switching to Newton on an already-built `Data` would hand this function empty buffers - an
+    // out-of-bounds write into whatever follows them. Naming the mistake costs one comparison per step.
     assertf(
-        d.newton_hessian.len == m.nv * m.nv,
+        d.newton_hessian.len == m.dof_count * m.dof_count,
         @src(),
         "solver.algorithm was set to .newton after Data.init, so its {d}x{d} working set was " ++
             "never allocated — choose the algorithm in Options, before building Data",
-        .{ m.nv, m.nv },
+        .{ m.dof_count, m.dof_count },
     );
-    const nv: usize = m.nv;
+    const nv: usize = m.dof_count;
     const rows: usize = d.constraint_count;
-    const acc: []f32 = d.acc;
-    @memcpy(acc, d.free_acc);
-
-    var iteration: u32 = 0;
-    while (iteration < m.opt.solver.max_iterations) : (iteration += 1) {
-        // ---- residual, active set, and gradient ----
-        //
-        // `newton_residual[i]` is `J_i*a - aref_i`: how far row `i` is from its target.
-        var active: usize = 0;
-        for (0..rows) |row| {
-            const jac: []const f32 = d.constraint_jacobian[row * nv ..][0..nv];
-            var value: f32 = 0;
-            for (0..nv) |i| {
-                value += jac[i] * acc[i];
-            }
-            const residual: f32 = value - d.constraint_target_acc[row];
-            d.newton_residual[row] = residual;
-            // * THE SIGN CONVENTION IS `makeConstraints`': positive violation means "restore".
-            // A row that may only push is in the objective only while it would push; one that
-            // may pull as well is always in it.
-            d.newton_active[row] = !d.constraint_kind[row].isUnilateral() or residual < 0;
-            if (d.newton_active[row]) {
-                active += 1;
-            }
-        }
-        if (active == 0) {
-            break;
-        }
-
-        // grad L = M(a - a_free) + J^T D r
-        for (0..nv) |i| {
-            d.newton_step[i] = acc[i] - d.free_acc[i];
-        }
-        mulM(m, d, d.newton_step, d.newton_gradient);
-        for (0..rows) |row| {
-            if (!d.newton_active[row]) {
-                continue;
-            }
-            const weight: f32 = d.newton_residual[row] / d.constraint_regularizer[row];
-            const jac: []const f32 = d.constraint_jacobian[row * nv ..][0..nv];
-            for (0..nv) |i| {
-                d.newton_gradient[i] += jac[i] * weight;
-            }
-        }
-
-        var gradient_norm: f32 = 0;
-        for (0..nv) |i| {
-            gradient_norm += d.newton_gradient[i] * d.newton_gradient[i];
-        }
-        if (gradient_norm < m.opt.solver.tolerance * m.opt.solver.tolerance) {
-            break;
-        }
-
-        // ---- H = M + J^T D J, dense ----
-        //
-        // * DENSE IS THE RIGHT CALL HERE. `H` is nvxnv where nv is tens, not thousands, and
-        // `J^T D J` fills in anyway the moment two contacts share a body - which in a stack is
-        // every pair. A sparse structure would cost more to maintain than it saves.
-        const hessian: []f32 = d.newton_hessian;
-        @memset(hessian, 0);
-        for (0..nv) |i| {
-            const row_start: u32 = m.mass_row_start[i];
-            for (0..m.mass_row_nonzeros[i]) |k| {
-                const j: u32 = m.mass_col_index[row_start + k];
-                const value: f32 = d.mass_matrix[row_start + k];
-                hessian[i * nv + j] += value;
-                if (j != i) {
-                    hessian[j * nv + i] += value; // only half of M is stored
-                }
-            }
-        }
-        for (0..rows) |row| {
-            if (!d.newton_active[row]) {
-                continue;
-            }
-            const scale: f32 = 1.0 / d.constraint_regularizer[row];
-            const jac: []const f32 = d.constraint_jacobian[row * nv ..][0..nv];
-            for (0..nv) |i| {
-                if (jac[i] == 0) {
-                    continue;
-                }
-                const weighted: f32 = jac[i] * scale;
-                for (0..nv) |j| {
-                    hessian[i * nv + j] += weighted * jac[j];
-                }
-            }
-        }
-
-        // ---- Newton direction: H*delta = -grad  ----
-        //
-        // * `H` IS SYMMETRIC POSITIVE DEFINITE - `M` is, and `J^T D J` is positive
-        // semi-definite with `D >= 0` - so a Cholesky is both valid and half the work of an LU.
-        // If it fails anyway (a degenerate model, an f32 accident), fall back to the gradient
-        // direction, which is always a descent direction and merely slower.
-        const factored: bool = choleskyFactor(hessian, nv);
-        for (0..nv) |i| {
-            d.newton_step[i] = -d.newton_gradient[i];
-        }
-        if (factored) {
-            choleskySolve(hessian, nv, d.newton_step);
-        }
-
-        // ---- line search ----
-        //
-        // * NEEDED BECAUSE `L` IS PIECEWISE QUADRATIC, not quadratic: a full Newton step can
-        // cross into a region where a different set of rows is active, where it is no longer
-        // the minimiser and can be much worse. Backtracking from a full step is the cheapest
-        // thing that is always safe.
-        const before: f32 = newtonCost(m, d, acc, 0);
-        var alpha: f32 = 1.0;
-        var accepted: bool = false;
-        for (0..8) |_| {
-            if (newtonCost(m, d, acc, alpha) < before) {
-                accepted = true;
-                break;
-            }
-            alpha *= 0.5;
-        }
-        if (!accepted) {
-            break; // no downhill step exists: this is the minimum, to f32's satisfaction
-        }
-        for (0..nv) |i| {
-            acc[i] += alpha * d.newton_step[i];
+    const acc: []f32 = d.joint_accelerations;
+    // Each row's weight and kind, fixed for the solve.
+    for (0..rows) |row| {
+        d.newton_row_weight[row] = 1.0 / d.constraint_regularizer[row];
+        d.newton_row_unilateral[row] = d.constraint_kind[row].isUnilateral();
+    }
+    // THE START: the free acceleration, or the last step's accelerations when they cost less (MuJoCo's warm start).
+    @memcpy(acc, d.smooth_joint_accelerations);
+    if (m.opt.warm_start and rows > 0) {
+        const free_cost: f32 = newtonCostAt(m, d, d.smooth_joint_accelerations);
+        const warm_cost: f32 = newtonCostAt(m, d, d.warmstart_accelerations);
+        // MuJoCo's tie-break: the warm start is kept unless it costs MORE (`warmstart` in engine_forward.c).
+        if (warm_cost <= free_cost) {
+            @memcpy(acc, d.warmstart_accelerations);
         }
     }
-    d.solver_iterations = iteration;
-
-    // ---- recover the constraint forces the accelerations imply ----
-    //
-    // * THE CALLER'S CONTRACT IS FORCES, not accelerations - warm starting, `equalityError`
-    // and every diagnostic read `constraint_force`. `f = -r/R` on active rows is the force
-    // that produced the acceleration just solved for.
+    // THE KEPT PRODUCTS at the start: each row's residual J a - aref, and the inertia's gradient M (a - a_free) - zero
+    // at the free acceleration. From here on a step moves them; neither is multiplied out again.
     for (0..rows) |row| {
         const jac: []const f32 = d.constraint_jacobian[row * nv ..][0..nv];
         var value: f32 = 0;
         for (0..nv) |i| {
             value += jac[i] * acc[i];
         }
-        const residual: f32 = value - d.constraint_target_acc[row];
-        const unilateral: bool = d.constraint_kind[row].isUnilateral();
-        const force: f32 = -residual / d.constraint_regularizer[row];
-        d.constraint_force[row] = if (unilateral) @max(0, force) else force;
+        d.newton_residual[row] = value - d.constraint_target_acc[row];
     }
-    @memset(d.constraint_joint_force, 0);
-    for (0..rows) |row| {
-        const force: f32 = d.constraint_force[row];
-        if (force == 0) {
-            continue;
-        }
-        const jac: []const f32 = d.constraint_jacobian[row * nv ..][0..nv];
+    for (0..nv) |i| {
+        d.newton_scratch[i] = acc[i] - d.smooth_joint_accelerations[i];
+    }
+    mulM(m, d, d.newton_scratch, d.newton_inertia_gradient);
+    // THE SCALE: 1 / trace(M) - M's diagonal is the last entry of each of its rows.
+    var trace: f32 = 0;
+    for (0..nv) |i| {
+        trace += d.mass_matrix[m.mass_row_start[i] + m.mass_row_entry_count[i] - 1];
+    }
+    const scale: f32 = 1.0 / @max(1.0e-15, trace);
+    const tolerance: f32 = m.opt.solver.tolerance;
+    var measures: NewtonRound = newtonDerivatives(m, d);
+    // A start that already meets the gradient's rule - no row pushing, at the free acceleration - takes no round.
+    var is_done: bool = measures.gradient_length * scale < tolerance;
+    var iteration: u32 = 0;
+    var line_evaluations: u32 = 0;
+    while (!is_done and iteration < m.opt.solver.max_iterations) {
+        // THE LINE along the step: the inertia's slope s^T M (a - a_free) from the kept product, M s for its curvature,
+        // J s for each row's rate.
+        mulM(m, d, d.newton_step, d.newton_mv);
+        var inertia_slope: f32 = 0;
+        var inertia_half_curvature: f32 = 0;
+        var step_squared: f32 = 0;
         for (0..nv) |i| {
-            d.constraint_joint_force[i] += jac[i] * force;
+            inertia_slope += d.newton_step[i] * d.newton_inertia_gradient[i];
+            inertia_half_curvature += 0.5 * d.newton_step[i] * d.newton_mv[i];
+            step_squared += d.newton_step[i] * d.newton_step[i];
         }
+        for (0..rows) |row| {
+            const jac: []const f32 = d.constraint_jacobian[row * nv ..][0..nv];
+            var rate: f32 = 0;
+            for (0..nv) |i| {
+                rate += jac[i] * d.newton_step[i];
+            }
+            d.newton_row_rate[row] = rate;
+        }
+        const line: SearchLine = .{
+            .inertia_slope = inertia_slope,
+            .inertia_half_curvature = inertia_half_curvature,
+            .row_residual = d.newton_residual[0..rows],
+            .row_rate = d.newton_row_rate[0..rows],
+            .row_weight = d.newton_row_weight[0..rows],
+            .row_unilateral = d.newton_row_unilateral[0..rows],
+        };
+        // The slope's tolerance: a fraction of the solve's, scaled by the step's length and by the inertia (MuJoCo's).
+        const line_tolerance: f32 = tolerance * m.opt.solver.line_search_tolerance;
+        const slope_tolerance_scaled: f32 = line_tolerance * @sqrt(step_squared) / scale;
+        const slope_tolerance: f32 = @max(slope_tolerance_scaled, 1.0e-6);
+        const found: LineSearchResult = searchLine(line, slope_tolerance, m.opt.solver.line_search_iterations);
+        line_evaluations += found.points_evaluated;
+        // THE STEP, and the kept products with it: a += alpha s, M (a - a_free) += alpha M s, r += alpha J s.
+        for (0..nv) |i| {
+            acc[i] += found.alpha * d.newton_step[i];
+            d.newton_inertia_gradient[i] += found.alpha * d.newton_mv[i];
+        }
+        for (0..rows) |row| {
+            d.newton_residual[row] += found.alpha * d.newton_row_rate[row];
+        }
+        iteration += 1;
+        measures = newtonDerivatives(m, d);
+        // MUJOCO'S STOPS, each scaled: no step; a small improvement; a small gradient; a small Newton decrement.
+        const has_no_step: bool = found.alpha == 0;
+        const improved_little: bool = found.improvement > 0 and found.improvement * scale < tolerance;
+        const gradient_is_small: bool = measures.gradient_length * scale < tolerance;
+        const decrement_is_small: bool = 0.5 * measures.decrement * scale < tolerance;
+        is_done = has_no_step or improved_little or gradient_is_small or decrement_is_small;
     }
+    // The forces are the last round's (`newtonDerivatives`): the force that produces the answer.
+    d.solver_iterations = iteration;
+    d.solver_line_evaluations = line_evaluations;
 }
 
 /// Has the solver actually solved it? The check `solveConstraints` uses internally, exposed
 /// because a caller - or a test - asking "did that converge?" should not have to reconstruct
 /// the scaling rule, and two copies of a convergence criterion is one copy too many.
-/// Rebuild `d.acc` so it agrees with `d.constraint_force` after the forces were changed
+/// Rebuild `d.joint_accelerations` so it agrees with `d.constraint_force` after the forces were changed
 /// outside the sweep.
 ///
 /// -- ** THE SOLVER'S ONE INVARIANT: `acc` AND `constraint_force` MUST AGREE --
 ///
-/// Every sweep reads `d.acc` to work out how much force a row still needs, then adds the
+/// Every sweep reads `d.joint_accelerations` to work out how much force a row still needs, then adds the
 /// difference. That only works if `acc` already reflects the forces currently held. Warm
 /// starting learned this the hard way - seeding forces without seeding `acc` made them double
 /// every step, and a joint on its limit reached 7619 N.
@@ -5724,15 +7381,15 @@ fn solveNewton(m: *const Model, d: *Data) void {
 /// written once here rather than twice because the two callers cannot be allowed to disagree
 /// about what "agree" means.
 fn rebuildAccelerationFromForces(m: *const Model, d: *Data) void {
-    @memcpy(d.acc, d.free_acc);
+    @memcpy(d.joint_accelerations, d.smooth_joint_accelerations);
     for (0..d.constraint_count) |row| {
         const force: f32 = d.constraint_force[row];
         if (force == 0) {
             continue;
         }
         const inv_inertia_jacobian: []const f32 =
-            d.constraint_inv_inertia_jacobian[row * m.nv ..][0..m.nv];
-        for (d.acc, inv_inertia_jacobian) |*a, mj| {
+            d.constraint_inv_inertia_jacobian[row * m.dof_count ..][0..m.dof_count];
+        for (d.joint_accelerations, inv_inertia_jacobian) |*a, mj| {
             a.* += force * mj;
         }
     }
@@ -5781,9 +7438,9 @@ pub fn constraintResidual(m: *const Model, d: *const Data) f32 {
         if (d.constraint_inertia[row] <= min_constraint_diag) {
             continue;
         }
-        const jacobian: []const f32 = d.constraint_jacobian[row * m.nv ..][0..m.nv];
+        const jacobian: []const f32 = d.constraint_jacobian[row * m.dof_count ..][0..m.dof_count];
         var current_acc: f32 = 0;
-        for (jacobian, d.acc) |j, a| {
+        for (jacobian, d.joint_accelerations) |j, a| {
             current_acc += j * a;
         }
         const shortfall: f32 = current_acc +
@@ -5811,12 +7468,13 @@ pub fn solveConstraints(m: *const Model, d: *Data) void {
     const zone: profiler.Zone = profiler.zoneNamed(@src(), "robot.solve");
     defer zone.end();
     d.requireStage(.force, "solveConstraints");
+    // Only Newton's line searches evaluate points; it sets its own count.
+    d.solver_line_evaluations = 0;
     if (d.constraint_count == 0) {
-        @memset(d.constraint_joint_force, 0);
-        // Reset the diagnostic too. Leaving it stale means a step with no constraints
-        // reports whatever the last constrained step happened to need - which reads as "the
-        // solver is struggling" when in fact it did not run, and sent me chasing a
-        // convergence problem that did not exist.
+        @memset(d.constraint_joint_forces, 0);
+        // The diagnostic is reset too: left stale, a step with no constraints would report
+        // whatever the last constrained step needed - reading as a solver struggling when it
+        // did not run at all.
         d.solver_iterations = 0;
         return;
     }
@@ -5844,12 +7502,12 @@ pub fn solveConstraints(m: *const Model, d: *Data) void {
     // acceleration plus the current forces - and with the copy inside the `if`, a cold solve
     // rebuilt from a STALE snapshot. Two tests caught it immediately, which is the argument
     // for having a resting-contact test at all.
-    @memcpy(d.free_acc, d.acc);
+    @memcpy(d.smooth_joint_accelerations, d.joint_accelerations);
 
-    // * NEWTON WORKS IN ACCELERATION SPACE and wants no warm-started forces - it starts from
-    // `free_acc` and the line search takes it from there. It recovers `constraint_force` and
-    // `constraint_joint_force` at its end, which is the caller's whole contract, so everything
-    // downstream is unchanged.
+    // * NEWTON WORKS IN ACCELERATION SPACE and wants no warm-started forces: it starts from
+    // `smooth_joint_accelerations`, or from last step's accelerations when they cost no more (its own warm start).
+    // Every round makes `constraint_force` and `constraint_joint_forces` - the caller's whole contract - so the last
+    // round leaves them in place and everything downstream is unchanged.
     if (m.opt.solver.algorithm == .newton) {
         solveNewton(m, d);
         d.warm_count = d.constraint_count;
@@ -5871,9 +7529,9 @@ pub fn solveConstraints(m: *const Model, d: *Data) void {
             // ** AND THE ACCELERATION MUST BE SEEDED TO MATCH. This is the part a naive
             // warm start omits, and omitting it is catastrophic rather than merely slow.
             //
-            // The loop below reads `d.acc` to work out how much force a row still needs,
+            // The loop below reads `d.joint_accelerations` to work out how much force a row still needs,
             // then ADDS the difference to `constraint_force[row]`. If the force starts
-            // non-zero while `d.acc` still holds the FREE acceleration, the first iteration
+            // non-zero while `d.joint_accelerations` still holds the FREE acceleration, the first iteration
             // computes the whole force again and adds it on top of the warm value - so the
             // force doubles every step. Measured before this line existed: a joint resting
             // on its limit sank straight through and its constraint force reached 7619 N.
@@ -5886,8 +7544,8 @@ pub fn solveConstraints(m: *const Model, d: *Data) void {
                 // means seeding costs one multiply-add per DOF and cannot disagree with
                 // what the solver does with the same force.
                 const inv_inertia_jacobian: []const f32 =
-                    d.constraint_inv_inertia_jacobian[row * m.nv ..][0..m.nv];
-                for (d.acc, inv_inertia_jacobian) |*a, mj| {
+                    d.constraint_inv_inertia_jacobian[row * m.dof_count ..][0..m.dof_count];
+                for (d.joint_accelerations, inv_inertia_jacobian) |*a, mj| {
                     a.* += d.constraint_force[row] * mj;
                 }
             }
@@ -5916,10 +7574,10 @@ pub fn solveConstraints(m: *const Model, d: *Data) void {
             if (force == 0) {
                 continue;
             }
-            const jacobian: []const f32 = d.constraint_jacobian[row * m.nv ..][0..m.nv];
+            const jacobian: []const f32 = d.constraint_jacobian[row * m.dof_count ..][0..m.dof_count];
             var seeded: f32 = 0;
             var free: f32 = 0;
-            for (jacobian, d.acc, d.free_acc) |j, a, fa| {
+            for (jacobian, d.joint_accelerations, d.smooth_joint_accelerations) |j, a, fa| {
                 seeded += j * a;
                 free += j * fa;
             }
@@ -5930,7 +7588,7 @@ pub fn solveConstraints(m: *const Model, d: *Data) void {
         d.warm_start_rejected = warm_cost > 0;
         if (d.warm_start_rejected) {
             @memset(d.constraint_force[0..d.constraint_count], 0);
-            @memcpy(d.acc, d.free_acc);
+            @memcpy(d.joint_accelerations, d.smooth_joint_accelerations);
         }
     } else {
         d.warm_start_rejected = false;
@@ -5989,13 +7647,13 @@ pub fn solveConstraints(m: *const Model, d: *Data) void {
             if (d.constraint_inertia[row] <= min_constraint_diag) {
                 continue;
             }
-            const jacobian: []const f32 = d.constraint_jacobian[row * m.nv ..][0..m.nv];
+            const jacobian: []const f32 = d.constraint_jacobian[row * m.dof_count ..][0..m.dof_count];
             const inv_inertia_jacobian: []const f32 =
-                d.constraint_inv_inertia_jacobian[row * m.nv ..][0..m.nv];
+                d.constraint_inv_inertia_jacobian[row * m.dof_count ..][0..m.dof_count];
 
             // J_i * a - what this constraint is currently experiencing.
             var current_acc: f32 = 0;
-            for (jacobian, d.acc) |j, a| {
+            for (jacobian, d.joint_accelerations) |j, a| {
                 current_acc += j * a;
             }
 
@@ -6028,7 +7686,7 @@ pub fn solveConstraints(m: *const Model, d: *Data) void {
             // Push the joint-space acceleration by what this row just did. This is the
             // ONLY channel through which rows influence each other, which is why the
             // update above needs no explicit `A`.
-            for (d.acc, inv_inertia_jacobian) |*a, mj| {
+            for (d.joint_accelerations, inv_inertia_jacobian) |*a, mj| {
                 a.* += applied * mj;
             }
         }
@@ -6122,11 +7780,11 @@ pub fn solveConstraints(m: *const Model, d: *Data) void {
 
     // Report the constraint forces in joint coordinates too - `J^Tf` is what a sensor reads
     // and what a user asking "how hard is this limit pushing?" means.
-    @memset(d.constraint_joint_force, 0);
+    @memset(d.constraint_joint_forces, 0);
     for (0..d.constraint_count) |row| {
-        const jacobian: []const f32 = d.constraint_jacobian[row * m.nv ..][0..m.nv];
+        const jacobian: []const f32 = d.constraint_jacobian[row * m.dof_count ..][0..m.dof_count];
         const force: f32 = d.constraint_force[row];
-        for (d.constraint_joint_force, jacobian) |*q, j| {
+        for (d.constraint_joint_forces, jacobian) |*q, j| {
             q.* += j * force;
         }
     }
@@ -6164,17 +7822,17 @@ fn writeVec(out: []f32, v: Vec) void {
 
 /// A site's spatial velocity, in WORLD axes about the site's own point.
 ///
-/// `cvel` is about the tree's shared frame origin, so the linear part has to be carried out
+/// `body_velocities` is about the tree's shared frame origin, so the linear part has to be carried out
 /// to the site: a spatial motion `(omega, v)` about `O` moves a point `p` at `v + omega x (p - O)`.
 /// The same identity as `jacPoint`, which is not a coincidence - one is this evaluated at a
 /// velocity, the other its derivative with respect to each DOF.
 fn siteVelocity(m: *const Model, d: *const Data, site: u32) Motion {
     const body: u32 = m.site_body[site];
-    const origin: Vec = d.subtree_com[m.body_root[body]];
-    const spatial: Motion = d.cvel[body];
+    const origin: Vec = d.subtree_centres_of_mass[m.body_root[body]];
+    const spatial: Motion = d.body_velocities[body];
     return .{
         .ang = spatial.ang,
-        .lin = spatial.lin + cross(spatial.ang, d.site_xpos[site] - origin),
+        .lin = spatial.lin + cross(spatial.ang, d.site_positions[site] - origin),
     };
 }
 
@@ -6194,36 +7852,36 @@ fn siteVelocity(m: *const Model, d: *const Data, site: u32) Motion {
 /// rotating, which is every simple test one would think to write.
 fn siteProperAcceleration(m: *const Model, d: *const Data, site: u32) Vec {
     const body: u32 = m.site_body[site];
-    const origin: Vec = d.subtree_com[m.body_root[body]];
-    const offset: Vec = d.site_xpos[site] - origin;
+    const origin: Vec = d.subtree_centres_of_mass[m.body_root[body]];
+    const offset: Vec = d.site_positions[site] - origin;
 
-    const spatial_acc: Motion = d.body_acc[body];
-    const spatial_vel: Motion = d.cvel[body];
+    const spatial_acc: Motion = d.body_accelerations[body];
+    const spatial_vel: Motion = d.body_velocities[body];
     const point_vel: Vec = spatial_vel.lin + cross(spatial_vel.ang, offset);
     const point_acc: Vec = spatial_acc.lin + cross(spatial_acc.ang, offset) +
         cross(spatial_vel.ang, point_vel);
 
-    return rotate(conjugate(d.site_xrot[site]), point_acc);
+    return rotate(conjugate(d.site_orientations[site]), point_acc);
 }
 
 /// Evaluate the sensors belonging to one stage. Called three times per `forward`.
 pub fn sensors(m: *const Model, d: *Data, stage: Stage) void {
-    for (0..m.nsensor) |si| {
+    for (0..m.sensor_count) |si| {
         const kind: SensorKind = m.sensor_kind[si];
         if (kind.stage() != stage) {
             continue;
         }
         const target: u32 = m.sensor_target[si];
-        const out: []f32 = d.sensor_data[m.sensor_adr[si]..][0..kind.dim()];
+        const out: []f32 = d.sensor_data[m.sensor_first_value[si]..][0..kind.dim()];
         switch (kind) {
-            .joint_pos => out[0] = d.pos[m.jnt_qpos_adr[target]],
-            .joint_vel => out[0] = d.vel[m.jnt_dof_adr[target]],
+            .joint_pos => out[0] = d.joint_positions[m.joint_first_coordinate[target]],
+            .joint_vel => out[0] = d.joint_velocities[m.joint_first_dof[target]],
             .tendon_pos => out[0] = d.tendon_length[target],
             .tendon_vel => out[0] = d.tendon_velocity[target],
-            .actuator_force => out[0] = d.act_force[target],
-            .site_pos => writeVec(out, d.site_xpos[target]),
+            .actuator_force => out[0] = d.actuator_forces[target],
+            .site_pos => writeVec(out, d.site_positions[target]),
             .site_quat => {
-                const q: Quat = d.site_xrot[target];
+                const q: Quat = d.site_orientations[target];
                 inline for (0..4) |k| {
                     out[k] = q[k];
                 }
@@ -6236,11 +7894,11 @@ pub fn sensors(m: *const Model, d: *Data, stage: Stage) void {
                 // the difference between "how fast is it moving" and "how fast does IT
                 // think it is moving".
                 const world: Motion = siteVelocity(m, d, target);
-                writeVec(out, rotate(conjugate(d.site_xrot[target]), world.lin));
+                writeVec(out, rotate(conjugate(d.site_orientations[target]), world.lin));
             },
             .gyro => {
                 const world: Motion = siteVelocity(m, d, target);
-                writeVec(out, rotate(conjugate(d.site_xrot[target]), world.ang));
+                writeVec(out, rotate(conjugate(d.site_orientations[target]), world.ang));
             },
             .accelerometer => writeVec(out, siteProperAcceleration(m, d, target)),
         }
@@ -6259,18 +7917,18 @@ pub fn sensors(m: *const Model, d: *Data, stage: Stage) void {
 /// impossible to bolt on afterwards.
 pub fn bodyAccelerations(m: *const Model, d: *Data) void {
     d.requireStage(.force, "bodyAccelerations");
-    d.body_acc[world_body] = .{ .ang = vec_zero, .lin = -m.opt.gravity };
+    d.body_accelerations[world_body] = .{ .ang = vec_zero, .lin = -m.opt.gravity };
 
-    for (1..m.nbody) |bi| {
-        var a: Motion = d.body_acc[m.body_parent[bi]];
-        const dof_adr: u32 = m.body_dof_adr[bi];
-        for (0..m.body_dof_num[bi]) |k| {
+    for (1..m.body_count) |bi| {
+        var a: Motion = d.body_accelerations[m.body_parent[bi]];
+        const dof_adr: u32 = m.body_first_dof[bi];
+        for (0..m.body_dof_count[bi]) |k| {
             const dof: u32 = dof_adr + @as(u32, @intCast(k));
             // The moving-axis term, and this body's own joint acceleration.
-            a = a.add(d.cdof_dot[dof].scale(d.vel[dof]));
-            a = a.add(d.cdof[dof].scale(d.acc[dof]));
+            a = a.add(d.dof_axis_rates[dof].scale(d.joint_velocities[dof]));
+            a = a.add(d.dof_axes[dof].scale(d.joint_accelerations[dof]));
         }
-        d.body_acc[bi] = a;
+        d.body_accelerations[bi] = a;
     }
 }
 
@@ -6297,44 +7955,48 @@ pub fn rotateQuatByAngularVel(q: Quat, w: Vec, dt: f32) Quat {
     return normalizeQuat(qmul(q, delta));
 }
 
-/// Advance `pos` by `vel` over `dt`, respecting the geometry of each joint type.
-pub fn integratePos(m: *const Model, pos: []f32, vel: []const f32, dt: f32) void {
-    assertf(pos.len == m.nq, @src(), "pos has {d} entries, model wants {d}", .{ pos.len, m.nq });
-    assertf(vel.len == m.nv, @src(), "vel has {d} entries, model wants {d}", .{ vel.len, m.nv });
-
-    for (0..m.njnt) |ji| {
-        const qadr: u32 = m.jnt_qpos_adr[ji];
-        const vadr: u32 = m.jnt_dof_adr[ji];
-        switch (m.jnt_type[ji]) {
-            .slide, .hinge => {
-                pos[qadr] += dt * vel[vadr];
-            },
-            .free => {
-                // Translation is ordinary integration; rotation is not.
-                inline for (0..3) |k| {
-                    pos[qadr + k] += dt * vel[vadr + k];
-                }
-                const w: Vec = vec(vel[vadr + 3], vel[vadr + 4], vel[vadr + 5]);
-                const q: Quat = .{ pos[qadr + 3], pos[qadr + 4], pos[qadr + 5], pos[qadr + 6] };
-                const rotated: Quat = rotateQuatByAngularVel(q, w, dt);
-                inline for (0..4) |k| {
-                    pos[qadr + 3 + k] = rotated[k];
-                }
-            },
-            .ball => {
-                const w: Vec = vec(vel[vadr], vel[vadr + 1], vel[vadr + 2]);
-                const q: Quat = .{ pos[qadr], pos[qadr + 1], pos[qadr + 2], pos[qadr + 3] };
-                const rotated: Quat = rotateQuatByAngularVel(q, w, dt);
-                inline for (0..4) |k| {
-                    pos[qadr + k] = rotated[k];
-                }
-            },
-        }
-    }
+/// ONE JOINT's `integratePos`: its coordinates carried by `velocity` over `dt` - for a slide or a hinge the rate
+/// times the step added; for a ball its quaternion turned by its angular velocity (`rotateQuatByAngularVel`); for a
+/// free joint its position carried by its linear velocity, then its orientation turned by its angular velocity. A
+/// function of values, so robotgpu's kernels call it on a world's joint as robot.zig calls it on a model's.
+/// `jointPositionDifference` is its inverse: the velocity that carries `from` to `to`.
+pub fn integrateJointPosition(
+    joint_type: JointType,
+    coordinates: JointCoordinates,
+    velocity: JointVelocity,
+    dt: f32,
+) JointCoordinates {
+    return switch (joint_type) {
+        .slide, .hinge => .ofSingle(coordinates.single() + dt * velocity.single()),
+        .ball => .ofBall(rotateQuatByAngularVel(coordinates.ballOrientation(), velocity.ballAngular(), dt)),
+        // Translation is ordinary integration; rotation is not.
+        .free => .ofFree(
+            coordinates.freePosition() + splat(dt) * velocity.freeLinear(),
+            rotateQuatByAngularVel(coordinates.freeOrientation(), velocity.freeAngular(), dt),
+        ),
+    };
 }
 
-/// The angular velocity that rotates `from` into `to` over `1/inv_dt` seconds.
-fn angularVelBetween(from: Quat, to: Quat, inv_dt: f32) Vec {
+/// Advance `pos` by `vel` over `dt`, respecting the geometry of each joint type: each joint by
+/// `integrateJointPosition`.
+pub fn integratePos(m: *const Model, pos: []f32, vel: []const f32, dt: f32) void {
+    assertf(
+        pos.len == m.coordinate_count,
+        @src(),
+        "pos has {d} entries, model wants {d}",
+        .{ pos.len, m.coordinate_count },
+    );
+    assertf(vel.len == m.dof_count, @src(), "vel has {d} entries, model wants {d}", .{ vel.len, m.dof_count });
+    for (0..m.joint_count) |joint| {
+        const coordinates: JointCoordinates = readJointCoordinates(m, joint, pos);
+        const velocity: JointVelocity = readJointVelocity(m, joint, vel);
+        const moved: JointCoordinates = integrateJointPosition(m.joint_type[joint], coordinates, velocity, dt);
+        writeJointCoordinates(m, joint, moved, pos);
+    }
+}
+/// The angular velocity that rotates `from` into `to` over `1/inv_dt` seconds - a free or ball joint's share of
+/// `differentiatePos`, its delicate part. Shared with robotgpu's kernels.
+pub fn angularVelBetween(from: Quat, to: Quat, inv_dt: f32) Vec {
     // Relative rotation in `from`'s frame, matching the composition order above.
     const inv_from: Quat = .{ -from[0], -from[1], -from[2], from[3] };
     var rel: Quat = qmul(inv_from, to);
@@ -6352,6 +8014,26 @@ fn angularVelBetween(from: Quat, to: Quat, inv_dt: f32) Vec {
     return axis * splat(angle * inv_dt);
 }
 
+/// ONE JOINT's `differentiatePos`: the velocity that carries its coordinates `from` to `to` over the step whose
+/// inverse is `inv_dt` - for a slide or a hinge the difference, for a ball the angular velocity between its quaternions
+/// (`angularVelBetween`), for a free joint its position's difference and then its orientation's. A function of values,
+/// so robotgpu's kernels call it on a world's joint as robot.zig calls it on a model's.
+pub fn jointPositionDifference(
+    joint_type: JointType,
+    from: JointCoordinates,
+    to: JointCoordinates,
+    inv_dt: f32,
+) JointVelocity {
+    return switch (joint_type) {
+        .slide, .hinge => .ofSingle((to.single() - from.single()) * inv_dt),
+        .ball => .ofBall(angularVelBetween(from.ballOrientation(), to.ballOrientation(), inv_dt)),
+        .free => .ofFree(
+            (to.freePosition() - from.freePosition()) * splat(inv_dt),
+            angularVelBetween(from.freeOrientation(), to.freeOrientation(), inv_dt),
+        ),
+    };
+}
+
 /// The inverse of `integratePos`: the velocity that carries `from` to `to` in `dt`.
 /// MuJoCo calls this `mj_differentiatePos`, and it exists because "subtract two positions"
 /// is not a meaningful operation on a model containing a quaternion.
@@ -6364,43 +8046,1272 @@ pub fn differentiatePos(
 ) void {
     assertf(dt > 0.0, @src(), "differentiatePos needs a positive dt, got {d}", .{dt});
     const inv_dt: f32 = 1.0 / dt;
+    for (0..m.joint_count) |joint| {
+        const joint_from: JointCoordinates = readJointCoordinates(m, joint, from);
+        const joint_to: JointCoordinates = readJointCoordinates(m, joint, to);
+        const velocity: JointVelocity = jointPositionDifference(m.joint_type[joint], joint_from, joint_to, inv_dt);
+        writeJointVelocity(m, joint, velocity, vel);
+    }
+}
 
-    for (0..m.njnt) |ji| {
-        const qadr: u32 = m.jnt_qpos_adr[ji];
-        const vadr: u32 = m.jnt_dof_adr[ji];
-        switch (m.jnt_type[ji]) {
-            .slide, .hinge => {
-                vel[vadr] = (to[qadr] - from[qadr]) * inv_dt;
-            },
-            .free => {
-                inline for (0..3) |k| {
-                    vel[vadr + k] = (to[qadr + k] - from[qadr + k]) * inv_dt;
-                }
-                const qa: Quat = .{ from[qadr + 3], from[qadr + 4], from[qadr + 5], from[qadr + 6] };
-                const qb: Quat = .{ to[qadr + 3], to[qadr + 4], to[qadr + 5], to[qadr + 6] };
-                const w: Vec = angularVelBetween(qa, qb, inv_dt);
-                inline for (0..3) |k| {
-                    vel[vadr + 3 + k] = w[k];
-                }
-            },
-            .ball => {
-                const qa: Quat = .{ from[qadr], from[qadr + 1], from[qadr + 2], from[qadr + 3] };
-                const qb: Quat = .{ to[qadr], to[qadr + 1], to[qadr + 2], to[qadr + 3] };
-                const w: Vec = angularVelBetween(qa, qb, inv_dt);
-                inline for (0..3) |k| {
-                    vel[vadr + k] = w[k];
-                }
-            },
+/// A servo's law: its spring's frequency in Hz and damping ratio (1 is critical), and the bound on the acceleration it
+/// may ask of a joint.
+pub const ServoLaw = struct {
+    frequency: f32 = 20.0,
+    damping: f32 = 1.0,
+    max_acceleration: f32 = 400.0,
+};
+
+/// A LIMB's SPRING FREQUENCY at stiffness `stiffness` (s, in [-1, 1] as a squashed policy gives it):
+/// `frequency 3^(s/4)`.
+/// A spring's stiffness goes as its frequency squared, so over s in [-1, 1] the limb's stiffness spans a factor of 3 -
+/// Spoljaric, Yan & Lee's 20 to 60 - centred in the logarithm on `frequency`, the tuned law's; s = 0 is exactly it, as
+/// 2^0 is 1. Through `@exp2`, the device's and the CPU's both.
+pub fn limbSpringFrequency(frequency: f32, stiffness: f32) f32 {
+    const quarter_log2_three: f32 = comptime @log2(@as(f32, 3.0)) / 4.0;
+    return frequency * @exp2(stiffness * quarter_log2_three);
+}
+
+/// THE LIMBS' STIFFNESS as the servo takes it: each dof's limb (`dofLimbs`) and each limb's stiffness - the number its
+/// policy chose, in [-1, 1] (`limbSpringFrequency`).
+pub const LimbStiffness = struct {
+    limb_of_dof: []const u32,
+    stiffness: []const f32,
+
+    /// Dof `dof`'s spring frequency: its limb's (`limbSpringFrequency`), or the law's own for the free root's dofs.
+    pub fn dofFrequency(limbs: LimbStiffness, frequency: f32, dof: usize) f32 {
+        const limb: u32 = limbs.limb_of_dof[dof];
+        if (limb == no_limb) {
+            return frequency;
+        }
+        return limbSpringFrequency(frequency, limbs.stiffness[limb]);
+    }
+};
+
+/// THE TORQUES FOR JOINT ACCELERATIONS `accel`: what the servo applies once it has chosen its accelerations - a fixed
+/// base's inverse dynamics (`inverseDynamics`), or with a free root the floating base's (`floatingBaseTorques`: the
+/// root left free to respond), the root's own six zero, as nothing actuates it. `d` forward-current, its bias forces
+/// computed. `dense` holds nv x nv numbers, `full` nv, and `out` receives nv torques.
+pub fn torquesForAccelerations(
+    m: *const Model,
+    d: *Data,
+    accel: []const f32,
+    dense: []f32,
+    full: []f32,
+    out: []f32,
+) void {
+    const root: u32 = rootDofCount(m);
+    if (root == 0) {
+        inverseDynamics(m, d, accel, out);
+        return;
+    }
+    floatingBaseTorques(m, d, accel, dense, full, out);
+    @memset(out[0..root], 0.0);
+}
+
+/// THE SERVO: the joint torques that pull `d`'s pose toward `target` - each dof's position error (`differentiatePos`),
+/// the acceleration an implicit spring asks for it at the end of a step of `dt` (`stableSpringAccelToward`, damped
+/// toward `target_velocity` when one is given and toward rest otherwise), bounded; then the torques that produce those
+/// accelerations through the model - inverse dynamics, its floating-base form for a free root, whose own six dofs ask
+/// for nothing and get no torque. `d` must be forward-current (its mass matrix and bias forces at its state); the
+/// scratches hold nv numbers each and `dense` nv * nv; `out` receives nv torques.
+pub fn servoTorques(
+    m: *const Model,
+    d: *Data,
+    target: []const f32,
+    target_velocity: ?[]const f32,
+    law: ServoLaw,
+    limbs: ?LimbStiffness,
+    dt: f32,
+    accel_scratch: []f32,
+    scratch: []f32,
+    dense: []f32,
+    full: []f32,
+    out: []f32,
+) void {
+    differentiatePos(m, scratch, d.joint_positions, target, 1.0);
+    const root: u32 = rootDofCount(m);
+    @memset(accel_scratch[0..root], 0.0);
+    for (root..m.dof_count) |k| {
+        // Toward rest is toward a target velocity of zero, to the bit: v - 0 is v.
+        const moving_target: f32 = if (target_velocity) |moving| moving[k] else 0.0;
+        // Each limb's spring at its own stiffness, where the limbs are given one.
+        const frequency: f32 = if (limbs) |limb_stiffness|
+            limb_stiffness.dofFrequency(law.frequency, k)
+        else
+            law.frequency;
+        const want: f32 = stableSpringAccelToward(
+            scratch[k],
+            d.joint_velocities[k],
+            moving_target,
+            frequency,
+            law.damping,
+            dt,
+        );
+        accel_scratch[k] = clamp(want, -law.max_acceleration, law.max_acceleration);
+    }
+    torquesForAccelerations(m, d, accel_scratch, dense, full, out);
+}
+
+/// How many TARGET OFFSETS a policy's action has: one per actuated degree of freedom - every dof but the free root's
+/// six, so 35 for humanoid_flex2, one per hinge and three per ball. The action's joints' part: a fleet whose limbs'
+/// stiffness is on adds a number per limb after them (`robot_track.actionWidth`).
+pub fn actionSize(m: *const Model) usize {
+    return m.dof_count - rootDofCount(m);
+}
+
+/// The servo's targets for one step: the reference pose, nudged by the policy's action.
+///
+/// The action is a DISPLACEMENT IN VELOCITY SPACE, which is why `integratePos` applies it - that
+/// is the function that already knows a hinge's offset is an angle added, and a ball's is
+/// `exp(a/2)` composed on the RIGHT, in the child's frame where a ball's degrees of freedom live.
+/// Getting either of those by hand is how forearms end up twisted. The root's six numbers are left
+/// alone: a policy cannot push on the world.
+///
+/// `scale` is how far one unit of action reaches, in radians - the action itself is expected in
+/// [-1, 1], which is what a squashed policy produces. `scratch` is `m.dof_count` long, and `out` is
+/// `m.coordinate_count`; `out` may alias `reference_pose`.
+pub fn applyAction(
+    m: *const Model,
+    reference_pose: []const f32,
+    action: []const f32,
+    scale: f32,
+    scratch: []f32,
+    out: []f32,
+) void {
+    assertf(action.len == actionSize(m), @src(), "action has {d} numbers, model wants {d}", .{
+        action.len,
+        actionSize(m),
+    });
+    const sizes_match: bool = scratch.len == m.dof_count and out.len == m.coordinate_count;
+    assertf(sizes_match, @src(), "scratch {d} (wants {d}), out {d} (wants {d})", .{
+        scratch.len,
+        m.dof_count,
+        out.len,
+        m.coordinate_count,
+    });
+    const root: usize = rootDofCount(m);
+    @memset(scratch[0..root], 0.0);
+    for (action, root..) |a, k| {
+        scratch[k] = scale * a;
+    }
+    if (out.ptr != reference_pose.ptr) {
+        @memcpy(out, reference_pose);
+    }
+    integratePos(m, out, scratch, 1.0);
+}
+
+/// Put every hinge back inside its range. A reference is already in range, but a reference plus an
+/// offset need not be, and a target outside a limit is a servo pushing against a wall forever.
+pub fn clampHinges(m: *const Model, pose: []f32) void {
+    for (0..m.joint_count) |j| {
+        if (m.joint_type[j] != .hinge and m.joint_type[j] != .slide) {
+            continue;
+        }
+        const range: [2]f32 = m.joint_range[j] orelse continue;
+        const at: usize = m.joint_first_coordinate[j];
+        pose[at] = clamp(pose[at], range[0], range[1]);
+    }
+}
+
+/// ONE NUMBER OF THE ACTION FILTER: `asked` blended into `applied` by `factor` - `factor asked + (1 - factor) applied`,
+/// the form EXACT at 1 (`applied` becomes `asked`, whatever it was), so a factor of 1 is no filter. A function of
+/// values, so robotgpu's `filter_actions` computes each number as `filterAction` does.
+pub fn filteredActionNumber(factor: f32, asked: f32, applied: f32) f32 {
+    return factor * asked + (1.0 - factor) * applied;
+}
+
+/// THE ACTION FILTER (DReCon's action smoothing): what the policy asked for, blended into what is applied -
+/// `applied = factor asked + (1 - factor) applied`, in place, each number by `filteredActionNumber`. Run before each
+/// PHYSICS step at 0.5, a new decision ramps in over its physics steps - 50% of the way after one, 75% after two, 94%
+/// after four - so no joint's target jumps at a decision's start; DReCon ran it once a decision, at 0.2. 1 is no
+/// filter. ONE definition: the CPU fleet's `driveOnce` and the device's `filter_actions` run it each physics step;
+/// `robot_policy.Controller` and the SuperTrack learner (`robot_latent`, whose training graph writes the same blend
+/// with tensors) once a decision.
+pub fn filterAction(factor: f32, asked: []const f32, applied: []f32) void {
+    for (applied, asked) |*now, wanted| {
+        now.* = filteredActionNumber(factor, wanted, now.*);
+    }
+}
+
+/// A ROTATION AS TWO AXES: the first two columns of its matrix - what a network sees and predicts instead of a
+/// quaternion, being continuous and free of the quaternion's sign.
+pub fn twoAxis(q: Quat) [6]f32 {
+    const x: Vec = rotate(q, vec(1, 0, 0));
+    const y: Vec = rotate(q, vec(0, 1, 0));
+    return .{ x[0], x[1], x[2], y[0], y[1], y[2] };
+}
+
+/// HOW FAST A POINT OF A BODY MOVES, in the world, from the body's spatial velocity `motion` in robot.zig's shared
+/// frame (`Data.body_velocities`): world axes, the origin `origin` at its root's subtree centre of mass, where the
+/// velocities down a chain simply add. `motion.lin` is the velocity of whichever point of the body sits at that
+/// origin, so the point `at` moves at `motion.lin + w x (at - origin)`.
+pub fn motionPointVelocity(motion: Motion, origin: Vec, at: Vec) Vec {
+    return motion.lin + cross(motion.ang, at - origin);
+}
+
+/// ONE BODY's FEATURES AS A NETWORK SEES THEM (robot_track's `local`): its position relative to the root's, its
+/// rotation as two axes, its velocity and its angular velocity - each turned into the root's frame by `to_local`, the
+/// root's rotation undone - and its height, kept in world.
+pub const LocalBody = struct {
+    position: Vec,
+    rotation: [6]f32,
+    velocity: Vec,
+    angular: Vec,
+    height: f32,
+};
+
+/// One body's `LocalBody` from its world pose and velocities, `origin` the root's position.
+pub fn localBody(
+    to_local: Quat,
+    origin: Vec,
+    position: Vec,
+    rotation: Quat,
+    velocity: Vec,
+    angular: Vec,
+) LocalBody {
+    const local_body: LocalBody = .{
+        .position = rotate(to_local, position - origin),
+        .rotation = twoAxis(qmul(to_local, rotation)),
+        .velocity = rotate(to_local, velocity),
+        .angular = rotate(to_local, angular),
+        .height = position[2],
+    };
+    return local_body;
+}
+
+/// How many numbers robot_track's `local` writes for a model of `bodies` bodies: per body but the world, 3 position
+/// + 6 rotation + 3 velocity + 3 angular + 1 height, and 3 more for the world's up, in the root's frame.
+///
+/// The world body is not part of the character, and including it would quietly smuggle the character's absolute
+/// position back in: the world's origin, seen from the root, is exactly where the character is standing. The root's
+/// own position and rotation stay in (always zero and identity) so that every body sits at the same offset.
+pub fn localSize(bodies: usize) usize {
+    return (bodies - 1) * (3 + 6 + 3 + 3 + 1) + 3;
+}
+
+/// HOW MANY NUMBERS ONE BODY OF A REFERENCE STATE TAKES as a table holds it, frame after frame (robot_track's
+/// `Fleet.clipReferenceBodies`, robotgpu's `clip_reference_bodies`): its position, rotation, velocity and angular
+/// velocity, four numbers each, then its lowest point and three zeros - five vectors, so each reads as one.
+pub const reference_body_numbers: usize = 20;
+
+/// A CHARACTER's BODIES AS THE JUDGEMENT READS THEM, from slices indexed as the model indexes bodies, body 0 the world:
+/// each body's frame origin and rotation, the origin's velocity and the angular velocity in world axes, and its lowest
+/// point above the floor (`no_shape_height` where a body's shapes are unknown). robot_track's `State` gives these; the
+/// device reads its world arrays through a type with the same functions - so both judge with one definition.
+pub const BodySlices = struct {
+    positions: []const Vec,
+    rotations: []const Quat,
+    velocities: []const Vec,
+    angular_velocities: []const Vec,
+    lowest_points: []const f32,
+
+    pub fn count(bodies: BodySlices) usize {
+        return bodies.positions.len;
+    }
+    pub fn position(bodies: BodySlices, body: usize) Vec {
+        return bodies.positions[body];
+    }
+    pub fn rotation(bodies: BodySlices, body: usize) Quat {
+        return bodies.rotations[body];
+    }
+    pub fn velocity(bodies: BodySlices, body: usize) Vec {
+        return bodies.velocities[body];
+    }
+    pub fn angular(bodies: BodySlices, body: usize) Vec {
+        return bodies.angular_velocities[body];
+    }
+    pub fn lowest(bodies: BodySlices, body: usize) f32 {
+        return bodies.lowest_points[body];
+    }
+};
+
+/// What a type of bodies must offer the judgement - `BodySlices`' functions, by name: checked where a judgement is
+/// made for it, so a missing one is named rather than found deep in an instantiation.
+fn requireBodies(comptime Bodies: type) void {
+    const reads = [_][]const u8{ "count", "position", "rotation", "velocity", "angular", "lowest" };
+    for (reads) |name| {
+        if (!@hasDecl(Bodies, name)) {
+            @compileError(@typeName(Bodies) ++ " lacks `" ++ name ++ "`, which the judgement reads (see BodySlices)");
         }
     }
+}
+
+/// How far the simulated character is from the reference, in the eight ways that matter.
+///
+/// Split deliberately into POSE and PLACE. The pose terms are measured in the root's own frame, so
+/// they answer "is the body making the right shape, moving the right way?" without caring where it
+/// is. The root terms answer the rest: "and is it in the right place, facing the right way?" A
+/// character that made perfect shapes while drifting across the room would score full marks on the
+/// first four and fail the last two, which is exactly the distinction a tracking reward needs.
+pub const TrackingError = struct {
+    /// Mean over bodies of the distance between them, in the root's frame (metres).
+    pose_position: f32,
+    /// ...and the WORST single body's distance, same measure (metres). The mean hides one limb far off: an arm
+    /// pinned under the body is a metre out while the other bodies are fine, and the mean barely moves. MimicKit
+    /// ends an episode on exactly this - its worst body - rather than on an average. Root frame, like the mean:
+    /// the body being in the wrong PLACE is the root terms' job, this is the body being the wrong SHAPE.
+    worst_body: f32,
+    /// Mean over bodies of the angle between them, root-relative (radians).
+    pose_rotation: f32,
+    /// Mean over bodies of the velocity difference, in the root's frame (m/s).
+    velocity: f32,
+    /// Mean over bodies of the angular velocity difference, in the root's frame (rad/s).
+    angular: f32,
+    /// How far the root itself is from where the reference puts it (metres, world).
+    root_position: f32,
+    /// And how far it is from facing the way the reference faces (radians).
+    root_rotation: f32,
+    /// GRAVITY, which every term above but the root's two is blind to - they measure the pose from the root's
+    /// own frame, so a body lying on the floor with the right joint angles matches a standing reference. The
+    /// mean over bodies of the difference in HEIGHT above the floor (metres, world z)...
+    height: f32,
+    /// ...and how far the UP direction, as each root sees it, differs (the distance between two unit vectors,
+    /// 0 to 2): tilt against gravity, what SuperTrack's L_up measures.
+    up: f32,
+    /// UNEXPECTED CONTACT (metres): of the bodies the character has ON the floor (lowest point within
+    /// `contact_band`), the highest the REFERENCE holds its counterpart - 0 when nothing unexpected touches.
+    /// A knee down while the reference stands reads the reference knee's height (~0.45 m on Geno); the get-up's
+    /// hands and knees on the floor read 0, because the reference's are down too. MimicKit's fastest fall signal
+    /// is contact, but through a list of bodies allowed to touch PER MOTION; measured against the reference it
+    /// needs no list - only the bodies a robot always stands on are exempt (`Task.contact_exempt`).
+    /// Needs `State.lowest` (filled by `stateOf`); a state without geometry never touches, so this reads 0.
+    unexpected_contact: f32,
+    /// The HEAD's height off the reference head's (metres, world z) - SuperTrack's whole failure rule: an episode
+    /// ends when this passes 25 cm (plan F3b). 0 when no head was given (`trackingError`); a judge names the head
+    /// per robot (`Task.head_body`) and asks `trackingErrorWithHead`.
+    head_height: f32,
+};
+
+/// How close to the floor a body's lowest point must be to count as touching it (metres). Resting contact
+/// sits within a few millimetres (Geno's soles 4.5 mm into the floor when copied from a capture); a body a
+/// centimetre up is clearly not bearing on it.
+pub const contact_band: f32 = 0.01;
+
+/// The angle between two rotations, taken from the vector part of their difference so that small
+/// angles stay accurate in f32 (`acos` of a w near 1 loses half its digits).
+pub fn angleBetween(a: Quat, b: Quat) f32 {
+    var rel: Quat = qmul(a, conjugate(b));
+    if (rel[3] < 0.0) {
+        rel = -rel;
+    }
+    return 2.0 * asinRad(@min(1.0, length3(vec(rel[0], rel[1], rel[2]))));
+}
+
+/// `trackingError` with the head's height gap measured too (`TrackingError.head_height`) - what a judge asks, having
+/// resolved the robot's head (`Task.head_body`). One implementation: `trackingError` is this with no head.
+pub fn trackingErrorOver(
+    comptime Bodies: type,
+    sim: Bodies,
+    reference: Bodies,
+    root: usize,
+    head: ?usize,
+) TrackingError {
+    comptime requireBodies(Bodies);
+    const bodies: usize = sim.count();
+    assertf(bodies > 1 and reference.count() == bodies, @src(), "{d} bodies against {d}", .{
+        bodies,
+        reference.count(),
+    });
+    const to_local: Quat = conjugate(sim.rotation(root));
+    const to_local_ref: Quat = conjugate(reference.rotation(root));
+    var out: TrackingError = .{
+        .pose_position = 0.0,
+        .worst_body = 0.0,
+        .pose_rotation = 0.0,
+        .velocity = 0.0,
+        .angular = 0.0,
+        .root_position = length3(sim.position(root) - reference.position(root)),
+        .root_rotation = angleBetween(sim.rotation(root), reference.rotation(root)),
+        .height = 0.0,
+        .up = length3(rotate(to_local, vec(0.0, 0.0, 1.0)) - rotate(to_local_ref, vec(0.0, 0.0, 1.0))),
+        .unexpected_contact = 0.0,
+        .head_height = if (head) |h| @abs(sim.position(h)[2] - reference.position(h)[2]) else 0.0,
+    };
+    // Body 0 is the world, and the root's own pose terms are zero by construction; both are still
+    // counted so the mean is over the same number of bodies every time, which keeps a reward
+    // comparable between models.
+    const count: f32 = float(bodies - 1);
+    for (1..bodies) |b| {
+        const p: Vec = rotate(to_local, sim.position(b) - sim.position(root));
+        const p_ref: Vec = rotate(to_local_ref, reference.position(b) - reference.position(root));
+        const r: Quat = qmul(to_local, sim.rotation(b));
+        const r_ref: Quat = qmul(to_local_ref, reference.rotation(b));
+        const v: Vec = rotate(to_local, sim.velocity(b));
+        const v_ref: Vec = rotate(to_local_ref, reference.velocity(b));
+        const w: Vec = rotate(to_local, sim.angular(b));
+        const w_ref: Vec = rotate(to_local_ref, reference.angular(b));
+        const body_distance: f32 = length3(p - p_ref);
+        out.pose_position += body_distance / count;
+        out.worst_body = @max(out.worst_body, body_distance);
+        out.height += @abs(sim.position(b)[2] - reference.position(b)[2]) / count;
+        out.pose_rotation += angleBetween(r, r_ref) / count;
+        out.velocity += length3(v - v_ref) / count;
+        out.angular += length3(w - w_ref) / count;
+        // A body down that the reference holds up. An unknown reference height (no geometry) cannot accuse
+        // anything, so it is skipped rather than read as "very high".
+        const touching: bool = sim.lowest(b) < contact_band;
+        const reference_known: bool = reference.lowest(b) < no_shape_height;
+        if (touching and reference_known) {
+            out.unexpected_contact = @max(out.unexpected_contact, reference.lowest(b));
+        }
+    }
+    return out;
+}
+
+/// What each part of being wrong costs. Every term is `weight * exp(-error / scale)`, so a term at
+/// its scale is worth about a third of its weight, and the whole reward lands in [0, 1] when the
+/// weights sum to one.
+///
+/// A weighted SUM rather than a product, because a product means any single term near zero throws
+/// the whole reward away - which is right for a controller that must never fail a term, and wrong
+/// for a learner that has to be told which way is better while it is still bad at everything.
+pub const RewardWeights = struct {
+    pose_position: f32 = 0.3,
+    pose_position_scale: f32 = 0.1,
+    pose_rotation: f32 = 0.3,
+    pose_rotation_scale: f32 = 0.25,
+    velocity: f32 = 0.1,
+    velocity_scale: f32 = 1.0,
+    angular: f32 = 0.1,
+    angular_scale: f32 = 5.0,
+    root_position: f32 = 0.1,
+    root_position_scale: f32 = 0.15,
+    root_rotation: f32 = 0.1,
+    root_rotation_scale: f32 = 0.3,
+    /// THE GRAVITY GATE (Sep 26). The terms above add up, and 80% of them measure the pose from the root's own
+    /// frame - so a body lying on the floor with the right joint angles earns about 0.8 while its reference
+    /// stands. SuperTrack's reward is ONE exponential of every loss, heights and up included, so any large loss
+    /// sinks all of it; here that becomes a gate: when set, the whole reward is multiplied by
+    /// exp(-height / height_scale) and exp(-up / up_scale). Perfect tracking still earns exactly 1. Zero - the
+    /// default - leaves the reward exactly as it was.
+    height_scale: f32 = 0.0,
+    up_scale: f32 = 0.0,
+};
+
+/// The reward for one step: 1 when the characters coincide, falling smoothly from there.
+pub fn reward(err: TrackingError, w: RewardWeights) f32 {
+    var total: f32 = w.pose_position * @exp(-err.pose_position / w.pose_position_scale) +
+        w.pose_rotation * @exp(-err.pose_rotation / w.pose_rotation_scale) +
+        w.velocity * @exp(-err.velocity / w.velocity_scale) +
+        w.angular * @exp(-err.angular / w.angular_scale) +
+        w.root_position * @exp(-err.root_position / w.root_position_scale) +
+        w.root_rotation * @exp(-err.root_rotation / w.root_rotation_scale);
+    if (w.height_scale > 0.0) {
+        total *= @exp(-err.height / w.height_scale);
+    }
+    if (w.up_scale > 0.0) {
+        total *= @exp(-err.up / w.up_scale);
+    }
+    return total;
+}
+
+/// SUPERMIMIC'S REWARD (Liao et al., 2026: "SuperMimic: Scaling Humanoid Whole-Body Control with One Differentiable
+/// World Model") - the measure its evaluation scores a clip by, kept beside this file's own reward so a run can be
+/// read on SuperMimic's scale. Six bounded exponentials of squared errors, each 1 when the character and its reference
+/// coincide:
+///
+///     body positions     every body against the reference RE-ANCHORED to the character: the reference turned about
+///                        the vertical by the heading difference between the two roots, and moved to the character's
+///                        ground position at its own height - so drifting across the floor or facing a little aside
+///                        costs nothing here, while the pose, the height and the tilt are judged in full
+///     body rotations     the same re-anchoring; the squared angle between each body's two rotations
+///     body velocities    linear and angular, in world axes, as they are
+///     the root           its position and its rotation against the reference's, as they are - half weight each
+///
+/// Each body term is averaged over every body, the root included and the world not, as this file's own reward reads
+/// them (SuperMimic averages over fourteen chosen bodies of its robot). A step earns at most the sum of the weights -
+/// 5 with SuperMimic's, the four body terms at 1 and the root's two at a half (`maxStepTracking`). SuperMimic also
+/// subtracts two penalties, the change of the policy's action since the last decision and joints near their limits,
+/// which need the actions and the joints rather than two states.
+pub const SuperMimicScales = struct {
+    /// Each term's scale, in its error's units (metres, radians, metres and radians a second): a term whose error
+    /// is at its scale is worth exp(-1) of its weight.
+    body_position: f32 = 0.3,
+    body_rotation: f32 = 0.4,
+    body_velocity: f32 = 1.0,
+    body_angular: f32 = 3.14,
+    root_position: f32 = 0.3,
+    root_rotation: f32 = 0.4,
+    /// Each body term's weight, and each root term's.
+    body_weight: f32 = 1.0,
+    root_weight: f32 = 0.5,
+    /// The two penalties' weights: on the squared change of the policy's raw action since its previous decision
+    /// (`superMimicActionRate`), and on how far limited joints are past their soft range (`superMimicJointLimitExcess`)
+    /// - the range narrowed about its middle to `soft_limit_share` of its width.
+    action_rate_weight: f32 = -0.1,
+    joint_limit_weight: f32 = -2.0,
+    soft_limit_share: f32 = 0.9,
+    /// THE SERVO's EFFORT (`EffortSums`), charged per decision - zero by default; the night's recipe sets the torque's
+    /// very small. The torque's on the mean of (tau / (m g))^2 over the actuated dofs and the decision's steps...
+    torque_weight: f32 = 0.0,
+    /// ...the energy's on the energy per unit of mass.
+    energy_weight: f32 = 0.0,
+
+    /// The most one step's tracking earns: every term at 1.
+    pub fn maxStepTracking(scales: SuperMimicScales) f32 {
+        const body_terms: f32 = 4.0 * scales.body_weight;
+        const root_terms: f32 = 2.0 * scales.root_weight;
+        return body_terms + root_terms;
+    }
+};
+
+/// SuperMimic's six terms for one step, each in [0, 1], and their weighted sum.
+pub const SuperMimicTracking = struct {
+    body_position: f32,
+    body_rotation: f32,
+    body_velocity: f32,
+    body_angular: f32,
+    root_position: f32,
+    root_rotation: f32,
+    /// The weighted sum: at most `SuperMimicScales.maxStepTracking`.
+    total: f32,
+};
+
+/// Where a rotation points the frame's x axis, as an angle about the vertical seen from above - its heading.
+fn headingAngle(rotation: Quat) f32 {
+    const facing: Vec = rotate(rotation, vec(1, 0, 0));
+    return atan2Rad(facing[1], facing[0]);
+}
+
+/// One of SuperMimic's terms: 1 at no error, exp(-1) where the squared error is the scale's square, falling toward 0
+/// beyond - bounded, so no single term can dominate the step.
+fn boundedTerm(squared_error: f32, scale: f32) f32 {
+    return @exp(-squared_error / (scale * scale));
+}
+
+/// SuperMimic's tracking terms (`SuperMimicScales`) for `sim` against `reference`, both whole-body states in world
+/// space, `root` the character's root body.
+pub fn superMimicTrackingOver(
+    comptime Bodies: type,
+    sim: Bodies,
+    reference: Bodies,
+    root: usize,
+    scales: SuperMimicScales,
+) SuperMimicTracking {
+    comptime requireBodies(Bodies);
+    // The re-anchoring: the turn about the vertical is the heading of the roots' RELATIVE rotation, which differs
+    // from the difference of their headings when a root is tilted; the anchor is the character's ground position at
+    // the reference's height.
+    const relative_rotation: Quat = qmul(sim.rotation(root), conjugate(reference.rotation(root)));
+    const turn: Quat = quatFromAxisAngle(vec(0, 0, 1), headingAngle(relative_rotation));
+    const sim_root: Vec = sim.position(root);
+    const reference_root: Vec = reference.position(root);
+    const anchor: Vec = vec(sim_root[0], sim_root[1], reference_root[2]);
+    const bodies: usize = sim.count();
+    var position_error_sum: f32 = 0;
+    var rotation_error_sum: f32 = 0;
+    var velocity_error_sum: f32 = 0;
+    var angular_error_sum: f32 = 0;
+    for (1..bodies) |body| {
+        const anchored_position: Vec = anchor + rotate(turn, reference.position(body) - reference_root);
+        const anchored_rotation: Quat = qmul(turn, reference.rotation(body));
+        const position_gap: Vec = anchored_position - sim.position(body);
+        const rotation_gap: f32 = angleBetween(anchored_rotation, sim.rotation(body));
+        const velocity_gap: Vec = reference.velocity(body) - sim.velocity(body);
+        const angular_gap: Vec = reference.angular(body) - sim.angular(body);
+        position_error_sum += dot3(position_gap, position_gap);
+        rotation_error_sum += rotation_gap * rotation_gap;
+        velocity_error_sum += dot3(velocity_gap, velocity_gap);
+        angular_error_sum += dot3(angular_gap, angular_gap);
+    }
+    const body_count: f32 = float(bodies - 1);
+    const root_position_gap: Vec = reference_root - sim_root;
+    const root_rotation_gap: f32 = angleBetween(reference.rotation(root), sim.rotation(root));
+    const position_error: f32 = position_error_sum / body_count;
+    const rotation_error: f32 = rotation_error_sum / body_count;
+    const velocity_error: f32 = velocity_error_sum / body_count;
+    const angular_error: f32 = angular_error_sum / body_count;
+    const root_position_error: f32 = dot3(root_position_gap, root_position_gap);
+    const root_rotation_error: f32 = root_rotation_gap * root_rotation_gap;
+    const body_position: f32 = boundedTerm(position_error, scales.body_position);
+    const body_rotation: f32 = boundedTerm(rotation_error, scales.body_rotation);
+    const body_velocity: f32 = boundedTerm(velocity_error, scales.body_velocity);
+    const body_angular: f32 = boundedTerm(angular_error, scales.body_angular);
+    const root_position: f32 = boundedTerm(root_position_error, scales.root_position);
+    const root_rotation: f32 = boundedTerm(root_rotation_error, scales.root_rotation);
+    const body_terms: f32 = body_position + body_rotation + body_velocity + body_angular;
+    const root_terms: f32 = root_position + root_rotation;
+    return .{
+        .body_position = body_position,
+        .body_rotation = body_rotation,
+        .body_velocity = body_velocity,
+        .body_angular = body_angular,
+        .root_position = root_position,
+        .root_rotation = root_rotation,
+        .total = scales.body_weight * body_terms + scales.root_weight * root_terms,
+    };
+}
+
+/// One number's change between two actions, squared - what SuperMimic's action rate sums over an action's numbers, in
+/// order (`superMimicActionRate`, robotgpu's `judge_rewards`).
+pub fn actionChangeSquared(now: f32, before: f32) f32 {
+    const change: f32 = now - before;
+    return change * change;
+}
+
+/// The first of SuperMimic's penalties: the squared change of the action since the previous step, summed over its
+/// components. SuperMimic penalises the action its environment is given, which nothing filters there; here it is the
+/// action the fleet is given - the policy's own where nothing filters it, its filtered one where the caller runs
+/// The action filter (`robot_policy.Controller`), held between decisions, so each decision's change is counted once. An
+/// episode's first step is measured against zero, as SuperMimic resets its previous action.
+pub fn superMimicActionRate(action: []const f32, previous_action: []const f32) f32 {
+    var change_squared: f32 = 0;
+    for (action, previous_action) |now, before| {
+        change_squared += actionChangeSquared(now, before);
+    }
+    return change_squared;
+}
+
+/// ONE JOINT's EXCESS PAST ITS SOFT LIMIT (SuperMimic's joint-limit term), by its type. A hinge's or a slide's position
+/// past the soft band about its range's middle, `soft_limit_share` of its half-width each way. A ball is limited by its
+/// rotation box instead (`ballBoxExcess`), a free joint not at all.
+pub fn jointLimitExcess(
+    coordinates: JointCoordinates,
+    joint_type: JointType,
+    range: [2]f32,
+    soft_limit_share: f32,
+) f32 {
+    // One value chosen, one return: a switch whose every arm returns leaves an unreachable merge behind it in the
+    // GPU translation, which WGSL compilers warn of.
+    const excess: f32 = switch (joint_type) {
+        .hinge, .slide => hinge: {
+            const middle: f32 = 0.5 * (range[0] + range[1]);
+            const soft_half_width: f32 = 0.5 * (range[1] - range[0]) * soft_limit_share;
+            const soft_low: f32 = middle - soft_half_width;
+            const soft_high: f32 = middle + soft_half_width;
+            const position: f32 = coordinates.single();
+            break :hinge @max(position - soft_high, 0) + @max(soft_low - position, 0);
+        },
+        // A ball's limit is its rotation box (`ballBoxExcess`); a free joint has none.
+        .ball, .free => 0,
+    };
+    return excess;
+}
+
+/// A BALL's ROTATION AS A ROTATION VECTOR: its axis times its angle, the shorter way round (w made non-negative), from
+/// the quaternion's vector part as `angleBetween` takes it, so small turns stay accurate in f32.
+pub fn rotationVectorOf(rotation: Quat) Vec {
+    const unit: Quat = if (rotation[3] < 0.0) -rotation else rotation;
+    const vector_part: Vec = vec(unit[0], unit[1], unit[2]);
+    const sine: f32 = length3(vector_part);
+    if (sine < 1.0e-12) {
+        return vector_part * splat(2.0);
+    }
+    const angle: f32 = 2.0 * asinRad(@min(1.0, sine));
+    return vector_part * splat(angle / sine);
+}
+
+/// The rotation a rotation vector stands for (`rotationVectorOf` undone).
+pub fn rotationOfVector(rotation_vector: Vec) Quat {
+    const angle: f32 = length3(rotation_vector);
+    if (angle < 1.0e-12) {
+        return normalizeQuat(.{ 0.5 * rotation_vector[0], 0.5 * rotation_vector[1], 0.5 * rotation_vector[2], 1.0 });
+    }
+    const half_angle: f32 = 0.5 * angle;
+    const scale: f32 = @sin(half_angle) / angle;
+    return .{ rotation_vector[0] * scale, rotation_vector[1] * scale, rotation_vector[2] * scale, @cos(half_angle) };
+}
+
+/// A BALL's LIMITS AS ITS CAPTURES DRAW THEM: a box in rotation-vector space, each component's least and greatest over
+/// every captured frame, widened by a margin (`rotationBoxes`). Every captured pose is inside its box by
+/// construction; a knee's bend lies along one component whose low end sits near zero, so a backward bend leaves it.
+pub const RotationBox = struct {
+    /// The captures' mean rotation: the box is drawn around it, so every captured rotation sits far from the half
+    /// turn where a rotation vector flips sign (it takes the shorter way round).
+    center: Quat = quat_identity,
+    low: Vec,
+    high: Vec,
+};
+
+/// A ball's rotation as its box measures it: the rotation vector of the turn from the box's center to it.
+fn rotationVectorInBox(rotation: Quat, box: RotationBox) Vec {
+    return rotationVectorOf(qmul(conjugate(box.center), rotation));
+}
+
+/// EACH BALL's ROTATION BOX from `frame_count` poses of the model's coordinates (frame after frame - every clip's),
+/// each component widened by `margin` radians; null for a joint that is not a ball.
+pub fn rotationBoxes(
+    m: *const Model,
+    poses: []const f32,
+    frame_count: usize,
+    margin: f32,
+    out: []?RotationBox,
+) void {
+    const coordinate_count: usize = m.coordinate_count;
+    for (out, 0..) |*box, joint| {
+        if (m.joint_type[joint] != .ball) {
+            box.* = null;
+            continue;
+        }
+        // The center: the captured rotations' mean - each turned to the first's hemisphere (q and -q are one
+        // rotation), summed and normalized, which for rotations this close together is their mean.
+        var sum: Quat = .{ 0, 0, 0, 0 };
+        var first: Quat = quat_identity;
+        for (0..frame_count) |frame| {
+            const pose: []const f32 = poses[frame * coordinate_count ..][0..coordinate_count];
+            const rotation: Quat = readJointCoordinates(m, joint, pose).ballOrientation();
+            if (frame == 0) {
+                first = rotation;
+            }
+            const same_hemisphere: bool = @reduce(.Add, rotation * first) >= 0;
+            sum += if (same_hemisphere) rotation else -rotation;
+        }
+        const center: Quat = normalizeQuat(sum);
+        var low: Vec = splat(1.0e30);
+        var high: Vec = splat(-1.0e30);
+        for (0..frame_count) |frame| {
+            const pose: []const f32 = poses[frame * coordinate_count ..][0..coordinate_count];
+            const rotation: Quat = readJointCoordinates(m, joint, pose).ballOrientation();
+            const rotation_vector: Vec = rotationVectorInBox(rotation, .{ .center = center, .low = low, .high = high });
+            low = @min(low, rotation_vector);
+            high = @max(high, rotation_vector);
+        }
+        box.* = .{ .center = center, .low = low - splat(margin), .high = high + splat(margin) };
+    }
+}
+
+/// How far a ball's rotation lies outside its box: each component's distance past its high or below its low, summed.
+pub fn ballBoxExcess(rotation: Quat, box: RotationBox) f32 {
+    const rotation_vector: Vec = rotationVectorInBox(rotation, box);
+    const above: Vec = @max(rotation_vector - box.high, splat(0.0));
+    const below: Vec = @max(box.low - rotation_vector, splat(0.0));
+    const outside: Vec = above + below;
+    return outside[0] + outside[1] + outside[2];
+}
+
+/// ONE BALL's TARGET INSIDE ITS BOX - the rule `clampBalls` and robotgpu's `reference_targets` both follow: outside,
+/// its rotation vector clamped component by component and turned back into a rotation; inside, the rotation itself,
+/// to the bit.
+pub fn ballTargetInBox(rotation: Quat, box: RotationBox) Quat {
+    const rotation_vector: Vec = rotationVectorInBox(rotation, box);
+    const clamped: Vec = clamp(rotation_vector, box.low, box.high);
+    const inside: bool = @reduce(.And, clamped == rotation_vector);
+    if (inside) {
+        return rotation;
+    }
+    return qmul(box.center, rotationOfVector(clamped));
+}
+
+/// EVERY BALL's TARGET CLAMPED INTO ITS BOX, as `clampHinges` clamps a hinge's: a target outside has its rotation
+/// vector clamped component by component and written back; a target inside is left as it is, to the bit.
+pub fn clampBalls(m: *const Model, boxes: []const ?RotationBox, pose: []f32) void {
+    for (boxes, 0..) |maybe_box, joint| {
+        const box: RotationBox = maybe_box orelse continue;
+        const rotation: Quat = readJointCoordinates(m, joint, pose).ballOrientation();
+        const first: u32 = m.joint_first_coordinate[joint];
+        pose[first..][0..4].* = ballTargetInBox(rotation, box);
+    }
+}
+
+/// SUPERMIMIC's JOINT-LIMIT TERM: every limited hinge's and slide's excess past its soft limit (`jointLimitExcess`),
+/// and every boxed ball's excess past its box (`ballBoxExcess`), summed in joint order.
+pub fn superMimicJointLimitExcess(
+    m: *const Model,
+    boxes: []const ?RotationBox,
+    joint_positions: []const f32,
+    soft_limit_share: f32,
+) f32 {
+    var excess: f32 = 0;
+    for (m.joint_range, boxes, 0..) |maybe_range, maybe_box, joint| {
+        const coordinates: JointCoordinates = readJointCoordinates(m, joint, joint_positions);
+        if (maybe_box) |box| {
+            excess += ballBoxExcess(coordinates.ballOrientation(), box);
+            continue;
+        }
+        const range: [2]f32 = maybe_range orelse continue;
+        excess += jointLimitExcess(coordinates, m.joint_type[joint], range, soft_limit_share);
+    }
+    return excess;
+}
+
+/// When to give up on an episode.
+///
+/// By tracking error, and by nothing else. The obvious test - "has the head dropped below some
+/// height?" - is wrong for this set of clips: the get-up spends ten seconds lying on the floor, and
+/// a height test would call the best possible tracking a failure. Losing the reference is the only
+/// failure there is.
+pub const Termination = struct {
+    pose_position: f32 = 0.35,
+    pose_rotation: f32 = 1.2,
+    root_position: f32 = 0.6,
+    root_rotation: f32 = 1.5,
+    /// The reference is also lost when the bodies' mean HEIGHT differs from its by more than this (metres) -
+    /// RELATIVE to the reference, so the get-up's ten seconds on the floor are fine while the reference lies
+    /// there too: SuperTrack's rule (the head 25 cm off the reference's), over every body. Off by default.
+    height: f32 = 1.0e30,
+    /// ...and when the body's TILT against gravity differs from the reference's by more than this (the up
+    /// vectors' distance, each in its own root's frame: 0.8 is ~47 degrees) - falling over, whatever the
+    /// heading. Off by default.
+    up: f32 = 1.0e30,
+    /// ...and when any ONE body is further than this from its reference counterpart, in the root's frame (metres)
+    /// - the limb the mean cannot see (`TrackingError.worst_body`). Off by default.
+    worst_body: f32 = 1.0e30,
+    /// ...and when a body touches the floor while the reference holds it higher than this (metres) - a knee, a
+    /// hand, the hips going down where the reference's are not (`TrackingError.unexpected_contact`). Off by
+    /// default.
+    unexpected_contact: f32 = 1.0e30,
+    /// ...and when the HEAD's height is further than this from the reference head's (metres) - SuperTrack's rule
+    /// (25 cm), clip-agnostic and relative, so a get-up's floor is fine while the reference lies there too
+    /// (`TrackingError.head_height`; the head resolved from `Task.head_body`). Off by default.
+    head_height: f32 = 1.0e30,
+
+    /// Steps after a reset during which losing the reference does not end the episode. A policy bad enough
+    /// to fail within a training window's length leaves NO window in its data - training then stops for
+    /// good, and the bad policy never improves (seen on the phone: updates frozen, 0.1 s to failure). A
+    /// grace of the window's length guarantees every episode one. 0 for the old robot's fleets.
+    grace_steps: u32 = 0,
+
+    // ==== THE STRUCT IS THE LIST ====
+    //
+    // Every limit here is an `f32` named EXACTLY like the `TrackingError` field it limits, and `scaled`,
+    // `terminated` and the tests walk the fields instead of naming them. So adding a limit is adding it HERE and
+    // the error it limits THERE - nothing else. Lists written out by hand drifted twice: geno_train's leash
+    // dropped the tilt limit when `up` was added (Sep 26), and `scaled` / `terminated` each had to be edited for
+    // every new limit. The comptime check below turns a limit with no matching error into a compile error that
+    // says so, instead of an `@field` error somewhere else.
+    comptime {
+        const info = @typeInfo(Termination).@"struct";
+        for (info.field_names, info.field_types) |name, field_type| {
+            if (field_type == f32 and !@hasField(TrackingError, name)) {
+                @compileError("Termination." ++ name ++ " limits nothing: TrackingError has no field of that name");
+            }
+        }
+    }
+
+    /// Every limit scaled by `fraction` (the grace kept) - a looser leash (> 1) or an early warning (< 1).
+    pub fn scaled(self: Termination, fraction: f32) Termination {
+        var out: Termination = self;
+        const info = @typeInfo(Termination).@"struct";
+        inline for (info.field_names, info.field_types) |name, field_type| {
+            if (field_type == f32) {
+                @field(out, name) *= fraction;
+            }
+        }
+        return out;
+    }
+};
+
+/// Has the reference been lost? True when ANY error exceeds its limit - each `Termination` field against the
+/// `TrackingError` field of the same name (see "THE STRUCT IS THE LIST" in `Termination`).
+pub fn terminated(err: TrackingError, limits: Termination) bool {
+    const info = @typeInfo(Termination).@"struct";
+    inline for (info.field_names, info.field_types) |name, field_type| {
+        if (field_type == f32 and @field(err, name) > @field(limits, name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// AN EPISODE's COUNTERS for one character, carried by the judgement from decision to decision.
+pub const EpisodeCounters = struct {
+    /// Decisions since the episode began - advanced before the judgement reads it.
+    steps: u32 = 0,
+    /// Decisions left in the aftermath of a loss; 0 outside one.
+    aftermath_steps_left: u32 = 0,
+    /// Decisions in a row the reference has been held again, in an aftermath.
+    return_streak: u32 = 0,
+    /// Decisions since the reference was lost, in an aftermath.
+    steps_since_loss: u32 = 0,
+};
+
+/// AN EPISODE's RULES: how long a start is graced, how long an aftermath lasts and how long a return must hold, the
+/// longest episode, and whether this character lives on through an aftermath at all.
+pub const EpisodeRules = struct {
+    grace_steps: u32,
+    aftermath_steps: u32,
+    return_steps: u32,
+    max_steps: u32,
+    keeps_aftermath: bool,
+};
+
+/// WHAT A DECISION's JUDGEMENT DECIDES about an episode (`judgeEpisode`).
+pub const EpisodeVerdict = struct {
+    /// The decision was taken in an aftermath: the reference already lost, the rule not asked.
+    in_aftermath: bool,
+    /// THE FAILURE: the decision the reference was lost - counted once, never again in the aftermath that follows.
+    lost: bool,
+    /// Back with the reference: held `return_steps` decisions in a row in an aftermath, which ends here.
+    returned: bool,
+    /// A loss the character lives on from, into an aftermath.
+    aftermath_begins: bool,
+    /// The episode ends with this decision.
+    finished: bool,
+    /// It ends at a loss the character does not live on from - terminated, as are a break and an aftermath run out.
+    ends_at_loss: bool,
+    /// It ends at the longest episode - truncated, as is a clip's end.
+    capped: bool,
+    /// A return's length, the decisions since the loss - 0 unless `returned`.
+    return_length: u32,
+};
+
+/// WHAT A RANDOM DRAW IS FOR - each purpose its own stream (`drawUniform`), so a draw added later never shifts the
+/// numbers another purpose draws.
+pub const DrawPurpose = enum(u32) {
+    start_clip,
+    start_frame,
+    start_in_trouble,
+    start_push_direction,
+    push_chance,
+    push_speed,
+    push_direction,
+    start_noise,
+    /// An action's exploration noise (`explorationNoise`), drawn at the decision's number, one per action.
+    explore_action,
+};
+
+/// One word scrambled - the PCG family's output permutation (O'Neill 2014): integer multiplies, xors and shifts, which
+/// every GPU computes exactly as the CPU does.
+fn scrambleWord(word: u32) u32 {
+    const stepped: u32 = word *% 747796405 +% 2891336453;
+    const shift: u5 = @intCast((stepped >> 28) + 4);
+    const permuted: u32 = ((stepped >> shift) ^ stepped) *% 277803737;
+    return (permuted >> 22) ^ permuted;
+}
+
+/// A COUNTER-BASED RANDOM WORD: a function of the run's seed, the world, a counter (the world's episode, or the
+/// decision), the draw's purpose and an index within it (a coordinate's start noise; 0 for a single draw), each folded
+/// in and scrambled in turn - no state to carry, so the CPU fleet and
+/// the device, which steps thousands of worlds at once, draw the same numbers for the same world.
+pub fn drawWord(
+    seed: u32,
+    world: u32,
+    counter: u32,
+    purpose: DrawPurpose,
+    index: u32,
+) u32 {
+    var word: u32 = scrambleWord(seed);
+    word = scrambleWord(word ^ world);
+    word = scrambleWord(word ^ counter);
+    word = scrambleWord(word ^ @backingInt(purpose));
+    word = scrambleWord(word ^ index);
+    return word;
+}
+
+/// The run's 64-bit seed folded into the 32 bits the draws take, both halves kept.
+pub fn drawSeed(seed: u64) u32 {
+    const low: u32 = @truncate(seed);
+    const high: u32 = @truncate(seed >> 32);
+    return scrambleWord(low ^ scrambleWord(high));
+}
+
+/// A UNIFORM INDEX below `count` (`drawWord`), by integers alone: the word's top 16 bits times `count`, shifted down 16
+/// - always below `count`, as `floor(drawUniform(...) * count)` is not (for a count in the hundreds that product can
+/// round up to `count` itself in f32). `count` at most 65536, so the product stays in 32 bits (WGSL has no 64-bit
+/// integers).
+pub fn drawBelow(
+    seed: u32,
+    world: u32,
+    counter: u32,
+    purpose: DrawPurpose,
+    index: u32,
+    count: u32,
+) u32 {
+    assertf(count > 0 and count <= 65536, @src(), "drawBelow: a count of {d}", .{count});
+    const top_bits: u32 = drawWord(seed, world, counter, purpose, index) >> 16;
+    return (top_bits * count) >> 16;
+}
+
+/// A UNIFORM DRAW in [0, 1) (`drawWord`): the word's top 24 bits as a fraction of 2^24 - exact in f32.
+pub fn drawUniform(
+    seed: u32,
+    world: u32,
+    counter: u32,
+    purpose: DrawPurpose,
+    index: u32,
+) f32 {
+    const top_bits: u32 = drawWord(seed, world, counter, purpose, index) >> 8;
+    return float(top_bits) * (1.0 / 16777216.0);
+}
+
+/// A STANDARD NORMAL DRAW (`drawWord`), by Box and Muller's transform of two uniform draws - the `index`th normal
+/// number of a purpose takes the uniform draws 2 index and 2 index + 1: sqrt(-2 ln u1) times the cosine of u2 turns,
+/// u1 from (0, 1] so the logarithm stays finite. `log`, `sqrt` and `cos` are what every GPU has.
+pub fn drawNormal(
+    seed: u32,
+    world: u32,
+    counter: u32,
+    purpose: DrawPurpose,
+    index: u32,
+) f32 {
+    const first: f32 = 1.0 - drawUniform(seed, world, counter, purpose, 2 * index);
+    const second: f32 = drawUniform(seed, world, counter, purpose, 2 * index + 1);
+    const radius: f32 = @sqrt(-2.0 * @log(first));
+    return radius * cosTurns(second);
+}
+
+/// AN ACTION's EXPLORATION NOISE - SuperTrack's: the policy's action plus `spread` (the noise scale times sigma) times
+/// a normal number, independent for every action and every decision. Drawn by counter, at the world, the decision's
+/// number and the action, so the device and the CPU explore with the very same numbers.
+pub fn explorationNoise(
+    seed: u32,
+    world: u32,
+    decision: u32,
+    action: u32,
+    spread: f32,
+) f32 {
+    const normal: f32 = drawNormal(seed, world, decision, .explore_action, action);
+    return spread * normal;
+}
+
+/// A SETTING THAT IS ON OR OFF, as a device's uniform holds it (robotgpu's `StepOptions`).
+pub const Switch = enum(u32) { enabled, disabled };
+
+/// THE SERVO's MODE on a device: off - the applied forces are the host's; toward rest - the spring damped toward zero
+/// velocity; toward motion - damped toward each dof's target velocity (the tracking task's velocity feedforward).
+pub const ServoMode = enum(u32) { off, toward_rest, toward_motion };
+
+/// THE EPISODE's RULES as a device takes them (robot_track's `Options` and `Task.termination.grace_steps`): every
+/// length in decisions.
+pub const EpisodeOptions = struct {
+    grace_steps: u32,
+    aftermath_steps: u32,
+    return_steps: u32,
+    max_steps: u32,
+    /// The worlds below it live on through an aftermath (robot_track's `keepsAftermath`).
+    aftermath_world_count: u32,
+    /// Physics steps per decision, for the clip's end.
+    decision_physics_steps: u32,
+};
+
+/// HOW A WORLD's CLIP IS CHOSEN at a start on a device, as the CPU fleet's `ClipAssignment`: drawn (`random`), or the
+/// world's own by its index (`by_character`: world modulo the clips).
+pub const ClipAssignment = enum(u32) { random, by_character };
+
+/// THE JUDGEMENT's WEIGHTS: the tracker's reward weights and SuperMimic's scales, as robot_track's `Task` holds them
+/// (`weights`, `super_mimic`).
+pub const JudgementWeights = struct {
+    reward_weights: RewardWeights = .{},
+    scales: SuperMimicScales = .{},
+    /// The termination rule's limits (robot_track's `Task.termination`; its `grace_steps` is the episode's counters').
+    termination: Termination = .{},
+};
+
+/// THE TRAINER's FILTER AT EACH DECISION, as a device takes it (`filter_decision`): the share of a new choice in the
+/// joints' offsets and in the limbs' stiffnesses. 1 is no filter - a fleet has none of its own at the decision's rate;
+/// a trainer has, and names its shares.
+pub const DecisionFilterShares = struct {
+    offsets: f32 = 1,
+    stiffness: f32 = 1,
+};
+
+/// THE TRACKING TASK's SETTINGS, every world's, as ONE VALUE - what a CPU fleet's options and task say (robot_track's
+/// `Fleet.trackingSettings` builds it), and what a simulator on a device takes in one call (robotgpu's
+/// `CpuTwin.setTracking`, the host's `Sim.setTracking`), so no setting is left at a default nobody chose: the floor,
+/// the servo's law and mode, the action's scale and filters, the limbs' stiffness, the head body, the episode's
+/// rules, the judgement's weights, a start's rest and noise, the pushes and the curriculum. It lives here, below both
+/// the fleet and the device's kernels, so the fleet can describe itself without importing the device, and one
+/// definition serves the trainer and every check.
+pub const TrackingSettings = struct {
+    floor: Floor,
+    law: ServoLaw,
+    servo_mode: ServoMode,
+    action_scale: f32,
+    action_filter: f32,
+    /// The limbs' stiffness share (the fleet's `stiffness_filter`).
+    stiffness_filter: f32,
+    /// The action filter at each decision (`filter_decision`): the trainer's `filter` and `stiffness_filter`. 1: no
+    /// filter - the explored choice is the decision's action exactly.
+    decision_filter: f32 = 1,
+    decision_stiffness_filter: f32 = 1,
+    limb_stiffness: Switch,
+    head: ?usize,
+    episode: EpisodeOptions,
+    judgement: JudgementWeights,
+    /// The run's draw seed and how a world's clip is chosen at a start (`begin_reset`).
+    draw_seed: u32,
+    clip_assignment: ClipAssignment,
+    /// Whether a start rests on the floor, and its clearance (`rest_on_floor`).
+    rest_on_floor: Switch,
+    rest_clearance: f32,
+    /// A start's noise, the fleet's `start_noise` (`perturb_start`).
+    start_noise_pose: f32,
+    start_noise_velocity: f32,
+    /// The pushes (`push_worlds`, `start_in_trouble`): the fleet's `Pushes`, and a decision's seconds.
+    push_every: u32,
+    push_rate_per_second: f32,
+    push_speed_min: f32,
+    push_speed_max: f32,
+    push_start_share: f32,
+    decision_seconds: f32,
+    /// SuperMimic's curriculum on the device (`begin_reset`), and its returns' discount.
+    curriculum: Switch,
+    curriculum_discount: f32,
+    /// Each joint's rotation box, or null (the fleet's `rotation_boxes`): each ball's servo target clamped into its
+    /// own.
+    rotation_boxes: []const ?RotationBox,
+};
+
+/// SUPERMIMIC's START CURRICULUM, its numbers - their constants (`manager_terms.py`) as the defaults. A start's bin is
+/// drawn `uniform_share` uniformly, `hard_share` by a softmax of -`sharpness` G / scale (towards bins of low return),
+/// and the rest by that softmax's long-run average, which keeps `history_memory` of itself at each draw; a finished
+/// episode moves its start bin's G to `return_memory` G + (1 - `return_memory`) of its return.
+pub const StartCurriculumRule = struct {
+    uniform_share: f32 = 0.5,
+    hard_share: f32 = 0.4,
+    sharpness: f32 = 25.0,
+    history_memory: f32 = 0.999,
+    return_memory: f32 = 0.8,
+};
+
+/// SUPERMIMIC's START CURRICULUM, ITS SOFTMAX: each bin's share of the hard draws, `exp(-sharpness G / scale)`
+/// normalized over the bins - bins of low return G favoured. `return_scale` is the largest return (the largest step
+/// reward over 1 - gamma). Its largest exponent is subtracted first, so none overflows. Into `out`, one per bin.
+pub fn startBinSoftmax(
+    rule: StartCurriculumRule,
+    bin_returns: []const f32,
+    return_scale: f32,
+    out: []f32,
+) void {
+    var largest: f32 = -1.0e30;
+    for (bin_returns) |bin_return| {
+        largest = @max(largest, -rule.sharpness * bin_return / return_scale);
+    }
+    var exponent_sum: f32 = 0;
+    for (bin_returns, out) |bin_return, *share| {
+        share.* = @exp(-rule.sharpness * bin_return / return_scale - largest);
+        exponent_sum += share.*;
+    }
+    for (out) |*share| {
+        share.* /= exponent_sum;
+    }
+}
+
+/// THE SOFTMAX's LONG-RUN AVERAGE, folded once per sampling round - SuperMimic folds it once per call of its sampler,
+/// which draws every start of a step together: `history_memory` of itself, the rest of this round's softmax.
+pub fn foldStartBinHistory(
+    rule: StartCurriculumRule,
+    long_run: []f32,
+    softmax: []const f32,
+) void {
+    for (long_run, softmax) |*average, share| {
+        average.* = rule.history_memory * average.* + (1.0 - rule.history_memory) * share;
+    }
+}
+
+/// THE MIXTURE A START IS DRAWN FROM - pure, so a start reads it without changing it: `uniform_share` spread evenly,
+/// `hard_share` by the softmax, the rest by the long-run average (normalized). Into `out`, one per bin, summing to 1.
+pub fn startBinMixture(
+    rule: StartCurriculumRule,
+    softmax: []const f32,
+    long_run: []const f32,
+    out: []f32,
+) void {
+    const bin_count: f32 = float(softmax.len);
+    const history_share: f32 = 1.0 - rule.uniform_share - rule.hard_share;
+    var long_run_sum: f32 = 0;
+    for (long_run) |average| {
+        long_run_sum += average;
+    }
+    for (out, softmax, long_run) |*probability, share, average| {
+        const uniform_part: f32 = rule.uniform_share / bin_count;
+        const hard_part: f32 = rule.hard_share * share;
+        const history_part: f32 = history_share * average / long_run_sum;
+        probability.* = uniform_part + hard_part + history_part;
+    }
+}
+
+/// SUPERMIMIC's WHOLE SAMPLING CALL on one set of bins: the softmax of `bin_returns`, folded into `long_run`, then the
+/// mixture into `out` - `startBinSoftmax`, `foldStartBinHistory`, `startBinMixture` in turn. `out` holds the softmax
+/// between them.
+pub fn startBinProbabilities(
+    rule: StartCurriculumRule,
+    bin_returns: []const f32,
+    long_run: []f32,
+    return_scale: f32,
+    out: []f32,
+) void {
+    startBinSoftmax(rule, bin_returns, return_scale, out);
+    foldStartBinHistory(rule, long_run, out);
+    startBinMixture(rule, out, long_run, out);
+}
+
+/// A FINISHED EPISODE INTO ITS START BIN's RETURN ESTIMATE (SuperMimic's `update_start_bin_returns`):
+/// G <- memory G + (1 - memory) R, R the episode's discounted return - and, for an episode cut short rather than ended
+/// by failure, the tail it would have earned at its mean reward, gamma^length (mean) / (1 - gamma).
+pub fn updateStartBinReturn(
+    rule: StartCurriculumRule,
+    bin_return: *f32,
+    discounted_return: f32,
+    mean_reward: f32,
+    length: f32,
+    gamma: f32,
+    ended_by_failure: bool,
+) void {
+    const tail: f32 = if (ended_by_failure) 0.0 else @exp(length * @log(gamma)) * mean_reward / (1.0 - gamma);
+    const episode_return: f32 = discounted_return + tail;
+    bin_return.* = rule.return_memory * bin_return.* + (1.0 - rule.return_memory) * episode_return;
+}
+
+/// THE EPISODE JUDGED after a decision - grace, failure, aftermath, return and end, the one rule the CPU fleet and the
+/// device both follow. A character whose error is no longer finite is BROKEN, grace or not (every comparison with NaN
+/// is false, so the limits alone would let it run on). Out of grace and outside an aftermath, the termination rule
+/// (`terminated`) is asked; its firing LOSES the reference - and a character that keeps an aftermath lives on through
+/// one, the rule asked the other way round (is the reference held again?) until it RETURNS or the aftermath runs out.
+/// The episode ends at a loss with no aftermath, at a break, when an aftermath runs out, at the longest episode, or
+/// when `clip_over` (another decision would run past the clip). `counters` advanced in place.
+pub fn judgeEpisode(
+    counters: *EpisodeCounters,
+    rules: EpisodeRules,
+    err: TrackingError,
+    limits: Termination,
+    clip_over: bool,
+) EpisodeVerdict {
+    const finite_position: bool = err.pose_position == err.pose_position and err.pose_rotation == err.pose_rotation;
+    const finite_root: bool = err.root_position == err.root_position and err.root_rotation == err.root_rotation;
+    const broken: bool = !(finite_position and finite_root);
+    const graced: bool = counters.steps < rules.grace_steps;
+    const was_in_aftermath: bool = counters.aftermath_steps_left > 0;
+    const rule_fires: bool = !graced and !was_in_aftermath and terminated(err, limits);
+    const lost: bool = !was_in_aftermath and (broken or rule_fires);
+    var returned: bool = false;
+    if (was_in_aftermath) {
+        counters.steps_since_loss += 1;
+        const holds_again: bool = !broken and !terminated(err, limits);
+        counters.return_streak = if (holds_again) counters.return_streak + 1 else 0;
+        returned = rules.return_steps > 0 and counters.return_streak >= rules.return_steps;
+    }
+    const has_aftermath: bool = rules.aftermath_steps > 0 and rules.keeps_aftermath;
+    const aftermath_begins: bool = rule_fires and !broken and has_aftermath;
+    var return_length: u32 = 0;
+    if (aftermath_begins) {
+        counters.aftermath_steps_left = rules.aftermath_steps;
+        counters.return_streak = 0;
+        counters.steps_since_loss = 0;
+    } else if (returned) {
+        // Back with the reference: the aftermath ends here, and the episode goes on.
+        counters.aftermath_steps_left = 0;
+        return_length = counters.steps_since_loss;
+    } else if (was_in_aftermath) {
+        counters.aftermath_steps_left -= 1;
+    }
+    // An aftermath ends its episode only when it runs out - a failure to return.
+    const aftermath_ran_out: bool = counters.aftermath_steps_left == 0;
+    const aftermath_over: bool = was_in_aftermath and !returned and aftermath_ran_out;
+    const capped: bool = counters.steps >= rules.max_steps;
+    const ends_at_loss: bool = lost and !aftermath_begins;
+    // A broken body ends its episode whenever it breaks, in an aftermath too.
+    const finished: bool = ends_at_loss or broken or aftermath_over or capped or clip_over;
+    const verdict: EpisodeVerdict = .{
+        .in_aftermath = was_in_aftermath,
+        .lost = lost,
+        .returned = returned,
+        .aftermath_begins = aftermath_begins,
+        .finished = finished,
+        .ends_at_loss = ends_at_loss,
+        .capped = capped,
+        .return_length = return_length,
+    };
+    return verdict;
 }
 
 /// Renormalize every quaternion in `pos`. Integration walks a quaternion off the unit
 /// sphere a little each step, and the error compounds, so this runs after every advance.
 pub fn normalizeQuats(m: *const Model, pos: []f32) void {
-    for (0..m.njnt) |ji| {
-        const qadr: u32 = m.jnt_qpos_adr[ji];
-        const base: u32 = switch (m.jnt_type[ji]) {
+    for (0..m.joint_count) |ji| {
+        const qadr: u32 = m.joint_first_coordinate[ji];
+        const base: u32 = switch (m.joint_type[ji]) {
             .free => qadr + 3,
             .ball => qadr,
             .slide, .hinge => continue,
@@ -6466,10 +9377,66 @@ pub fn forward(m: *const Model, d: *Data) void {
     sensors(m, d, .velocity);
     forwardDynamics(m, d);
     solveConstraints(m, d);
-    if (m.nsensor > 0) {
+    if (m.sensor_count > 0) {
         bodyAccelerations(m, d);
         sensors(m, d, .force);
     }
+}
+
+/// THE SERVO's EFFORT, summed through a decision's physics steps: ENERGY, the sum of |tau q'| dt - braking spends as a
+/// motor without regeneration spends it - and TORQUE, the sum of (tau / (m g))^2, each over the actuated dofs and the
+/// steps; tau the servo's torque, m g the character's weight. (Measured from zero, not from the reference's own
+/// torques: those need the reference's contact forces, which nothing computes yet.) The reward divides them out:
+/// energy by the mass, torque by the dofs and the steps.
+pub const EffortSums = struct {
+    energy: f32 = 0,
+    torque_squares: f32 = 0,
+};
+
+/// One dof's effort over one physics step, added into `sums` - the one arithmetic the CPU fleet and the device
+/// follow, dof after dof in order. `weight` the character's mass times gravity.
+pub fn addDofEffort(
+    sums: *EffortSums,
+    torque: f32,
+    velocity: f32,
+    timestep: f32,
+    weight: f32,
+) void {
+    sums.energy += @abs(torque * velocity) * timestep;
+    const relative: f32 = torque / weight;
+    sums.torque_squares += relative * relative;
+}
+
+/// A character's mass: every body's but the world's.
+pub fn characterMass(m: *const Model) f32 {
+    var mass: f32 = 0;
+    for (m.body_mass[1..m.body_count]) |body_mass| {
+        mass += body_mass;
+    }
+    return mass;
+}
+
+/// THE EFFORT's COST for a decision - SuperMimic's torque and energy terms, the CPU fleet's and the device's: the
+/// torque's mean over the actuated dofs and the decision's physics steps, and the energy per unit of mass, each by its
+/// weight.
+pub fn effortCost(
+    sums: EffortSums,
+    scales: SuperMimicScales,
+    actuated_dofs: f32,
+    physics_steps: f32,
+    mass: f32,
+) f32 {
+    const torque_mean: f32 = sums.torque_squares / (actuated_dofs * physics_steps);
+    const energy_per_mass: f32 = sums.energy / mass;
+    return scales.torque_weight * torque_mean + scales.energy_weight * energy_per_mass;
+}
+
+/// A character's weight, its mass times gravity's magnitude: the scale of its effort's torque term.
+pub fn characterWeight(m: *const Model) f32 {
+    const mass: f32 = characterMass(m);
+    const gravity: Vec = m.opt.gravity;
+    const gravity_size: f32 = @sqrt(gravity[0] * gravity[0] + gravity[1] * gravity[1] + gravity[2] * gravity[2]);
+    return mass * gravity_size;
 }
 
 /// Advance the state by `dt` using semi-implicit Euler.
@@ -6505,28 +9472,28 @@ pub fn forward(m: *const Model, d: *Data) void {
 ///
 /// * AND IT COSTS NOTHING WHEN NOTHING IS DAMPED - the undamped path is the original two-line
 /// loop, chosen by a flag computed once at build time rather than by scanning every step.
-fn dampedVelocityStep(m: *const Model, d: *Data, dt: f32) void {
+pub fn dampedVelocityStep(m: *const Model, d: *Data, dt: f32) void {
     if (!m.has_dof_damping) {
-        for (0..m.nv) |i| {
-            d.vel[i] += dt * d.acc[i];
+        for (0..m.dof_count) |i| {
+            d.joint_velocities[i] += dt * d.joint_accelerations[i];
         }
         return;
     }
 
     // `M*dv = h*M*a` explicitly; implicitly it is `(M + h*B)*dv = h*M*a`, with the same right
     // hand side. Building the impulse first keeps this true whatever produced `acc`.
-    mulM(m, d, d.acc, d.implicit_rhs);
+    mulM(m, d, d.joint_accelerations, d.implicit_rhs);
     for (d.implicit_rhs) |*value| {
         value.* *= dt;
     }
 
     factorMDamped(m, d, dt);
     solveM(m, d, d.implicit_rhs);
-    for (0..m.nv) |i| {
-        d.vel[i] += d.implicit_rhs[i];
+    for (0..m.dof_count) |i| {
+        d.joint_velocities[i] += d.implicit_rhs[i];
     }
 
-    // * AND THE PLAIN FACTORISATION IS RESTORED. `qLD` is shared scratch: anything reaching for
+    // * AND THE PLAIN FACTORISATION IS RESTORED. `mass_factor` is shared scratch: anything reaching for
     // `solveM` afterwards expects the mass matrix, and leaving a damped factorisation behind
     // would quietly change every constraint's effective inertia.
     //
@@ -6535,7 +9502,7 @@ fn dampedVelocityStep(m: *const Model, d: *Data, dt: f32) void {
     // Measured on the standing Go1 (`zig build robot-bench`): a factorisation is ~690 ns
     // against a ~15 300 ns step, so this restore alone is **about 4.5% of every step** -
     // and the very next `forward` opens with `factorM` and overwrites it. Between the two
-    // there is nothing in the engine that reads `qLD`.
+    // there is nothing in the engine that reads `mass_factor`.
     //
     // It is kept anyway, and the reason is the word "engine". A CALLER sits in that gap by
     // design - that is the entire point of the `step1`/`step2` split - and `solveM`,
@@ -6544,7 +9511,7 @@ fn dampedVelocityStep(m: *const Model, d: *Data, dt: f32) void {
     // wrong MATRIX, because the stage is legitimately `.position` either way. A controller
     // scaling gains by `massDiagonal` between steps would silently get damped inertias.
     //
-    // * The cheap fix is a flag on `Data` saying which matrix `qLD` currently holds, so the
+    // * The cheap fix is a flag on `Data` saying which matrix `mass_factor` currently holds, so the
     // restore becomes lazy and the assert becomes possible. It is not done here because
     // "nothing is lazy, nothing is cached" is a property of this file worth more than 4.5%
     // - but if this step ever needs to be twice as fast, this is a known 4.5% with a known
@@ -6573,7 +9540,7 @@ fn dampedVelocityStep(m: *const Model, d: *Data, dt: f32) void {
 /// model with it.
 fn boundVelocity(m: *const Model, d: *Data) void {
     const bound: f32 = m.opt.max_velocity;
-    for (d.vel) |*v| {
+    for (d.joint_velocities) |*v| {
         if (!isFinite(v.*)) {
             // Not recoverable, but containable: the body stops rather than poisoning `M`.
             v.* = 0;
@@ -6583,9 +9550,9 @@ fn boundVelocity(m: *const Model, d: *Data) void {
     }
 }
 
-fn advanceEuler(m: *const Model, d: *Data, dt: f32) void {
-    for (0..m.na) |i| {
-        d.act[i] += dt * d.act_dot[i];
+pub fn advanceEuler(m: *const Model, d: *Data, dt: f32) void {
+    for (0..m.activation_count) |i| {
+        d.activations[i] += dt * d.activation_rates[i];
     }
     dampedVelocityStep(m, d, dt);
     // ** BOUNDED HERE, BETWEEN THE TWO INTEGRATIONS - the placement is the whole fix.
@@ -6595,8 +9562,8 @@ fn advanceEuler(m: *const Model, d: *Data, dt: f32) void {
     // left a NaN position behind, which reached `crb` on the next `forward` exactly as before.
     // **Measured: 2297 NaN steps out of 2400, unchanged by the clamp.**
     boundVelocity(m, d);
-    integratePos(m, d.pos, d.vel, dt);
-    normalizeQuats(m, d.pos);
+    integratePos(m, d.joint_positions, d.joint_velocities, dt);
+    normalizeQuats(m, d.joint_positions);
 }
 
 /// Advance by `dt` using classical fourth-order Runge-Kutta.
@@ -6610,13 +9577,13 @@ fn advanceEuler(m: *const Model, d: *Data, dt: f32) void {
 /// high-order method assumes smoothness. RK4 is for the clean case, which is exactly the
 /// case where you want to verify energy conservation.
 fn advanceRk4(m: *const Model, d: *Data, dt: f32) void {
-    const nv: usize = m.nv;
+    const nv: usize = m.dof_count;
     // Working copies. RK4 needs the ORIGINAL state to evaluate each stage from, so the
     // starting point is saved once and every stage restores from it.
     const pos0: []f32 = d.rk_pos0;
     const vel0: []f32 = d.rk_vel0;
-    @memcpy(pos0, d.pos);
-    @memcpy(vel0, d.vel);
+    @memcpy(pos0, d.joint_positions);
+    @memcpy(vel0, d.joint_velocities);
 
     // Butcher tableau for classical RK4: evaluate at 0, dt/2, dt/2, dt, and weight the
     // slopes 1/6, 1/3, 1/3, 1/6.
@@ -6631,41 +9598,41 @@ fn advanceRk4(m: *const Model, d: *Data, dt: f32) void {
     inline for (0..4) |stage| {
         if (stage > 0) {
             // Restore and take a trial step of `stage_dt * dt` along the previous slope.
-            @memcpy(d.pos, pos0);
-            @memcpy(d.vel, vel0);
+            @memcpy(d.joint_positions, pos0);
+            @memcpy(d.joint_velocities, vel0);
             const h: f32 = stage_dt[stage] * dt;
             for (0..nv) |i| {
-                d.vel[i] = vel0[i] + h * d.rk_acc_stage[i];
+                d.joint_velocities[i] = vel0[i] + h * d.rk_acc_stage[i];
             }
-            integratePos(m, d.pos, d.rk_vel_stage, h);
-            normalizeQuats(m, d.pos);
+            integratePos(m, d.joint_positions, d.rk_vel_stage, h);
+            normalizeQuats(m, d.joint_positions);
             forward(m, d);
         } else {
             forward(m, d);
         }
         // Record this stage's slope, and accumulate its weighted contribution.
-        @memcpy(d.rk_vel_stage, d.vel);
-        @memcpy(d.rk_acc_stage, d.acc);
+        @memcpy(d.rk_vel_stage, d.joint_velocities);
+        @memcpy(d.rk_acc_stage, d.joint_accelerations);
         for (0..nv) |i| {
-            vel_sum[i] += weight[stage] * d.vel[i];
-            acc_sum[i] += weight[stage] * d.acc[i];
+            vel_sum[i] += weight[stage] * d.joint_velocities[i];
+            acc_sum[i] += weight[stage] * d.joint_accelerations[i];
         }
     }
 
     // Activation is integrated ONCE, with the last stage's rate. RK4-weighting it too
     // would be more faithful, but activation dynamics are first-order and slow compared to
     // the mechanics, so it is not where the error budget goes.
-    for (0..m.na) |i| {
-        d.act[i] += dt * d.act_dot[i];
+    for (0..m.activation_count) |i| {
+        d.activations[i] += dt * d.activation_rates[i];
     }
 
     // Apply the combined slope from the original state.
-    @memcpy(d.pos, pos0);
+    @memcpy(d.joint_positions, pos0);
     for (0..nv) |i| {
-        d.vel[i] = vel0[i] + dt * acc_sum[i];
+        d.joint_velocities[i] = vel0[i] + dt * acc_sum[i];
     }
-    integratePos(m, d.pos, vel_sum, dt);
-    normalizeQuats(m, d.pos);
+    integratePos(m, d.joint_positions, vel_sum, dt);
+    normalizeQuats(m, d.joint_positions);
 }
 
 /// The half of the pipeline that depends only on the STATE - everything through the bias
@@ -6676,7 +9643,7 @@ fn advanceRk4(m: *const Model, d: *Data, dt: f32) void {
 /// whole extra `forward` halves the work of a control loop, which is why MuJoCo exposes the
 /// same split.
 ///
-/// A controller reads `Data`, writes `ctrl` and `applied_force`, and then calls `step2`.
+/// A controller reads `Data`, writes `ctrl` and `applied_joint_forces`, and then calls `step2`.
 pub fn step1(m: *const Model, d: *Data) void {
     assertf(
         m.opt.integrator != .rk4,
@@ -6783,7 +9750,7 @@ fn applyBlock(block: *const [36]f32, v: Motion) Motion {
 /// The derivative of `rotationTriple`, for a ball joint or a free joint's rotational half.
 ///
 /// * ONE SNAPSHOT FOR ALL THREE. `rotationTriple` takes the velocity once, before any of its
-/// three DOFs is folded in, and builds all three `cdof_dot` from that same value. The
+/// three DOFs is folded in, and builds all three `dof_axis_rates` from that same value. The
 /// derivative has to do the same: taking a fresh partial per DOF makes the second and third
 /// depend on the first, which is a different function.
 fn rotationTripleDerivative(
@@ -6794,10 +9761,10 @@ fn rotationTripleDerivative(
     body: usize,
     dof: u32,
 ) void {
-    const nv: usize = m.nv;
+    const nv: usize = m.dof_count;
     inline for (0..3) |k| {
         var block: [36]f32 = undefined;
-        crossMotionVelJacobian(d.cdof[dof + k], &block);
+        crossMotionVelJacobian(d.dof_axes[dof + k], &block);
         for (0..nv) |j| {
             // * READ FROM THE SNAPSHOT, which is `dcvel[body]` as it stands BEFORE the loop
             // below adds anything - the same value for all three.
@@ -6807,7 +9774,7 @@ fn rotationTripleDerivative(
     // Only now are the three folded into the running total - after all three partials above
     // have been taken from the snapshot.
     inline for (0..3) |k| {
-        dcvel[body * nv + dof + k] = dcvel[body * nv + dof + k].add(d.cdof[dof + k]);
+        dcvel[body * nv + dof + k] = dcvel[body * nv + dof + k].add(d.dof_axes[dof + k]);
     }
 }
 
@@ -6839,7 +9806,7 @@ fn applyBlockForce(block: *const [36]f32, v: Motion) Force {
 /// -- * THE STRUCTURE MIRRORS `rne` EXACTLY, one derivative level up --
 ///
 /// `rne` propagates a 6-vector per body; this propagates a 6xnv matrix per body - the same
-/// forward sweep, the same backward sum, the same final projection onto `cdof`. Reading them
+/// forward sweep, the same backward sum, the same final projection onto `dof_axes`. Reading them
 /// side by side is the only sane way to check either.
 ///
 /// * AND THE RESULT IS ASYMMETRIC, which is why MuJoCo solves `implicit` with an LU rather
@@ -6851,28 +9818,29 @@ fn rneVelDerivative(m: *const Model, d: *Data, out: []f32) void {
     // `.implicit`, and the integrator can be changed afterwards.
     assertf(
         // Both sizes, since they differ: per-body for the sweep buffers, per-DOF for
-        // `deriv_cdof_dot`.
-        d.deriv_cacc.len == m.nbody * m.nv and d.deriv_cdof_dot.len == m.nv * m.nv,
+        // `derivative_dof_axis_rates`.
+        d.derivative_body_accelerations.len == m.body_count * m.dof_count and
+            d.derivative_dof_axis_rates.len == m.dof_count * m.dof_count,
         @src(),
         "integrator was set to .implicit after Data.init, so the Coriolis-derivative scratch " ++
             "was never allocated — choose the integrator in Options, before building Data",
         .{},
     );
-    const nv: usize = m.nv;
-    const dcacc: []Motion = d.deriv_cacc;
-    const dcfrc: []Force = d.deriv_cfrc;
-    const dcvel: []Motion = d.deriv_cvel;
-    const dcdof_dot: []Motion = d.deriv_cdof_dot;
+    const nv: usize = m.dof_count;
+    const dcacc: []Motion = d.derivative_body_accelerations;
+    const dcfrc: []Force = d.derivative_subtree_forces;
+    const dcvel: []Motion = d.derivative_body_velocities;
+    const dcdof_dot: []Motion = d.derivative_dof_axis_rates;
 
     // ---- dcvel/dqvel and dcdof_dot/dqvel, mirroring `comVel` ----
     //
     // `cvel[i] = cvel[parent] + sum cdof[k]*qvel[k]`, so dcvel[i]/dqvel[j] is the parent's
-    // derivative plus `cdof[j]` when `j` is one of this body's own DOFs. `cdof_dot` is
+    // derivative plus `cdof[j]` when `j` is one of this body's own DOFs. `dof_axis_rates` is
     // `crossMotion(vel, cdof)`, whose derivative follows through `vel`.
     for (0..nv) |j| {
         dcvel[world_body * nv + j] = .zero;
     }
-    for (1..m.nbody) |bi| {
+    for (1..m.body_count) |bi| {
         const parent: usize = m.body_parent[bi];
         for (0..nv) |j| {
             dcvel[bi * nv + j] = dcvel[parent * nv + j];
@@ -6894,17 +9862,17 @@ fn rneVelDerivative(m: *const Model, d: *Data, out: []f32) void {
         //     velocity taken before any of them is added. Folding each into the running total
         //     as it goes makes the second and third terms depend on the first, which is not
         //     what `rotationTriple` computes.
-        const jnt_adr: u32 = m.body_jnt_adr[bi];
-        for (jnt_adr..jnt_adr + m.body_jnt_num[bi]) |ji| {
-            const dof: usize = m.jnt_dof_adr[ji];
-            switch (m.jnt_type[ji]) {
+        const jnt_adr: u32 = m.body_first_joint[bi];
+        for (jnt_adr..jnt_adr + m.body_joint_count[bi]) |ji| {
+            const dof: usize = m.joint_first_dof[ji];
+            switch (m.joint_type[ji]) {
                 .slide, .hinge => {
                     var block: [36]f32 = undefined;
-                    crossMotionVelJacobian(d.cdof[dof], &block);
+                    crossMotionVelJacobian(d.dof_axes[dof], &block);
                     for (0..nv) |j| {
                         dcdof_dot[dof * nv + j] = applyBlock(&block, dcvel[bi * nv + j]);
                     }
-                    dcvel[bi * nv + dof] = dcvel[bi * nv + dof].add(d.cdof[dof]);
+                    dcvel[bi * nv + dof] = dcvel[bi * nv + dof].add(d.dof_axes[dof]);
                 },
                 .ball => rotationTripleDerivative(m, d, dcvel, dcdof_dot, bi, @intCast(dof)),
                 .free => {
@@ -6913,7 +9881,7 @@ fn rneVelDerivative(m: *const Model, d: *Data, out: []f32) void {
                         for (0..nv) |j| {
                             dcdof_dot[(dof + k) * nv + j] = .zero;
                         }
-                        dcvel[bi * nv + dof + k] = dcvel[bi * nv + dof + k].add(d.cdof[dof + k]);
+                        dcvel[bi * nv + dof + k] = dcvel[bi * nv + dof + k].add(d.dof_axes[dof + k]);
                     }
                     rotationTripleDerivative(m, d, dcvel, dcdof_dot, bi, @intCast(dof + 3));
                 },
@@ -6925,39 +9893,39 @@ fn rneVelDerivative(m: *const Model, d: *Data, out: []f32) void {
     for (0..nv) |j| {
         dcacc[world_body * nv + j] = .zero;
     }
-    for (1..m.nbody) |bi| {
+    for (1..m.body_count) |bi| {
         const parent: usize = m.body_parent[bi];
         for (0..nv) |j| {
             dcacc[bi * nv + j] = dcacc[parent * nv + j];
         }
-        const dof_adr: u32 = m.body_dof_adr[bi];
-        for (0..m.body_dof_num[bi]) |k| {
+        const dof_adr: u32 = m.body_first_dof[bi];
+        for (0..m.body_dof_count[bi]) |k| {
             const dof: usize = dof_adr + k;
             // d(cdof_dot[dof]*qvel[dof])/dqvel[j] has two terms: the explicit one when j == dof,
             // and the implicit one through cdof_dot itself.
-            dcacc[bi * nv + dof] = dcacc[bi * nv + dof].add(d.cdof_dot[dof]);
-            const speed: f32 = d.vel[dof];
+            dcacc[bi * nv + dof] = dcacc[bi * nv + dof].add(d.dof_axis_rates[dof]);
+            const speed: f32 = d.joint_velocities[dof];
             for (0..nv) |j| {
                 dcacc[bi * nv + j] = dcacc[bi * nv + j].add(dcdof_dot[dof * nv + j].scale(speed));
             }
         }
 
         // dcfrc/dqvel = I*dcacc/dqvel + d(cvel x I*cvel)/dcvel * dcvel/dqvel
-        const inertia: Inertia = d.cinert[bi];
+        const inertia: Inertia = d.body_inertias[bi];
         var cross_block: [36]f32 = undefined;
-        crossForceVelJacobian(inertia.mul(d.cvel[bi]), &cross_block);
+        crossForceVelJacobian(inertia.mul(d.body_velocities[bi]), &cross_block);
         for (0..nv) |j| {
             const from_acc: Force = inertia.mul(dcacc[bi * nv + j]);
             // The second half of the product rule: cvel appears on BOTH sides of the cross.
             const dv: Motion = dcvel[bi * nv + j];
             const direct: Force = applyBlockForce(&cross_block, dv);
-            const through_inertia: Force = crossForce(d.cvel[bi], inertia.mul(dv));
+            const through_inertia: Force = crossForce(d.body_velocities[bi], inertia.mul(dv));
             dcfrc[bi * nv + j] = from_acc.add(direct).add(through_inertia);
         }
     }
 
     // ---- backward sum, exactly as `rne` does ----
-    var bi: usize = m.nbody;
+    var bi: usize = m.body_count;
     while (bi > 1) {
         bi -= 1;
         const parent: usize = m.body_parent[bi];
@@ -6972,7 +9940,7 @@ fn rneVelDerivative(m: *const Model, d: *Data, out: []f32) void {
     for (0..nv) |i| {
         const body: usize = m.dof_body[i];
         for (0..nv) |j| {
-            out[i * nv + j] -= dot6(d.cdof[i], dcfrc[body * nv + j]);
+            out[i * nv + j] -= dot6(d.dof_axes[i], dcfrc[body * nv + j]);
         }
     }
 }
@@ -6992,14 +9960,14 @@ fn smoothVelDerivative(m: *const Model, out: []f32) void {
     @memset(out, 0);
 
     // ---- joint damping: a force on one DOF, proportional to that DOF's own velocity ----
-    for (0..m.njnt) |ji| {
-        const damping: f32 = m.jnt_damping[ji];
+    for (0..m.joint_count) |ji| {
+        const damping: f32 = m.joint_damping[ji];
         if (damping == 0.0) {
             continue;
         }
-        const dof_adr: u32 = m.jnt_dof_adr[ji];
-        for (dof_adr..dof_adr + m.jnt_type[ji].dofCount()) |dof| {
-            out[dof * m.nv + dof] -= damping;
+        const dof_adr: u32 = m.joint_first_dof[ji];
+        for (dof_adr..dof_adr + m.joint_type[ji].dofCount()) |dof| {
+            out[dof * m.dof_count + dof] -= damping;
         }
     }
 
@@ -7008,18 +9976,18 @@ fn smoothVelDerivative(m: *const Model, out: []f32) void {
     // scaled by `c_j`. So the contribution is `-b*c_jc_k` - an outer product, coupling every
     // DOF the tendon touches to every other. This is the term that costs the tree sparsity,
     // and it is also the term a diagonal approximation would silently drop.
-    for (0..m.ntendon) |ti| {
+    for (0..m.tendon_count) |ti| {
         const damping: f32 = m.tendon_damping[ti];
         if (damping == 0.0) {
             continue;
         }
-        const coefficients: []const f32 = m.tendon_jacobian[ti * m.nv ..][0..m.nv];
+        const coefficients: []const f32 = m.tendon_jacobian[ti * m.dof_count ..][0..m.dof_count];
         for (coefficients, 0..) |cj, j| {
             if (cj == 0.0) {
                 continue;
             }
             for (coefficients, 0..) |ck, k| {
-                out[j * m.nv + k] -= damping * cj * ck;
+                out[j * m.dof_count + k] -= damping * cj * ck;
             }
         }
     }
@@ -7029,26 +9997,26 @@ fn smoothVelDerivative(m: *const Model, out: []f32) void {
     // this step's velocity, so it contributes nothing here. A velocity servo's whole
     // restoring action lives in `bias[2]`, which is exactly why such a servo is the thing
     // most likely to destabilise an explicit integrator.
-    for (0..m.nu) |ai| {
-        const b2: f32 = m.act_bias[ai][2];
+    for (0..m.actuator_count) |ai| {
+        const b2: f32 = m.actuator_bias[ai][2];
         if (b2 == 0.0) {
             continue;
         }
-        switch (m.act_kind[ai]) {
+        switch (m.actuator_kind[ai]) {
             .joint => {
-                const dof: u32 = m.act_dof[ai];
-                out[dof * m.nv + dof] += b2;
+                const dof: u32 = m.actuator_dof[ai];
+                out[dof * m.dof_count + dof] += b2;
             },
             .tendon => {
                 // Same outer-product shape as tendon damping, for the same reason.
-                const target: u32 = m.act_target[ai];
-                const coefficients: []const f32 = m.tendon_jacobian[target * m.nv ..][0..m.nv];
+                const target: u32 = m.actuator_target[ai];
+                const coefficients: []const f32 = m.tendon_jacobian[target * m.dof_count ..][0..m.dof_count];
                 for (coefficients, 0..) |cj, j| {
                     if (cj == 0.0) {
                         continue;
                     }
                     for (coefficients, 0..) |ck, k| {
-                        out[j * m.nv + k] += b2 * cj * ck;
+                        out[j * m.dof_count + k] += b2 * cj * ck;
                     }
                 }
             },
@@ -7133,13 +10101,13 @@ fn luSolve(a: []const f32, n: u32, pivot: []const u32, x: []f32) void {
 /// always be built badly enough and an integrator that silently produces NaN is worse than
 /// one that visibly loses an accuracy guarantee.
 fn advanceImplicitFast(m: *const Model, d: *Data, dt: f32) void {
-    const nv: u32 = m.nv;
+    const nv: u32 = m.dof_count;
     if (nv == 0) {
         return;
     }
 
     // rhs = h*M*a, the impulse the explicit step would have applied.
-    mulM(m, d, d.acc, d.implicit_rhs);
+    mulM(m, d, d.joint_accelerations, d.implicit_rhs);
     for (d.implicit_rhs) |*value| {
         value.* *= dt;
     }
@@ -7157,8 +10125,8 @@ fn advanceImplicitFast(m: *const Model, d: *Data, dt: f32) void {
     }
     for (0..nv) |i| {
         const row: u32 = m.mass_row_start[i];
-        for (0..m.mass_row_nonzeros[i]) |k| {
-            const j: u32 = m.mass_col_index[row + k];
+        for (0..m.mass_row_entry_count[i]) |k| {
+            const j: u32 = m.mass_entry_column[row + k];
             const value: f32 = d.mass_matrix[row + k];
             d.implicit_matrix[i * nv + j] += value;
             if (j != i) {
@@ -7170,23 +10138,23 @@ fn advanceImplicitFast(m: *const Model, d: *Data, dt: f32) void {
     if (luFactor(d.implicit_matrix, nv, d.implicit_pivot)) {
         luSolve(d.implicit_matrix, nv, d.implicit_pivot, d.implicit_rhs);
         for (0..nv) |i| {
-            d.vel[i] += d.implicit_rhs[i];
+            d.joint_velocities[i] += d.implicit_rhs[i];
         }
     } else {
         for (0..nv) |i| {
-            d.vel[i] += dt * d.acc[i];
+            d.joint_velocities[i] += dt * d.joint_accelerations[i];
         }
     }
 
-    for (0..m.na) |i| {
-        d.act[i] += dt * d.act_dot[i];
+    for (0..m.activation_count) |i| {
+        d.activations[i] += dt * d.activation_rates[i];
     }
     // Same bound, same placement, and for the same reason as in `advanceEuler`: it has to sit
     // before the velocity is carried into `pos`, or it cleans a value that has already done
     // its damage.
     boundVelocity(m, d);
-    integratePos(m, d.pos, d.vel, dt);
-    normalizeQuats(m, d.pos);
+    integratePos(m, d.joint_positions, d.joint_velocities, dt);
+    normalizeQuats(m, d.joint_positions);
 }
 
 /// Advance the simulation by one timestep: `forward`, then integrate.
@@ -7202,6 +10170,7 @@ pub fn step(m: *const Model, d: *Data) void {
     switch (m.opt.integrator) {
         .euler => {
             forward(m, d);
+            @memcpy(d.warmstart_accelerations, d.joint_accelerations);
             advanceEuler(m, d, m.opt.timestep);
         },
         // * THE TWO IMPLICIT MODES SHARE A STEP AND DIFFER ONLY IN WHAT GOES INTO `D`. MuJoCo
@@ -7209,9 +10178,14 @@ pub fn step(m: *const Model, d: *Data) void {
         // and the entire cost difference sitting behind it.
         .implicitfast, .implicit => {
             forward(m, d);
+            @memcpy(d.warmstart_accelerations, d.joint_accelerations);
             advanceImplicitFast(m, d, m.opt.timestep);
         },
-        .rk4 => advanceRk4(m, d, m.opt.timestep),
+        .rk4 => {
+            // Its own stages run `forward`; the last stage's accelerations are the warm start.
+            advanceRk4(m, d, m.opt.timestep);
+            @memcpy(d.warmstart_accelerations, d.joint_accelerations);
+        },
     }
     // The state has moved; everything derived from it is now stale.
     d.stage = .stale;
@@ -7226,19 +10200,19 @@ pub fn step(m: *const Model, d: *Data) void {
 pub fn energy(m: *const Model, d: *const Data) f32 {
     d.requireStage(.position, "energy");
     var kinetic: f32 = 0;
-    for (0..m.nv) |i| {
+    for (0..m.dof_count) |i| {
         const row: u32 = m.mass_row_start[i];
-        for (0..m.mass_row_nonzeros[i]) |k| {
-            const j: u32 = m.mass_col_index[row + k];
+        for (0..m.mass_row_entry_count[i]) |k| {
+            const j: u32 = m.mass_entry_column[row + k];
             const value: f32 = d.mass_matrix[row + k];
             // Only the lower triangle is stored, so off-diagonal entries count twice.
             const factor: f32 = if (i == j) 1.0 else 2.0;
-            kinetic += 0.5 * factor * value * d.vel[i] * d.vel[j];
+            kinetic += 0.5 * factor * value * d.joint_velocities[i] * d.joint_velocities[j];
         }
     }
     var potential: f32 = 0;
-    for (1..m.nbody) |bi| {
-        potential -= m.body_mass[bi] * dot3(m.opt.gravity, d.body_xipos[bi]);
+    for (1..m.body_count) |bi| {
+        potential -= m.body_mass[bi] * dot3(m.opt.gravity, d.body_centres_of_mass[bi]);
     }
     return kinetic + potential;
 }
@@ -7247,33 +10221,48 @@ pub fn energy(m: *const Model, d: *const Data) f32 {
 // Placing a built robot - lowest points, resting on the floor
 // =============================================================================
 
+/// A sphere's lowest point (world z), its centre at `center`.
+pub fn sphereLowestPoint(center: Vec, radius: f32) f32 {
+    return center[2] - radius;
+}
+
+/// A capsule's or a cylinder's lowest point (world z): its axis along its local Y, `half_height` each way from
+/// `center`, turned by `rotation` - the lower end of the axis, less the radius.
+pub fn segmentLowestPoint(
+    center: Vec,
+    rotation: Quat,
+    radius: f32,
+    half_height: f32,
+) f32 {
+    const axis: Vec = rotate(rotation, vec(0, half_height, 0));
+    return center[2] - @abs(axis[2]) - radius;
+}
+
+/// A box's lowest point (world z): the lowest of its eight corners, its centre at `center`, turned by `rotation`.
+pub fn boxLowestPoint(center: Vec, rotation: Quat, half_extent: Vec) f32 {
+    var lowest: f32 = no_shape_height;
+    var corner: u32 = 0;
+    while (corner < 8) : (corner += 1) {
+        const x: f32 = if (corner & 1 == 0) -half_extent[0] else half_extent[0];
+        const y: f32 = if (corner & 2 == 0) -half_extent[1] else half_extent[1];
+        const z: f32 = if (corner & 4 == 0) -half_extent[2] else half_extent[2];
+        lowest = @min(lowest, center[2] + rotate(rotation, vec(x, y, z))[2]);
+    }
+    return lowest;
+}
+
 /// The lowest point (world z) of one collision shape at the current kinematics. Plain geometry: the lowest of a
-/// sphere's, a capsule's or cylinder's (along local Y), a box's corners, a hull's points.
+/// sphere's, a capsule's or cylinder's (along local Y), a box's corners (`sphereLowestPoint`, `segmentLowestPoint`,
+/// `boxLowestPoint` - robotgpu's `body_lowest_points` calls the same), a hull's points.
 fn geomLowestPoint(m: *const Model, d: *const Data, g: usize) f32 {
     const body: u32 = m.geom_body[g];
-    const rot: Quat = qmul(d.body_xrot[body], m.geom_rot[g]);
-    const center: Vec = d.body_xpos[body] + rotate(d.body_xrot[body], m.geom_pos[g]);
+    const rot: Quat = qmul(d.body_orientations[body], m.geom_local_rotation[g]);
+    const center: Vec = d.body_positions[body] + rotate(d.body_orientations[body], m.geom_local_position[g]);
     switch (m.geom_shape[g]) {
-        .sphere => |shape| return center[2] - shape.radius,
-        .capsule => |shape| {
-            const axis: Vec = rotate(rot, vec(0, shape.half_height, 0));
-            return center[2] - @abs(axis[2]) - shape.radius;
-        },
-        .cylinder => |shape| {
-            const axis: Vec = rotate(rot, vec(0, shape.half_height, 0));
-            return center[2] - @abs(axis[2]) - shape.radius;
-        },
-        .box => |shape| {
-            var lowest: f32 = no_shape_height;
-            for (0..8) |corner| {
-                const h: Vec = shape.half_extent;
-                const x: f32 = if (corner & 1 == 0) -h[0] else h[0];
-                const y: f32 = if (corner & 2 == 0) -h[1] else h[1];
-                const z: f32 = if (corner & 4 == 0) -h[2] else h[2];
-                lowest = @min(lowest, center[2] + rotate(rot, vec(x, y, z))[2]);
-            }
-            return lowest;
-        },
+        .sphere => |shape| return sphereLowestPoint(center, shape.radius),
+        .capsule => |shape| return segmentLowestPoint(center, rot, shape.radius, shape.half_height),
+        .cylinder => |shape| return segmentLowestPoint(center, rot, shape.radius, shape.half_height),
+        .box => |shape| return boxLowestPoint(center, rot, shape.half_extent),
         .hull => |shape| {
             var lowest: f32 = no_shape_height;
             for (shape.points) |point| {
@@ -7288,9 +10277,9 @@ fn geomLowestPoint(m: *const Model, d: *const Data, g: usize) f32 {
 /// point of body `b`'s collision shapes, `no_shape_height` for a body with none (the world body always - it is the
 /// floor). What lets a tracker ask WHICH body touches the floor, not just whether something does.
 pub fn bodyLowestPoints(m: *const Model, d: *const Data, out: []f32) void {
-    assertf(out.len == m.nbody, @src(), "{d} heights for {d} bodies", .{ out.len, m.nbody });
+    assertf(out.len == m.body_count, @src(), "{d} heights for {d} bodies", .{ out.len, m.body_count });
     @memset(out, no_shape_height);
-    for (0..m.ngeom) |g| {
+    for (0..m.geom_count) |g| {
         const body: u32 = m.geom_body[g];
         if (body == 0) {
             continue;
@@ -7309,7 +10298,7 @@ pub fn bodyLowestPoints(m: *const Model, d: *const Data, out: []f32) void {
 pub fn lowestPoint(m: *const Model, d: *const Data) f32 {
     // Higher than any robot will ever stand: the first shape replaces it.
     var lowest: f32 = no_shape_height;
-    for (0..m.ngeom) |g| {
+    for (0..m.geom_count) |g| {
         if (m.geom_body[g] == 0) {
             continue;
         }
@@ -7318,21 +10307,28 @@ pub fn lowestPoint(m: *const Model, d: *const Data) f32 {
     return lowest;
 }
 
+/// HOW FAR A BODY RESTS UP (`restOnFloor`, and robotgpu's `rest_on_floor`): enough to put its lowest point `clearance`
+/// above the floor, never down - a clip may start in the air - and nothing when the lowest point is not a number.
+pub fn restLift(clearance: f32, lowest: f32) f32 {
+    const lift: f32 = clearance - lowest;
+    return if (lift > 0.0) lift else 0.0;
+}
+
 /// Lift a free-rooted robot so its lowest point sits `clearance` above the floor - a pose copied from a
 /// capture puts feet INTO the floor (Geno's soles rest 4.5 mm below it, a walk's heel deeper), and the contact
 /// solver resolves that overlap in one step with an impulse that throws the robot up and spins it. Never
 /// lowers: a clip may start in the air. Returns the lift; the data is forwarded again when it moved.
 pub fn restOnFloor(m: *const Model, d: *Data, clearance: f32) f32 {
-    const root: usize = for (m.jnt_type, 0..) |kind, j| {
+    const root: usize = for (m.joint_type, 0..) |kind, j| {
         if (kind == .free) {
             break j;
         }
     } else return 0.0;
-    const lift: f32 = clearance - lowestPoint(m, d);
-    if (!(lift > 0.0)) {
+    const lift: f32 = restLift(clearance, lowestPoint(m, d));
+    if (lift == 0.0) {
         return 0.0;
     }
-    d.pos[m.jnt_qpos_adr[root] + 2] += lift;
+    d.joint_positions[m.joint_first_coordinate[root] + 2] += lift;
     d.stage = .stale;
     forward(m, d);
     return lift;
@@ -7352,8 +10348,9 @@ const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 
 const expectApproxEqAbs = std.testing.expectApproxEqAbs;
+const expectApproxEqRel = std.testing.expectApproxEqRel;
 
-const reference = @import("tests/fixtures/robot/reference.zig");
+const reference_fixtures = @import("tests/fixtures/robot/reference.zig");
 
 /// The double pendulum from the plan's phase-3 demo, and from the oracle fixtures.
 const DoublePendulum = Spec(.{
@@ -7419,12 +10416,12 @@ test "build: tree topology, dof chains and mass-matrix sparsity" {
 
     // Row 0 is just the diagonal; row 1 covers itself and its one ancestor. That IS the
     // sparsity of M, and the diagonal is stored last in each row.
-    try expectEqual(@as(u32, 1), m.mass_row_nonzeros[0]);
-    try expectEqual(@as(u32, 2), m.mass_row_nonzeros[1]);
-    try expectEqual(@as(u32, 3), m.mass_nonzero_count);
-    try expectEqual(@as(u32, 0), m.mass_col_index[m.mass_row_start[0]]);
-    try expectEqual(@as(u32, 0), m.mass_col_index[m.mass_row_start[1]]); // ancestor first
-    try expectEqual(@as(u32, 1), m.mass_col_index[m.mass_row_start[1] + 1]); // diagonal last
+    try expectEqual(@as(u32, 1), m.mass_row_entry_count[0]);
+    try expectEqual(@as(u32, 2), m.mass_row_entry_count[1]);
+    try expectEqual(@as(u32, 3), m.mass_entry_count);
+    try expectEqual(@as(u32, 0), m.mass_entry_column[m.mass_row_start[0]]);
+    try expectEqual(@as(u32, 0), m.mass_entry_column[m.mass_row_start[1]]); // ancestor first
+    try expectEqual(@as(u32, 1), m.mass_entry_column[m.mass_row_start[1] + 1]); // diagonal last
 }
 
 test "build: geoms give a body mass, and armature defaults are positive" {
@@ -7473,7 +10470,7 @@ test "welded bodies are transparent to the dof chain" {
     var m: Model = try Welded.build(gpa);
     defer m.deinit();
 
-    try expectEqual(@as(u32, 2), m.nv); // the weld adds no freedom
+    try expectEqual(@as(u32, 2), m.dof_count); // the weld adds no freedom
     try expectEqual(@as(u32, 0), m.dof_parent[1]);
 }
 
@@ -7492,15 +10489,15 @@ test "data: reset returns to qpos0, including quaternion identity" {
     defer d.deinit();
 
     // zm stores a quaternion as (x, y, z, w), so only the w lane starts at one.
-    try expectApproxEqAbs(@as(f32, 0), d.pos[3], 1.0e-9);
-    try expectApproxEqAbs(@as(f32, 1), d.pos[6], 1.0e-9);
+    try expectApproxEqAbs(@as(f32, 0), d.joint_positions[3], 1.0e-9);
+    try expectApproxEqAbs(@as(f32, 1), d.joint_positions[6], 1.0e-9);
 
-    d.pos[0] = 5;
-    d.vel[2] = -3;
+    d.joint_positions[0] = 5;
+    d.joint_velocities[2] = -3;
     d.reset(&m);
-    try expectApproxEqAbs(@as(f32, 0), d.pos[0], 1.0e-9);
-    try expectApproxEqAbs(@as(f32, 0), d.vel[2], 1.0e-9);
-    try expectApproxEqAbs(@as(f32, 1), d.pos[6], 1.0e-9);
+    try expectApproxEqAbs(@as(f32, 0), d.joint_positions[0], 1.0e-9);
+    try expectApproxEqAbs(@as(f32, 0), d.joint_velocities[2], 1.0e-9);
+    try expectApproxEqAbs(@as(f32, 1), d.joint_positions[6], 1.0e-9);
 }
 
 test "data: joint accessors take an enum" {
@@ -7558,25 +10555,25 @@ test "kinematics: body positions match MuJoCo" {
     defer d.deinit();
 
     var compared: u32 = 0;
-    for (reference.cases) |c| {
+    for (reference_fixtures.cases) |c| {
         if (!eql(u8, c.model, "double_pendulum")) {
             continue;
         }
-        try expectEqual(m.nq, @as(u32, @intCast(c.nq)));
-        try expectEqual(m.nv, @as(u32, @intCast(c.nv)));
+        try expectEqual(m.coordinate_count, @as(u32, @intCast(c.nq)));
+        try expectEqual(m.dof_count, @as(u32, @intCast(c.nv)));
 
-        @memcpy(d.pos, c.qpos);
+        @memcpy(d.joint_positions, c.qpos);
         kinematics(&m, &d);
 
         // f32 against MuJoCo's f64, on positions of order 1 m: 1e-5 absolute is a tight
         // bound that still leaves room for the precision difference.
-        for (0..m.nbody) |bi| {
+        for (0..m.body_count) |bi| {
             const want: Vec = vec(
                 c.body_pos[bi * 3 + 0],
                 c.body_pos[bi * 3 + 1],
                 c.body_pos[bi * 3 + 2],
             );
-            const got: Vec = d.body_xpos[bi];
+            const got: Vec = d.body_positions[bi];
             inline for (0..3) |k| {
                 try expectApproxEqAbs(want[k], got[k], 1.0e-5);
             }
@@ -7588,7 +10585,7 @@ test "kinematics: body positions match MuJoCo" {
 }
 
 test "comPos: subtree com, cinert and cdof all match MuJoCo" {
-    // The decisive test for phase 1. `cdof` in particular is the one the plan flagged as
+    // The decisive test for phase 1. `dof_axes` in particular is the one the plan flagged as
     // P2 - the highest-cost trap in the port, because a wrong sign or a wrong offset there
     // produces a simulation that runs and looks alive and is quietly wrong. Comparing
     // against an independent implementation is the only way to be sure.
@@ -7599,23 +10596,23 @@ test "comPos: subtree com, cinert and cdof all match MuJoCo" {
     defer d.deinit();
 
     var compared: u32 = 0;
-    for (reference.cases) |c| {
+    for (reference_fixtures.cases) |c| {
         if (!eql(u8, c.model, "double_pendulum")) {
             continue;
         }
-        @memcpy(d.pos, c.qpos);
+        @memcpy(d.joint_positions, c.qpos);
         kinematics(&m, &d);
         comPos(&m, &d);
 
-        for (0..m.nbody) |bi| {
+        for (0..m.body_count) |bi| {
             inline for (0..3) |k| {
-                try expectApproxEqAbs(c.subtree_com[bi * 3 + k], d.subtree_com[bi][k], 1.0e-5);
-                try expectApproxEqAbs(c.body_ipos[bi * 3 + k], d.body_xipos[bi][k], 1.0e-5);
+                try expectApproxEqAbs(c.subtree_com[bi * 3 + k], d.subtree_centres_of_mass[bi][k], 1.0e-5);
+                try expectApproxEqAbs(c.body_ipos[bi * 3 + k], d.body_centres_of_mass[bi][k], 1.0e-5);
             }
             // MuJoCo's cinert packing is [Ixx Iyy Izz, Ixy Ixz Iyz, h(3), m] - the same
             // ten numbers as robot.Inertia, in the same order, which is not a coincidence:
             // the packing was chosen to match.
-            const got: Inertia = d.cinert[bi];
+            const got: Inertia = d.body_inertias[bi];
             const base: usize = bi * 10;
             inline for (0..3) |k| {
                 try expectApproxEqAbs(c.cinert[base + k], got.diag[k], 1.0e-4);
@@ -7626,8 +10623,8 @@ test "comPos: subtree com, cinert and cdof all match MuJoCo" {
         }
 
         // cdof is (rot:lin), angular first - the convention the whole file hangs on.
-        for (0..m.nv) |vi| {
-            const got: Motion = d.cdof[vi];
+        for (0..m.dof_count) |vi| {
+            const got: Motion = d.dof_axes[vi];
             inline for (0..3) |k| {
                 try expectApproxEqAbs(c.cdof[vi * 6 + k], got.ang[k], 1.0e-5);
                 try expectApproxEqAbs(c.cdof[vi * 6 + 3 + k], got.lin[k], 1.0e-5);
@@ -7648,11 +10645,11 @@ test "crb: the mass matrix matches MuJoCo" {
     var dense: [4]f32 = undefined; // nv = 2
 
     var compared: u32 = 0;
-    for (reference.cases) |c| {
+    for (reference_fixtures.cases) |c| {
         if (!eql(u8, c.model, "double_pendulum")) {
             continue;
         }
-        @memcpy(d.pos, c.qpos);
+        @memcpy(d.joint_positions, c.qpos);
         kinematics(&m, &d);
         comPos(&m, &d);
         crb(&m, &d);
@@ -7662,10 +10659,10 @@ test "crb: the mass matrix matches MuJoCo" {
         // than special-case that, compare the OFF-diagonal exactly and allow the diagonal
         // to exceed MuJoCo's by exactly the armature - which also pins that armature lands
         // where it should and nowhere else.
-        for (0..m.nv) |i| {
-            for (0..m.nv) |j| {
-                const want: f32 = c.mass_matrix[i * m.nv + j];
-                const got: f32 = dense[i * m.nv + j];
+        for (0..m.dof_count) |i| {
+            for (0..m.dof_count) |j| {
+                const want: f32 = c.mass_matrix[i * m.dof_count + j];
+                const got: f32 = dense[i * m.dof_count + j];
                 const extra: f32 = if (i == j) m.dof_armature[i] else 0.0;
                 try expectApproxEqAbs(want + extra, got, @max(1.0e-6, @abs(want) * 1.0e-5));
             }
@@ -7689,8 +10686,8 @@ test "factorM: solving M x = y round-trips through the dense matrix" {
     var dense: [4]f32 = undefined;
     const poses = [_][2]f32{ .{ 0, 0 }, .{ 0.3, -0.7 }, .{ -1.1, 2.2 } };
     for (poses) |q| {
-        d.pos[0] = q[0];
-        d.pos[1] = q[1];
+        d.joint_positions[0] = q[0];
+        d.joint_positions[1] = q[1];
         kinematics(&m, &d);
         comPos(&m, &d);
         crb(&m, &d);
@@ -7719,8 +10716,8 @@ test "factorM: no fill-in, and the factor reproduces M" {
     var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
-    d.pos[0] = 0.4;
-    d.pos[1] = -0.9;
+    d.joint_positions[0] = 0.4;
+    d.joint_positions[1] = -0.9;
     kinematics(&m, &d);
     comPos(&m, &d);
     crb(&m, &d);
@@ -7731,16 +10728,16 @@ test "factorM: no fill-in, and the factor reproduces M" {
 
     // Reassemble. For nv = 2: L = [[1, 0], [l10, 1]], D = diag(d0, d1), and the stored
     // form has l10 in row 1's off-diagonal slot with D on the diagonals.
-    const l10: f32 = d.qLD[m.mass_row_start[1]];
-    const d0: f32 = 1.0 / d.qLDiagInv[0];
-    const d1: f32 = 1.0 / d.qLDiagInv[1];
+    const l10: f32 = d.mass_factor[m.mass_row_start[1]];
+    const d0: f32 = 1.0 / d.mass_factor_inverse_diagonal[0];
+    const d1: f32 = 1.0 / d.mass_factor_inverse_diagonal[1];
     // M = L^T D L  =>  M00 = d0 + l10^2*d1,  M01 = l10*d1,  M11 = d1.
     try expectApproxEqAbs(dense[0], d0 + l10 * l10 * d1, 1.0e-4);
     try expectApproxEqAbs(dense[1], l10 * d1, 1.0e-5);
     try expectApproxEqAbs(dense[3], d1, 1.0e-5);
 
     // The factor occupies exactly M's sparsity: same mass_nonzero_count entries, no extra storage.
-    try expectEqual(@as(usize, m.mass_nonzero_count), d.qLD.len);
+    try expectEqual(@as(usize, m.mass_entry_count), d.mass_factor.len);
 }
 
 test "factorM: solveM agrees with MuJoCo's own solve" {
@@ -7754,11 +10751,11 @@ test "factorM: solveM agrees with MuJoCo's own solve" {
     defer d.deinit();
 
     var compared: u32 = 0;
-    for (reference.cases) |c| {
+    for (reference_fixtures.cases) |c| {
         if (!eql(u8, c.model, "double_pendulum")) {
             continue;
         }
-        @memcpy(d.pos, c.qpos);
+        @memcpy(d.joint_positions, c.qpos);
         kinematics(&m, &d);
         comPos(&m, &d);
         crb(&m, &d);
@@ -7808,23 +10805,23 @@ test "dynamics: bias force and acceleration match MuJoCo" {
     defer d.deinit();
 
     var compared: u32 = 0;
-    for (reference.cases) |c| {
+    for (reference_fixtures.cases) |c| {
         if (!eql(u8, c.model, "double_pendulum")) {
             continue;
         }
-        @memcpy(d.pos, c.qpos);
-        @memcpy(d.vel, c.qvel);
+        @memcpy(d.joint_positions, c.qpos);
+        @memcpy(d.joint_velocities, c.qvel);
         forward(&m, &d);
 
         // c(q,v): Coriolis + centrifugal + gravity.
-        for (0..m.nv) |i| {
-            try expectApproxEqAbs(c.bias[i], d.bias_force[i], @max(1.0e-4, @abs(c.bias[i]) * 1.0e-4));
+        for (0..m.dof_count) |i| {
+            try expectApproxEqAbs(c.bias[i], d.bias_joint_forces[i], @max(1.0e-4, @abs(c.bias[i]) * 1.0e-4));
         }
         // qacc with zero control. Ours carries armature on the diagonal and MuJoCo's does
         // not, so a small difference is expected and the tolerance reflects it rather than
         // pretending the models are identical.
-        for (0..m.nv) |i| {
-            try expectApproxEqAbs(c.acc[i], d.acc[i], @max(1.0e-2, @abs(c.acc[i]) * 0.02));
+        for (0..m.dof_count) |i| {
+            try expectApproxEqAbs(c.acc[i], d.joint_accelerations[i], @max(1.0e-2, @abs(c.acc[i]) * 0.02));
         }
         compared += 1;
     }
@@ -7848,11 +10845,11 @@ test "dynamics: forward then inverse returns the force you started with" {
 
     var recovered: [2]f32 = undefined;
     for (poses, vels, forces) |q, v, f| {
-        @memcpy(d.pos, &q);
-        @memcpy(d.vel, &v);
-        @memcpy(d.applied_force, &f);
+        @memcpy(d.joint_positions, &q);
+        @memcpy(d.joint_velocities, &v);
+        @memcpy(d.applied_joint_forces, &f);
         forward(&m, &d);
-        inverseDynamics(&m, &d, d.acc, &recovered);
+        inverseDynamics(&m, &d, d.joint_accelerations, &recovered);
         for (f, recovered) |want, got| {
             try expectApproxEqAbs(want, got, 1.0e-4);
         }
@@ -7869,14 +10866,14 @@ test "dynamics: gravity compensation is inverse dynamics at rest" {
     var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
-    d.pos[0] = 0.6;
-    d.pos[1] = -1.2;
+    d.joint_positions[0] = 0.6;
+    d.joint_positions[1] = -1.2;
     forward(&m, &d);
     // Cancel the bias, then re-solve: the acceleration must vanish.
-    @memcpy(d.applied_force, d.bias_force);
+    @memcpy(d.applied_joint_forces, d.bias_joint_forces);
     forwardDynamics(&m, &d);
-    for (0..m.nv) |i| {
-        try expectApproxEqAbs(@as(f32, 0), d.acc[i], 1.0e-4);
+    for (0..m.dof_count) |i| {
+        try expectApproxEqAbs(@as(f32, 0), d.joint_accelerations[i], 1.0e-4);
     }
 }
 
@@ -7901,8 +10898,8 @@ test "dynamics: RK4 conserves energy where Euler leaks it" {
         var d: Data = try .init(gpa, mm);
         defer d.deinit();
         // Start well away from equilibrium so there is real energy to lose.
-        d.pos[0] = 1.4;
-        d.pos[1] = -2.0;
+        d.joint_positions[0] = 1.4;
+        d.joint_positions[1] = -2.0;
         forward(mm, &d);
         const e0: f32 = energy(mm, &d);
 
@@ -7937,7 +10934,7 @@ test "dynamics: a free body follows a parabola" {
     var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
-    d.pos[1] = 10.0; // start 10 m up
+    d.joint_positions[1] = 10.0; // start 10 m up
     const seconds: f32 = 1.0;
     const steps: usize = 1000;
     for (0..steps) |_| {
@@ -7946,10 +10943,10 @@ test "dynamics: a free body follows a parabola" {
     // y = y0 - 1/2g t^2. Semi-implicit Euler is off by O(dt) per step in a known direction,
     // so allow a millimetre or so rather than pretending it is exact.
     const want: f32 = 10.0 - 0.5 * 9.81 * seconds * seconds;
-    try expectApproxEqAbs(want, d.pos[1], 0.02);
+    try expectApproxEqAbs(want, d.joint_positions[1], 0.02);
     // And nothing should have started rotating.
     inline for (0..3) |k| {
-        try expectApproxEqAbs(@as(f32, 0), d.vel[3 + k], 1.0e-5);
+        try expectApproxEqAbs(@as(f32, 0), d.joint_velocities[3 + k], 1.0e-5);
     }
 }
 
@@ -7957,7 +10954,7 @@ test "jacobian: agrees with a finite difference of the kinematics" {
     // The cheapest strong test in the project, and the most independent: a Jacobian is BY
     // DEFINITION the derivative of the forward kinematics, so nudge each joint and measure
     // where the point went. It needs no reference values and it validates the frame
-    // conventions of phases 1 and 2 at the same time -- if `cdof` were built about the
+    // conventions of phases 1 and 2 at the same time -- if `dof_axes` were built about the
     // wrong origin, or with a sign flipped, the derivative would simply not match.
     const gpa: Allocator = testing_allocator;
     var m: Model = try DoublePendulum.build(gpa);
@@ -7970,27 +10967,27 @@ test "jacobian: agrees with a finite difference of the kinematics" {
 
     const poses = [_][2]f32{ .{ 0.3, -0.7 }, .{ -1.1, 2.2 }, .{ 0.0, 0.0 }, .{ 1.4, 0.9 } };
     for (poses) |q| {
-        @memcpy(d.pos, &q);
+        @memcpy(d.joint_positions, &q);
         kinematics(&m, &d);
         comPos(&m, &d);
 
         const body: u32 = 2; // the lower link
-        const point: Vec = d.body_xipos[body];
+        const point: Vec = d.body_centres_of_mass[body];
         // The point is fixed IN THE BODY, so re-derive its local offset once and track the
         // same material point as the joints move. Tracking a fixed WORLD point instead
         // would measure something else entirely.
-        const local: Vec = rotate(conjugate(d.body_xrot[body]), point - d.body_xpos[body]);
+        const local: Vec = rotate(conjugate(d.body_orientations[body]), point - d.body_positions[body]);
         jacBodyCom(&m, &d, body, &jac_p, &jac_r);
 
         const eps: f32 = 1.0e-4;
-        for (0..m.nv) |i| {
+        for (0..m.dof_count) |i| {
             // Central difference: second-order accurate, so the tolerance can be tight.
             var moved: [2]Vec = undefined;
             inline for (.{ -eps, eps }, 0..) |delta, k| {
-                @memcpy(d.pos, &q);
-                d.pos[i] += delta;
+                @memcpy(d.joint_positions, &q);
+                d.joint_positions[i] += delta;
                 kinematics(&m, &d);
-                moved[k] = d.body_xpos[body] + rotate(d.body_xrot[body], local);
+                moved[k] = d.body_positions[body] + rotate(d.body_orientations[body], local);
             }
             const numeric: Vec = (moved[1] - moved[0]) / splat(2.0 * eps);
             inline for (0..3) |axis| {
@@ -7998,7 +10995,7 @@ test "jacobian: agrees with a finite difference of the kinematics" {
             }
         }
         // Restore, since the loop perturbed the state.
-        @memcpy(d.pos, &q);
+        @memcpy(d.joint_positions, &q);
         kinematics(&m, &d);
         comPos(&m, &d);
     }
@@ -8015,22 +11012,22 @@ test "jacobian: matches MuJoCo for every body" {
     var jac_r: [2]Vec = undefined;
 
     var compared: u32 = 0;
-    for (reference.cases) |c| {
+    for (reference_fixtures.cases) |c| {
         if (!eql(u8, c.model, "double_pendulum")) {
             continue;
         }
-        @memcpy(d.pos, c.qpos);
+        @memcpy(d.joint_positions, c.qpos);
         kinematics(&m, &d);
         comPos(&m, &d);
 
-        for (0..m.nbody) |bi| {
+        for (0..m.body_count) |bi| {
             jacBodyCom(&m, &d, @intCast(bi), &jac_p, &jac_r);
             // MuJoCo stores 3 rows of nv; ours is nv columns of 3.
-            const base: usize = bi * 3 * m.nv;
-            for (0..m.nv) |i| {
+            const base: usize = bi * 3 * m.dof_count;
+            for (0..m.dof_count) |i| {
                 inline for (0..3) |axis| {
-                    try expectApproxEqAbs(c.jac_com_p[base + axis * m.nv + i], jac_p[i][axis], 1.0e-5);
-                    try expectApproxEqAbs(c.jac_com_r[base + axis * m.nv + i], jac_r[i][axis], 1.0e-5);
+                    try expectApproxEqAbs(c.jac_com_p[base + axis * m.dof_count + i], jac_p[i][axis], 1.0e-5);
+                    try expectApproxEqAbs(c.jac_com_r[base + axis * m.dof_count + i], jac_r[i][axis], 1.0e-5);
                 }
             }
         }
@@ -8041,7 +11038,7 @@ test "jacobian: matches MuJoCo for every body" {
 
 test "jacobian: J v is the point's actual velocity" {
     // A different kind of check: the Jacobian must reproduce the velocity the DYNAMICS
-    // pipeline computed independently, via `cvel`. Two paths to the same number, and they
+    // pipeline computed independently, via `body_velocities`. Two paths to the same number, and they
     // do not share a code path -- one walks cdof, the other accumulates body velocities.
     const gpa: Allocator = testing_allocator;
     var m: Model = try DoublePendulum.build(gpa);
@@ -8049,10 +11046,10 @@ test "jacobian: J v is the point's actual velocity" {
     var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
-    d.pos[0] = 0.55;
-    d.pos[1] = -1.3;
-    d.vel[0] = 1.7;
-    d.vel[1] = -0.8;
+    d.joint_positions[0] = 0.55;
+    d.joint_positions[1] = -1.3;
+    d.joint_velocities[0] = 1.7;
+    d.joint_velocities[1] = -0.8;
     forward(&m, &d);
 
     const body: u32 = 2;
@@ -8060,15 +11057,15 @@ test "jacobian: J v is the point's actual velocity" {
     jacBodyCom(&m, &d, body, &jac_p, null);
 
     var from_jac: Vec = vec_zero;
-    for (0..m.nv) |i| {
-        from_jac += jac_p[i] * splat(d.vel[i]);
+    for (0..m.dof_count) |i| {
+        from_jac += jac_p[i] * splat(d.joint_velocities[i]);
     }
 
     // The same point's velocity from the body's spatial velocity, which is what `comVel`
     // produced: v + w x (p - O), about the shared frame origin.
-    const origin: Vec = d.subtree_com[m.body_root[body]];
-    const cv: Motion = d.cvel[body];
-    const from_cvel: Vec = cv.lin + cross(cv.ang, d.body_xipos[body] - origin);
+    const origin: Vec = d.subtree_centres_of_mass[m.body_root[body]];
+    const cv: Motion = d.body_velocities[body];
+    const from_cvel: Vec = cv.lin + cross(cv.ang, d.body_centres_of_mass[body] - origin);
 
     inline for (0..3) |axis| {
         try expectApproxEqAbs(from_cvel[axis], from_jac[axis], 1.0e-5);
@@ -8093,7 +11090,7 @@ test "jacobian: transpose turns a tip force into joint torques" {
     var torque: [2]f32 = .{ 0, 0 };
 
     const body: u32 = 2;
-    const tip: Vec = d.body_xpos[body] + rotate(d.body_xrot[body], vec(0, -0.4, 0));
+    const tip: Vec = d.body_positions[body] + rotate(d.body_orientations[body], vec(0, -0.4, 0));
     // Push along +X, at the tip, 1 newton.
     applyForceAtPoint(&m, &d, body, tip, vec(1, 0, 0), vec_zero, &jac_p, &jac_r, &torque);
 
@@ -8133,13 +11130,13 @@ test "actuator: a position servo is a PD controller in disguise" {
 
     const kp: f32 = 30;
     const kv: f32 = 3;
-    d.pos[0] = 0.4;
-    d.vel[0] = -0.9;
-    d.ctrl[0] = 1.1;
+    d.joint_positions[0] = 0.4;
+    d.joint_velocities[0] = -0.9;
+    d.controls[0] = 1.1;
     forward(&m, &d);
 
     const want: f32 = kp * (1.1 - 0.4) - kv * (-0.9);
-    try expectApproxEqAbs(want, d.act_force[0], 1.0e-3);
+    try expectApproxEqAbs(want, d.actuator_forces[0], 1.0e-3);
 }
 
 test "actuator: a position servo holds a load against gravity" {
@@ -8153,19 +11150,19 @@ test "actuator: a position servo holds a load against gravity" {
     defer d.deinit();
 
     const target: f32 = 0.0; // straight down is qpos0; command it to stay there
-    d.ctrl[0] = target;
+    d.controls[0] = target;
     // Start displaced, then let the servo pull it back.
-    d.pos[0] = 0.8;
+    d.joint_positions[0] = 0.8;
     for (0..4000) |_| {
         step(&m, &d);
     }
     forward(&m, &d);
 
     // Settled: velocity gone, and the position error is where servo torque cancels gravity.
-    try expectApproxEqAbs(@as(f32, 0), d.vel[0], 1.0e-2);
+    try expectApproxEqAbs(@as(f32, 0), d.joint_velocities[0], 1.0e-2);
     // At equilibrium: kp*(target - l) = gravity torque at l. Straight down the gravity
     // torque is zero, so the servo should sit essentially at the target.
-    try expectApproxEqAbs(target, d.pos[0], 2.0e-2);
+    try expectApproxEqAbs(target, d.joint_positions[0], 2.0e-2);
 }
 
 test "actuator: filter_exact survives a time constant shorter than the timestep" {
@@ -8199,16 +11196,16 @@ test "actuator: filter_exact survives a time constant shorter than the timestep"
         var d: Data = try .init(gpa, &m);
         defer d.deinit();
 
-        d.ctrl[0] = 1.0;
+        d.controls[0] = 1.0;
         for (0..60) |_| {
             step(&m, &d);
         }
         if (exact) {
             // Converged to the command and stayed there.
-            try expectApproxEqAbs(@as(f32, 1.0), d.act[0], 1.0e-4);
+            try expectApproxEqAbs(@as(f32, 1.0), d.activations[0], 1.0e-4);
         } else {
             // Diverged, spectacularly. The point is that it is NOT near 1.
-            try expect(@abs(d.act[0]) > 10.0);
+            try expect(@abs(d.activations[0]) > 10.0);
         }
     }
 }
@@ -8221,12 +11218,12 @@ test "actuator: ctrl and force ranges clamp" {
     defer d.deinit();
 
     // ctrl_range is [-2, 2]; command far outside it and the servo must behave as if 2.
-    d.ctrl[0] = 500.0;
+    d.controls[0] = 500.0;
     forward(&m, &d);
-    const clamped: f32 = d.act_force[0];
-    d.ctrl[0] = 2.0;
+    const clamped: f32 = d.actuator_forces[0];
+    d.controls[0] = 2.0;
     forward(&m, &d);
-    try expectApproxEqAbs(d.act_force[0], clamped, 1.0e-4);
+    try expectApproxEqAbs(d.actuator_forces[0], clamped, 1.0e-4);
 }
 
 test "actuator: gear scales the whole affine law" {
@@ -8250,12 +11247,12 @@ test "actuator: gear scales the whole affine law" {
     var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
-    d.ctrl[0] = 1.0;
-    d.ctrl[1] = 1.0;
+    d.controls[0] = 1.0;
+    d.controls[1] = 1.0;
     forward(&m, &d);
-    try expectApproxEqAbs(@as(f32, 7.0), d.act_force[1] / d.act_force[0], 1.0e-4);
+    try expectApproxEqAbs(@as(f32, 7.0), d.actuator_forces[1] / d.actuator_forces[0], 1.0e-4);
     // Both drive the same DOF, so the joint sees their sum.
-    try expectApproxEqAbs(@as(f32, 8.0), d.actuator_force[0], 1.0e-4);
+    try expectApproxEqAbs(@as(f32, 8.0), d.actuator_joint_forces[0], 1.0e-4);
 }
 
 test "integration: Jacobian-transpose IK reaches an off-axis target" {
@@ -8308,26 +11305,26 @@ test "integration: Jacobian-transpose IK reaches an off-axis target" {
     defer d.deinit();
     var jac_p: [2]Vec = undefined;
 
-    d.pos[0] = 0.6;
-    d.pos[1] = -1.0;
+    d.joint_positions[0] = 0.6;
+    d.joint_positions[1] = -1.0;
     const target: Vec = vec(0.55, -0.45, 0); // off the vertical axis, inside the workspace
 
     for (0..2400) |_| { // 10 seconds
         forward(&m, &d);
-        @memcpy(d.applied_force, d.bias_force); // weightless
-        const tip: Vec = d.site_xpos[0];
+        @memcpy(d.applied_joint_forces, d.bias_joint_forces); // weightless
+        const tip: Vec = d.site_positions[0];
         jacSite(&m, &d, @as(u32, 0), &jac_p, null);
-        for (0..m.nv) |i| {
-            d.applied_force[i] += 40.0 * dot3(jac_p[i], target - tip) - 1.2 * d.vel[i];
+        for (0..m.dof_count) |i| {
+            d.applied_joint_forces[i] += 40.0 * dot3(jac_p[i], target - tip) - 1.2 * d.joint_velocities[i];
         }
         step(&m, &d);
     }
     forward(&m, &d);
 
-    try expectApproxEqAbs(@as(f32, 0), length3(target - d.site_xpos[0]), 5.0e-3);
+    try expectApproxEqAbs(@as(f32, 0), length3(target - d.site_positions[0]), 5.0e-3);
     // And it got there by BENDING. A straight arm reaching an off-axis point would mean
     // the elbow was not participating, which is the failure this test exists to catch.
-    try expect(@abs(d.pos[1]) > 0.5);
+    try expect(@abs(d.joint_positions[1]) > 0.5);
 }
 
 // The other oracle models, transcribed from scripts/robot_oracle.py. They exist so the
@@ -8389,22 +11386,22 @@ fn checkAgainstOracle(
     tol: f32,
 ) !void {
     var compared: u32 = 0;
-    for (reference.cases) |c| {
+    for (reference_fixtures.cases) |c| {
         if (!eql(u8, c.model, name)) {
             continue;
         }
-        try expectEqual(m.nq, @as(u32, @intCast(c.nq)));
-        try expectEqual(m.nv, @as(u32, @intCast(c.nv)));
-        @memcpy(d.pos, c.qpos);
-        @memcpy(d.vel, c.qvel);
+        try expectEqual(m.coordinate_count, @as(u32, @intCast(c.nq)));
+        try expectEqual(m.dof_count, @as(u32, @intCast(c.nv)));
+        @memcpy(d.joint_positions, c.qpos);
+        @memcpy(d.joint_velocities, c.qvel);
         forward(m, d);
 
-        for (0..m.nbody) |bi| {
+        for (0..m.body_count) |bi| {
             inline for (0..3) |k| {
-                try expectApproxEqAbs(c.body_pos[bi * 3 + k], d.body_xpos[bi][k], tol);
-                try expectApproxEqAbs(c.subtree_com[bi * 3 + k], d.subtree_com[bi][k], tol);
+                try expectApproxEqAbs(c.body_pos[bi * 3 + k], d.body_positions[bi][k], tol);
+                try expectApproxEqAbs(c.subtree_com[bi * 3 + k], d.subtree_centres_of_mass[bi][k], tol);
             }
-            const got: Inertia = d.cinert[bi];
+            const got: Inertia = d.body_inertias[bi];
             const base: usize = bi * 10;
             inline for (0..3) |k| {
                 try expectApproxEqAbs(c.cinert[base + k], got.diag[k], tol);
@@ -8414,14 +11411,14 @@ fn checkAgainstOracle(
         }
         // cdof is where the ball and free joint paths actually differ, so it carries the
         // weight of this whole test.
-        for (0..m.nv) |vi| {
+        for (0..m.dof_count) |vi| {
             inline for (0..3) |k| {
-                try expectApproxEqAbs(c.cdof[vi * 6 + k], d.cdof[vi].ang[k], tol);
-                try expectApproxEqAbs(c.cdof[vi * 6 + 3 + k], d.cdof[vi].lin[k], tol);
+                try expectApproxEqAbs(c.cdof[vi * 6 + k], d.dof_axes[vi].ang[k], tol);
+                try expectApproxEqAbs(c.cdof[vi * 6 + 3 + k], d.dof_axes[vi].lin[k], tol);
             }
         }
-        for (0..m.nv) |i| {
-            try expectApproxEqAbs(c.bias[i], d.bias_force[i], @max(tol, @abs(c.bias[i]) * 1.0e-4));
+        for (0..m.dof_count) |i| {
+            try expectApproxEqAbs(c.bias[i], d.bias_joint_forces[i], @max(tol, @abs(c.bias[i]) * 1.0e-4));
         }
         compared += 1;
     }
@@ -8446,8 +11443,8 @@ test "oracle: free body - the nq != nv path, and the quaternion ordering" {
     defer m.deinit();
     var d: Data = try .init(gpa, &m);
     defer d.deinit();
-    try expectEqual(@as(u32, 7), m.nq);
-    try expectEqual(@as(u32, 6), m.nv);
+    try expectEqual(@as(u32, 7), m.coordinate_count);
+    try expectEqual(@as(u32, 6), m.dof_count);
     try checkAgainstOracle("free_body", &m, &d, 2.0e-4);
 }
 
@@ -8457,8 +11454,8 @@ test "oracle: ball chain - three rotational DOFs from one joint" {
     defer m.deinit();
     var d: Data = try .init(gpa, &m);
     defer d.deinit();
-    try expectEqual(@as(u32, 5), m.nq); // 4 (quat) + 1 (hinge)
-    try expectEqual(@as(u32, 4), m.nv); // 3 + 1
+    try expectEqual(@as(u32, 5), m.coordinate_count); // 4 (quat) + 1 (hinge)
+    try expectEqual(@as(u32, 4), m.dof_count); // 3 + 1
     try checkAgainstOracle("ball_chain", &m, &d, 2.0e-4);
 }
 
@@ -8541,7 +11538,7 @@ test "oracle: arm3 - mixed axes and rotated geoms" {
     defer m.deinit();
     var d: Data = try .init(gpa, &m);
     defer d.deinit();
-    try expectEqual(@as(u32, 3), m.nv);
+    try expectEqual(@as(u32, 3), m.dof_count);
     try checkAgainstOracle("arm3", &m, &d, 3.0e-4);
 }
 
@@ -8594,7 +11591,7 @@ test "passive: damping removes energy, and only damping does" {
         var d: Data = try .init(gpa, &m);
         defer d.deinit();
 
-        d.pos[0] = 1.5;
+        d.joint_positions[0] = 1.5;
         forward(&m, &d);
         const e0: f32 = energy(&m, &d);
         for (0..2400) |_| {
@@ -8634,20 +11631,20 @@ test "passive: stiffness is a spring about ref, and it conserves" {
     defer d.deinit();
 
     // Displaced from ref, the spring must push back TOWARD ref, not toward zero.
-    d.pos[0] = 1.0;
+    d.joint_positions[0] = 1.0;
     forward(&m, &d);
-    try expect(d.passive_force[0] < 0.0);
-    try expectApproxEqAbs(-8.0 * (1.0 - 0.3), d.passive_force[0], 1.0e-4);
+    try expect(d.passive_joint_forces[0] < 0.0);
+    try expectApproxEqAbs(-8.0 * (1.0 - 0.3), d.passive_joint_forces[0], 1.0e-4);
 
     // On the other side of ref it must push the other way.
-    d.pos[0] = -0.2;
+    d.joint_positions[0] = -0.2;
     forward(&m, &d);
-    try expect(d.passive_force[0] > 0.0);
+    try expect(d.passive_joint_forces[0] > 0.0);
 
     // And at ref exactly, nothing.
-    d.pos[0] = 0.3;
+    d.joint_positions[0] = 0.3;
     forward(&m, &d);
-    try expectApproxEqAbs(@as(f32, 0), d.passive_force[0], 1.0e-5);
+    try expectApproxEqAbs(@as(f32, 0), d.passive_joint_forces[0], 1.0e-5);
 }
 
 test "step1/step2 is exactly equivalent to step" {
@@ -8665,18 +11662,18 @@ test "step1/step2 is exactly equivalent to step" {
     defer b.deinit();
 
     inline for (.{ &a, &b }) |dd| {
-        dd.pos[0] = 0.9;
-        dd.pos[1] = -1.4;
+        dd.joint_positions[0] = 0.9;
+        dd.joint_positions[1] = -1.4;
     }
     for (0..600) |_| {
         step(&a_model, &a);
         step1(&b_model, &b);
         step2(&b_model, &b);
     }
-    for (a.pos, b.pos) |x, y| {
+    for (a.joint_positions, b.joint_positions) |x, y| {
         try expectApproxEqAbs(x, y, 1.0e-6);
     }
-    for (a.vel, b.vel) |x, y| {
+    for (a.joint_velocities, b.joint_velocities) |x, y| {
         try expectApproxEqAbs(x, y, 1.0e-6);
     }
 }
@@ -8711,11 +11708,11 @@ test "actuator: activation advances once per step under RK4 too" {
         var d: Data = try .init(gpa, &m);
         defer d.deinit();
 
-        d.ctrl[0] = 1.0;
+        d.controls[0] = 1.0;
         for (0..200) |_| { // one second
             step(&m, &d);
         }
-        reached[idx] = d.act[0];
+        reached[idx] = d.activations[0];
     }
     // w_dot = u = 1 for one second, so w must be 1 -- under BOTH integrators.
     try expectApproxEqAbs(@as(f32, 1.0), reached[0], 1.0e-3);
@@ -8743,22 +11740,22 @@ test "slide joint: a prismatic DOF falls like a free mass" {
     defer m.deinit();
     var d: Data = try .init(gpa, &m);
     defer d.deinit();
-    try expectEqual(@as(u32, 1), m.nq);
-    try expectEqual(@as(u32, 1), m.nv);
+    try expectEqual(@as(u32, 1), m.coordinate_count);
+    try expectEqual(@as(u32, 1), m.dof_count);
 
     // Mass matrix of a pure slide is just the mass, whatever the position.
-    d.pos[0] = 3.7;
+    d.joint_positions[0] = 3.7;
     forward(&m, &d);
     try expectApproxEqAbs(m.body_mass[1], d.mass_matrix[0], 1.0e-4);
     // And the bias force is its weight.
-    try expectApproxEqAbs(m.body_mass[1] * 9.81, d.bias_force[0], 1.0e-3);
+    try expectApproxEqAbs(m.body_mass[1] * 9.81, d.bias_joint_forces[0], 1.0e-3);
 
-    d.pos[0] = 0;
-    d.vel[0] = 0;
+    d.joint_positions[0] = 0;
+    d.joint_velocities[0] = 0;
     for (0..1000) |_| {
         step(&m, &d);
     }
-    try expectApproxEqAbs(-0.5 * 9.81, d.pos[0], 0.02);
+    try expectApproxEqAbs(-0.5 * 9.81, d.joint_positions[0], 0.02);
 }
 
 test "several joints on one body chain, and gimbal-lock like real hinges" {
@@ -8786,7 +11783,7 @@ test "several joints on one body chain, and gimbal-lock like real hinges" {
     defer m.deinit();
     var d: Data = try .init(gpa, &m);
     defer d.deinit();
-    try expectEqual(@as(u32, 3), m.nv);
+    try expectEqual(@as(u32, 3), m.dof_count);
 
     // Chained, not parallel. Before the fix that established this, each DOF's parent was
     // the body's parent, which gave the wrong mass-matrix sparsity entirely.
@@ -8796,20 +11793,20 @@ test "several joints on one body chain, and gimbal-lock like real hinges" {
 
     // Each joint's axis is expressed in the frame built by the joints BEFORE it, which is
     // what makes them compose in declaration order.
-    d.pos[0] = pi * 0.5; // yaw a quarter turn about +Y
+    d.joint_positions[0] = pi * 0.5; // yaw a quarter turn about +Y
     forward(&m, &d);
     // The pitch axis started as +X; a quarter turn about +Y sends it to -Z.
-    try expectApproxEqAbs(@as(f32, 0), d.jnt_xaxis[1][0], 1.0e-5);
-    try expectApproxEqAbs(@as(f32, -1), d.jnt_xaxis[1][2], 1.0e-5);
+    try expectApproxEqAbs(@as(f32, 0), d.joint_axes[1][0], 1.0e-5);
+    try expectApproxEqAbs(@as(f32, -1), d.joint_axes[1][2], 1.0e-5);
 
     // * GIMBAL LOCK. Add a quarter turn of pitch and the ROLL axis swings onto the YAW
     // axis: two of the three DOFs become the same rotation, the arm loses a degree of
     // freedom, and M becomes singular. This is not a defect of the port - it is why a ball
     // joint is a distinct joint type rather than three hinges in a trench coat.
-    d.pos[1] = pi * 0.5;
+    d.joint_positions[1] = pi * 0.5;
     kinematics(&m, &d);
-    const yaw_axis: Vec = d.jnt_xaxis[0];
-    const roll_axis: Vec = d.jnt_xaxis[2];
+    const yaw_axis: Vec = d.joint_axes[0];
+    const roll_axis: Vec = d.joint_axes[2];
     // Parallel (up to sign): the magnitude of their dot product is 1.
     try expectApproxEqAbs(@as(f32, 1), @abs(dot3(yaw_axis, roll_axis)), 1.0e-4);
 }
@@ -8821,8 +11818,8 @@ test "mulM agrees with the dense matrix" {
     var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
-    d.pos[0] = 0.7;
-    d.pos[1] = -1.1;
+    d.joint_positions[0] = 0.7;
+    d.joint_positions[1] = -1.1;
     forward(&m, &d);
     var dense: [4]f32 = undefined;
     massMatrixDense(&m, &d, &dense);
@@ -8847,19 +11844,19 @@ test "determinism: the same initial state gives the same trajectory" {
     defer b.deinit();
 
     inline for (.{ &a, &b }) |dd| {
-        dd.pos[0] = 2.1;
-        dd.pos[1] = -0.8;
-        dd.vel[0] = 0.4;
+        dd.joint_positions[0] = 2.1;
+        dd.joint_positions[1] = -0.8;
+        dd.joint_velocities[0] = 0.4;
     }
     for (0..3000) |_| {
         step(&m, &a);
         step(&m, &b);
     }
     // Bit-identical, not approximately equal: same code, same inputs, same order.
-    for (a.pos, b.pos) |x, y| {
+    for (a.joint_positions, b.joint_positions) |x, y| {
         try expectEqual(x, y);
     }
-    for (a.vel, b.vel) |x, y| {
+    for (a.joint_velocities, b.joint_velocities) |x, y| {
         try expectEqual(x, y);
     }
 }
@@ -8872,10 +11869,10 @@ test "setCtrl and jacSite accept generated enums" {
     defer d.deinit();
 
     setCtrl(&m, &d, ServoArm.Actuator.servo, 0.42);
-    try expectApproxEqAbs(@as(f32, 0.42), d.ctrl[0], 1.0e-9);
+    try expectApproxEqAbs(@as(f32, 0.42), d.controls[0], 1.0e-9);
     // The enum's tag IS the index, so the two spellings must address the same actuator.
     setCtrl(&m, &d, @as(u32, 0), -0.17);
-    try expectApproxEqAbs(@as(f32, -0.17), d.ctrl[0], 1.0e-9);
+    try expectApproxEqAbs(@as(f32, -0.17), d.controls[0], 1.0e-9);
 }
 
 const deg30: f32 = 30.0 * pi / 180.0;
@@ -8976,12 +11973,12 @@ fn checkConstraintRows(
     var compared: u32 = 0;
     var saw_active: bool = false;
     var saw_inactive: bool = false;
-    for (reference.cases) |c| {
+    for (reference_fixtures.cases) |c| {
         if (!eql(u8, c.model, name)) {
             continue;
         }
-        @memcpy(d.pos, c.qpos);
-        @memcpy(d.vel, c.qvel);
+        @memcpy(d.joint_positions, c.qpos);
+        @memcpy(d.joint_velocities, c.qvel);
         forward(m, d);
 
         try expectEqual(c.nefc, @as(usize, d.constraint_count));
@@ -8993,8 +11990,9 @@ fn checkConstraintRows(
 
         for (0..d.constraint_count) |row| {
             // Jacobian row.
-            for (0..m.nv) |i| {
-                try expectApproxEqAbs(c.efc_j[row * m.nv + i], d.constraint_jacobian[row * m.nv + i], tol);
+            for (0..m.dof_count) |i| {
+                const entry: usize = row * m.dof_count + i;
+                try expectApproxEqAbs(c.efc_j[entry], d.constraint_jacobian[entry], tol);
             }
             try expectApproxEqAbs(c.efc_pos[row], d.constraint_violation[row], tol);
             // The exact constraint-space inertia - the fixture is generated with MuJoCo's
@@ -9094,11 +12092,11 @@ test "constraints: a narrow range with a wide margin activates BOTH ends" {
     try checkConstraintRows("limit_both_sides", &m, &d, 1.0e-4);
 
     // And the rows really do oppose each other, which is what makes the pair meaningful.
-    d.pos[0] = 0;
+    d.joint_positions[0] = 0;
     forward(&m, &d);
     try expectEqual(@as(u32, 2), d.constraint_count);
     try expect(d.constraint_jacobian[0] > 0.0);
-    try expect(d.constraint_jacobian[m.nv] < 0.0);
+    try expect(d.constraint_jacobian[m.dof_count] < 0.0);
 }
 
 /// The contact model: a pendulum whose tip sphere rests on the ground.
@@ -9124,12 +12122,12 @@ test "contact: pyramidal rows match MuJoCo, fed MuJoCo's own contact" {
     defer d.deinit();
 
     var compared: u32 = 0;
-    for (reference.cases) |c| {
+    for (reference_fixtures.cases) |c| {
         if (!eql(u8, c.model, "contact_ground")) {
             continue;
         }
-        @memcpy(d.pos, c.qpos);
-        @memcpy(d.vel, c.qvel);
+        @memcpy(d.joint_positions, c.qpos);
+        @memcpy(d.joint_velocities, c.qvel);
 
         d.clearContacts();
         for (0..c.ncon) |ci| {
@@ -9156,8 +12154,9 @@ test "contact: pyramidal rows match MuJoCo, fed MuJoCo's own contact" {
 
         try expectEqual(c.nefc, @as(usize, d.constraint_count));
         for (0..d.constraint_count) |row| {
-            for (0..m.nv) |i| {
-                try expectApproxEqAbs(c.efc_j[row * m.nv + i], d.constraint_jacobian[row * m.nv + i], 1.0e-4);
+            for (0..m.dof_count) |i| {
+                const entry: usize = row * m.dof_count + i;
+                try expectApproxEqAbs(c.efc_j[entry], d.constraint_jacobian[entry], 1.0e-4);
             }
             try expectApproxEqAbs(c.efc_pos[row], d.constraint_violation[row], 1.0e-5);
             try expectApproxEqAbs(
@@ -9218,12 +12217,12 @@ test "contact: the pyramid's edge rows are normal +/- mu*tangent" {
 
     // Rows 0 and 1 are the +mu and -mu edges of tangent 0.
     try expectApproxEqAbs(normal_row + mu * tangent0_row, d.constraint_jacobian[0], 1.0e-5);
-    try expectApproxEqAbs(normal_row - mu * tangent0_row, d.constraint_jacobian[m.nv], 1.0e-5);
+    try expectApproxEqAbs(normal_row - mu * tangent0_row, d.constraint_jacobian[m.dof_count], 1.0e-5);
     // Their average is the pure normal - which is what makes an evenly-loaded pyramid
     // produce a purely normal force.
     try expectApproxEqAbs(
         normal_row,
-        0.5 * (d.constraint_jacobian[0] + d.constraint_jacobian[m.nv]),
+        0.5 * (d.constraint_jacobian[0] + d.constraint_jacobian[m.dof_count]),
         1.0e-5,
     );
     // And all four rows share the contact's penetration as their residual.
@@ -9265,7 +12264,7 @@ test "contact: row order is deterministic whatever order the detector reports" {
         d.setContacts(&order);
         forward(&m, &d);
         try expectEqual(rows_per_contact * 2, d.constraint_count);
-        acc[idx] = d.acc[0];
+        acc[idx] = d.joint_accelerations[0];
         var total: f32 = 0;
         for (0..d.constraint_count) |row| {
             total += d.constraint_force[row];
@@ -9288,18 +12287,18 @@ test "contact: forward() enforces contacts, and a resting link stops falling" {
     defer d.deinit();
 
     // No contact: the link accelerates under gravity once displaced.
-    d.pos[0] = 0.4;
+    d.joint_positions[0] = 0.4;
     d.clearContacts();
     forward(&m, &d);
-    const free_acc: f32 = d.acc[0];
+    const free_acc: f32 = d.joint_accelerations[0];
     try expect(@abs(free_acc) > 1.0);
 
     // Now a floor contact under the tip. Swinging back toward vertical carries the tip
     // downward, so a ground normal opposes the motion and the constraint must fight it.
-    // The contact point is the sphere's CENTRE (`body_xipos`), not the body origin - the
+    // The contact point is the sphere's CENTRE (`body_centres_of_mass`), not the body origin - the
     // origin is the hinge itself, where the Jacobian is identically zero and no contact
     // there could do anything.
-    const contact_point: Vec = d.body_xipos[1];
+    const contact_point: Vec = d.body_centres_of_mass[1];
     const normal: Vec = vec(0, 1, 0);
     d.setContacts(&.{.{
         .position = contact_point,
@@ -9318,7 +12317,7 @@ test "contact: forward() enforces contacts, and a resting link stops falling" {
     // Not merely "smaller in magnitude": a stiff contact that is already 5 mm deep is
     // asked to undo that penetration, so reversing the sign is the correct answer, and
     // asserting a magnitude decrease would be asserting a weaker contact than we want.
-    try expect(d.acc[0] > free_acc + 1.0);
+    try expect(d.joint_accelerations[0] > free_acc + 1.0);
     // Every force is finite and non-negative - the property the zero-A_hat skip protects.
     for (0..d.constraint_count) |row| {
         try expect(d.constraint_force[row] >= 0.0);
@@ -9344,7 +12343,7 @@ test "contact: a row the mechanism cannot move along carries no force" {
 
     // Straight down, touching the floor: the tip's only motion is along X, so the normal
     // (Y) and the out-of-plane tangent (Z) both see nothing.
-    d.pos[0] = 0;
+    d.joint_positions[0] = 0;
     d.setContacts(&.{.{
         .position = vec(0, -0.5925, 0),
         .normal = vec(0, 1, 0),
@@ -9426,17 +12425,17 @@ test "constraints: the Jacobian sign always pushes back into range" {
     var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
-    d.pos[0] = deg90 + 0.2; // past the UPPER limit
+    d.joint_positions[0] = deg90 + 0.2; // past the UPPER limit
     forward(&m, &d);
     try expectEqual(@as(u32, 1), d.constraint_count);
     try expect(d.constraint_jacobian[0] < 0.0); // negative row, so +f drives q down
 
-    d.pos[0] = -deg90 - 0.2; // past the LOWER limit
+    d.joint_positions[0] = -deg90 - 0.2; // past the LOWER limit
     forward(&m, &d);
     try expectEqual(@as(u32, 1), d.constraint_count);
     try expect(d.constraint_jacobian[0] > 0.0); // positive row, so +f drives q up
 
-    d.pos[0] = 0; // comfortably inside
+    d.joint_positions[0] = 0; // comfortably inside
     forward(&m, &d);
     try expectEqual(@as(u32, 0), d.constraint_count);
 }
@@ -9491,7 +12490,7 @@ test "constraints: R scales with constraint-space inertia, which is the whole po
         defer m.deinit();
         var d: Data = try .init(gpa, &m);
         defer d.deinit();
-        d.pos[0] = deg30 + 0.05;
+        d.joint_positions[0] = deg30 + 0.05;
         forward(&m, &d);
         try expectEqual(@as(u32, 1), d.constraint_count);
         ratio_diag[idx] = d.constraint_inertia[0];
@@ -9520,10 +12519,10 @@ test "solver: converges, and the residual says so" {
     defer d.deinit();
 
     // Drive both joints past their limits, hard.
-    d.pos[0] = deg20 + 0.3;
-    d.pos[1] = deg10 + 0.4;
-    d.vel[0] = 2.0;
-    d.vel[1] = 1.5;
+    d.joint_positions[0] = deg20 + 0.3;
+    d.joint_positions[1] = deg10 + 0.4;
+    d.joint_velocities[0] = 2.0;
+    d.joint_velocities[1] = 1.5;
     forward(&m, &d);
 
     try expectEqual(@as(u32, 2), d.constraint_count);
@@ -9543,15 +12542,15 @@ test "solver: the KKT conditions actually hold at the answer" {
     var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
-    d.pos[0] = deg20 + 0.25;
-    d.pos[1] = -deg45 - 0.15; // the OTHER end of the second joint's range
+    d.joint_positions[0] = deg20 + 0.25;
+    d.joint_positions[1] = -deg45 - 0.15; // the OTHER end of the second joint's range
     forward(&m, &d);
     try expectEqual(@as(u32, 2), d.constraint_count);
 
     for (0..d.constraint_count) |row| {
-        const jacobian: []const f32 = d.constraint_jacobian[row * m.nv ..][0..m.nv];
+        const jacobian: []const f32 = d.constraint_jacobian[row * m.dof_count ..][0..m.dof_count];
         var constraint_acc: f32 = 0;
-        for (jacobian, d.acc) |j, a| {
+        for (jacobian, d.joint_accelerations) |j, a| {
             constraint_acc += j * a;
         }
         const shortfall: f32 = constraint_acc +
@@ -9627,20 +12626,20 @@ test "unified tree: a robot pushing a FREE BODY conserves momentum" {
     defer d.deinit();
 
     // One slide DOF plus six for the free body; seven positions plus a quaternion.
-    try expectEqual(@as(u32, 7), m.nv);
-    try expectEqual(@as(u32, 8), m.nq);
+    try expectEqual(@as(u32, 7), m.dof_count);
+    try expectEqual(@as(u32, 8), m.coordinate_count);
 
-    d.vel[0] = 1.0;
+    d.joint_velocities[0] = 1.0;
     const initial_momentum: f32 = 2.0 * 1.0; // the crate starts at rest
 
     for (0..600) |_| {
         forward(&m, &d);
         d.clearContacts();
         // A contact between two TREE BODIES - `body_b` is the crate, not `world_body`.
-        const gap: f32 = d.body_xpos[2][0] - d.body_xpos[1][0] - 0.10;
+        const gap: f32 = d.body_positions[2][0] - d.body_positions[1][0] - 0.10;
         if (gap < 0.01) {
             d.pushContact(.{
-                .position = (d.body_xpos[1] + d.body_xpos[2]) * splat(@as(f32, 0.5)),
+                .position = (d.body_positions[1] + d.body_positions[2]) * splat(@as(f32, 0.5)),
                 .normal = vec(1, 0, 0),
                 .tangent = .{ vec(0, 1, 0), vec(0, 0, 1) },
                 .distance = gap,
@@ -9659,13 +12658,13 @@ test "unified tree: a robot pushing a FREE BODY conserves momentum" {
     // origin, so the crate was permanently overlapping the pusher), and tight numbers on a
     // wrong setup are how a fix looks like a regression. The property is that momentum
     // moved from one body to the other; the exact split is the integrator's business.
-    try expect(d.vel[0] < 0.95);
-    try expect(d.vel[1] > 0.3);
+    try expect(d.joint_velocities[0] < 0.95);
+    try expect(d.joint_velocities[1] > 0.3);
 
     // * And the books balance. 0.1% is generous for f32 over 600 steps; the measured error
     // is 0.002%, and a loose bound here keeps the test about CONSERVATION rather than about
     // the integrator's exact accuracy.
-    const final_momentum: f32 = 2.0 * d.vel[0] + 0.5 * d.vel[1];
+    const final_momentum: f32 = 2.0 * d.joint_velocities[0] + 0.5 * d.joint_velocities[1];
     try expectApproxEqAbs(initial_momentum, final_momentum, 0.002);
 }
 
@@ -9682,7 +12681,7 @@ test "warm start: same answer, far fewer iterations" {
     //
     // -- AND THE BUG THIS WOULD HAVE CAUGHT --
     //
-    // The first implementation warm-started the FORCES but left `d.acc` holding the free
+    // The first implementation warm-started the FORCES but left `d.joint_accelerations` holding the free
     // acceleration. The iteration then computed the whole force again and added it on top,
     // doubling it every step: a joint resting on its limit sank straight through, and its
     // constraint force reached 7619 N. Seeding `acc += M^-1J^Tf` is what makes the two agree.
@@ -9721,18 +12720,18 @@ test "warm start: same answer, far fewer iterations" {
         var d: Data = try .init(gpa, &m);
         defer d.deinit();
 
-        d.pos[0] = 45.0 * pi / 180.0; // above the limit, free to fall onto it
+        d.joint_positions[0] = 45.0 * pi / 180.0; // above the limit, free to fall onto it
         for (0..2400) |_| {
             step(&m, &d);
         }
         forward(&m, &d);
         if (warm) {
             warm_iterations = d.solver_iterations;
-            warm_pos = d.pos[0];
+            warm_pos = d.joint_positions[0];
             warm_force = d.constraint_force[0];
         } else {
             cold_iterations = d.solver_iterations;
-            cold_pos = d.pos[0];
+            cold_pos = d.joint_positions[0];
             cold_force = d.constraint_force[0];
         }
     }
@@ -9781,16 +12780,16 @@ test "solver: a joint held against its limit comes to rest there" {
     var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
-    d.pos[0] = deg45; // above the limit, free to fall onto it
+    d.joint_positions[0] = deg45; // above the limit, free to fall onto it
     for (0..2400) |_| { // 10 seconds
         step(&m, &d);
     }
     forward(&m, &d);
 
     // Resting ON the lower limit, penetrating only as much as a soft constraint permits.
-    try expect(d.pos[0] < deg30 + 0.01); // it did come down to the limit
-    try expect(d.pos[0] > deg30 - 0.03); // and did not sink through it
-    try expect(@abs(d.vel[0]) < 0.05); // and is at rest, not rattling
+    try expect(d.joint_positions[0] < deg30 + 0.01); // it did come down to the limit
+    try expect(d.joint_positions[0] > deg30 - 0.03); // and did not sink through it
+    try expect(@abs(d.joint_velocities[0]) < 0.05); // and is at rest, not rattling
     try expect(d.constraint_force[0] > 0.0); // actively holding
 }
 
@@ -9833,12 +12832,12 @@ test "solver: penetration under load is independent of mass - the A_hat payoff" 
         var d: Data = try .init(gpa, &m);
         defer d.deinit();
 
-        d.pos[0] = deg45;
+        d.joint_positions[0] = deg45;
         for (0..2400) |_| {
             step(&m, &d);
         }
         forward(&m, &d);
-        penetration[idx] = deg30 - d.pos[0]; // positive when sunk past the limit
+        penetration[idx] = deg30 - d.joint_positions[0]; // positive when sunk past the limit
     }
 
     // The same softness at both scales. Compared absolutely because both should be tiny;
@@ -9857,7 +12856,7 @@ test "solver: no constraints means no work and no force" {
     // pendulum hangs straight down, which is its equilibrium, so gravity exerts no torque
     // and "the acceleration is nonzero" would be false for reasons having nothing to do
     // with constraints.
-    d.pos[0] = 0.5;
+    d.joint_positions[0] = 0.5;
     forward(&m, &d);
     try expectEqual(@as(u32, 0), d.constraint_count);
     try expectApproxEqAbs(@as(f32, 0), constraintResidual(&m, &d), 1.0e-9);
@@ -9865,11 +12864,11 @@ test "solver: no constraints means no work and no force" {
     // Left stale, a step with no constraints reports the last constrained step's count and
     // reads as a solver in trouble.
     try expectEqual(@as(u32, 0), d.solver_iterations);
-    for (d.constraint_joint_force) |joint_force| {
+    for (d.constraint_joint_forces) |joint_force| {
         try expectApproxEqAbs(@as(f32, 0), joint_force, 1.0e-9);
     }
     // And the acceleration is the unconstrained one: swinging back toward vertical.
-    try expect(d.acc[0] < -1.0);
+    try expect(d.joint_accelerations[0] < -1.0);
 }
 
 test "solver: constraint force is reported in joint coordinates as J^T f" {
@@ -9879,7 +12878,7 @@ test "solver: constraint force is reported in joint coordinates as J^T f" {
     var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
-    d.pos[0] = deg90 + 0.2; // past the upper limit
+    d.joint_positions[0] = deg90 + 0.2; // past the upper limit
     forward(&m, &d);
     try expectEqual(@as(u32, 1), d.constraint_count);
     try expect(d.constraint_force[0] > 0.0); // pushing
@@ -9888,10 +12887,10 @@ test "solver: constraint force is reported in joint coordinates as J^T f" {
     // drives the coordinate back down into range.
     try expectApproxEqAbs(
         d.constraint_jacobian[0] * d.constraint_force[0],
-        d.constraint_joint_force[0],
+        d.constraint_joint_forces[0],
         1.0e-5,
     );
-    try expect(d.constraint_joint_force[0] < 0.0);
+    try expect(d.constraint_joint_forces[0] < 0.0);
 }
 
 /// The MuJoCo `model/car` idea, reduced to its essential mechanism: two wheels, and two
@@ -9936,11 +12935,11 @@ test "tendon: length and velocity are the linear combination they are defined as
     var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
-    try expectEqual(@as(u32, 2), m.ntendon);
-    d.pos[0] = 0.7; // left
-    d.pos[1] = 0.2; // right
-    d.vel[0] = 1.5;
-    d.vel[1] = -0.5;
+    try expectEqual(@as(u32, 2), m.tendon_count);
+    d.joint_positions[0] = 0.7; // left
+    d.joint_positions[1] = 0.2; // right
+    d.joint_velocities[0] = 1.5;
+    d.joint_velocities[1] = -0.5;
     forward(&m, &d);
 
     // forward = qL + qR, turn = qL - qR. Straight from the definition, which is the point:
@@ -9962,25 +12961,25 @@ test "tendon: a differential drive turns two controls into forward and turn" {
     defer d.deinit();
 
     // Drive only: both wheels must turn the SAME way, by the same amount.
-    d.ctrl[0] = 1.0; // forward
-    d.ctrl[1] = 0.0; // turn
+    d.controls[0] = 1.0; // forward
+    d.controls[1] = 0.0; // turn
     for (0..240) |_| {
         step(&m, &d);
     }
     forward(&m, &d);
-    try expect(d.pos[0] > 0.05);
-    try expectApproxEqAbs(d.pos[0], d.pos[1], 1.0e-4);
+    try expect(d.joint_positions[0] > 0.05);
+    try expectApproxEqAbs(d.joint_positions[0], d.joint_positions[1], 1.0e-4);
 
     // Steer only: OPPOSITE ways, by the same amount.
     d.reset(&m);
-    d.ctrl[0] = 0.0;
-    d.ctrl[1] = 1.0;
+    d.controls[0] = 0.0;
+    d.controls[1] = 1.0;
     for (0..240) |_| {
         step(&m, &d);
     }
     forward(&m, &d);
-    try expect(d.pos[0] > 0.05);
-    try expectApproxEqAbs(d.pos[0], -d.pos[1], 1.0e-4);
+    try expect(d.joint_positions[0] > 0.05);
+    try expectApproxEqAbs(d.joint_positions[0], -d.joint_positions[1], 1.0e-4);
     // And a pure turn leaves the vehicle's forward coordinate untouched, which is the
     // decoupling the tendons exist to provide.
     try expectApproxEqAbs(@as(f32, 0), d.tendon_length[0], 1.0e-4);
@@ -9996,17 +12995,17 @@ test "tendon: one scalar force spreads across the DOFs by its coefficients" {
     var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
-    d.ctrl[0] = 2.0; // forward: coefficients (+1, +1)
-    d.ctrl[1] = 0.0;
+    d.controls[0] = 2.0; // forward: coefficients (+1, +1)
+    d.controls[1] = 0.0;
     forward(&m, &d);
-    try expectApproxEqAbs(@as(f32, 2.0), d.actuator_force[0], 1.0e-5);
-    try expectApproxEqAbs(@as(f32, 2.0), d.actuator_force[1], 1.0e-5);
+    try expectApproxEqAbs(@as(f32, 2.0), d.actuator_joint_forces[0], 1.0e-5);
+    try expectApproxEqAbs(@as(f32, 2.0), d.actuator_joint_forces[1], 1.0e-5);
 
-    d.ctrl[0] = 0.0;
-    d.ctrl[1] = 3.0; // turn: coefficients (+1, -1)
+    d.controls[0] = 0.0;
+    d.controls[1] = 3.0; // turn: coefficients (+1, -1)
     forward(&m, &d);
-    try expectApproxEqAbs(@as(f32, 3.0), d.actuator_force[0], 1.0e-5);
-    try expectApproxEqAbs(@as(f32, -3.0), d.actuator_force[1], 1.0e-5);
+    try expectApproxEqAbs(@as(f32, 3.0), d.actuator_joint_forces[0], 1.0e-5);
+    try expectApproxEqAbs(@as(f32, -3.0), d.actuator_joint_forces[1], 1.0e-5);
 }
 
 test "tendon: a spring on the tendon pulls its length toward rest" {
@@ -10042,8 +13041,8 @@ test "tendon: a spring on the tendon pulls its length toward rest" {
     var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
-    d.pos[0] = 0.6;
-    d.pos[1] = 0.6; // tendon length 1.2, well away from rest
+    d.joint_positions[0] = 0.6;
+    d.joint_positions[1] = 0.6; // tendon length 1.2, well away from rest
     for (0..2400) |_| {
         step(&m, &d);
     }
@@ -10088,12 +13087,12 @@ test "sensor: layout is packed by declaration order, and each kind has its width
     defer d.deinit();
 
     // 1 + 1 + 3 + 3 + 3 + 3 + 3 + 1
-    try expectEqual(@as(u32, 18), m.nsensordata);
-    try expectEqual(@as(u32, 8), m.nsensor);
+    try expectEqual(@as(u32, 18), m.sensor_value_count);
+    try expectEqual(@as(u32, 8), m.sensor_count);
     try expectEqual(@as(usize, 18), d.sensor_data.len);
     // Enum indexing works the same way it does everywhere else.
     try expectEqual(@as(u32, 0), @backingInt(SensedArm.Sensor.angle));
-    try expectEqual(@as(u32, 2), m.sensor_adr[2]); // after two scalars
+    try expectEqual(@as(u32, 2), m.sensor_first_value[2]); // after two scalars
 }
 
 test "sensor: position and velocity readings agree with the state they report" {
@@ -10103,8 +13102,8 @@ test "sensor: position and velocity readings agree with the state they report" {
     var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
-    d.pos[0] = 0.4;
-    d.vel[0] = 1.3;
+    d.joint_positions[0] = 0.4;
+    d.joint_velocities[0] = 1.3;
     forward(&m, &d);
 
     try expectApproxEqAbs(@as(f32, 0.4), d.sensor_data[0], 1.0e-6);
@@ -10133,8 +13132,8 @@ test "sensor: a gyro reads in its OWN frame, which is the whole point of mountin
     var local_first: Vec = vec_zero;
     var world_first: Vec = vec_zero;
     inline for (.{ 0.0, 1.1 }, 0..) |angle, idx| {
-        d.pos[0] = angle;
-        d.vel[0] = 2.0;
+        d.joint_positions[0] = angle;
+        d.joint_velocities[0] = 2.0;
         forward(&m, &d);
         const world_vel: Vec = vec(d.sensor_data[5], d.sensor_data[6], d.sensor_data[7]);
         const local_vel: Vec = vec(d.sensor_data[11], d.sensor_data[12], d.sensor_data[13]);
@@ -10170,8 +13169,8 @@ test "sensor: an accelerometer reads PROPER acceleration - g at rest, zero in fr
     // HELD STILL at the bottom of its swing: the arm is in equilibrium there, so the site
     // is stationary and the instrument must read g along its own +Y (the link hangs along
     // -Y, so the site's +Y points back up toward the pivot).
-    d.pos[0] = 0;
-    d.vel[0] = 0;
+    d.joint_positions[0] = 0;
+    d.joint_velocities[0] = 0;
     forward(&m, &d);
     const at_rest: Vec = vec(d.sensor_data[14], d.sensor_data[15], d.sensor_data[16]);
     try expectApproxEqAbs(@as(f32, 9.81), at_rest[1], 0.05);
@@ -10202,9 +13201,9 @@ test "sensor: the accelerometer's Coriolis term is not optional" {
     defer d.deinit();
 
     const rate: f32 = 3.0;
-    d.pos[0] = 0;
-    d.vel[0] = rate;
-    d.ctrl[0] = 0;
+    d.joint_positions[0] = 0;
+    d.joint_velocities[0] = rate;
+    d.controls[0] = 0;
     forward(&m, &d);
 
     // Spinning at omega about the pivot, a point at radius r feels omega^2r toward the centre. The
@@ -10232,17 +13231,17 @@ test "implicit: with no velocity-dependent forces it IS explicit Euler" {
     defer implicit_data.deinit();
 
     inline for (.{ &euler_data, &implicit_data }) |dd| {
-        dd.pos[0] = 1.1;
-        dd.pos[1] = -0.6;
-        dd.vel[0] = 0.4;
+        dd.joint_positions[0] = 1.1;
+        dd.joint_positions[1] = -0.6;
+        dd.joint_velocities[0] = 0.4;
     }
     for (0..200) |_| {
         step(&euler_model, &euler_data);
         step(&implicit_model, &implicit_data);
     }
-    for (0..euler_model.nv) |i| {
-        try expectApproxEqAbs(euler_data.pos[i], implicit_data.pos[i], 1.0e-4);
-        try expectApproxEqAbs(euler_data.vel[i], implicit_data.vel[i], 1.0e-4);
+    for (0..euler_model.dof_count) |i| {
+        try expectApproxEqAbs(euler_data.joint_positions[i], implicit_data.joint_positions[i], 1.0e-4);
+        try expectApproxEqAbs(euler_data.joint_velocities[i], implicit_data.joint_velocities[i], 1.0e-4);
     }
 }
 
@@ -10302,25 +13301,25 @@ test "implicit: the velocity derivative matches a finite difference of the force
     var analytic: [4]f32 = undefined; // nv = 2
     smoothVelDerivative(&m, &analytic);
 
-    d.pos[0] = 0.3;
-    d.pos[1] = -0.5;
+    d.joint_positions[0] = 0.3;
+    d.joint_positions[1] = -0.5;
     const base_vel = [_]f32{ 0.8, -0.4 };
 
     const eps: f32 = 1.0e-3;
-    for (0..m.nv) |column| {
+    for (0..m.dof_count) |column| {
         // Central difference of the velocity-dependent forces with respect to v[column].
         var forces: [2][2]f32 = undefined;
         inline for (.{ -eps, eps }, 0..) |delta, side| {
-            @memcpy(d.vel, &base_vel);
-            d.vel[column] += delta;
+            @memcpy(d.joint_velocities, &base_vel);
+            d.joint_velocities[column] += delta;
             forward(&m, &d);
-            for (0..m.nv) |row| {
-                forces[side][row] = d.passive_force[row] + d.actuator_force[row];
+            for (0..m.dof_count) |row| {
+                forces[side][row] = d.passive_joint_forces[row] + d.actuator_joint_forces[row];
             }
         }
-        for (0..m.nv) |row| {
+        for (0..m.dof_count) |row| {
             const numeric: f32 = (forces[1][row] - forces[0][row]) / (2.0 * eps);
-            try expectApproxEqAbs(numeric, analytic[row * m.nv + column], 2.0e-3);
+            try expectApproxEqAbs(numeric, analytic[row * m.dof_count + column], 2.0e-3);
         }
     }
 
@@ -10359,7 +13358,7 @@ test "* integrators: joint damping is implicit in BOTH, as in MuJoCo" {
         m.opt.integrator = integrator;
         var d: Data = try .init(gpa, &m);
         defer d.deinit();
-        d.vel[0] = 1.0;
+        d.joint_velocities[0] = 1.0;
         for (0..600) |_| {
             step(&m, &d);
             // Stop as soon as divergence is established.
@@ -10374,11 +13373,11 @@ test "* integrators: joint damping is implicit in BOTH, as in MuJoCo" {
             // passing an arbitrary line, so the test asserts that instead - and it still
             // observes the failure rather than being killed by it, which was always the
             // point.
-            if (@abs(d.vel[0]) >= m.opt.max_velocity * 0.99) {
+            if (@abs(d.joint_velocities[0]) >= m.opt.max_velocity * 0.99) {
                 break;
             }
         }
-        results[idx] = @abs(d.vel[0]);
+        results[idx] = @abs(d.joint_velocities[0]);
     }
 
     // -- *** EULER NO LONGER DIVERGES HERE, AND THAT IS THE POINT OF THE CHANGE --
@@ -10429,16 +13428,16 @@ test "implicit: a damped system loses energy monotonically, as damping must" {
     var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
-    d.pos[0] = 1.5;
+    d.joint_positions[0] = 1.5;
     forward(&m, &d);
     const start_energy: f32 = energy(&m, &d);
     // The energy of the same pendulum at rest at the bottom: the floor this can approach
     // but never pass.
-    d.pos[0] = 0;
+    d.joint_positions[0] = 0;
     forward(&m, &d);
     const lowest_possible: f32 = energy(&m, &d);
-    d.pos[0] = 1.5;
-    d.vel[0] = 0;
+    d.joint_positions[0] = 1.5;
+    d.joint_velocities[0] = 0;
     forward(&m, &d);
     var previous: f32 = energy(&m, &d);
     for (0..1200) |_| {
@@ -10483,14 +13482,14 @@ test "inertial: a jointed body with mass but NO geoms is legal" {
     defer d.deinit();
 
     try expectApproxEqAbs(@as(f32, 0.5), m.body_mass[1], 1.0e-6);
-    try expectEqual(@as(u32, 0), m.ngeom);
+    try expectEqual(@as(u32, 0), m.geom_count);
 
     // And it SIMULATES: the mass matrix must be positive definite, which is what the
     // massless-body check was protecting against in the first place.
-    d.pos[0] = 0.6;
+    d.joint_positions[0] = 0.6;
     forward(&m, &d);
-    try expect(d.acc[0] == d.acc[0]); // not NaN
-    try expect(@abs(d.acc[0]) > 0.1); // gravity acts on it, so it really has mass
+    try expect(d.joint_accelerations[0] == d.joint_accelerations[0]); // not NaN
+    try expect(@abs(d.joint_accelerations[0]) > 0.1); // gravity acts on it, so it really has mass
 }
 
 test "inertial: a stated mass tensor replaces the geom-derived one, verbatim" {
@@ -10520,11 +13519,11 @@ test "inertial: a stated mass tensor replaces the geom-derived one, verbatim" {
     defer m.deinit();
 
     try expectApproxEqAbs(@as(f32, 0.629769), m.body_mass[1], 1.0e-6);
-    try expectApproxEqAbs(@as(f32, -0.041018), m.body_ipos[1][0], 1.0e-6);
-    try expectApproxEqAbs(@as(f32, 0.049974), m.body_ipos[1][2], 1.0e-6);
+    try expectApproxEqAbs(@as(f32, -0.041018), m.body_centre_of_mass_offset[1][0], 1.0e-6);
+    try expectApproxEqAbs(@as(f32, 0.049974), m.body_centre_of_mass_offset[1][2], 1.0e-6);
     // The tensor copies across without an eigendecomposition - the payoff for `Inertia`
     // storing the full symmetric form.
-    const inertia: Inertia = m.body_inertia[1];
+    const inertia: Inertia = m.body_local_inertia[1];
     try expectApproxEqAbs(@as(f32, 0.00315), inertia.diag[0], 1.0e-9);
     try expectApproxEqAbs(@as(f32, 0.00388), inertia.diag[1], 1.0e-9);
     try expectApproxEqAbs(@as(f32, 0.004285), inertia.diag[2], 1.0e-9);
@@ -10532,16 +13531,16 @@ test "inertial: a stated mass tensor replaces the geom-derived one, verbatim" {
     try expectApproxEqAbs(@as(f32, 0.00015), inertia.off[1], 1.0e-9);
     try expectApproxEqAbs(@as(f32, 8.2299e-6), inertia.off[2], 1.0e-11);
     // A stated inertia is about the COM by definition, so the first moment is zero and the
-    // offset lives in `body_ipos` - the same split the geom-derived path uses.
+    // offset lives in `body_centre_of_mass_offset` - the same split the geom-derived path uses.
     try expectApproxEqAbs(@as(f32, 0), length3(inertia.h), 1.0e-9);
 
     // And the model actually SIMULATES with it: the mass matrix must still be positive
     // definite, which is the property a mis-transcribed tensor would break.
     var d: Data = try .init(gpa, &m);
     defer d.deinit();
-    d.pos[0] = 0.5;
+    d.joint_positions[0] = 0.5;
     forward(&m, &d);
-    try expect(d.acc[0] == d.acc[0]); // not NaN
+    try expect(d.joint_accelerations[0] == d.joint_accelerations[0]); // not NaN
     try expect(conditionEstimate(&m, &d) < 1.0e6);
 }
 
@@ -10598,12 +13597,12 @@ test "inertial: geom-derived and stated agree when they describe the same body" 
     // Same mass to within the transcription's precision.
     try expectApproxEqAbs(derived.body_mass[1], restated.body_mass[1], 1.0e-5);
     // And the same dynamics: gravity torque at the same pose.
-    da.pos[0] = 0.7;
-    db.pos[0] = 0.7;
+    da.joint_positions[0] = 0.7;
+    db.joint_positions[0] = 0.7;
     forward(&derived, &da);
     forward(&restated, &db);
     // Tight, because these should agree to floating-point noise rather than approximately.
-    try expectApproxEqAbs(da.acc[0], db.acc[0], 1.0e-4);
+    try expectApproxEqAbs(da.joint_accelerations[0], db.joint_accelerations[0], 1.0e-4);
 }
 
 test "crb: M is symmetric, positive definite, and configuration-dependent" {
@@ -10620,8 +13619,8 @@ test "crb: M is symmetric, positive definite, and configuration-dependent" {
     var folded_diag: f32 = 0;
 
     for (poses, 0..) |q, pi_| {
-        d.pos[0] = q[0];
-        d.pos[1] = q[1];
+        d.joint_positions[0] = q[0];
+        d.joint_positions[1] = q[1];
         kinematics(&m, &d);
         comPos(&m, &d);
         crb(&m, &d);
@@ -10681,7 +13680,7 @@ test "crb: a locked subtree behaves as one rigid body" {
     defer wm.deinit();
     var wd: Data = try .init(gpa, &wm);
     defer wd.deinit();
-    try expectEqual(@as(u32, 1), wm.nv);
+    try expectEqual(@as(u32, 1), wm.dof_count);
     kinematics(&wm, &wd);
     comPos(&wm, &wd);
     crb(&wm, &wd);
@@ -10723,13 +13722,13 @@ test "kinematics: a hinge rotates about its ANCHOR, not the body origin" {
     var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
-    d.pos[0] = pi * 0.5;
+    d.joint_positions[0] = pi * 0.5;
     kinematics(&m, &d);
 
     // Anchor at (1,0,0); origin starts 1 m along -X from it and ends 1 m along -Y.
-    try expectApproxEqAbs(@as(f32, 1), d.jnt_xanchor[0][0], 1.0e-5);
-    try expectApproxEqAbs(@as(f32, 1), d.body_xpos[0 + 1][0], 1.0e-5);
-    try expectApproxEqAbs(@as(f32, -1), d.body_xpos[0 + 1][1], 1.0e-5);
+    try expectApproxEqAbs(@as(f32, 1), d.joint_anchors[0][0], 1.0e-5);
+    try expectApproxEqAbs(@as(f32, 1), d.body_positions[0 + 1][0], 1.0e-5);
+    try expectApproxEqAbs(@as(f32, -1), d.body_positions[0 + 1][1], 1.0e-5);
 }
 
 test "kinematics: sites ride their body, and the stage advances" {
@@ -10748,12 +13747,12 @@ test "kinematics: sites ride their body, and the stage advances" {
     defer d.deinit();
 
     try expectEqual(Stage.stale, d.stage);
-    d.pos[0] = pi * 0.5; // quarter turn about Z takes +X to +Y
+    d.joint_positions[0] = pi * 0.5; // quarter turn about Z takes +X to +Y
     kinematics(&m, &d);
     try expectEqual(Stage.position, d.stage);
 
-    try expectApproxEqAbs(@as(f32, 0), d.site_xpos[0][0], 1.0e-5);
-    try expectApproxEqAbs(@as(f32, 2), d.site_xpos[0][1], 1.0e-5);
+    try expectApproxEqAbs(@as(f32, 0), d.site_positions[0][0], 1.0e-5);
+    try expectApproxEqAbs(@as(f32, 2), d.site_positions[0][1], 1.0e-5);
 }
 
 test "position coordinates: integrate then differentiate is a round trip" {
@@ -10773,14 +13772,14 @@ test "position coordinates: integrate then differentiate is a round trip" {
 
     const dt: f32 = 0.01;
     const wanted = [_]f32{ 0.5, -1.25, 2.0, 0.3, -0.7, 1.1 };
-    @memcpy(d.vel, &wanted);
+    @memcpy(d.joint_velocities, &wanted);
 
     var before: [7]f32 = undefined;
-    @memcpy(&before, d.pos);
-    integratePos(&m, d.pos, d.vel, dt);
+    @memcpy(&before, d.joint_positions);
+    integratePos(&m, d.joint_positions, d.joint_velocities, dt);
 
     var recovered: [6]f32 = undefined;
-    differentiatePos(&m, &recovered, &before, d.pos, dt);
+    differentiatePos(&m, &recovered, &before, d.joint_positions, dt);
     for (wanted, recovered) |w, r| {
         try expectApproxEqAbs(w, r, 1.0e-4);
     }
@@ -10801,15 +13800,15 @@ test "position coordinates: quaternions stay on the unit sphere" {
     defer d.deinit();
 
     // Spin hard, for a long time, on a deliberately awkward axis.
-    d.vel[0] = 7.0;
-    d.vel[1] = -3.5;
-    d.vel[2] = 11.25;
+    d.joint_velocities[0] = 7.0;
+    d.joint_velocities[1] = -3.5;
+    d.joint_velocities[2] = 11.25;
     for (0..100_000) |_| {
-        integratePos(&m, d.pos, d.vel, 1.0 / 240.0);
-        normalizeQuats(&m, d.pos);
+        integratePos(&m, d.joint_positions, d.joint_velocities, 1.0 / 240.0);
+        normalizeQuats(&m, d.joint_positions);
     }
-    const n: f32 = @sqrt(d.pos[0] * d.pos[0] + d.pos[1] * d.pos[1] +
-        d.pos[2] * d.pos[2] + d.pos[3] * d.pos[3]);
+    const n: f32 = @sqrt(d.joint_positions[0] * d.joint_positions[0] + d.joint_positions[1] * d.joint_positions[1] +
+        d.joint_positions[2] * d.joint_positions[2] + d.joint_positions[3] * d.joint_positions[3]);
     try expectApproxEqAbs(@as(f32, 1), n, 1.0e-5);
 }
 
@@ -10983,7 +13982,7 @@ test "solver: Nesterov momentum reaches the same answer, in fewer iterations" {
         defer d.deinit();
 
         // Drive the joint hard into its lower limit so the solve has real work to do.
-        d.pos[0] = -0.05;
+        d.joint_positions[0] = -0.05;
         for (0..200) |_| {
             forward(&m, &d);
             step(&m, &d);
@@ -11051,10 +14050,10 @@ test "* equality: a four-bar linkage, which a tree cannot express" {
     var data: Data = try .init(gpa, &model);
     defer data.deinit();
 
-    try expect(model.neq == 1);
+    try expect(model.equality_count == 1);
 
     // Twist one arm and let go. Without the closure the other would not move at all.
-    data.pos[0] = 0.35;
+    data.joint_positions[0] = 0.35;
     data.stage = .stale;
     // * THE COUPLING IS TRACKED DURING THE SWING, NOT AT THE END. Both arms hang straight down
     // at rest, and the anchors were chosen so the tips coincide THERE - so the final state
@@ -11064,7 +14063,7 @@ test "* equality: a four-bar linkage, which a tree cannot express" {
     for (0..2000) |_| {
         forward(&model, &data);
         step(&model, &data);
-        follower_swing = @max(follower_swing, @abs(data.pos[1]));
+        follower_swing = @max(follower_swing, @abs(data.joint_positions[1]));
     }
     forward(&model, &data);
 
@@ -11199,13 +14198,13 @@ test "* equality: a geared gripper - two fingers, one motor" {
     // - no gravity, no contact - so any motion at all arrived through the constraint.
     for (0..1500) |_| {
         forward(&model, &data);
-        data.applied_force[model.jnt_dof_adr[0]] = 3.0;
+        data.applied_joint_forces[model.joint_first_dof[0]] = 3.0;
         step(&model, &data);
     }
     forward(&model, &data);
 
-    const left: f32 = data.pos[model.jnt_qpos_adr[0]];
-    const right: f32 = data.pos[model.jnt_qpos_adr[1]];
+    const left: f32 = data.joint_positions[model.joint_first_coordinate[0]];
+    const right: f32 = data.joint_positions[model.joint_first_coordinate[1]];
     try expect(left > 0.05); // it actually moved
     // * AND THE MIRROR HELD. A hair of error is expected - a loop closure is soft in the same
     // way contact is - but the fingers track each other to well under a millimetre.
@@ -11242,7 +14241,7 @@ test "equality: a coupling with no driver locks a joint" {
         step(&model, &data);
     }
     forward(&model, &data);
-    try expectApproxEqAbs(@as(f32, 0.4), data.pos[0], 0.01);
+    try expectApproxEqAbs(@as(f32, 0.4), data.joint_positions[0], 0.01);
 }
 
 test "* equality: a weld holds orientation, not just position" {
@@ -11281,20 +14280,22 @@ test "* equality: a weld holds orientation, not just position" {
     try expect(data.constraint_count == 6);
 
     // Turn the anchor. A welded body must come with it - position AND heading.
-    const spin: u32 = model.jnt_qpos_adr[0];
+    const spin: u32 = model.joint_first_coordinate[0];
     for (0..3000) |_| {
         forward(&model, &data);
         // Drive the hinge toward a quarter turn.
-        data.applied_force[model.jnt_dof_adr[0]] = 40.0 * (0.7 - data.pos[spin]) - 4.0 * data.vel[0];
+        const spin_angle: f32 = data.joint_positions[spin];
+        const spin_rate: f32 = data.joint_velocities[0];
+        data.applied_joint_forces[model.joint_first_dof[0]] = 40.0 * (0.7 - spin_angle) - 4.0 * spin_rate;
         step(&model, &data);
     }
     forward(&model, &data);
 
-    try expect(@abs(data.pos[spin] - 0.7) < 0.1); // the anchor got there
+    try expect(@abs(data.joint_positions[spin] - 0.7) < 0.1); // the anchor got there
     // * AND THE HELD BODY TURNED WITH IT. Under a `connect` this would hang plumb whatever the
     // anchor did, because a shared point permits any rotation about itself.
-    const held_heading: Vec = rotate(data.body_xrot[2], vec(1, 0, 0));
-    const anchor_heading: Vec = rotate(data.body_xrot[1], vec(1, 0, 0));
+    const held_heading: Vec = rotate(data.body_orientations[2], vec(1, 0, 0));
+    const anchor_heading: Vec = rotate(data.body_orientations[1], vec(1, 0, 0));
     try expectApproxEqAbs(@as(f32, 0), length3(held_heading - anchor_heading), 0.06);
     // And it is still where it should be.
     try expect(equalityError(&model, &data, 0) < 0.02);
@@ -11317,7 +14318,7 @@ pub fn massDiagonal(m: *const Model, d: *const Data, dof: u32) f32 {
     // The mass matrix is built during the position stage, alongside the composite inertias.
     d.requireStage(.position, "massDiagonal");
     const row: u32 = m.mass_row_start[dof];
-    return d.mass_matrix[row + m.mass_row_nonzeros[dof] - 1];
+    return d.mass_matrix[row + m.mass_row_entry_count[dof] - 1];
 }
 
 /// Pack a flat observation vector: joint coordinates, joint velocities, then every sensor.
@@ -11325,7 +14326,7 @@ pub fn massDiagonal(m: *const Model, d: *const Data, dof: u32) f32 {
 /// -- * WHY THIS EXISTS RATHER THAN LEAVING IT TO THE CALLER --
 ///
 /// Every caller writes the same three memcpys, and the ones who get it wrong get it wrong the
-/// same way: reading `nq` floats of velocity, or `nv` of position. Those differ exactly when a
+/// same way: reading `coordinate_count` floats of velocity, or `dof_count` of position. Those differ exactly when a
 /// model has a free or ball joint - a quaternion is four numbers of position and three of
 /// velocity - so the mistake is invisible on a fixed-base arm and silently corrupts every
 /// legged robot. The engine knows both sizes; the caller should not have to.
@@ -11338,17 +14339,17 @@ pub fn massDiagonal(m: *const Model, d: *const Data, dof: u32) f32 {
 pub fn observe(m: *const Model, d: *const Data, out: []f32) usize {
     d.requireStage(.position, "observe");
     var at: usize = 0;
-    @memcpy(out[at..][0..m.nq], d.pos);
-    at += m.nq;
-    @memcpy(out[at..][0..m.nv], d.vel);
-    at += m.nv;
-    @memcpy(out[at..][0..m.nsensordata], d.sensor_data);
-    return at + m.nsensordata;
+    @memcpy(out[at..][0..m.coordinate_count], d.joint_positions);
+    at += m.coordinate_count;
+    @memcpy(out[at..][0..m.dof_count], d.joint_velocities);
+    at += m.dof_count;
+    @memcpy(out[at..][0..m.sensor_value_count], d.sensor_data);
+    return at + m.sensor_value_count;
 }
 
 /// Floats `observe` writes.
 pub fn observationSize(m: *const Model) usize {
-    return m.nq + m.nv + m.nsensordata;
+    return m.coordinate_count + m.dof_count + m.sensor_value_count;
 }
 
 /// Everything that determines the next step, and nothing that does not.
@@ -11392,9 +14393,9 @@ pub const State = struct {
 
     pub fn init(gpa: Allocator, m: *const Model) !State {
         return .{
-            .pos = try gpa.alloc(f32, m.nq),
-            .vel = try gpa.alloc(f32, m.nv),
-            .act = try gpa.alloc(f32, m.na),
+            .pos = try gpa.alloc(f32, m.coordinate_count),
+            .vel = try gpa.alloc(f32, m.dof_count),
+            .act = try gpa.alloc(f32, m.activation_count),
             .warm_force = try gpa.alloc(f32, m.constraint_capacity),
             .warm_key = try gpa.alloc(u64, m.constraint_capacity),
             .warm_count = 0,
@@ -11412,9 +14413,9 @@ pub const State = struct {
 
     /// Copy the current state out of `d`.
     pub fn save(self: *State, d: *const Data) void {
-        @memcpy(self.pos, d.pos);
-        @memcpy(self.vel, d.vel);
-        @memcpy(self.act, d.act);
+        @memcpy(self.pos, d.joint_positions);
+        @memcpy(self.vel, d.joint_velocities);
+        @memcpy(self.act, d.activations);
         @memcpy(self.warm_force, d.warm_force);
         @memcpy(self.warm_key, d.warm_key);
         self.warm_count = d.warm_count;
@@ -11427,9 +14428,9 @@ pub const State = struct {
     /// before - which reads correctly right up until something uses a pose without calling
     /// `forward` first.
     pub fn restore(self: *const State, d: *Data) void {
-        @memcpy(d.pos, self.pos);
-        @memcpy(d.vel, self.vel);
-        @memcpy(d.act, self.act);
+        @memcpy(d.joint_positions, self.pos);
+        @memcpy(d.joint_velocities, self.vel);
+        @memcpy(d.activations, self.act);
         @memcpy(d.warm_force, self.warm_force);
         @memcpy(d.warm_key, self.warm_key);
         d.warm_count = self.warm_count;
@@ -11553,7 +14554,7 @@ test "* state: a saved state replays bit-for-bit" {
     // `warm_force` were omitted entirely - which is exactly how that omission survives a test.
     for (0..900) |_| {
         forward(&model, &data);
-        data.applied_force[0] = 8.0;
+        data.applied_joint_forces[0] = 8.0;
         step(&model, &data);
     }
     forward(&model, &data);
@@ -11564,17 +14565,17 @@ test "* state: a saved state replays bit-for-bit" {
     // Continue, and record where it ends up.
     for (0..300) |_| {
         forward(&model, &data);
-        data.applied_force[0] = 8.0;
+        data.applied_joint_forces[0] = 8.0;
         step(&model, &data);
     }
-    const first_pos: [2]f32 = .{ data.pos[0], data.pos[1] };
-    const first_vel: [2]f32 = .{ data.vel[0], data.vel[1] };
+    const first_pos: [2]f32 = .{ data.joint_positions[0], data.joint_positions[1] };
+    const first_vel: [2]f32 = .{ data.joint_velocities[0], data.joint_velocities[1] };
 
     // Rewind and do exactly the same again.
     snapshot.restore(&data);
     for (0..300) |_| {
         forward(&model, &data);
-        data.applied_force[0] = 8.0;
+        data.applied_joint_forces[0] = 8.0;
         step(&model, &data);
     }
 
@@ -11583,10 +14584,10 @@ test "* state: a saved state replays bit-for-bit" {
     // `expectApproxEqAbs` would pass on a state that had lost its warm start: the trajectory
     // would be close for a few hundred steps and diverge later. Exact equality is the only
     // assertion that catches it here rather than in someone's training run.
-    try expectEqual(first_pos[0], data.pos[0]);
-    try expectEqual(first_pos[1], data.pos[1]);
-    try expectEqual(first_vel[0], data.vel[0]);
-    try expectEqual(first_vel[1], data.vel[1]);
+    try expectEqual(first_pos[0], data.joint_positions[0]);
+    try expectEqual(first_pos[1], data.joint_positions[1]);
+    try expectEqual(first_vel[0], data.joint_velocities[0]);
+    try expectEqual(first_vel[1], data.joint_velocities[1]);
 }
 
 test "state: what a snapshot must carry, and what it need not" {
@@ -11630,10 +14631,10 @@ test "state: what a snapshot must carry, and what it need not" {
                     const x: f32 = if (corner % 2 == 0) -0.04 else 0.04;
                     const z: f32 = if (corner < 2) -0.04 else 0.04;
                     d.pushContact(.{
-                        .position = vec(d.pos[0] + x, 0, d.pos[2] + z),
+                        .position = vec(d.joint_positions[0] + x, 0, d.joint_positions[2] + z),
                         .normal = vec(0, 1, 0),
                         .tangent = .{ vec(1, 0, 0), vec(0, 0, 1) },
-                        .distance = d.pos[1] - 0.05,
+                        .distance = d.joint_positions[1] - 0.05,
                         .friction = .{ 0.8, 0.8 },
                         .body_a = world_body,
                         .body_b = 1,
@@ -11651,13 +14652,13 @@ test "state: what a snapshot must carry, and what it need not" {
 
     snapshot.save(&data);
     settle(&model, &data, 200);
-    const replayed_height: f32 = data.pos[1];
+    const replayed_height: f32 = data.joint_positions[1];
 
     // Full restore replays exactly - this is the first test's property, re-checked on a scene
     // with many rows.
     snapshot.restore(&data);
     settle(&model, &data, 200);
-    try expectEqual(replayed_height, data.pos[1]);
+    try expectEqual(replayed_height, data.joint_positions[1]);
 
     // -- ** AND WITHOUT THE WARM START IT REPLAYS TOO - WHICH WAS NOT THE EXPECTED ANSWER --
     //
@@ -11677,7 +14678,7 @@ test "state: what a snapshot must carry, and what it need not" {
     snapshot.restore(&data);
     data.forgetWarmStart();
     settle(&model, &data, 200);
-    try expectEqual(replayed_height, data.pos[1]);
+    try expectEqual(replayed_height, data.joint_positions[1]);
 }
 
 test "* state: many Data against one Model do not interfere" {
@@ -11727,10 +14728,10 @@ test "* state: many Data against one Model do not interfere" {
         defer data.deinit();
         for (0..800) |_| {
             forward(&model, &data);
-            data.applied_force[0] = torque;
+            data.applied_joint_forces[0] = torque;
             step(&model, &data);
         }
-        alone[i] = .{ data.pos[0], data.pos[1] };
+        alone[i] = .{ data.joint_positions[0], data.joint_positions[1] };
     }
 
     // -- Then: all three interleaved, sharing the model --
@@ -11748,15 +14749,15 @@ test "* state: many Data against one Model do not interfere" {
         // then reads. Stepping them in turn puts every write between two reads.
         for (&batch, torques) |*data, torque| {
             forward(&model, data);
-            data.applied_force[0] = torque;
+            data.applied_joint_forces[0] = torque;
             step(&model, data);
         }
     }
 
     // -- * BIT-FOR-BIT THE SAME AS ALONE --
     for (&batch, alone) |*data, want| {
-        try expectEqual(want[0], data.pos[0]);
-        try expectEqual(want[1], data.pos[1]);
+        try expectEqual(want[0], data.joint_positions[0]);
+        try expectEqual(want[1], data.joint_positions[1]);
     }
 }
 
@@ -11827,24 +14828,24 @@ test "** implicit: the Coriolis derivative, on every joint kind" {
         defer model.deinit();
         var data: Data = try .init(gpa, &model);
         defer data.deinit();
-        const nv: usize = model.nv;
+        const nv: usize = model.dof_count;
 
         // A pose and a spin that make every cross-product term non-trivial.
-        for (0..model.njnt) |j| {
-            if (model.jnt_type[j] == .free or model.jnt_type[j] == .ball) {
-                const q: u32 = model.jnt_qpos_adr[j] +
-                    @as(u32, if (model.jnt_type[j] == .free) 3 else 0);
+        for (0..model.joint_count) |j| {
+            if (model.joint_type[j] == .free or model.joint_type[j] == .ball) {
+                const q: u32 = model.joint_first_coordinate[j] +
+                    @as(u32, if (model.joint_type[j] == .free) 3 else 0);
                 const tilt: Quat = quatFromAxisAngle(normalize3(vec(0.4, -0.7, 0.5)), 0.8);
-                data.pos[q + 0] = tilt[0];
-                data.pos[q + 1] = tilt[1];
-                data.pos[q + 2] = tilt[2];
-                data.pos[q + 3] = tilt[3];
+                data.joint_positions[q + 0] = tilt[0];
+                data.joint_positions[q + 1] = tilt[1];
+                data.joint_positions[q + 2] = tilt[2];
+                data.joint_positions[q + 3] = tilt[3];
             } else {
-                data.pos[model.jnt_qpos_adr[j]] = 0.4;
+                data.joint_positions[model.joint_first_coordinate[j]] = 0.4;
             }
         }
         for (0..nv) |i| {
-            data.vel[i] = 3.0 - float(i % 5) * 1.7;
+            data.joint_velocities[i] = 3.0 - float(i % 5) * 1.7;
         }
         data.stage = .stale;
         forward(&model, &data);
@@ -11864,12 +14865,12 @@ test "** implicit: the Coriolis derivative, on every joint kind" {
         var worst: f32 = 0;
         var largest: f32 = 0;
         for (0..nv) |j| {
-            const keep: f32 = data.vel[j];
-            data.vel[j] = keep + step_size;
+            const keep: f32 = data.joint_velocities[j];
+            data.joint_velocities[j] = keep + step_size;
             data.stage = .stale;
             forward(&model, &data);
             rne(&model, &data, shifted);
-            data.vel[j] = keep;
+            data.joint_velocities[j] = keep;
             data.stage = .stale;
             forward(&model, &data);
             for (0..nv) |i| {
@@ -11929,16 +14930,16 @@ test "* implicit: the Coriolis derivative matches finite differences" {
     defer data.deinit();
 
     // Spinning hard enough that the gyroscopic terms dominate.
-    data.pos[0] = 0.3;
-    data.pos[1] = -0.7;
-    data.pos[2] = 0.4;
-    data.vel[0] = 9.0;
-    data.vel[1] = -6.0;
-    data.vel[2] = 4.0;
+    data.joint_positions[0] = 0.3;
+    data.joint_positions[1] = -0.7;
+    data.joint_positions[2] = 0.4;
+    data.joint_velocities[0] = 9.0;
+    data.joint_velocities[1] = -6.0;
+    data.joint_velocities[2] = 4.0;
     data.stage = .stale;
     forward(&model, &data);
 
-    const nv: usize = model.nv;
+    const nv: usize = model.dof_count;
     const analytic: []f32 = try gpa.alloc(f32, nv * nv);
     defer gpa.free(analytic);
     @memset(analytic, 0);
@@ -11954,12 +14955,12 @@ test "* implicit: the Coriolis derivative matches finite differences" {
     const step_size: f32 = 1.0e-3;
     var worst: f32 = 0;
     for (0..nv) |j| {
-        const keep: f32 = data.vel[j];
-        data.vel[j] = keep + step_size;
+        const keep: f32 = data.joint_velocities[j];
+        data.joint_velocities[j] = keep + step_size;
         data.stage = .stale;
         forward(&model, &data);
         rne(&model, &data, shifted);
-        data.vel[j] = keep;
+        data.joint_velocities[j] = keep;
         data.stage = .stale;
         forward(&model, &data);
 
@@ -12051,8 +15052,8 @@ test "* integrators: what each one is actually for, measured" {
             // * 80 rad/s, DELIBERATELY UNDER the 100 rad/s velocity bound. A first attempt used
             // 200 and 600, where every integrator reported a "peak" of exactly 100 - the clamp,
             // not divergence - and the comparison said nothing at all.
-            data.vel[2] = 80.0;
-            data.vel[0] = 0.4;
+            data.joint_velocities[2] = 80.0;
+            data.joint_velocities[0] = 0.4;
             data.stage = .stale;
             forward(&model, &data);
             // ROUND, not truncate: in f32, 1 / (1/500) is 499.99997 - truncating ran 499 steps (0.998 s) and
@@ -12062,7 +15063,7 @@ test "* integrators: what each one is actually for, measured" {
                 step(&model, &data);
             }
             forward(&model, &data);
-            return .{ data.pos[0], data.pos[1] };
+            return .{ data.joint_positions[0], data.joint_positions[1] };
         }
     }.go;
 
@@ -12221,16 +15222,16 @@ test "** actuator forces match MuJoCo, all three transmissions" {
         var data: Data = try .init(gpa, &model);
         defer data.deinit();
 
-        data.pos[0] = 0.3;
-        data.vel[0] = 1.4;
-        data.ctrl[0] = 0.7;
+        data.joint_positions[0] = 0.3;
+        data.joint_velocities[0] = 1.4;
+        data.controls[0] = 0.7;
         data.stage = .stale;
         forward(&model, &data);
 
-        expectApproxEqAbs(case.want, data.actuator_force[0], 1.0e-4) catch |err| {
+        expectApproxEqAbs(case.want, data.actuator_joint_forces[0], 1.0e-4) catch |err| {
             std.log.err("{s}: got {d:.6}, MuJoCo gives {d:.6}", .{
                 case.name,
-                data.actuator_force[0],
+                data.actuator_joint_forces[0],
                 case.want,
             });
             return err;
@@ -12299,17 +15300,17 @@ test "** a fixed tendon matches MuJoCo - length, velocity, and the force it spre
     var data: Data = try .init(gpa, &model);
     defer data.deinit();
 
-    data.pos[0] = 0.4;
-    data.pos[1] = -0.2;
-    data.vel[0] = 1.1;
-    data.vel[1] = 0.6;
+    data.joint_positions[0] = 0.4;
+    data.joint_positions[1] = -0.2;
+    data.joint_velocities[0] = 1.1;
+    data.joint_velocities[1] = 0.6;
     data.stage = .stale;
     forward(&model, &data);
 
     try expectApproxEqAbs(@as(f32, 0.5), data.tendon_length[0], 1.0e-5);
     try expectApproxEqAbs(@as(f32, 0.8), data.tendon_velocity[0], 1.0e-5);
-    try expectApproxEqAbs(@as(f32, -18.4), data.passive_force[0], 1.0e-3);
-    try expectApproxEqAbs(@as(f32, 9.2), data.passive_force[1], 1.0e-3);
+    try expectApproxEqAbs(@as(f32, -18.4), data.passive_joint_forces[0], 1.0e-3);
+    try expectApproxEqAbs(@as(f32, 9.2), data.passive_joint_forces[1], 1.0e-3);
 }
 
 // =============================================================================
@@ -12326,7 +15327,8 @@ pub const SkeletonToModelOptions = struct {
     /// kg per cubic metre. Water is 1000; a human averages slightly less.
     density: f32 = 985.0,
     /// Bones shorter than this get no geom and a token inertia - finger tips and end sites,
-    /// which would otherwise contribute degenerate capsules.
+    /// which would otherwise contribute degenerate capsules. The token is a 1 g solid sphere of
+    /// `min_radius` at the bone's joint: enough for the mass matrix to stay positive definite.
     min_bone_length: f32 = 0.02,
     /// * Y-UP, METRES, matching the rest of zimr. The clip must already be in these units;
     /// `draw3d.scaleBvhSkeletalClip` converts a centimetre capture.
@@ -12343,7 +15345,7 @@ pub const SkeletonToModelOptions = struct {
 /// of each bone's local rotation - **no IK, no solver, no Jacobian**.
 ///
 /// That makes it the one place a robot-side error can be attributed with certainty. It
-/// exercises the whole `qpos` path - quaternion layout, `jnt_qpos_adr`, `nq != nv`, free-joint
+/// exercises the whole `qpos` path - quaternion layout, `joint_first_coordinate`, `nq != nv`, free-joint
 /// handling, `kinematics` - with the solver removed. `humanoid.xml` cannot give that signal:
 /// there, errors are EXPECTED, and a bug is indistinguishable from a knee that only has one
 /// hinge.
@@ -12409,6 +15411,8 @@ pub fn skeletonToModel(
 
         var geoms: []GeomSpec = &.{};
         var inertial: ?InertialSpec = null;
+        // The lightest a bone may be, in kg: the floor under a long bone's capsule, and all a short bone weighs.
+        const smallest_bone_mass: f32 = 0.001;
 
         const bone_is_long_enough: bool = bone_length >= opts.min_bone_length;
         if (bone_is_long_enough) {
@@ -12434,7 +15438,7 @@ pub fn skeletonToModel(
 
             const capsule_volume: f32 =
                 3.14159265 * capsule_radius * capsule_radius * bone_length;
-            const bone_mass: f32 = @max(capsule_volume * opts.density, 0.001);
+            const bone_mass: f32 = @max(capsule_volume * opts.density, smallest_bone_mass);
 
             // A capsule's inertia about its centre, treated as a cylinder: accurate enough for
             // a ragdoll, and far better than the alternative of leaving it at zero.
@@ -12453,6 +15457,20 @@ pub fn skeletonToModel(
                     0,
                     0,
                 },
+            };
+        } else {
+            // * A SHORT BONE STILL HAS INERTIA: a small solid sphere at its joint. Left with none, a short bone at
+            // the end of a chain - an End Site, whose offset a capture often writes as zero - is a body that weighs
+            // nothing on a joint whose default armature is a fraction of that nothing. Its row of the mass matrix is
+            // then all zeros, and the model's build, which factors M at the reference pose
+            // (`refreshReferenceInverseWeights`), stops on the zero pivot. MuJoCo refuses such a model for the same
+            // reason: a body that moves must have mass and inertia.
+            const token_radius: f32 = opts.min_radius;
+            // A solid sphere's moment about any axis through its centre: 2/5 m r^2.
+            const token_moment: f32 = 0.4 * smallest_bone_mass * token_radius * token_radius;
+            inertial = .{
+                .mass = smallest_bone_mass,
+                .full_inertia = .{ token_moment, token_moment, token_moment, 0, 0, 0 },
             };
         }
 
@@ -12492,19 +15510,19 @@ test "skeletonToModel: the synthesized model reproduces the skeleton's rest pose
     // * `nq != nv` is exercised here on purpose - the root is a FREE joint, so `qpos` carries a
     // quaternion and is longer than the DOF count. A model built with the wrong qpos layout
     // fails this immediately rather than drifting later.
-    try expectEqual(@as(u32, 3), m.nbody - 1); // + the world body
-    try expect(m.nq > m.nv); // free joint => quaternion in qpos
+    try expectEqual(@as(u32, 3), m.body_count - 1); // + the world body
+    try expect(m.coordinate_count > m.dof_count); // free joint => quaternion in qpos
 
-    // * `qpos0` IS the rest configuration - zeros except a free joint's quaternion, which
+    // * `reference_joint_positions` IS the rest configuration - zeros except a free joint's quaternion, which
     // rests at identity (robot.zig:1941). Starting anywhere else would test a pose the
     // skeleton never described.
-    @memcpy(d.pos, m.qpos0);
+    @memcpy(d.joint_positions, m.reference_joint_positions);
     kinematics(&m, &d);
 
     // Body 0 is the world; ours start at 1.
-    const root_pos: Vec = d.body_xpos[1];
-    const mid_pos: Vec = d.body_xpos[2];
-    const tip_pos: Vec = d.body_xpos[3];
+    const root_pos: Vec = d.body_positions[1];
+    const mid_pos: Vec = d.body_positions[2];
+    const tip_pos: Vec = d.body_positions[3];
     try expectApproxEqAbs(@as(f32, 0.0), root_pos[1], 1.0e-5);
     try expectApproxEqAbs(@as(f32, 1.0), mid_pos[1], 1.0e-5);
     try expectApproxEqAbs(@as(f32, 2.0), tip_pos[1], 1.0e-5);
@@ -12516,6 +15534,28 @@ test "skeletonToModel: the synthesized model reproduces the skeleton's rest pose
     try expect(m.body_mass[3] > 0.0);
 }
 
+test "skeletonToModel: a zero-length end site has inertia, so the model's mass matrix factors" {
+    const gpa: Allocator = testing_allocator;
+
+    // The three-bone chain, and an End Site at the tip with a zero offset, as a capture writes one. It is a leaf:
+    // nothing below it lends its joint any inertia, so only its own keeps its pivots of M above zero.
+    const names = [_][]const u8{ "root", "mid", "tip", "tip_end" };
+    const parents = [_]i32{ -1, 0, 1, 2 };
+    const offsets = [_]Vec{ vec(0, 0, 0), vec(0, 1, 0), vec(0, 1, 0), vec(0, 0, 0) };
+
+    // The build factors M at the reference pose, and asserts on a pivot that is not positive.
+    var m: Model = try skeletonToModel(gpa, &names, &parents, &offsets, .{});
+    defer m.deinit();
+
+    const end_site_body: usize = 4; // body 0 is the world
+    try expect(m.body_mass[end_site_body] > 0.0);
+    // Its ball joint's three dofs are the model's last three, and each has a measured inverse weight.
+    const dof_count: usize = m.dof_count;
+    for (m.dof_inverse_weight[dof_count - 3 .. dof_count]) |inverse_weight| {
+        try expect(inverse_weight > 0.0);
+    }
+}
+
 /// Write an animation pose straight into `qpos` - no IK, no solver.
 ///
 /// -- *** THE POINT OF section 13x --
@@ -12525,7 +15565,7 @@ test "skeletonToModel: the synthesized model reproduces the skeleton's rest pose
 /// per joint. So playback is a COPY, and the result is exact rather than converged.
 ///
 /// That makes this the one place a robot-side error can be attributed with certainty: it
-/// exercises the whole `qpos` path - quaternion layout, `jnt_qpos_adr`, `nq != nv`, free-joint
+/// exercises the whole `qpos` path - quaternion layout, `joint_first_coordinate`, `nq != nv`, free-joint
 /// handling - with the solver removed.
 ///
 /// ** QUATERNIONS ARE `(x, y, z, w)` HERE, NOT MuJoCo's `(w, x, y, z)`. `robot.zig` stores zm's
@@ -12542,31 +15582,31 @@ pub fn poseFromLocalRotations(
     root_translation: Vec,
     rotations: []const Quat,
 ) void {
-    const joint_count: usize = @min(rotations.len, m.njnt);
+    const joint_count: usize = @min(rotations.len, m.joint_count);
 
     for (0..joint_count) |joint| {
-        const qpos_start: usize = m.jnt_qpos_adr[joint];
+        const qpos_start: usize = m.joint_first_coordinate[joint];
         const local_rotation: Quat = rotations[joint];
 
-        switch (m.jnt_type[joint]) {
+        switch (m.joint_type[joint]) {
             .free => {
                 // A free joint carries the body's full pose: three position components, then
                 // a quaternion. This is the reason `nq != nv` - six DOF, seven qpos entries.
-                d.pos[qpos_start + 0] = root_translation[0];
-                d.pos[qpos_start + 1] = root_translation[1];
-                d.pos[qpos_start + 2] = root_translation[2];
-                d.pos[qpos_start + 3] = local_rotation[0];
-                d.pos[qpos_start + 4] = local_rotation[1];
-                d.pos[qpos_start + 5] = local_rotation[2];
-                d.pos[qpos_start + 6] = local_rotation[3];
+                d.joint_positions[qpos_start + 0] = root_translation[0];
+                d.joint_positions[qpos_start + 1] = root_translation[1];
+                d.joint_positions[qpos_start + 2] = root_translation[2];
+                d.joint_positions[qpos_start + 3] = local_rotation[0];
+                d.joint_positions[qpos_start + 4] = local_rotation[1];
+                d.joint_positions[qpos_start + 5] = local_rotation[2];
+                d.joint_positions[qpos_start + 6] = local_rotation[3];
             },
             .ball => {
                 // A ball joint's qpos IS a quaternion - the same three rotational DOF a BVH
                 // channel set carries, which is what makes this a copy rather than a solve.
-                d.pos[qpos_start + 0] = local_rotation[0];
-                d.pos[qpos_start + 1] = local_rotation[1];
-                d.pos[qpos_start + 2] = local_rotation[2];
-                d.pos[qpos_start + 3] = local_rotation[3];
+                d.joint_positions[qpos_start + 0] = local_rotation[0];
+                d.joint_positions[qpos_start + 1] = local_rotation[1];
+                d.joint_positions[qpos_start + 2] = local_rotation[2];
+                d.joint_positions[qpos_start + 3] = local_rotation[3];
             },
             else => {
                 // A hinge or slide cannot carry a full rotation. Those belong to the IK path;
@@ -12600,7 +15640,7 @@ test "poseFromLocalRotations: robot kinematics reproduces the animation pose exa
     };
     const root_pos: Vec = vec(0.3, 1.1, -0.2);
 
-    @memcpy(d.pos, m.qpos0);
+    @memcpy(d.joint_positions, m.reference_joint_positions);
     poseFromLocalRotations(&m, &d, root_pos, &rots);
     kinematics(&m, &d);
 
@@ -12620,7 +15660,7 @@ test "poseFromLocalRotations: robot kinematics reproduces the animation pose exa
 
     for (0..4) |i| {
         // Body 0 is the world; ours start at 1.
-        const got: Vec = d.body_xpos[i + 1];
+        const got: Vec = d.body_positions[i + 1];
         inline for (0..3) |c| {
             try expectApproxEqAbs(ref_pos[i][c], got[c], 1.0e-5);
         }
@@ -12630,7 +15670,7 @@ test "poseFromLocalRotations: robot kinematics reproduces the animation pose exa
     // (w, x, y, z) instead of zm's (x, y, z, w) can still land the ROOT in the right place
     // while every orientation is wrong - positions alone would not catch it.
     for (0..4) |i| {
-        const got: Quat = d.body_xrot[i + 1];
+        const got: Quat = d.body_orientations[i + 1];
         const want: Quat = ref_rot[i];
         // Quaternions double-cover: q and -q are the same rotation.
         const dotp: f32 = got[0] * want[0] + got[1] * want[1] + got[2] * want[2] + got[3] * want[3];
@@ -12669,30 +15709,30 @@ pub fn fitLocalRotations(
     desired_local_rotations: []const Quat,
     out_residual_error: ?[]f32,
 ) void {
-    const joint_count: usize = @min(desired_local_rotations.len, m.njnt);
+    const joint_count: usize = @min(desired_local_rotations.len, m.joint_count);
 
     for (0..joint_count) |joint| {
-        const qpos_start: usize = m.jnt_qpos_adr[joint];
+        const qpos_start: usize = m.joint_first_coordinate[joint];
         const desired: Quat = desired_local_rotations[joint];
 
-        switch (m.jnt_type[joint]) {
+        switch (m.joint_type[joint]) {
             .free => {
-                d.pos[qpos_start + 0] = root_translation[0];
-                d.pos[qpos_start + 1] = root_translation[1];
-                d.pos[qpos_start + 2] = root_translation[2];
-                d.pos[qpos_start + 3] = desired[0];
-                d.pos[qpos_start + 4] = desired[1];
-                d.pos[qpos_start + 5] = desired[2];
-                d.pos[qpos_start + 6] = desired[3];
+                d.joint_positions[qpos_start + 0] = root_translation[0];
+                d.joint_positions[qpos_start + 1] = root_translation[1];
+                d.joint_positions[qpos_start + 2] = root_translation[2];
+                d.joint_positions[qpos_start + 3] = desired[0];
+                d.joint_positions[qpos_start + 4] = desired[1];
+                d.joint_positions[qpos_start + 5] = desired[2];
+                d.joint_positions[qpos_start + 6] = desired[3];
                 if (out_residual_error) |residual| {
                     residual[joint] = 0; // a free joint represents any rotation exactly
                 }
             },
             .ball => {
-                d.pos[qpos_start + 0] = desired[0];
-                d.pos[qpos_start + 1] = desired[1];
-                d.pos[qpos_start + 2] = desired[2];
-                d.pos[qpos_start + 3] = desired[3];
+                d.joint_positions[qpos_start + 0] = desired[0];
+                d.joint_positions[qpos_start + 1] = desired[1];
+                d.joint_positions[qpos_start + 2] = desired[2];
+                d.joint_positions[qpos_start + 3] = desired[3];
                 if (out_residual_error) |residual| {
                     residual[joint] = 0;
                 }
@@ -12701,7 +15741,7 @@ pub fn fitLocalRotations(
                 // * THE PROJECTION. A hinge can only express rotation ABOUT ITS AXIS, so take
                 // the component of `desired` along that axis - the swing-twist decomposition's
                 // twist term - and discard the swing.
-                const axis: Vec = m.jnt_axis[joint];
+                const axis: Vec = m.joint_local_axis[joint];
                 const rotation_vector: Vec = .{ desired[0], desired[1], desired[2], 0 };
                 const along_axis: f32 = dot3(rotation_vector, axis);
 
@@ -12733,10 +15773,10 @@ pub fn fitLocalRotations(
 
                 // * CLAMPED TO THE JOINT'S RANGE. A pose outside it is one the robot cannot
                 // hold, and letting the kinematics show it would flatter the result.
-                if (m.jnt_range[joint]) |range| {
+                if (m.joint_range[joint]) |range| {
                     angle = clamp(angle, range[0], range[1]);
                 }
-                d.pos[qpos_start] = angle;
+                d.joint_positions[qpos_start] = angle;
 
                 if (out_residual_error) |residual| {
                     // How much of the requested rotation the hinge could NOT represent.
@@ -12768,9 +15808,9 @@ test "fitLocalRotations: a hinge takes the bend it can and reports the rest" {
     defer m.deinit();
 
     // Rebuild the second joint as a limited hinge, the way a real robot model has it.
-    m.jnt_type[1] = .hinge;
-    m.jnt_axis[1] = vec(1, 0, 0);
-    m.jnt_range[1] = .{ -2.8, 0.03 }; // humanoid.xml's knee: -160..2 degrees
+    m.joint_type[1] = .hinge;
+    m.joint_local_axis[1] = vec(1, 0, 0);
+    m.joint_range[1] = .{ -2.8, 0.03 }; // humanoid.xml's knee: -160..2 degrees
 
     var d: Data = try .init(gpa, &m);
     defer d.deinit();
@@ -12779,10 +15819,10 @@ test "fitLocalRotations: a hinge takes the bend it can and reports the rest" {
     // * A PURE BEND ABOUT THE HINGE AXIS is representable exactly, so the residual must be ~0.
     const pure_bend: Quat = quatFromAxisAngle(vec(1, 0, 0), -1.0);
     var desired: [2]Quat = .{ zm.quat_identity, pure_bend };
-    @memcpy(d.pos, m.qpos0);
+    @memcpy(d.joint_positions, m.reference_joint_positions);
     fitLocalRotations(&m, &d, vec(0, 0, 0), &desired, &residual);
     try expect(residual[1] < 1.0e-3);
-    try expectApproxEqAbs(@as(f32, -1.0), d.pos[m.jnt_qpos_adr[1]], 1.0e-4);
+    try expectApproxEqAbs(@as(f32, -1.0), d.joint_positions[m.joint_first_coordinate[1]], 1.0e-4);
 
     // ** A TWIST ABOUT AN AXIS THE HINGE DOES NOT HAVE cannot be represented at all, and the
     // residual must SAY SO. This is the number that separates "the model cannot do this" from
@@ -12790,16 +15830,16 @@ test "fitLocalRotations: a hinge takes the bend it can and reports the rest" {
     // impossible to make on `humanoid.xml`.
     const pure_twist: Quat = quatFromAxisAngle(vec(0, 1, 0), 1.0);
     desired[1] = pure_twist;
-    @memcpy(d.pos, m.qpos0);
+    @memcpy(d.joint_positions, m.reference_joint_positions);
     fitLocalRotations(&m, &d, vec(0, 0, 0), &desired, &residual);
     try expect(residual[1] > 0.9);
 
     // * AND THE LIMIT IS RESPECTED. A knee asked to bend the wrong way stops at its range
     // rather than producing a pose the robot could never hold.
     desired[1] = quatFromAxisAngle(vec(1, 0, 0), 1.5);
-    @memcpy(d.pos, m.qpos0);
+    @memcpy(d.joint_positions, m.reference_joint_positions);
     fitLocalRotations(&m, &d, vec(0, 0, 0), &desired, &residual);
-    try expect(d.pos[m.jnt_qpos_adr[1]] <= 0.03 + 1.0e-5);
+    try expect(d.joint_positions[m.joint_first_coordinate[1]] <= 0.03 + 1.0e-5);
     try expect(residual[1] > 0.5); // clamping is itself a loss, and it is reported
 }
 
@@ -13039,7 +16079,7 @@ pub fn resolveMatchTable(
 
 /// Each body's world ORIENTATION at the model's rest configuration.
 ///
-/// * This is `humanoid.xml`'s reference pose, and it needs no extra file: `qpos0` IS the rest
+/// * This is `humanoid.xml`'s reference pose, and it needs no extra file: `reference_joint_positions` IS the rest
 /// configuration (zeros, plus identity for a free joint's quaternion), so running kinematics on
 /// it gives every body's rest orientation directly.
 ///
@@ -13048,17 +16088,17 @@ pub fn resolveMatchTable(
 /// MuJoCo model through `qpos0`. Three formats, three sources, one meaning: **where does this
 /// joint point when the skeleton is at rest.**
 ///
-/// Overwrites `d.pos` and the kinematics state; call it before posing, not during.
+/// Overwrites `d.joint_positions` and the kinematics state; call it before posing, not during.
 pub fn referenceOrientationsFromRest(
     m: *const Model,
     d: *Data,
     out_reference_orientations: []Quat,
 ) void {
-    @memcpy(d.pos, m.qpos0);
+    @memcpy(d.joint_positions, m.reference_joint_positions);
     kinematics(m, d);
-    const body_count: usize = @min(m.nbody, out_reference_orientations.len);
+    const body_count: usize = @min(m.body_count, out_reference_orientations.len);
     for (0..body_count) |body| {
-        out_reference_orientations[body] = d.body_xrot[body];
+        out_reference_orientations[body] = d.body_orientations[body];
     }
 }
 
@@ -13097,39 +16137,39 @@ pub fn fitBodyRotation(
     body: usize,
     desired_local_rotation: Quat,
 ) f32 {
-    const joint_start: usize = m.body_jnt_adr[body];
-    const joint_count: usize = m.body_jnt_num[body];
+    const joint_start: usize = m.body_first_joint[body];
+    const joint_count: usize = m.body_joint_count[body];
 
     var remaining: Quat = desired_local_rotation;
 
     for (0..joint_count) |offset| {
         const joint: usize = joint_start + offset;
-        const qpos_start: usize = m.jnt_qpos_adr[joint];
+        const qpos_start: usize = m.joint_first_coordinate[joint];
 
-        switch (m.jnt_type[joint]) {
+        switch (m.joint_type[joint]) {
             .free => {
                 // A free joint's rotation half; its translation is the caller's business.
-                d.pos[qpos_start + 3] = remaining[0];
-                d.pos[qpos_start + 4] = remaining[1];
-                d.pos[qpos_start + 5] = remaining[2];
-                d.pos[qpos_start + 6] = remaining[3];
+                d.joint_positions[qpos_start + 3] = remaining[0];
+                d.joint_positions[qpos_start + 4] = remaining[1];
+                d.joint_positions[qpos_start + 5] = remaining[2];
+                d.joint_positions[qpos_start + 6] = remaining[3];
                 remaining = quat_identity;
             },
             .ball => {
-                d.pos[qpos_start + 0] = remaining[0];
-                d.pos[qpos_start + 1] = remaining[1];
-                d.pos[qpos_start + 2] = remaining[2];
-                d.pos[qpos_start + 3] = remaining[3];
+                d.joint_positions[qpos_start + 0] = remaining[0];
+                d.joint_positions[qpos_start + 1] = remaining[1];
+                d.joint_positions[qpos_start + 2] = remaining[2];
+                d.joint_positions[qpos_start + 3] = remaining[3];
                 remaining = quat_identity;
             },
             .hinge => {
-                const axis: Vec = m.jnt_axis[joint];
+                const axis: Vec = m.joint_local_axis[joint];
                 const angle: f32 = twistAngleAbout(remaining, axis);
-                const limited_angle: f32 = if (m.jnt_range[joint]) |range|
+                const limited_angle: f32 = if (m.joint_range[joint]) |range|
                     clamp(angle, range[0], range[1])
                 else
                     angle;
-                d.pos[qpos_start] = limited_angle;
+                d.joint_positions[qpos_start] = limited_angle;
 
                 // * REMOVE WHAT THIS JOINT TOOK, so the next hinge in the chain fits the
                 // REMAINDER rather than the original. Skipping this is what makes a naive
@@ -13179,7 +16219,7 @@ fn cross3(a: Vec, b: Vec) Vec {
 ///
 /// So the only work is walking the path from `body` up to the world and filling those columns.
 ///
-/// * REQUIRES `kinematics` AND `comPos` TO HAVE RUN. `cdof` and `subtree_com` are their output;
+/// * REQUIRES `kinematics` AND `comPos` TO HAVE RUN. `dof_axes` and `subtree_centres_of_mass` are their output;
 /// calling this on a stale `Data` silently returns a Jacobian for a pose the model is no longer
 /// in.
 ///
@@ -13194,7 +16234,7 @@ pub fn jacBody(
     jacp: ?[]f32,
     jacr: ?[]f32,
 ) void {
-    const dof_count: usize = m.nv;
+    const dof_count: usize = m.dof_count;
     if (jacp) |translation_jacobian| {
         @memset(translation_jacobian[0 .. 3 * dof_count], 0);
     }
@@ -13204,18 +16244,18 @@ pub fn jacBody(
 
     // Every spatial quantity is expressed about this body's kinematic-tree root COM.
     const tree_root: usize = m.body_root[body];
-    const offset_from_com: Vec = point - d.subtree_com[tree_root];
+    const offset_from_com: Vec = point - d.subtree_centres_of_mass[tree_root];
 
     // Walk from the body up to the world, filling a column per DOF along the way. Only these
     // DOFs can move the point; everything else is genuinely zero.
     var walker: usize = body;
     while (walker != world_body) {
-        const first_dof: usize = m.body_dof_adr[walker];
-        const dof_count_here: usize = m.body_dof_num[walker];
+        const first_dof: usize = m.body_first_dof[walker];
+        const dof_count_here: usize = m.body_dof_count[walker];
 
         for (0..dof_count_here) |offset| {
             const dof: usize = first_dof + offset;
-            const motion_axis: Motion = d.cdof[dof];
+            const motion_axis: Motion = d.dof_axes[dof];
 
             if (jacp) |translation_jacobian| {
                 // A rotational DOF moves the point by its angular axis crossed with the lever
@@ -13248,10 +16288,10 @@ test "jacBody: every column matches a finite-difference perturbation of its own 
     defer m.deinit();
     var d: Data = try .init(gpa, &m);
     defer d.deinit();
-    try expect(m.nq > m.nv);
+    try expect(m.coordinate_count > m.dof_count);
 
     // A pose away from rest, so no term is accidentally zero.
-    @memcpy(d.pos, m.qpos0);
+    @memcpy(d.joint_positions, m.reference_joint_positions);
     const pose = [_]Quat{
         quatFromAxisAngle(vec(0, 1, 0), 0.35),
         quatFromAxisAngle(vec(1, 0, 0), 0.5),
@@ -13270,9 +16310,9 @@ test "jacBody: every column matches a finite-difference perturbation of its own 
     // point but measuring the ORIGIN's motion compares two different things - and it fails even
     // a correct Jacobian, which is how this was caught.
     const local_offset: Vec = vec(0.07, -0.05, 0.03);
-    const point: Vec = d.body_xpos[body] + zm.rotate(d.body_xrot[body], local_offset);
+    const point: Vec = d.body_positions[body] + zm.rotate(d.body_orientations[body], local_offset);
 
-    const jacp: []f32 = try gpa.alloc(f32, 3 * m.nv);
+    const jacp: []f32 = try gpa.alloc(f32, 3 * m.dof_count);
     defer gpa.free(jacp);
     jacBody(&m, &d, body, point, jacp, null);
 
@@ -13287,26 +16327,26 @@ test "jacBody: every column matches a finite-difference perturbation of its own 
     // joint's quaternion does not integrate by addition, and doing so would drift it off unit
     // length while still looking plausible.
     const epsilon: f32 = 1.0e-4;
-    const saved_pos: []f32 = try gpa.alloc(f32, m.nq);
+    const saved_pos: []f32 = try gpa.alloc(f32, m.coordinate_count);
     defer gpa.free(saved_pos);
-    @memcpy(saved_pos, d.pos);
+    @memcpy(saved_pos, d.joint_positions);
 
     var worst_error: f32 = 0;
-    for (0..m.nv) |dof| {
-        @memcpy(d.pos, saved_pos);
-        @memset(d.vel, 0);
-        d.vel[dof] = 1.0;
-        integratePos(&m, d.pos, d.vel, epsilon);
+    for (0..m.dof_count) |dof| {
+        @memcpy(d.joint_positions, saved_pos);
+        @memset(d.joint_velocities, 0);
+        d.joint_velocities[dof] = 1.0;
+        integratePos(&m, d.joint_positions, d.joint_velocities, epsilon);
         kinematics(&m, &d);
-        const moved: Vec = d.body_xpos[body] + zm.rotate(d.body_xrot[body], local_offset);
+        const moved: Vec = d.body_positions[body] + zm.rotate(d.body_orientations[body], local_offset);
 
-        @memcpy(d.pos, saved_pos);
+        @memcpy(d.joint_positions, saved_pos);
         kinematics(&m, &d);
-        const original: Vec = d.body_xpos[body] + zm.rotate(d.body_xrot[body], local_offset);
+        const original: Vec = d.body_positions[body] + zm.rotate(d.body_orientations[body], local_offset);
 
         const measured_velocity: Vec = (moved - original) / splat(epsilon);
         inline for (0..3) |axis| {
-            const predicted: f32 = jacp[axis * m.nv + dof];
+            const predicted: f32 = jacp[axis * m.dof_count + dof];
             worst_error = @max(worst_error, @abs(measured_velocity[axis] - predicted));
         }
     }
@@ -13390,7 +16430,7 @@ pub const IkOptions = struct {
     /// torso that had just been made EXACT. **A task is not a scope.** Masking to the arm's own
     /// three DOF makes the solve mean "bend this arm" rather than "get the hand there somehow".
     dof_mask: ?[]const bool = null,
-    /// Clamp each joint to its `jnt_range` after every step.
+    /// Clamp each joint to its `joint_range` after every step.
     ///
     /// -- *** WITHOUT THIS THE SOLVER RETURNS POSES THE ROBOT CANNOT HOLD --
     ///
@@ -13405,7 +16445,7 @@ pub const IkOptions = struct {
     ///
     /// * With limits on, a residual is the MODEL's - and that is the number worth having.
     respect_joint_limits: bool = false,
-    /// Strength of a SOFT limit barrier, pushing away from `jnt_range` before the wall.
+    /// Strength of a SOFT limit barrier, pushing away from `joint_range` before the wall.
     ///
     /// -- *** A HARD LIMIT IS A CLIFF; A BARRIER IS A SLOPE --
     ///
@@ -13437,7 +16477,7 @@ pub const IkOptions = struct {
     posture_weight: f32 = 0,
 };
 
-/// Floats `ikStep` needs in its scratch buffer for a model with `nv` degrees of freedom.
+/// Floats `ikStep` needs in its scratch buffer for a model with `dof_count` degrees of freedom.
 pub fn ikScratchSize(nv: usize) usize {
     // * 6nv jacobians + nv*nv normal matrix + nv gradient + nv step + 6nv for a RELATIVE task's
     // second Jacobian pair.
@@ -13521,7 +16561,7 @@ pub fn ikStep(
     opts: IkOptions,
     scratch: []f32,
 ) f32 {
-    const dof_count: usize = m.nv;
+    const dof_count: usize = m.dof_count;
     // * Checked up front with a message: the slices below would otherwise be the first thing to
     // notice a short buffer - a bounds panic in a safe build, and nothing at all in ReleaseSmall.
     assertf(
@@ -13548,15 +16588,15 @@ pub fn ikStep(
     var error_norm_squared: f32 = 0;
 
     for (tasks) |task| {
-        const body_position: Vec = d.body_xpos[task.body];
-        const body_rotation: Quat = d.body_xrot[task.body];
+        const body_position: Vec = d.body_positions[task.body];
+        const body_rotation: Quat = d.body_orientations[task.body];
         const point_world: Vec = body_position + zm.rotate(body_rotation, task.point_local);
 
         // * For a RELATIVE task, `target_world` is the wanted DIFFERENCE between this point and
         // the other, so the residual is measured on the difference too.
         const position_error: Vec = if (task.relative_to) |other| blk: {
-            const other_world: Vec = d.body_xpos[other.body] +
-                zm.rotate(d.body_xrot[other.body], other.point_local);
+            const other_world: Vec = d.body_positions[other.body] +
+                zm.rotate(d.body_orientations[other.body], other.point_local);
             break :blk task.target_world - (point_world - other_world);
         } else task.target_world - point_world;
 
@@ -13573,8 +16613,8 @@ pub fn ikStep(
         // their derivatives. Everything downstream - the normal equations, the damping, the
         // barrier - is unchanged, because a residual is a residual.
         if (task.relative_to) |other| {
-            const other_world: Vec = d.body_xpos[other.body] +
-                zm.rotate(d.body_xrot[other.body], other.point_local);
+            const other_world: Vec = d.body_positions[other.body] +
+                zm.rotate(d.body_orientations[other.body], other.point_local);
             jacBody(m, d, other.body, other_world, other_jacobian, other_rotation_jacobian);
             for (0..3 * dof_count) |k| {
                 jacobian[k] -= other_jacobian[k];
@@ -13676,20 +16716,20 @@ pub fn ikStep(
     // could hold - identical to the decimal is what dead code looks like. Found by `robot_dance`,
     // where posture 0.15 and 25 retargeted the dance to the same digit.
     if (opts.limit_barrier > 0 or opts.posture_weight > 0) {
-        for (0..m.njnt) |joint| {
-            const kind: JointType = m.jnt_type[joint];
+        for (0..m.joint_count) |joint| {
+            const kind: JointType = m.joint_type[joint];
             if (kind != .hinge and kind != .slide) {
                 continue;
             }
-            const dof: usize = m.jnt_dof_adr[joint];
+            const dof: usize = m.joint_first_dof[joint];
             if (dof >= dof_count) {
                 continue;
             }
-            const address: usize = m.jnt_qpos_adr[joint];
-            const current: f32 = d.pos[address];
+            const address: usize = m.joint_first_coordinate[joint];
+            const current: f32 = d.joint_positions[address];
 
             if (opts.limit_barrier > 0) {
-                if (m.jnt_range[joint]) |range| {
+                if (m.joint_range[joint]) |range| {
                     // * Margin-relative, so the barrier's strength does not depend on whether a
                     // joint's range is measured in a few degrees or a few radians.
                     const span: f32 = @max(range[1] - range[0], 1.0e-4);
@@ -13727,7 +16767,7 @@ pub fn ikStep(
 
     solveSymmetricPositiveDefinite(normal_matrix, gradient, joint_step, dof_count);
 
-    // ** INTEGRATED, NOT ADDED. `qpos` is longer than `nv` because a free joint carries a
+    // ** INTEGRATED, NOT ADDED. `qpos` is longer than `dof_count` because a free joint carries a
     // quaternion; `integratePos` composes it correctly where `pos += step` would drift it off
     // unit length while still looking plausible.
     if (opts.step_scale != 1.0) {
@@ -13752,13 +16792,13 @@ pub fn ikStep(
     // still move.
     if (opts.respect_joint_limits) {
         var allowed: f32 = 1.0;
-        for (0..m.njnt) |joint| {
-            const range: [2]f32 = m.jnt_range[joint] orelse continue;
-            const kind: JointType = m.jnt_type[joint];
+        for (0..m.joint_count) |joint| {
+            const range: [2]f32 = m.joint_range[joint] orelse continue;
+            const kind: JointType = m.joint_type[joint];
             if (kind != .hinge and kind != .slide) {
                 continue;
             }
-            const dof: usize = m.jnt_dof_adr[joint];
+            const dof: usize = m.joint_first_dof[joint];
             if (dof >= dof_count) {
                 continue;
             }
@@ -13766,7 +16806,7 @@ pub fn ikStep(
             if (@abs(delta) < 1.0e-9) {
                 continue;
             }
-            const current: f32 = d.pos[m.jnt_qpos_adr[joint]];
+            const current: f32 = d.joint_positions[m.joint_first_coordinate[joint]];
             const wall: f32 = if (delta > 0) range[1] else range[0];
             const room: f32 = wall - current;
             if (room * delta <= 0) {
@@ -13783,7 +16823,7 @@ pub fn ikStep(
         }
     }
 
-    integratePos(m, d.pos, joint_step, 1.0);
+    integratePos(m, d.joint_positions, joint_step, 1.0);
 
     // * A final clamp catches float drift only; the scaling above is what keeps motion
     // continuous.
@@ -13797,14 +16837,14 @@ pub fn ikStep(
     // back after each step keeps the iterate feasible, and the barrier then does its job inside.
     const project_into_range: bool = opts.respect_joint_limits or opts.limit_barrier > 0;
     if (project_into_range) {
-        for (0..m.njnt) |joint| {
-            const range: [2]f32 = m.jnt_range[joint] orelse continue;
-            const kind: JointType = m.jnt_type[joint];
+        for (0..m.joint_count) |joint| {
+            const range: [2]f32 = m.joint_range[joint] orelse continue;
+            const kind: JointType = m.joint_type[joint];
             if (kind != .hinge and kind != .slide) {
                 continue;
             }
-            const address: usize = m.jnt_qpos_adr[joint];
-            d.pos[address] = clamp(d.pos[address], range[0], range[1]);
+            const address: usize = m.joint_first_coordinate[joint];
+            d.joint_positions[address] = clamp(d.joint_positions[address], range[0], range[1]);
         }
     }
 
@@ -13825,16 +16865,16 @@ test "ikStep: a single position target converges on a redundant chain" {
     var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
-    @memcpy(d.pos, m.qpos0);
+    @memcpy(d.joint_positions, m.reference_joint_positions);
     kinematics(&m, &d);
     comPos(&m, &d);
 
     const tip: usize = 4;
-    const start: Vec = d.body_xpos[tip];
+    const start: Vec = d.body_positions[tip];
     // A target well off the rest pose but inside reach, so failure is unambiguous.
     const target: Vec = start + vec(0.35, -0.25, 0.2);
 
-    const scratch: []f32 = try gpa.alloc(f32, ikScratchSize(m.nv));
+    const scratch: []f32 = try gpa.alloc(f32, ikScratchSize(m.dof_count));
     defer gpa.free(scratch);
     const tasks = [_]IkTask{.{ .body = tip, .target_world = target, .weight = 1.0 }};
 
@@ -13854,7 +16894,7 @@ test "ikStep: a single position target converges on a redundant chain" {
         }
     }
 
-    const reached: Vec = d.body_xpos[tip];
+    const reached: Vec = d.body_positions[tip];
     const remaining: Vec = target - reached;
     const remaining_distance: f32 = @sqrt(
         remaining[0] * remaining[0] + remaining[1] * remaining[1] + remaining[2] * remaining[2],
@@ -13877,10 +16917,10 @@ test "ikStep: a single position target converges on a redundant chain" {
     //
     // * Verified as a real control: the convergence test above still passes with damping
     // removed, because a bent chain is well-conditioned. THIS one does not.
-    @memcpy(d.pos, m.qpos0);
+    @memcpy(d.joint_positions, m.reference_joint_positions);
     kinematics(&m, &d);
     comPos(&m, &d);
-    const unreachable_target: Vec = d.body_xpos[tip] + vec(0, 9.0, 0);
+    const unreachable_target: Vec = d.body_positions[tip] + vec(0, 9.0, 0);
     const stretch_tasks = [_]IkTask{.{
         .body = tip,
         .target_world = unreachable_target,
@@ -13896,12 +16936,12 @@ test "ikStep: a single position target converges on a redundant chain" {
     // legitimately travels a long way; what must never happen is a step that is not a number.
     // Bounding the magnitude instead was a mistake - it failed the CORRECT solver, which is how
     // it was caught.
-    for (0..m.nq) |index| {
-        try expect(d.pos[index] == d.pos[index]); // NaN is the only value unequal to itself
+    for (0..m.coordinate_count) |index| {
+        try expect(d.joint_positions[index] == d.joint_positions[index]); // NaN is the only value unequal to itself
     }
-    for (0..m.nbody) |body| {
+    for (0..m.body_count) |body| {
         inline for (0..3) |axis| {
-            const coordinate: f32 = d.body_xpos[body][axis];
+            const coordinate: f32 = d.body_positions[body][axis];
             try expect(coordinate == coordinate);
         }
     }
@@ -13936,7 +16976,7 @@ fn shortestArcFromYAxis(target_direction: Vec) Quat {
 ///
 /// -- *** WHY `referenceOrientationsFromRest` IS THE WRONG TOOL FOR A RETARGET --
 ///
-/// That one reads `body_xrot` at `qpos0` - the body FRAME's orientation. For `humanoid.xml`
+/// That one reads `body_orientations` at `reference_joint_positions` - the body FRAME's orientation. For `humanoid.xml`
 /// that is **identity for every body**, because the file declares no `quat`, `euler` or
 /// `axisangle` anywhere. Its bone directions live entirely in the POSITION OFFSETS:
 ///
@@ -13959,7 +16999,7 @@ pub fn referenceOrientationsFromBoneDirections(
     m: *const Model,
     out_reference_orientations: []Quat,
 ) void {
-    const body_count: usize = @min(m.nbody, out_reference_orientations.len);
+    const body_count: usize = @min(m.body_count, out_reference_orientations.len);
     for (0..body_count) |body| {
         out_reference_orientations[body] = quat_identity;
     }
@@ -13972,7 +17012,7 @@ pub fn referenceOrientationsFromBoneDirections(
         for (0..body_count) |candidate| {
             const candidate_is_child: bool = candidate != 0 and m.body_parent[candidate] == body;
             if (candidate_is_child) {
-                direction = m.body_pos[candidate];
+                direction = m.body_rest_position[candidate];
                 found_child = true;
                 break;
             }
@@ -14016,10 +17056,10 @@ test "referenceOrientationsFromBoneDirections: reads the OFFSETS, where a body-f
     // ** THE BODY-FRAME READ FINDS NOTHING. Every body rotation is identity here, exactly as in
     // `humanoid.xml`, so `referenceOrientationsFromRest` returns identity for all of them and
     // carries NO information about which way any bone points.
-    // * SIZED TO `nbody`, WHICH INCLUDES THE WORLD BODY. A 3-bone skeleton makes 4 bodies, and
+    // * SIZED TO `body_count`, WHICH INCLUDES THE WORLD BODY. A 3-bone skeleton makes 4 bodies, and
     // an array of 3 silently caps the child search - the first version of this test found no
     // children at all and reported everything as identity, which looked like a code bug.
-    try expectEqual(@as(u32, 4), m.nbody);
+    try expectEqual(@as(u32, 4), m.body_count);
     var from_frames: [4]Quat = undefined;
     referenceOrientationsFromRest(&m, &d, &from_frames);
     for (from_frames) |orientation| {
@@ -14057,12 +17097,12 @@ test "ikStep: an ORIENTATION target is reached, and the short way round" {
     var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
-    @memcpy(d.pos, m.qpos0);
+    @memcpy(d.joint_positions, m.reference_joint_positions);
     kinematics(&m, &d);
     comPos(&m, &d);
 
     const tip: usize = 3;
-    const scratch: []f32 = try gpa.alloc(f32, ikScratchSize(m.nv));
+    const scratch: []f32 = try gpa.alloc(f32, ikScratchSize(m.dof_count));
     defer gpa.free(scratch);
 
     // * A ball-jointed chain can express any orientation, so this must converge essentially
@@ -14073,7 +17113,7 @@ test "ikStep: an ORIENTATION target is reached, and the short way round" {
     );
     const tasks = [_]IkTask{.{
         .body = tip,
-        .target_world = d.body_xpos[tip],
+        .target_world = d.body_positions[tip],
         .weight = 0.0, // orientation only, so position cannot mask the result
         .target_rotation = wanted,
         .rotation_weight = 1.0,
@@ -14085,7 +17125,7 @@ test "ikStep: an ORIENTATION target is reached, and the short way round" {
         comPos(&m, &d);
     }
 
-    const reached: Quat = d.body_xrot[tip];
+    const reached: Quat = d.body_orientations[tip];
     const alignment: f32 = @abs(reached[0] * wanted[0] + reached[1] * wanted[1] +
         reached[2] * wanted[2] + reached[3] * wanted[3]);
     try expect(alignment > 0.999);
@@ -14100,7 +17140,7 @@ test "ikStep: an ORIENTATION target is reached, and the short way round" {
     //
     // * Saying so beats a comment that implies coverage the assertions do not deliver - the
     // failure mode this session has hit twice already.
-    @memcpy(d.pos, m.qpos0);
+    @memcpy(d.joint_positions, m.reference_joint_positions);
     kinematics(&m, &d);
     comPos(&m, &d);
     // * PAST pi (3.14). At 3.0 rad the error quaternion keeps a positive w and the sign
@@ -14109,7 +17149,7 @@ test "ikStep: an ORIENTATION target is reached, and the short way round" {
     const just_past_half_turn: Quat = quatFromAxisAngle(vec(0, 0, 1), 3.5);
     const long_way = [_]IkTask{.{
         .body = tip,
-        .target_world = d.body_xpos[tip],
+        .target_world = d.body_positions[tip],
         .weight = 0.0,
         .target_rotation = just_past_half_turn,
         .rotation_weight = 1.0,
@@ -14123,7 +17163,7 @@ test "ikStep: an ORIENTATION target is reached, and the short way round" {
         kinematics(&m, &d);
         comPos(&m, &d);
     }
-    const long_reached: Quat = d.body_xrot[tip];
+    const long_reached: Quat = d.body_orientations[tip];
     const long_alignment: f32 = @abs(long_reached[0] * just_past_half_turn[0] +
         long_reached[1] * just_past_half_turn[1] +
         long_reached[2] * just_past_half_turn[2] +
@@ -14433,9 +17473,9 @@ pub fn computeTwistChainOffsets(
     /// * Shoulder-to-shoulder is horizontal and sees yaw exactly. It is also the right bone on
     /// its merits: the torso's job in this rig is to carry the shoulders.
     shoulder_bodies: ?[2]usize,
-    /// The robot's REST configuration. Null uses `qpos0`.
+    /// The robot's REST configuration. Null uses `reference_joint_positions`.
     ///
-    /// -- *** `qpos0` IS NOT NECESSARILY A T-POSE --
+    /// -- *** `reference_joint_positions` IS NOT NECESSARILY A T-POSE --
     ///
     /// `humanoid.xml`'s folds its arms up into a triangle. Building twists against it compares
     /// two DIFFERENT PHYSICAL POSES, which is the rule this arc broke four times - and its root
@@ -14447,14 +17487,14 @@ pub fn computeTwistChainOffsets(
     out_twist: []Quat,
     out_parent_twist: []Quat,
 ) void {
-    for (0..m.nbody) |body| {
+    for (0..m.body_count) |body| {
         out_twist[body] = quat_identity;
         out_parent_twist[body] = quat_identity;
     }
     if (robot_rest_qpos) |rest| {
-        @memcpy(d.pos, rest);
+        @memcpy(d.joint_positions, rest);
     } else {
-        @memcpy(d.pos, m.qpos0);
+        @memcpy(d.joint_positions, m.reference_joint_positions);
     }
     kinematics(m, d);
 
@@ -14489,7 +17529,7 @@ pub fn computeTwistChainOffsets(
             }
 
             const robot_bone: Vec =
-                normalize3(d.body_xpos[child] - d.body_xpos[body]);
+                normalize3(d.body_positions[child] - d.body_positions[body]);
             const source_bone: Vec = rest_positions_robot_frame[@intCast(human_child)] -
                 rest_positions_robot_frame[@intCast(human_body)];
             const bone_length: f32 = @sqrt(source_bone[0] * source_bone[0] +
@@ -14520,7 +17560,7 @@ pub fn computeTwistChainOffsets(
             const human_right: i32 = human_of_body[shoulders[1]];
             if (human_left >= 0 and human_right >= 0) {
                 const robot_axis: Vec =
-                    d.body_xpos[shoulders[0]] - d.body_xpos[shoulders[1]];
+                    d.body_positions[shoulders[0]] - d.body_positions[shoulders[1]];
                 const source_axis: Vec = rest_positions_robot_frame[@intCast(human_left)] -
                     rest_positions_robot_frame[@intCast(human_right)];
                 const robot_len: f32 = @sqrt(robot_axis[0] * robot_axis[0] +
@@ -14535,7 +17575,7 @@ pub fn computeTwistChainOffsets(
                     );
                     // * Children inherit the corrected value, or they undo a twist their parent
                     // no longer has.
-                    for (0..m.nbody) |body| {
+                    for (0..m.body_count) |body| {
                         if (m.body_parent[body] == carrier) {
                             out_parent_twist[body] = out_twist[carrier];
                         }
@@ -14554,7 +17594,7 @@ pub const DirectionPair = struct {
     primary_to: usize,
     secondary_from: usize,
     secondary_to: usize,
-    /// The robot's matching directions at rest, in world (= local at `qpos0`).
+    /// The robot's matching directions at rest, in world (= local at `reference_joint_positions`).
     robot_primary: Vec,
     robot_secondary: Vec,
     /// How many ANCESTORS to fit the target through before the body itself.
@@ -14608,7 +17648,7 @@ pub const RetargetPose = struct {
     ///
     /// *** **B NEEDS NO REST-POSE ALGEBRA, BECAUSE A DIRECTION CARRIES ITS OWN FRAME.** Every
     /// rest-pose bug in this arc - A-pose for T-pose twice, an unrotated accumulation, a
-    /// vertical reference bone, a missing source rest rotation, `qpos0` not being a T-pose -
+    /// vertical reference bone, a missing source rest rotation, `reference_joint_positions` not being a T-pose -
     /// was a bug in A. **B is structurally immune to all of them.**
     ///
     /// * A's one advantage is that it carries TWIST, which a direction cannot. B recovers that
@@ -14624,7 +17664,7 @@ pub const RetargetPose = struct {
     /// solved in closed form by `solveTwoBoneLimb` rather than aimed, bent and twisted by three
     /// separate heuristics that each leave something undetermined.
     two_bone: ?[]const bool = null,
-    /// Each 1-DOF body's bend at `qpos0`, in radians. Null treats zero as straight - which is
+    /// Each 1-DOF body's bend at `reference_joint_positions`, in radians. Null treats zero as straight - which is
     /// **wrong for `humanoid.xml`, whose elbows rest at 109.5 degrees.**
     rest_flexion: ?[]const f32 = null,
     /// Scratch for the per-body orientation solve. When supplied, bodies with two or more DOF
@@ -14648,12 +17688,12 @@ pub const RetargetPose = struct {
     /// * Left optional so the caller owns the buffers and a per-frame call allocates nothing.
     solve_scratch: ?[]f32 = null,
     solve_tasks: ?[]IkTask = null,
-    /// Start from whatever `d.pos` already holds instead of resetting to `qpos0`.
+    /// Start from whatever `d.joint_positions` already holds instead of resetting to `reference_joint_positions`.
     ///
     /// -- *** THE REDUNDANT DOF IS RE-CHOSEN EVERY FRAME FROM A COLD START --
     ///
     /// A leg is 4 DOF against a 3-number ankle target, so one degree of freedom - the knee's
-    /// swivel - is genuinely free. From `qpos0` the solver picks whichever branch its damping
+    /// swivel - is genuinely free. From `reference_joint_positions` the solver picks whichever branch its damping
     /// favours, INDEPENDENTLY EVERY FRAME, and the leg snaps between equally-valid answers.
     /// **That is the jitter, and no static per-frame measurement can see it**: every angle can
     /// be correct while the limb flips between frames.
@@ -14774,7 +17814,7 @@ pub fn rotationBetweenDirectionPairs(
 }
 
 fn firstChildBody(m: *const Model, body: usize) ?usize {
-    for (1..m.nbody) |candidate| {
+    for (1..m.body_count) |candidate| {
         if (m.body_parent[candidate] == body) {
             return candidate;
         }
@@ -14901,8 +17941,8 @@ fn solveLimbHere(
 ) bool {
     const middle: usize = firstChildBody(m, body) orelse return false;
     const end: usize = firstChildBody(m, middle) orelse return false;
-    const middle_is_hinge: bool = m.body_jnt_num[middle] == 1 and
-        m.jnt_type[m.body_jnt_adr[middle]] == .hinge;
+    const middle_is_hinge: bool = m.body_joint_count[middle] == 1 and
+        m.joint_type[m.body_first_joint[middle]] == .hinge;
     if (!middle_is_hinge) {
         return false;
     }
@@ -14911,8 +17951,8 @@ fn solveLimbHere(
 
     // * LENGTHS FROM THE ROBOT, positions from the capture - the rule this arc arrived at three
     // times over.
-    const upper_length: f32 = vecLength(m.body_pos[middle]);
-    const lower_length: f32 = vecLength(m.body_pos[end]);
+    const upper_length: f32 = vecLength(m.body_rest_position[middle]);
+    const lower_length: f32 = vecLength(m.body_rest_position[end]);
     if (upper_length < 1.0e-5 or lower_length < 1.0e-5) {
         return false;
     }
@@ -14929,7 +17969,7 @@ fn solveLimbHere(
     //
     // * The error METRIC in `ARM FOCUS` already measured relative to the shoulder, for exactly
     // this reason. **I applied the principle to the measurement and not to the target.**
-    const shoulder: Vec = d.body_xpos[body];
+    const shoulder: Vec = d.body_positions[body];
     const capture_shoulder: Vec = in.positions[joint];
     const solution: TwoBoneSolution = solveTwoBoneLimb(
         shoulder,
@@ -14956,7 +17996,7 @@ fn solveLimbHere(
     // still exactly determined - 3 DOF against a 3-number hand - but as a coupled 3x3 system,
     // which is what NUMERICAL IK on the hand position solves and a closed form cannot. The
     // shortest-arc aim is kept (elbow exact) and the hand is left to the solver.
-    const local_bone: Vec = normalize3(m.body_pos[middle]);
+    const local_bone: Vec = normalize3(m.body_rest_position[middle]);
     const to_joint: Vec = solution.joint_position - shoulder;
     const to_joint_length: f32 = vecLength(to_joint);
     if (to_joint_length < 1.0e-6) {
@@ -14966,7 +18006,7 @@ fn solveLimbHere(
         local_bone,
         to_joint / splat(to_joint_length),
     );
-    const parent_world: Quat = d.body_xrot[m.body_parent[body]];
+    const parent_world: Quat = d.body_orientations[m.body_parent[body]];
     _ = fitBodyRotation(m, d, body, qmul(conjugate(parent_world), world_target));
 
     // -- *** THE HINGE: SUBTRACT THE REST BEND, NO SIGN FLIP --
@@ -14975,10 +18015,10 @@ fn solveLimbHere(
     // degrees. The earlier write here flipped the sign from the joint's range and wrote the
     // flexion as an absolute - which is why two-bone was switched off as "the hand does not
     // respond". It responded exactly to what it was given; what it was given was wrong.
-    const hinge: usize = m.body_jnt_adr[middle];
-    const range: [2]f32 = m.jnt_range[hinge] orelse .{ -3.14159, 3.14159 };
+    const hinge: usize = m.body_first_joint[middle];
+    const range: [2]f32 = m.joint_range[hinge] orelse .{ -3.14159, 3.14159 };
     const rest_flexion: f32 = if (in.rest_flexion) |rest| rest[middle] else 0;
-    d.pos[m.jnt_qpos_adr[hinge]] = clamp(solution.flexion - rest_flexion, range[0], range[1]);
+    d.joint_positions[m.joint_first_coordinate[hinge]] = clamp(solution.flexion - rest_flexion, range[0], range[1]);
     kinematics(m, d);
     return true;
 }
@@ -15025,7 +18065,7 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
     var parent_twist_local: [128]Quat = undefined;
     var effective_parent_twist: []const Quat = in.parent_twist;
     if (in.direction_pairs) |pairs| {
-        const count: usize = @min(m.nbody, parent_twist_local.len);
+        const count: usize = @min(m.body_count, parent_twist_local.len);
         @memcpy(parent_twist_local[0..count], in.parent_twist[0..count]);
         for (pairs) |pair| {
             for (0..count) |body| {
@@ -15041,22 +18081,22 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
     // overwrite it with the per-joint heuristic. **Symptom: a hand error frozen at 0.57 m on
     // every frame while the elbow improved** - the elbow was being placed correctly and undone.
     var already_posed: [128]bool = undefined;
-    @memset(already_posed[0..@min(m.nbody, already_posed.len)], false);
+    @memset(already_posed[0..@min(m.body_count, already_posed.len)], false);
 
     if (!in.warm_start) {
-        @memcpy(d.pos, m.qpos0);
+        @memcpy(d.joint_positions, m.reference_joint_positions);
     }
     if (in.root_world_position) |root_position| {
-        if (m.njnt > 0 and m.jnt_type[0] == .free) {
-            const root_qpos: usize = m.jnt_qpos_adr[0];
-            d.pos[root_qpos + 0] = root_position[0];
-            d.pos[root_qpos + 1] = root_position[1];
-            d.pos[root_qpos + 2] = root_position[2];
+        if (m.joint_count > 0 and m.joint_type[0] == .free) {
+            const root_qpos: usize = m.joint_first_coordinate[0];
+            d.joint_positions[root_qpos + 0] = root_position[0];
+            d.joint_positions[root_qpos + 1] = root_position[1];
+            d.joint_positions[root_qpos + 2] = root_position[2];
         }
     }
     kinematics(m, d);
 
-    for (0..m.nbody) |body| {
+    for (0..m.body_count) |body| {
         const human_joint: i32 = in.human_of_body[body];
         if (human_joint < 0) {
             continue;
@@ -15083,13 +18123,13 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
                     human_secondary,
                 );
                 const is_root: bool = m.body_parent[body] == 0;
-                if (is_root and m.njnt > 0 and m.jnt_type[0] == .free) {
+                if (is_root and m.joint_count > 0 and m.joint_type[0] == .free) {
                     // * The root is FREE: write the rotation, exactly. No fit.
-                    const root_qpos: usize = m.jnt_qpos_adr[0];
-                    d.pos[root_qpos + 3] = world[0];
-                    d.pos[root_qpos + 4] = world[1];
-                    d.pos[root_qpos + 5] = world[2];
-                    d.pos[root_qpos + 6] = world[3];
+                    const root_qpos: usize = m.joint_first_coordinate[0];
+                    d.joint_positions[root_qpos + 3] = world[0];
+                    d.joint_positions[root_qpos + 4] = world[1];
+                    d.joint_positions[root_qpos + 5] = world[2];
+                    d.joint_positions[root_qpos + 6] = world[3];
                 } else {
                     // * Not the root: fit through the ancestors named by `chain_depth`, top
                     // down, each against its parent's ACHIEVED orientation - then the body.
@@ -15110,11 +18150,11 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
                     while (i > 0) {
                         i -= 1;
                         const ancestor: usize = ancestors[i];
-                        const ancestor_parent: Quat = d.body_xrot[m.body_parent[ancestor]];
+                        const ancestor_parent: Quat = d.body_orientations[m.body_parent[ancestor]];
                         _ = fitBodyRotation(m, d, ancestor, qmul(conjugate(ancestor_parent), world));
                         kinematics(m, d);
                     }
-                    const parent_world: Quat = d.body_xrot[m.body_parent[body]];
+                    const parent_world: Quat = d.body_orientations[m.body_parent[body]];
                     _ = fitBodyRotation(m, d, body, qmul(conjugate(parent_world), world));
                 }
                 kinematics(m, d);
@@ -15161,7 +18201,7 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
                         const len: f32 = @sqrt(bone[0] * bone[0] + bone[1] * bone[1] +
                             bone[2] * bone[2]);
                         if (len > 1.0e-6) {
-                            const local_bone: Vec = normalize3(m.body_pos[child]);
+                            const local_bone: Vec = normalize3(m.body_rest_position[child]);
                             const target_dir: Vec = bone / splat(len);
 
                             // ** WHERE THE CHILD IS A HINGE, CHOOSE THE TWIST TOO. A shortest
@@ -15169,8 +18209,8 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
                             // THIS body's frame - so an arbitrary twist bends the child in an
                             // arbitrary PLANE. Measured: the forearm goes from -0.196 to +0.563
                             // once the plane is chosen.
-                            const child_is_hinge: bool = m.body_jnt_num[child] == 1 and
-                                m.jnt_type[m.body_jnt_adr[child]] == .hinge;
+                            const child_is_hinge: bool = m.body_joint_count[child] == 1 and
+                                m.joint_type[m.body_first_joint[child]] == .hinge;
                             if (child_is_hinge) {
                                 if (firstChildJoint(in.human_parents, human_child)) |grand| {
                                     const child_bone: Vec =
@@ -15182,7 +18222,7 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
                                         break :blk aimBoneWithTwist(
                                             local_bone,
                                             target_dir,
-                                            m.jnt_axis[m.body_jnt_adr[child]],
+                                            m.joint_local_axis[m.body_first_joint[child]],
                                             target_dir,
                                             child_bone / splat(child_len),
                                         );
@@ -15211,8 +18251,8 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
         // Measured: a 1-DOF elbow delivers -0.010 for an arbitrary direction. It swings in one
         // plane and takes the human's FLEXION ANGLE as a scalar; the sign comes from the joint's
         // own range, so a different robot needs no code change.
-        const only_hinge: bool = m.body_jnt_num[body] == 1 and
-            m.jnt_type[m.body_jnt_adr[body]] == .hinge;
+        const only_hinge: bool = m.body_joint_count[body] == 1 and
+            m.joint_type[m.body_first_joint[body]] == .hinge;
         if (only_hinge and in.human_parents[joint] >= 0) {
             if (firstChildJoint(in.human_parents, joint)) |human_child| {
                 const upper: Vec =
@@ -15229,15 +18269,15 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
                         -1.0,
                         1.0,
                     );
-                    const hinge: usize = m.body_jnt_adr[body];
-                    const range: [2]f32 = m.jnt_range[hinge] orelse .{ -3.14159, 3.14159 };
+                    const hinge: usize = m.body_first_joint[body];
+                    const range: [2]f32 = m.joint_range[hinge] orelse .{ -3.14159, 3.14159 };
                     const flexion: f32 = acosRad(cosine);
 
                     // -- *** ZERO IS NOT STRAIGHT --
                     //
                     // Measured on a bare model: `bend = rest_bend + qpos`, exactly, and
                     // `humanoid.xml`'s elbow rest bend is **109.5 degrees** - its arms fold into
-                    // a triangle at `qpos0`. **Writing the wanted flexion straight into the
+                    // a triangle at `reference_joint_positions`. **Writing the wanted flexion straight into the
                     // coordinate asked for -90.9 and got 18.6**, which cost four turns of
                     // geometric explanations that were all eliminated.
                     //
@@ -15258,7 +18298,7 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
                     //
                     // * The "which way does it bend" heuristic guessed from the range. The
                     // relation was measured, and it says: subtract, and stop.
-                    d.pos[m.jnt_qpos_adr[hinge]] =
+                    d.joint_positions[m.joint_first_coordinate[hinge]] =
                         clamp(flexion - rest_flexion, range[0], range[1]);
                     kinematics(m, d);
                     continue;
@@ -15275,25 +18315,25 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
         // 18.3 / 67.8 here. This remains for callers that do not.
         const child_for_aim: ?usize = firstChildBody(m, body);
         if (in.solve_scratch != null and in.solve_tasks != null and
-            m.body_dof_num[body] >= 2 and child_for_aim != null)
+            m.body_dof_count[body] >= 2 and child_for_aim != null)
         {
             const child: usize = child_for_aim.?;
-            const local_bone: Vec = m.body_pos[child];
+            const local_bone: Vec = m.body_rest_position[child];
             const bone_len: f32 = vecLength(local_bone);
             if (bone_len > 1.0e-6) {
                 const want_dir: Vec = normalize3(zm.rotate(world_target, local_bone));
                 var mask: [128]bool = undefined;
-                const dof_total: usize = @min(m.nv, mask.len);
+                const dof_total: usize = @min(m.dof_count, mask.len);
                 @memset(mask[0..dof_total], false);
-                const first_dof: usize = m.body_dof_adr[body];
-                for (0..m.body_dof_num[body]) |k| {
+                const first_dof: usize = m.body_first_dof[body];
+                for (0..m.body_dof_count[body]) |k| {
                     if (first_dof + k < dof_total) {
                         mask[first_dof + k] = true;
                     }
                 }
                 const tasks: []IkTask = in.solve_tasks.?;
                 const knee_target: Vec =
-                    d.body_xpos[body] + want_dir * splat(bone_len);
+                    d.body_positions[body] + want_dir * splat(bone_len);
                 tasks[0] = .{ .body = child, .target_world = knee_target, .weight = 1.0 };
                 var task_total: usize = 1;
 
@@ -15313,7 +18353,7 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
                                 const next: Vec =
                                     in.positions[human_grand] - in.positions[human_child];
                                 const next_len: f32 = vecLength(next);
-                                const own_len: f32 = vecLength(m.body_pos[grand]);
+                                const own_len: f32 = vecLength(m.body_rest_position[grand]);
                                 if (next_len > 1.0e-6 and own_len > 1.0e-6) {
                                     tasks[1] = .{
                                         .body = grand,
@@ -15346,7 +18386,7 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
             }
         }
 
-        const parent_world: Quat = d.body_xrot[m.body_parent[body]];
+        const parent_world: Quat = d.body_orientations[m.body_parent[body]];
         _ = fitBodyRotation(m, d, body, qmul(conjugate(parent_world), world_target));
         kinematics(m, d);
     }
@@ -15356,17 +18396,17 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
     if (in.shoulder_bodies) |shoulders| {
         const left_human: i32 = in.human_of_body[shoulders[0]];
         const right_human: i32 = in.human_of_body[shoulders[1]];
-        if (left_human >= 0 and right_human >= 0 and m.njnt > 0 and m.jnt_type[0] == .free) {
+        if (left_human >= 0 and right_human >= 0 and m.joint_count > 0 and m.joint_type[0] == .free) {
             const half: Vec = @splat(0.5);
             const robot_mid: Vec =
-                (d.body_xpos[shoulders[0]] + d.body_xpos[shoulders[1]]) * half;
+                (d.body_positions[shoulders[0]] + d.body_positions[shoulders[1]]) * half;
             const source_mid: Vec = (in.positions[@intCast(left_human)] +
                 in.positions[@intCast(right_human)]) * half;
             const shift: Vec = source_mid - robot_mid;
-            const root_qpos: usize = m.jnt_qpos_adr[0];
-            d.pos[root_qpos + 0] += shift[0];
-            d.pos[root_qpos + 1] += shift[1];
-            d.pos[root_qpos + 2] += shift[2];
+            const root_qpos: usize = m.joint_first_coordinate[0];
+            d.joint_positions[root_qpos + 0] += shift[0];
+            d.joint_positions[root_qpos + 1] += shift[1];
+            d.joint_positions[root_qpos + 2] += shift[2];
             kinematics(m, d);
         }
     }
@@ -15374,7 +18414,7 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
 
 /// Solve the robot into the source's rest pose, and return the configuration.
 ///
-/// -- *** WHY THE ROBOT'S OWN `qpos0` IS NOT A USABLE REFERENCE --
+/// -- *** WHY THE ROBOT'S OWN `reference_joint_positions` IS NOT A USABLE REFERENCE --
 ///
 /// `humanoid.xml`'s folds its arms up into a triangle - it is not a T-pose, and building twist
 /// offsets against it compares two DIFFERENT PHYSICAL POSES. Drawing the two settled in one
@@ -15404,7 +18444,7 @@ pub fn solveRestPoseFromSource(
     scratch: []f32,
     out_qpos: []f32,
 ) void {
-    @memcpy(d.pos, m.qpos0);
+    @memcpy(d.joint_positions, m.reference_joint_positions);
     kinematics(m, d);
     comPos(m, d);
 
@@ -15412,12 +18452,12 @@ pub fn solveRestPoseFromSource(
     // from the model.
     var targets: [128]Vec = undefined;
     targets[0] = .{ 0, 0, 0, 0 };
-    for (1..m.nbody) |body| {
+    for (1..m.body_count) |body| {
         const parent: u32 = m.body_parent[body];
-        const rest_offset: Vec = m.body_pos[body];
+        const rest_offset: Vec = m.body_rest_position[body];
         const own_length: f32 = @sqrt(rest_offset[0] * rest_offset[0] +
             rest_offset[1] * rest_offset[1] + rest_offset[2] * rest_offset[2]);
-        const parent_target: Vec = if (parent == 0) d.body_xpos[body] - rest_offset else targets[parent];
+        const parent_target: Vec = if (parent == 0) d.body_positions[body] - rest_offset else targets[parent];
 
         const human_body: i32 = human_of_body[body];
         const human_parent: i32 = if (parent == 0) -1 else human_of_body[parent];
@@ -15439,10 +18479,10 @@ pub fn solveRestPoseFromSource(
 
     // * One translation so the ANCHOR body lands on its mapped joint. The shape is already
     // right by here; only the placement is wrong.
-    if (anchor_body < m.nbody and human_of_body[anchor_body] >= 0) {
+    if (anchor_body < m.body_count and human_of_body[anchor_body] >= 0) {
         const correction: Vec =
             source_rest_robot_frame[@intCast(human_of_body[anchor_body])] - targets[anchor_body];
-        for (0..m.nbody) |body| {
+        for (0..m.body_count) |body| {
             targets[body] += correction;
         }
     }
@@ -15462,7 +18502,7 @@ pub fn solveRestPoseFromSource(
     // prediction refuted in three turns.**
 
     var task_count: usize = 0;
-    for (0..m.nbody) |body| {
+    for (0..m.body_count) |body| {
         if (human_of_body[body] < 0 or task_count >= tasks.len) {
             continue;
         }
@@ -15484,7 +18524,7 @@ pub fn solveRestPoseFromSource(
     // * Fixed with `point_local`: a point along the leaf's own geom, targeted at where the
     // capture's next joint sits relative to it, at the geom's own length. The leaf's ancestors
     // supply the DOF, exactly as they do in the animation.
-    for (0..m.nbody) |body| {
+    for (0..m.body_count) |body| {
         if (human_of_body[body] < 0 or task_count >= tasks.len) {
             continue;
         }
@@ -15496,11 +18536,11 @@ pub fn solveRestPoseFromSource(
 
         var far_geom: Vec = .{ 0, 0, 0, 0 };
         var far_length: f32 = 0;
-        for (0..m.ngeom) |geom| {
+        for (0..m.geom_count) |geom| {
             if (m.geom_body[geom] != body) {
                 continue;
             }
-            const offset: Vec = m.geom_pos[geom];
+            const offset: Vec = m.geom_local_position[geom];
             if (vecLength(offset) > far_length) {
                 far_length = vecLength(offset);
                 far_geom = offset * splat(2.0);
@@ -15526,7 +18566,7 @@ pub fn solveRestPoseFromSource(
         task_count += 1;
     }
     if (task_count == 0) {
-        @memcpy(out_qpos, d.pos);
+        @memcpy(out_qpos, d.joint_positions);
         return;
     }
 
@@ -15562,7 +18602,7 @@ pub fn solveRestPoseFromSource(
     // ** Reverted because **"helps what I aimed at, hurts something better" is not a result to
     // ship.** The hypothesis is now TESTED rather than untested, and the arm gains say it is
     // worth returning to once the leg path is understood.
-    @memcpy(out_qpos, d.pos);
+    @memcpy(out_qpos, d.joint_positions);
 }
 
 test "solveTwoBoneLimb: the hand lands EXACTLY on the target when it is in reach" {
@@ -15966,20 +19006,20 @@ pub fn solvePointCloud(
         "solvePointCloud: {d} rotations for {d} capture joints",
         .{ opts.rotations.len, opts.positions.len },
     );
-    @memcpy(d.pos[0..m.nq], m.qpos0[0..m.nq]);
+    @memcpy(d.joint_positions[0..m.coordinate_count], m.reference_joint_positions[0..m.coordinate_count]);
     if (opts.root_world) |world| {
         // * Three position coordinates are written at joint 0's address, which is only the root's
         // translation when joint 0 is a free joint. On a fixed-base robot they would overwrite the
         // first three hinge angles.
-        const root_is_free: bool = m.jnt_type.len > 0 and m.jnt_type[0] == .free;
+        const root_is_free: bool = m.joint_type.len > 0 and m.joint_type[0] == .free;
         assertf(root_is_free, @src(), "solvePointCloud: root_world needs a free root joint", .{});
-        const root_qpos: usize = m.jnt_qpos_adr[0];
-        d.pos[root_qpos] = world[0];
-        d.pos[root_qpos + 1] = world[1];
-        d.pos[root_qpos + 2] = world[2];
+        const root_qpos: usize = m.joint_first_coordinate[0];
+        d.joint_positions[root_qpos] = world[0];
+        d.joint_positions[root_qpos + 1] = world[1];
+        d.joint_positions[root_qpos + 2] = world[2];
     }
     if (opts.previous_qpos) |previous| {
-        @memcpy(d.pos[0..m.nq], previous[0..m.nq]);
+        @memcpy(d.joint_positions[0..m.coordinate_count], previous[0..m.coordinate_count]);
     }
     kinematics(m, d);
     comPos(m, d);
@@ -16115,7 +19155,7 @@ pub fn buildPointSamples(
     // the bug that once left two thirds of a robot without targets. The guards still stop before
     // an out-of-bounds write; they now also say that they did, in the assert before `return`.
     var out_of_room: bool = false;
-    for (1..m.nbody) |b| {
+    for (1..m.body_count) |b| {
         if (in.human_of_body[b] < 0) {
             continue;
         }
@@ -16131,7 +19171,7 @@ pub fn buildPointSamples(
             .weight = 1.0,
         };
         n += 1;
-        for (1..m.nbody) |c| {
+        for (1..m.body_count) |c| {
             if (m.body_parent[c] != b or in.human_of_body[c] < 0) {
                 continue;
             }
@@ -16141,7 +19181,7 @@ pub fn buildPointSamples(
             }
             out[n] = .{
                 .body = b,
-                .local = m.body_pos[c],
+                .local = m.body_rest_position[c],
                 .human = @intCast(in.human_of_body[c]),
                 .target_body = c,
                 .weight = 0.7,
@@ -16154,10 +19194,10 @@ pub fn buildPointSamples(
             var chain_dof: usize = 0;
             var walker: usize = b;
             while (walker != 0 and chain_dof < 3) {
-                chain_dof += m.body_dof_num[walker];
+                chain_dof += m.body_dof_count[walker];
                 walker = m.body_parent[walker];
             }
-            const bone: Vec = m.body_pos[c];
+            const bone: Vec = m.body_rest_position[c];
             const wants_side_pair: bool = chain_dof >= 3 and vecLength(bone) > 1.0e-4;
             const side_pair_fits: bool = n + 2 <= out.len;
             if (wants_side_pair and !side_pair_fits) {
@@ -16216,7 +19256,7 @@ pub fn buildPointSamples(
     for (in.rest_positions) |p| {
         ground_height = @min(ground_height, p[2]);
     }
-    for (1..m.nbody) |b| {
+    for (1..m.body_count) |b| {
         if (in.human_of_body[b] < 0) {
             continue;
         }
@@ -16234,18 +19274,18 @@ pub fn buildPointSamples(
 
         var far: Vec = .{ 0, 0, 0, 0 };
         var far_length: f32 = 0;
-        for (0..m.ngeom) |g| {
+        for (0..m.geom_count) |g| {
             if (m.geom_body[g] != b) {
                 continue;
             }
-            if (vecLength(m.geom_pos[g]) > far_length) {
-                far_length = vecLength(m.geom_pos[g]);
-                far = m.geom_pos[g] * splat(2.0);
+            if (vecLength(m.geom_local_position[g]) > far_length) {
+                far_length = vecLength(m.geom_local_position[g]);
+                far = m.geom_local_position[g] * splat(2.0);
             }
         }
         // -- ** A SPHERE HAS NO DIRECTION - and an ARBITRARY axis is not a substitute --
         //
-        // The head's geom is a sphere centred on the body origin, so `geom_pos` is zero and
+        // The head's geom is a sphere centred on the body origin, so `geom_local_position` is zero and
         // there is nothing to point with. Same for the hands. **That is why the head kept ONE
         // sample after the no-tip fix**: that fix assumed every leaf has an off-centre geom.
         //
@@ -16260,7 +19300,7 @@ pub fn buildPointSamples(
         // question, not a fallback**, and it is left open rather than answered with a constant.
         // -- *** A SPHERE HAS NO DIRECTION - BUT THE BONE DOES --
         //
-        // The head's geom is a sphere centred on the body origin, so `geom_pos` is zero and
+        // The head's geom is a sphere centred on the body origin, so `geom_local_position` is zero and
         // there is nothing to point with; the hands are the same. **That is why they kept ONE
         // sample**: a position, with orientation unconstrained.
         //
@@ -16307,7 +19347,7 @@ pub fn buildPointSamples(
             // *** THREE ATTEMPTS, THREE FAILURES, AND THE THIRD RULES OUT THE SECOND DIAGNOSIS.
             //
             //     1. an arbitrary local axis           torso 4.3 -> 64.6   forearm 2.8 -> 140.4
-            //     2. `body_pos`, the parent bone       torso 4.3 -> 56.2   forearm 2.8 -> 118.4
+            //     2. `body_rest_position`, the parent bone       torso 4.3 -> 56.2   forearm 2.8 -> 118.4
             //     3. the offset carried through the RELATIVE transform, cancelling the +Z/+X
             //        convention that makes every body's absolute rest orientations differ by
             //        ~90 degrees                       **identical to attempt 2, to the decimal**
@@ -16337,7 +19377,7 @@ pub fn buildPointSamples(
             const agreement: f32 = 1.0;
             //
             // *** AND THE CRITERION USES A DIFFERENT QUANTITY THAN THE ONE MEASURED. The 0.0
-            // degrees reported for the head came from `body_xrot` at `qpos0`; this reads
+            // degrees reported for the head came from `body_orientations` at `reference_joint_positions`; this reads
             // `robot_rest_rotations`, which is the SOLVED rest pose. **They are not the same
             // orientation**, and the head fails here while passing there.
             //
@@ -16353,7 +19393,7 @@ pub fn buildPointSamples(
             if (agreement < 0.87) {
                 continue;
             }
-            far = m.body_pos[b];
+            far = m.body_rest_position[b];
             far_length = vecLength(far);
             leaf_weight = 0.4;
         }
@@ -16485,7 +19525,7 @@ pub fn buildPointSamples(
     // ** NORMALISE PER BODY first: a body with four samples would otherwise pull four times as
     // hard as one with a single sample, so influence would be set by an accident of CHILD COUNT.
     var per_body: [128]f32 = undefined;
-    const body_limit: usize = @min(m.nbody, per_body.len);
+    const body_limit: usize = @min(m.body_count, per_body.len);
     @memset(per_body[0..body_limit], 0);
     for (0..n) |i| {
         if (out[i].body < body_limit) {
@@ -16553,7 +19593,7 @@ pub const CaptureFrame = struct {
 pub fn captureScale(m: *const Model, frame: CaptureFrame) f32 {
     var robot_bones: f32 = 0;
     var capture_bones: f32 = 0;
-    for (1..m.nbody) |b| {
+    for (1..m.body_count) |b| {
         const parent: u32 = m.body_parent[b];
         if (parent == 0 or b >= frame.human_of_body.len) {
             continue;
@@ -16566,11 +19606,507 @@ pub fn captureScale(m: *const Model, frame: CaptureFrame) f32 {
         if (hb >= frame.positions.len or hp >= frame.positions.len) {
             continue;
         }
-        robot_bones += vecLength(m.body_pos[b]);
+        robot_bones += vecLength(m.body_rest_position[b]);
         capture_bones += vecLength(frame.positions[hb] - frame.positions[hp]);
     }
     if (capture_bones > 1.0e-4 and robot_bones > 1.0e-4) {
         return robot_bones / capture_bones;
     }
     return 1.0;
+}
+
+test "Newton's line search: on one quadratic, the first Newton step is the lowest point" {
+    // The inertia alone: cost change 3 alpha + 2 alpha^2 (slope 3 at 0, curvature 4), lowest at alpha = -3/4.
+    const line: SearchLine = .{
+        .inertia_slope = 3,
+        .inertia_half_curvature = 2,
+        .row_residual = &.{},
+        .row_rate = &.{},
+        .row_weight = &.{},
+        .row_unilateral = &.{},
+    };
+    const found: LineSearchResult = searchLine(line, 1.0e-6, 50);
+    try expect(found.converged);
+    try expectApproxEqAbs(@as(f32, -0.75), found.alpha, 1.0e-6);
+    // The cost falls by 3^2 / (4 x 2) = 9/8.
+    try expectApproxEqAbs(@as(f32, 1.125), found.improvement, 1.0e-6);
+}
+
+test "Newton's line search: a row that stops pushing along the line - the bracket finds the kink's other side" {
+    // The inertia: 1/2 (alpha - 4)^2 less its value at 0 = -4 alpha + 1/2 alpha^2. A limit row pushing at 0: residual
+    // -1, rate 1, weight 10 - it leaves the cost at alpha = 1. Before 1 the row pulls the lowest point toward it:
+    // slope -4 + alpha + 10 (alpha - 1) = 0 at alpha = 14/11, past where the row leaves - so on that piece the slope
+    // never reaches zero; after 1, only the inertia's, -4 + alpha, zero at alpha = 4. The lowest point is 4.
+    const line: SearchLine = .{
+        .inertia_slope = -4,
+        .inertia_half_curvature = 0.5,
+        .row_residual = &.{-1},
+        .row_rate = &.{1},
+        .row_weight = &.{10},
+        .row_unilateral = &.{true},
+    };
+    const found: LineSearchResult = searchLine(line, 1.0e-6, 50);
+    try expect(found.converged);
+    try expectApproxEqAbs(@as(f32, 4), found.alpha, 1.0e-5);
+    // The cost there, relative to 0: the inertia's -16 + 8 = -8, and the row's 1/2 x 10 x 1 = 5 gone: -13.
+    try expectApproxEqAbs(@as(f32, 13), found.improvement, 1.0e-4);
+}
+
+test "Newton's line search: a row that starts pushing along the line stops the step where it balances" {
+    // The inertia wants alpha = 4 (slope -4 + alpha); a limit row idle at 0 (residual 1) whose rate -1 makes it push
+    // from alpha = 1: x = 1 - alpha. Past 1 the slope is -4 + alpha + 10 x (-1)(1 - alpha) = -14 + 11 alpha, zero at
+    // alpha = 14/11.
+    const line: SearchLine = .{
+        .inertia_slope = -4,
+        .inertia_half_curvature = 0.5,
+        .row_residual = &.{1},
+        .row_rate = &.{-1},
+        .row_weight = &.{10},
+        .row_unilateral = &.{true},
+    };
+    const found: LineSearchResult = searchLine(line, 1.0e-6, 50);
+    try expect(found.converged);
+    try expectApproxEqAbs(@as(f32, 14.0 / 11.0), found.alpha, 1.0e-5);
+    // The cost change there: the inertia's -4 x 14/11 + 1/2 (14/11)^2, plus the row's 1/2 x 10 x (3/11)^2.
+    const alpha: f32 = 14.0 / 11.0;
+    const expected_change: f32 = -4.0 * alpha + 0.5 * alpha * alpha + 0.5 * 10.0 * (1.0 - alpha) * (1.0 - alpha);
+    try expectApproxEqAbs(-expected_change, found.improvement, 1.0e-4);
+}
+
+test "Newton's line search: a start already at the lowest point takes no step" {
+    const line: SearchLine = .{
+        .inertia_slope = 0,
+        .inertia_half_curvature = 2,
+        .row_residual = &.{},
+        .row_rate = &.{},
+        .row_weight = &.{},
+        .row_unilateral = &.{},
+    };
+    const found: LineSearchResult = searchLine(line, 1.0e-6, 50);
+    try expect(found.converged);
+    try expectEqual(@as(f32, 0), found.alpha);
+    try expectEqual(@as(f32, 0), found.improvement);
+}
+
+test "the reference pose's inverse weights: a free box - its mass, and its inertia's inverses" {
+    const gpa: Allocator = testing_allocator;
+    const Floating = Spec(.{
+        .bodies = &.{.{
+            .name = "box",
+            .joints = &.{.{ .name = "root", .kind = .free }},
+            .inertial = .{ .mass = 2.0, .full_inertia = .{ 0.2, 0.3, 0.4, 0, 0, 0 } },
+        }},
+    });
+    var m: Model = try Floating.build(gpa);
+    defer m.deinit();
+    // The centre of mass at the body's origin: translation and rotation do not couple, so M is the mass on the
+    // first three dofs and the inertia on the last three, each with its dof's armature added.
+    const translation: f32 = 1.0 / (2.0 + m.dof_armature[0]);
+    const rotation: f32 = (1.0 / (0.2 + m.dof_armature[3]) + 1.0 / (0.3 + m.dof_armature[4]) +
+        1.0 / (0.4 + m.dof_armature[5])) / 3.0;
+    try expectApproxEqRel(translation, m.body_translation_inverse_weight[1], 1.0e-5);
+    try expectApproxEqRel(rotation, m.body_rotation_inverse_weight[1], 1.0e-5);
+    for (0..3) |dof| {
+        try expectApproxEqRel(translation, m.dof_inverse_weight[dof], 1.0e-5);
+        try expectApproxEqRel(rotation, m.dof_inverse_weight[3 + dof], 1.0e-5);
+    }
+    // The world cannot move.
+    try expectEqual(@as(f32, 0), m.body_translation_inverse_weight[world_body]);
+}
+
+test "the reference pose's inverse weights: a hinged rod - the lever arm squared over the inertia about the axis" {
+    const gpa: Allocator = testing_allocator;
+    // A rod of 3 kg about a vertical hinge at the world's origin, its centre of mass 0.5 m out along x.
+    const Rod = Spec(.{
+        .bodies = &.{.{
+            .name = "rod",
+            .joints = &.{.{ .name = "hinge", .kind = .hinge, .axis = vec(0, 0, 1) }},
+            .inertial = .{ .mass = 3.0, .pos = vec(0.5, 0, 0), .full_inertia = .{ 0.02, 0.025, 0.03, 0, 0, 0 } },
+        }},
+    });
+    var m: Model = try Rod.build(gpa);
+    defer m.deinit();
+    // About the hinge: the inertia about the centre of mass plus m l^2 (parallel axes), plus the armature.
+    const about_axis: f32 = 0.03 + 3.0 * 0.5 * 0.5 + m.dof_armature[0];
+    try expectApproxEqRel(1.0 / about_axis, m.dof_inverse_weight[0], 1.0e-5);
+    // The centre of mass moves along y at 0.5 per unit hinge rate: J M^-1 J^T has 0.25 / I on one diagonal entry
+    // of three; the rotation, 1 / I on one of three (about z alone).
+    try expectApproxEqRel(0.25 / about_axis / 3.0, m.body_translation_inverse_weight[1], 1.0e-5);
+    try expectApproxEqRel(1.0 / about_axis / 3.0, m.body_rotation_inverse_weight[1], 1.0e-5);
+}
+
+test "constraint rows at the reference pose's inertia: a box on the floor - each edge its weight x (1 + mu^2)" {
+    const gpa: Allocator = testing_allocator;
+    const Floating = Spec(.{
+        .bodies = &.{.{
+            .name = "box",
+            .joints = &.{.{ .name = "root", .kind = .free }},
+            .inertial = .{ .mass = 2.0, .full_inertia = .{ 0.2, 0.3, 0.4, 0, 0, 0 } },
+        }},
+    });
+    var m: Model = try Floating.build(gpa);
+    defer m.deinit();
+    m.opt.solver.algorithm = .newton;
+    var d: Data = try .init(gpa, &m);
+    defer d.deinit();
+    var regulariser_per_inertia: [2][4]f32 = undefined;
+    for ([_]ConstraintInertia{ .exact, .reference_pose }, 0..) |inertia, pass| {
+        m.opt.constraint_inertia = inertia;
+        d.reset(&m);
+        d.clearContacts();
+        d.pushContact(.{
+            .position = vec(0, 0, -0.05),
+            .normal = vec(0, 0, 1),
+            .tangent = .{ vec(1, 0, 0), vec(0, 1, 0) },
+            .distance = -0.001,
+            .friction = .{ 0.5, 0.5 },
+            .body_a = world_body,
+            .body_b = 1,
+        });
+        forward(&m, &d);
+        try expectEqual(@as(u32, 4), d.constraint_count);
+        for (0..4) |row| {
+            regulariser_per_inertia[pass][row] = d.constraint_regularizer[row] / d.constraint_inertia[row];
+        }
+        if (inertia == .reference_pose) {
+            // Every edge: the box's translation weight (the world's is zero), times 1 + 0.5^2.
+            const expected: f32 = m.body_translation_inverse_weight[1] * 1.25;
+            for (0..4) |row| {
+                try expectApproxEqRel(expected, d.constraint_inertia[row], 1.0e-5);
+            }
+            // Newton wanted no M^-1 J^T: none was computed.
+            for (d.constraint_inv_inertia_jacobian[0 .. 4 * m.dof_count]) |entry| {
+                try expectEqual(@as(f32, 0), entry);
+            }
+        }
+    }
+    // R / A is the impedance's (1 - imp) / imp either way: only A changed.
+    for (0..4) |row| {
+        try expectApproxEqRel(regulariser_per_inertia[0][row], regulariser_per_inertia[1][row], 1.0e-5);
+    }
+}
+
+test "contacts against a plane: a sphere sunk into the floor - its distance and the midpoint between surfaces" {
+    const ground: Plane = .{ .point = vec_zero, .normal = vec(0, 0, 1) };
+    // A ball of radius 0.1 with its centre 0.05 above the floor: 0.05 into it.
+    const contact: PlaneContact = planeSphere(ground, vec(0.3, -0.2, 0.05), 0.1, 0).?;
+    try expectApproxEqAbs(@as(f32, -0.05), contact.distance, 1.0e-6);
+    // Halfway between the ball's lowest point (-0.05) and the floor (0).
+    try expectApproxEqAbs(@as(f32, -0.025), contact.position[2], 1.0e-6);
+    try expectApproxEqAbs(@as(f32, 0.3), contact.position[0], 1.0e-6);
+    // Above the margin: none. Within it: one, at a positive distance.
+    try expect(planeSphere(ground, vec(0, 0, 0.2), 0.1, 0.05) == null);
+    const near: PlaneContact = planeSphere(ground, vec(0, 0, 0.12), 0.1, 0.05).?;
+    try expectApproxEqAbs(@as(f32, 0.02), near.distance, 1.0e-6);
+}
+
+test "contacts against a plane: a capsule flat touches at both ends, tilted at one, each frame along its axis" {
+    const ground: Plane = .{ .point = vec_zero, .normal = vec(0, 0, 1) };
+    const axis: Vec = vec(1, 0, 0);
+    // Lying along x, half a segment of 0.2, radius 0.05, its centre 0.04 above the floor: both ends 0.01 in.
+    const flat: [2]?PlaneContact = planeCapsule(ground, vec(0, 0, 0.04), axis, 0.2, 0.05, 0);
+    try expectApproxEqAbs(@as(f32, 0.2), flat[0].?.position[0], 1.0e-6);
+    try expectApproxEqAbs(@as(f32, -0.2), flat[1].?.position[0], 1.0e-6);
+    try expectApproxEqAbs(@as(f32, -0.01), flat[0].?.distance, 1.0e-6);
+    try expect(@reduce(.And, flat[1].?.tangent_hint == axis));
+    // Tilted 45 degrees, its centre 0.17 up: the +axis end's sphere 0.021 into the floor, the -axis end's far clear.
+    const tilted_axis: Vec = normalize3(vec(1, 0, -1));
+    const tilted: [2]?PlaneContact = planeCapsule(ground, vec(0, 0, 0.17), tilted_axis, 0.2, 0.05, 0);
+    try expect(tilted[1] == null);
+    const low_end_height: f32 = 0.17 - 0.2 * @sqrt(0.5);
+    try expectApproxEqAbs(low_end_height - 0.05, tilted[0].?.distance, 1.0e-6);
+}
+
+test "contacts against a plane: a box resting flat touches at its four lower corners, in corner order" {
+    const ground: Plane = .{ .point = vec_zero, .normal = vec(0, 0, 1) };
+    // A box of half extents 0.1, 0.05, 0.02, its centre 0.015 above the floor: its bottom face 0.005 in.
+    const contacts: [4]?PlaneContact = planeBox(ground, vec(0, 0, 0.015), quat_identity, vec(0.1, 0.05, 0.02), 0);
+    // Corners 0 to 3 - bit 2 clear, the lower face - in order: (-x,-y), (+x,-y), (-x,+y), (+x,+y).
+    const expected_x = [4]f32{ -0.1, 0.1, -0.1, 0.1 };
+    const expected_y = [4]f32{ -0.05, -0.05, 0.05, 0.05 };
+    for (contacts, expected_x, expected_y) |slot, x, y| {
+        const contact: PlaneContact = slot.?;
+        try expectApproxEqAbs(@as(f32, -0.005), contact.distance, 1.0e-6);
+        try expectApproxEqAbs(x, contact.position[0], 1.0e-6);
+        try expectApproxEqAbs(y, contact.position[1], 1.0e-6);
+        // Halfway between the corner (-0.005) and the floor.
+        try expectApproxEqAbs(@as(f32, -0.0025), contact.position[2], 1.0e-6);
+    }
+    // Lifted clear of the margin: none.
+    const lifted: [4]?PlaneContact = planeBox(ground, vec(0, 0, 0.1), quat_identity, vec(0.1, 0.05, 0.02), 0.01);
+    for (lifted) |slot| {
+        try expect(slot == null);
+    }
+}
+
+test "contacts against a plane: a contact's frame is orthonormal, its first tangent the hint when there is one" {
+    const up: Vec = vec(0, 0, 1);
+    // No hint: the world's y, made orthogonal to the normal; the second tangent the normal crossed with it.
+    const plain: [2]Vec = contactFrame(up, vec_zero);
+    try expectApproxEqAbs(@as(f32, 1), plain[0][1], 1.0e-6);
+    try expectApproxEqAbs(@as(f32, -1), plain[1][0], 1.0e-6);
+    // A capsule's axis as the hint, a little off the plane: kept, made orthogonal.
+    const hinted: [2]Vec = contactFrame(up, vec(1, 0, 0.1));
+    try expectApproxEqAbs(@as(f32, 1), hinted[0][0], 1.0e-6);
+    try expectApproxEqAbs(@as(f32, 0), dot3(hinted[0], up), 1.0e-6);
+    try expectApproxEqAbs(@as(f32, 0), dot3(hinted[1], up), 1.0e-6);
+    try expectApproxEqAbs(@as(f32, 0), dot3(hinted[0], hinted[1]), 1.0e-6);
+    // A normal along y: the fallback is z.
+    const sideways: [2]Vec = contactFrame(vec(0, 1, 0), vec_zero);
+    try expectApproxEqAbs(@as(f32, 1), sideways[0][2], 1.0e-6);
+}
+
+test "one joint's integration is its difference's inverse: a slide, a hinge, a ball and a free joint, each carried" {
+    // For each joint type, two poses: the velocity `jointPositionDifference` finds from the first to the second over a
+    // step, then `integrateJointPosition` over that step from the first - landing on the second, to rounding.
+    const dt: f32 = 1.0 / 60.0;
+    const turned_from: Quat = normalizeQuat(quat(0.1, -0.2, 0.3, 0.9));
+    const turned_to: Quat = normalizeQuat(quat(0.15, -0.1, 0.35, 0.85));
+    const Case = struct { joint_type: JointType, from: JointCoordinates, to: JointCoordinates };
+    const cases = [_]Case{
+        .{ .joint_type = .slide, .from = .ofSingle(0.2), .to = .ofSingle(0.23) },
+        .{ .joint_type = .hinge, .from = .ofSingle(-0.4), .to = .ofSingle(-0.35) },
+        .{ .joint_type = .ball, .from = .ofBall(turned_from), .to = .ofBall(turned_to) },
+        .{
+            .joint_type = .free,
+            .from = .ofFree(vec(0.1, 0.2, 0.9), turned_from),
+            .to = .ofFree(vec(0.12, 0.19, 0.91), turned_to),
+        },
+    };
+    for (cases) |case| {
+        const velocity: JointVelocity = jointPositionDifference(case.joint_type, case.from, case.to, 1.0 / dt);
+        const landed: JointCoordinates = integrateJointPosition(case.joint_type, case.from, velocity, dt);
+        const count: usize = case.joint_type.posCount();
+        for (landed.numbers[0..count], case.to.numbers[0..count]) |got, wanted| {
+            try expectApproxEqAbs(wanted, got, 1.0e-5);
+        }
+    }
+}
+
+test "filterAction - a fifth of the new, four fifths of the old; 1 is no filter" {
+    // Plan F6's formula, exactly: from rest, asking for 1 three times at DReCon's 0.2 applies 0.2, 0.36, 0.488; at 1
+    // the applied action IS the asked one, whatever was applied before.
+    var applied = [_]f32{ 0.0, 0.0 };
+    const asked = [_]f32{ 1.0, -1.0 };
+    filterAction(0.2, &asked, &applied);
+    try expectApproxEqAbs(@as(f32, 0.2), applied[0], 1.0e-7);
+    filterAction(0.2, &asked, &applied);
+    try expectApproxEqAbs(@as(f32, 0.36), applied[0], 1.0e-7);
+    filterAction(0.2, &asked, &applied);
+    try expectApproxEqAbs(@as(f32, 0.488), applied[0], 1.0e-7);
+    try expectApproxEqAbs(@as(f32, -0.488), applied[1], 1.0e-7);
+    filterAction(1.0, &asked, &applied);
+    try expect(applied[0] == 1.0 and applied[1] == -1.0);
+}
+
+test "contacts against a plane: MuJoCo 3.17's own contacts for a sphere, a tilted capsule and a turned box" {
+    // Each scene a floor plane and one primitive on a free body, `mj_forward` run by MuJoCo 3.17 (its Python package)
+    // and its contacts read - position, distance and frame - recorded here as numbers. MuJoCo's quaternions are
+    // (w, x, y, z), zimr's (x, y, z, w); MuJoCo's capsule lies along its local z.
+    const ground: Plane = .{ .point = vec_zero, .normal = vec(0, 0, 1) };
+    const up: Vec = vec(0, 0, 1);
+    // A sphere of radius 0.1 at (0.3, -0.2, 0.05): MuJoCo's one contact, its frame's tangents y and -x.
+    const sphere: PlaneContact = planeSphere(ground, vec(0.3, -0.2, 0.05), 0.1, 0).?;
+    try expectApproxEqAbs(@as(f32, -0.05), sphere.distance, 1.0e-6);
+    try expect(@reduce(.And, @abs(sphere.position - vec(0.3, -0.2, -0.025)) < splat(1.0e-6)));
+    const sphere_frame: [2]Vec = contactFrame(up, sphere.tangent_hint);
+    try expect(@reduce(.And, @abs(sphere_frame[0] - vec(0, 1, 0)) < splat(1.0e-6)));
+    try expect(@reduce(.And, @abs(sphere_frame[1] - vec(-1, 0, 0)) < splat(1.0e-6)));
+    // A capsule, radius 0.05 and half-length 0.2, at (0.1, 0.05, 0.17), turned 45 degrees about y: MuJoCo's one
+    // contact is its lower end's - here the -axis slot - its first tangent the axis laid on the floor.
+    const capsule_rotation: Quat = quat(0, 0.3826834, 0, 0.9238795);
+    const capsule_axis: Vec = rotate(capsule_rotation, vec(0, 0, 1));
+    const capsule: [2]?PlaneContact = planeCapsule(ground, vec(0.1, 0.05, 0.17), capsule_axis, 0.2, 0.05, 0);
+    try expect(capsule[0] == null);
+    const lower_end: PlaneContact = capsule[1].?;
+    try expectApproxEqAbs(@as(f32, -0.021421361), lower_end.distance, 1.0e-6);
+    try expect(@reduce(.And, @abs(lower_end.position - vec(-0.041421351, 0.05, -0.010710681)) < splat(1.0e-6)));
+    const capsule_frame: [2]Vec = contactFrame(up, lower_end.tangent_hint);
+    try expect(@reduce(.And, @abs(capsule_frame[0] - vec(1, 0, 0)) < splat(1.0e-6)));
+    try expect(@reduce(.And, @abs(capsule_frame[1] - vec(0, 1, 0)) < splat(1.0e-6)));
+    // A box of half extents (0.1, 0.05, 0.02) at (0, 0, 0.01), MuJoCo's quaternion (0.9659258, 0.1294095, 0,
+    // 0.2241439): MuJoCo's three contacts, in its corner order, and no fourth.
+    const box_rotation: Quat = quat(0.1294095, 0, 0.2241439, 0.9659258);
+    const box: [4]?PlaneContact = planeBox(ground, vec(0, 0, 0.01), box_rotation, vec(0.1, 0.05, 0.02), 0);
+    const mujoco_positions = [3]Vec{
+        vec(-0.069461518, -0.081602547, -0.013815698),
+        vec(0.110442286, 0.005000007, -0.008014427),
+        vec(-0.112762795, 0.004999991, -0.0013157),
+    };
+    const mujoco_distances = [3]f32{ -0.027631395, -0.016028855, -0.002631399 };
+    for (mujoco_positions, mujoco_distances, 0..) |position, distance, index| {
+        const contact: PlaneContact = box[index].?;
+        try expectApproxEqAbs(distance, contact.distance, 1.0e-6);
+        try expect(@reduce(.And, @abs(contact.position - position) < splat(1.0e-6)));
+    }
+    try expect(box[3] == null);
+}
+
+test "contacts against a plane: MuJoCo 3.17's own contacts for a cylinder lying, tilted, upright and buried" {
+    // Each scene a floor plane and a cylinder of radius 0.05 and half-length 0.1 on a free body, `mj_forward` run by
+    // MuJoCo 3.17 (its Python package) and its contacts read - position and distance - recorded here as numbers.
+    // MuJoCo's quaternions are (w, x, y, z), zimr's (x, y, z, w); MuJoCo's cylinder lies along its local z.
+    const ground: Plane = .{ .point = vec_zero, .normal = vec(0, 0, 1) };
+    const Scene = struct {
+        center: Vec,
+        rotation: Quat,
+        /// MuJoCo's contacts in its order, a null where it made none.
+        positions: [4]?Vec,
+        distances: [4]f32,
+    };
+    const scenes = [_]Scene{
+        // Lying on its side, turned 10 degrees about z and tilted 2 degrees: its two lower rim points, the deeper
+        // first.
+        .{
+            .center = vec(0.1, -0.05, 0.0435),
+            .rotation = quat(0.716602495, 0.062694595, 0.060543466, 0.692014986),
+            .positions = .{
+                vec(0.117051228, -0.146702319, -0.004979746),
+                vec(0.082342749, 0.050139248, -0.001489796),
+                null,
+                null,
+            },
+            .distances = .{ -0.009959491, -0.002979592, 0, 0 },
+        },
+        // Tilted 20 degrees about x, its cap 3 mm in: the deepest point alone - A and B stand above the floor.
+        .{
+            .center = vec(-0.1, 0.2, 0.10807026924487428),
+            .rotation = quat(0.173648178, 0, 0, 0.984807753),
+            .positions = .{ vec(-0.1, 0.187217383, -0.0015), null, null, null },
+            .distances = .{ -0.003, 0, 0, 0 },
+        },
+        // Exactly upright, its cap 2 mm in: the cap lies flat, so the first point is taken along the cylinder's x,
+        // A and B a third of the way round either side.
+        .{
+            .center = vec(0.2, 0.1, 0.098),
+            .rotation = quat(0, 0, 0, 1),
+            .positions = .{
+                vec(0.25, 0.1, -0.001),
+                null,
+                vec(0.175, 0.14330127, -0.001),
+                vec(0.175, 0.05669873, -0.001),
+            },
+            .distances = .{ -0.002, 0, -0.002, -0.002 },
+        },
+        // Tilted 20 degrees about x and buried: all four.
+        .{
+            .center = vec(0.05, -0.1, -0.12),
+            .rotation = quat(0.173648178, 0, 0, 0.984807753),
+            .positions = .{
+                vec(0.05, -0.112782617, -0.115535135),
+                vec(0.05, -0.181186645, -0.021565873),
+                vec(0.09330127, -0.04230567, -0.102709379),
+                vec(0.00669873, -0.04230567, -0.102709379),
+            },
+            .distances = .{ -0.231070269, -0.043131745, -0.205418758, -0.205418758 },
+        },
+    };
+    for (scenes) |scene| {
+        const axis: Vec = rotate(scene.rotation, vec(0, 0, 1));
+        const side: Vec = rotate(scene.rotation, vec(1, 0, 0));
+        const contacts: [4]?PlaneContact = planeCylinder(ground, scene.center, axis, side, 0.1, 0.05, 0);
+        for (contacts, scene.positions, scene.distances) |contact, expected_position, expected_distance| {
+            const position: Vec = expected_position orelse {
+                try expect(contact == null);
+                continue;
+            };
+            const made: PlaneContact = contact.?;
+            try expectApproxEqAbs(expected_distance, made.distance, 1.0e-6);
+            try expect(@reduce(.And, @abs(made.position - position) < splat(1.0e-6)));
+        }
+    }
+}
+
+test "the floor's contacts for a model: a box resting on it, four contacts at its lower corners, keyed and framed" {
+    const gpa: Allocator = testing_allocator;
+    const Resting = Spec(.{
+        .bodies = &.{.{
+            .name = "box",
+            .pos = vec(0, 0, 0.015),
+            .joints = &.{.{ .name = "root", .kind = .free }},
+            .geoms = &.{.{ .shape = .{ .box = .{ .half_extent = vec(0.1, 0.05, 0.02) } } }},
+        }},
+    });
+    var m: Model = try Resting.build(gpa);
+    defer m.deinit();
+    var d: Data = try .init(gpa, &m);
+    defer d.deinit();
+    kinematics(&m, &d);
+    d.clearContacts();
+    const resting_floor: Floor = .{ .friction = 0.7 };
+    try pushFloorContacts(&m, &d, resting_floor);
+    // The box's bottom face 0.005 into the floor: its four lower corners, from the world to the box, the friction
+    // the larger of the two, each keyed by its slot.
+    try expectEqual(@as(u32, 4), d.contact_count);
+    for (d.contacts[0..4], 0..) |contact, slot| {
+        try expectApproxEqAbs(@as(f32, -0.005), contact.distance, 1.0e-6);
+        try expectEqual(world_body, contact.body_a);
+        try expectEqual(@as(u32, 1), contact.body_b);
+        try expectEqual(@max(m.geom_friction[0], 0.7), contact.friction[0]);
+        try expectEqual(@as(u64, slot), contact.id);
+    }
+}
+
+test "counter-based draws: in [0, 1), the same for the same inputs, apart for apart ones, a half on average" {
+    const first: f32 = drawUniform(7, 3, 11, .push_speed, 0);
+    try expect(first >= 0.0 and first < 1.0);
+    try expectEqual(first, drawUniform(7, 3, 11, .push_speed, 0));
+    try expect(first != drawUniform(7, 3, 11, .push_direction, 0));
+    try expect(first != drawUniform(7, 4, 11, .push_speed, 0));
+    try expect(first != drawUniform(7, 3, 12, .push_speed, 0));
+    var sum: f32 = 0;
+    const draw_count: u32 = 10000;
+    var counter: u32 = 0;
+    while (counter < draw_count) : (counter += 1) {
+        const draw: f32 = drawUniform(1, 0, counter, .start_frame, 0);
+        try expect(draw >= 0.0 and draw < 1.0);
+        sum += draw;
+    }
+    const mean: f32 = sum / float(draw_count);
+    try expect(@abs(mean - 0.5) < 0.01);
+}
+
+test "counter-based indices: always below their count, every index reached" {
+    // A clip of 600 frames - where a float times the count could round up to 600 - and one of 3: every draw below its
+    // count, and every one of the 3 reached.
+    var reached: [3]bool = .{ false, false, false };
+    var counter: u32 = 0;
+    while (counter < 20000) : (counter += 1) {
+        try expect(drawBelow(5, 1, counter, .start_frame, 0, 600) < 600);
+        reached[drawBelow(5, 1, counter, .start_clip, 0, 3)] = true;
+    }
+    try expect(reached[0] and reached[1] and reached[2]);
+    // The largest word: its index still below the count.
+    const largest_top_bits: u32 = 0xffff_ffff >> 16;
+    try expect((largest_top_bits * 600) >> 16 < 600);
+}
+
+test "SuperMimic's start curriculum: their mixture, low-return bins favoured, a cut-short episode's tail" {
+    // Three bins, returns 10, 5, 0 against a largest return of 20: the softmax of -25 G / 20, its long-run average from
+    // equal shares, half uniform - computed here from their formula, and the lowest-return bin the most probable.
+    const returns: [3]f32 = .{ 10.0, 5.0, 0.0 };
+    var long_run: [3]f32 = .{ 1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0 };
+    var probabilities: [3]f32 = undefined;
+    startBinProbabilities(.{}, &returns, &long_run, 20.0, &probabilities);
+    const exponents: [3]f32 = .{ @exp(-12.5), @exp(-6.25), 1.0 };
+    const exponent_sum: f32 = exponents[0] + exponents[1] + exponents[2];
+    var total: f32 = 0;
+    for (probabilities, exponents, 0..) |probability, exponent, bin| {
+        const soft: f32 = exponent / exponent_sum;
+        const average: f32 = 0.999 / 3.0 + 0.001 * soft;
+        try expect(@abs(long_run[bin] - average) < 1.0e-6);
+        const expected: f32 = 0.5 / 3.0 + 0.4 * soft + 0.1 * average;
+        try expect(@abs(probability - expected) < 1.0e-5);
+        total += probability;
+    }
+    try expect(@abs(total - 1.0) < 1.0e-5);
+    try expect(probabilities[2] > probabilities[1] and probabilities[1] > probabilities[0]);
+    // A finished episode: terminated, its return alone; cut short, its tail too.
+    var terminated_estimate: f32 = 10.0;
+    updateStartBinReturn(.{}, &terminated_estimate, 4.0, 0.5, 20.0, 0.99, true);
+    try expect(@abs(terminated_estimate - (0.8 * 10.0 + 0.2 * 4.0)) < 1.0e-5);
+    var cut_estimate: f32 = 10.0;
+    updateStartBinReturn(.{}, &cut_estimate, 4.0, 0.5, 20.0, 0.99, false);
+    const tail: f32 = @exp(20.0 * @log(@as(f32, 0.99))) * 0.5 / 0.01;
+    try expect(@abs(cut_estimate - (0.8 * 10.0 + 0.2 * (4.0 + tail))) < 1.0e-3);
 }

@@ -4905,7 +4905,7 @@ pub const mixer = struct {
                 const sample_count: u32 = @intCast(samples.len);
                 const room_address: usize = workletAllocateSamples(samples_id, sample_count);
                 if (room_address == 0) {
-                    zm.assertUnreachable(@src(), "the worklet had no room for samples {d}", .{samples_id});
+                    assertUnreachable(@src(), "the worklet had no room for samples {d}", .{samples_id});
                 }
                 const room: [*]f32 = @ptrFromInt(room_address);
                 @memcpy(room[0..samples.len], samples);
@@ -5745,7 +5745,7 @@ pub const mixer = struct {
             ) void {
                 const host: *RendererHost = @ptrCast(@alignCast(context));
                 host.acceptSamples(samples_id, samples) catch {
-                    zm.assertUnreachable(@src(), "the host had no room for samples {d}", .{samples_id});
+                    assertUnreachable(@src(), "the host had no room for samples {d}", .{samples_id});
                 };
             }
 
@@ -6114,7 +6114,7 @@ pub const mixer = struct {
 
             fn sendSamples(samples_id: SamplesId, samples: []const f32) void {
                 host.acceptSamples(samples_id, samples) catch {
-                    zm.assertUnreachable(@src(), "the stand-in had no room for samples {d}", .{samples_id});
+                    assertUnreachable(@src(), "the stand-in had no room for samples {d}", .{samples_id});
                 };
             }
 
@@ -6165,7 +6165,7 @@ pub const mixer = struct {
                 render_callback: contract.AudioRenderCallback,
             ) contract.AudioFormat {
                 _ = render_callback;
-                zm.assertUnreachable(@src(), "the stand-in's forwarding started, so its output is not pulled", .{});
+                assertUnreachable(@src(), "the stand-in's forwarding started, so its output is not pulled", .{});
                 return wanted;
             }
 
@@ -6309,7 +6309,7 @@ pub const mixer = struct {
 
             fn sendSamples(samples_id: SamplesId, samples: []const f32) void {
                 host.acceptSamples(samples_id, samples) catch {
-                    zm.assertUnreachable(@src(), "the stand-in had no room for samples {d}", .{samples_id});
+                    assertUnreachable(@src(), "the stand-in had no room for samples {d}", .{samples_id});
                 };
             }
 
@@ -6345,7 +6345,7 @@ pub const mixer = struct {
                 render_callback: contract.AudioRenderCallback,
             ) contract.AudioFormat {
                 _ = render_callback;
-                zm.assertUnreachable(@src(), "the stand-in's forwarding started, so its output is not pulled", .{});
+                assertUnreachable(@src(), "the stand-in's forwarding started, so its output is not pulled", .{});
                 return wanted;
             }
 

@@ -91,6 +91,7 @@ const sac_width: usize = 2 * 4 + 1 + 2;
 const sac_batch_max: usize = 8;
 const isFinite = zm.isFinite;
 const float = zm.float;
+const assertUnreachable = zm.assertUnreachable;
 
 /// PPO's side: sixteen cartpoles on the CPU, their learner's update on the GPU.
 const n_envs: usize = 16;
@@ -345,7 +346,7 @@ fn costOf(s: *const State) mpc.Cost {
 /// Put the pole at `angle` (0 upright, pi hanging) and throw away the plan.
 fn reset(s: *State, angle: f32) void {
     s.data.reset(&s.model);
-    s.data.pos[pole_hinge] = angle;
+    s.data.joint_positions[pole_hinge] = angle;
     rbt.forward(&s.model, &s.data);
     @memset(s.plan.ctrl, 0);
     @memset(s.plan.feedback, 0);
@@ -361,7 +362,7 @@ fn reset(s: *State, angle: f32) void {
 fn resetEnv(s: *State, e: usize) void {
     const d: *rbt.Data = &s.envs[e];
     d.reset(&s.model);
-    d.pos[pole_hinge] = 0.1 * (2.0 * s.rng.random().float(f32) - 1.0);
+    d.joint_positions[pole_hinge] = 0.1 * (2.0 * s.rng.random().float(f32) - 1.0);
     rbt.forward(&s.model, d);
     s.env_steps[e] = 0;
 }
@@ -376,7 +377,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.plan.readLimits(&s.model);
     s.reference = try gpa.alloc(f32, (horizon + 1) * s.plan.nstate);
     @memset(s.reference, 0); // upright, centred, at rest
-    s.applied = try gpa.alloc(f32, s.model.nu);
+    s.applied = try gpa.alloc(f32, s.model.actuator_count);
     @memset(s.applied, 0);
 
     s.budget = 2;
@@ -597,7 +598,7 @@ fn planWithinFrame(s: *State, delta_time: f32) void {
     s.frame_ms += (delta_time * 1000.0 - s.frame_ms) * 0.1;
     // -- * A FAIR SHARE OF THE FRAME --
     // This rule was "add iterations only below 0.7 of the frame target" - which, on a display
-    // locked to vsync, never happens once a learner fills the headroom: on Simon's phone MPC sat
+    // locked to vsync, never happens once a learner fills the headroom: on a phone MPC sat
     // at 1 iteration a frame. Now MPC's budget is MILLISECONDS, steered by the learners' own
     // AIMD (+0.1 ms on time, x0.7 when late), and turned into iterations with the measured cost
     // of one. Two AIMD flows with the same increase and decrease converge to EQUAL shares - the
@@ -613,7 +614,12 @@ fn planWithinFrame(s: *State, delta_time: f32) void {
 }
 
 fn observe(d: *const rbt.Data) [4]f32 {
-    return .{ d.pos[cart_slide], d.pos[pole_hinge], d.vel[cart_slide], d.vel[pole_hinge] };
+    return .{
+        d.joint_positions[cart_slide],
+        d.joint_positions[pole_hinge],
+        d.joint_velocities[cart_slide],
+        d.joint_velocities[pole_hinge],
+    };
 }
 
 fn recordSurvival(s: *State, steps: u32) void {
@@ -634,11 +640,12 @@ fn collectTick(s: *State) void {
         r.logp[row] = s.learner.act(&obs, &action, s.rng.random());
         r.act[row] = action[0];
         r.value[row] = s.learner.value(&obs);
-        d.ctrl[0] = clamp(action[0], -1.0, 1.0);
+        d.controls[0] = clamp(action[0], -1.0, 1.0);
         rbt.step(&s.model, d);
         s.env_steps[e] += 1;
-        const angle: f32 = d.pos[pole_hinge];
-        const failed: bool = !isFinite(angle) or @abs(angle) > fail_angle or @abs(d.pos[cart_slide]) > fail_cart;
+        const angle: f32 = d.joint_positions[pole_hinge];
+        const cart_position: f32 = d.joint_positions[cart_slide];
+        const failed: bool = !isFinite(angle) or @abs(angle) > fail_angle or @abs(cart_position) > fail_cart;
         const capped: bool = !failed and s.env_steps[e] >= episode_cap;
         r.reward[row] = if (failed) 0.0 else 1.0;
         r.terminal[row] = failed;
@@ -766,7 +773,7 @@ fn runPpo(s: *State, delta_time: f32) void {
             collectTick(s);
         } else if (s.training == null) {
             finishRollout(s) catch |err| {
-                zm.assertUnreachable(@src(), "finishing a rollout failed: {t}", .{err});
+                assertUnreachable(@src(), "finishing a rollout failed: {t}", .{err});
             };
         } else {
             break;
@@ -815,11 +822,12 @@ fn sacTick(s: *State) void {
         } else {
             s.sac.act(&obs, &action, random, false);
         }
-        d.ctrl[0] = action[0];
+        d.controls[0] = action[0];
         rbt.step(&s.model, d);
         s.env_steps[e] += 1;
-        const angle: f32 = d.pos[pole_hinge];
-        const failed: bool = !isFinite(angle) or @abs(angle) > fail_angle or @abs(d.pos[cart_slide]) > fail_cart;
+        const angle: f32 = d.joint_positions[pole_hinge];
+        const cart_position: f32 = d.joint_positions[cart_slide];
+        const failed: bool = !isFinite(angle) or @abs(angle) > fail_angle or @abs(cart_position) > fail_cart;
         const capped: bool = !failed and s.env_steps[e] >= episode_cap;
         const next: [4]f32 = observe(d);
         const row: []f32 = s.sac_row;
@@ -830,7 +838,7 @@ fn sacTick(s: *State) void {
         row[10] = if (failed) 1.0 else 0.0;
         if (isFinite(angle)) {
             s.replay.push(row) catch |err| {
-                zm.assertUnreachable(@src(), "the replay refused a row: {t}", .{err});
+                assertUnreachable(@src(), "the replay refused a row: {t}", .{err});
             };
         }
         if (failed or capped) {
@@ -848,7 +856,7 @@ fn sacUpdate(s: *State) void {
     const draw: zn.Rng = .init(@truncate(s.sac_updates *% 2654435761));
     for (0..s.sac.options.batch) |i| {
         s.replay.sample(draw, @intCast(i), s.sac_rows[i * sac_width ..][0..sac_width]) catch |err| {
-            zm.assertUnreachable(@src(), "replay sample failed: {t}", .{err});
+            assertUnreachable(@src(), "replay sample failed: {t}", .{err});
         };
     }
     for (s.sac_next_noise) |*v| {
@@ -926,19 +934,20 @@ fn stTick(s: *State) void {
     for (0..n_envs) |e| {
         const d: *rbt.Data = &s.envs[e];
         if (s.st_steps[e] > 0 and s.st_steps[e] % st_push_every == 0) {
-            d.vel[pole_hinge] += st_push_size * (2.0 * random.float(f32) - 1.0);
+            d.joint_velocities[pole_hinge] += st_push_size * (2.0 * random.float(f32) - 1.0);
             s.st_segments[e] = s.st_next_segment;
             s.st_next_segment += 1;
         }
         const state: st_mod.State4 = observe(d);
         const action: f32 = s.st_host.act(state, true);
         s.st_host.remember(e, state, action, s.st_segments[e]);
-        d.ctrl[0] = action;
+        d.controls[0] = action;
         var failed: bool = false;
         for (0..st_frame_skip) |_| {
             rbt.step(&s.model, d);
-            const angle: f32 = d.pos[pole_hinge];
-            failed = failed or !isFinite(angle) or @abs(angle) > fail_angle or @abs(d.pos[cart_slide]) > fail_cart;
+            const angle: f32 = d.joint_positions[pole_hinge];
+            const cart_position: f32 = d.joint_positions[cart_slide];
+            failed = failed or !isFinite(angle) or @abs(angle) > fail_angle or @abs(cart_position) > fail_cart;
         }
         s.st_steps[e] += 1;
         if (failed or s.st_steps[e] >= st_cap) {
@@ -1073,8 +1082,8 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
         u.separator();
         u.text("MPC - in front: planning", .{});
 
-        const angle: f32 = s.data.pos[pole_hinge];
-        u.text("pole {d:>7.3} rad   cart {d:>6.2} m", .{ angle, s.data.pos[cart_slide] });
+        const angle: f32 = s.data.joint_positions[pole_hinge];
+        u.text("pole {d:>7.3} rad   cart {d:>6.2} m", .{ angle, s.data.joint_positions[cart_slide] });
         u.text("motor {d:>6.2}  (limit +-1)", .{s.applied[0]});
         u.separator();
 
@@ -1134,7 +1143,7 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
         if (u.button("shove the pole", .{})) {
             // A disturbance the plan did not see coming, which is what the feedback gain is
             // for. Big enough to be alarming, small enough to be recoverable.
-            s.data.vel[pole_hinge] += 3.5;
+            s.data.joint_velocities[pole_hinge] += 3.5;
         }
     }
     return captured;
@@ -1190,8 +1199,8 @@ fn drawScene(s: *State, gl: *z.WgpuGl) void {
     }
 
     // The robot itself, on top.
-    const x: f32 = s.data.pos[cart_slide];
-    const angle: f32 = s.data.pos[pole_hinge];
+    const x: f32 = s.data.joint_positions[cart_slide];
+    const angle: f32 = s.data.joint_positions[pole_hinge];
     s.transform[0] = mulMat(translation(x, 0, 0), scaling(0.2, 0.1, 0.1));
     z.drawMeshInstanced(gl, &s.cube, &s.transform, cart_col);
     drawPole(s, gl, x, angle, 0.035, pole_col);
@@ -1202,10 +1211,10 @@ fn drawPpo(s: *State, gl: *z.WgpuGl) void {
     s.transform[0] = mulMat(translation(0, -0.06, ppo_depth), scaling(2 * rail_limit, 0.01, 0.06));
     z.drawMeshInstanced(gl, &s.cube, &s.transform, rail_col);
     const d: *const rbt.Data = &s.envs[0];
-    const x: f32 = d.pos[cart_slide];
+    const x: f32 = d.joint_positions[cart_slide];
     s.transform[0] = mulMat(translation(x, 0, ppo_depth), scaling(0.2, 0.1, 0.1));
     z.drawMeshInstanced(gl, &s.cube, &s.transform, ppo_col);
-    drawPoleAt(s, gl, x, ppo_depth, d.pos[pole_hinge], 0.035, pole_col);
+    drawPoleAt(s, gl, x, ppo_depth, d.joint_positions[pole_hinge], 0.035, pole_col);
 }
 
 fn update(f: *z.Frame, s: *State) void {
@@ -1237,7 +1246,7 @@ fn update(f: *z.Frame, s: *State) void {
             // and planning at the display rate. `K_0*dx` is the backward pass's own answer to
             // being somewhere else.
             mpc.feedbackControl(&s.model, &s.data, &s.plan, s.applied);
-            @memcpy(s.data.ctrl, s.applied);
+            @memcpy(s.data.controls, s.applied);
             rbt.step(&s.model, &s.data);
             // ** SHIFT AFTER STEPPING, NOT BEFORE. The plan is indexed from "now"; once the
             // robot has advanced a tick, knot 1 is the new now. Shifting before the step

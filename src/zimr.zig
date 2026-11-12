@@ -481,8 +481,15 @@ pub const robot_lab = @import("robot_lab.zig");
 /// Geno's robot model as `robot_geno.writeModel` makes it - a fixture its tests hold byte-equal to a fresh
 /// build, so pages load the body without re-measuring it.
 pub const robot_geno_model: []const u8 = @embedFile("tests/fixtures/robot/geno.xml");
+/// MuJoCo's humanoid, as MJCF: hinges with ranges, for what Geno's ball joints cannot carry - joint limits.
+pub const robot_humanoid_model: []const u8 = @embedFile("tests/fixtures/robot/humanoid.xml");
+/// Unitree's Go1, as MuJoCo Menagerie writes it: a quadruped on a free root, its collision shapes primitives - the
+/// trunk a box, the legs capsules and cylinders, the feet spheres - and its home pose its first keyframe. Its visual
+/// meshes are not carried: the shapes are what the engines collide and what pages draw.
+pub const robot_go1_model: []const u8 = @embedFile("tests/fixtures/robot/go1/go1.xml");
 /// The networks and the resident data on the GPU: blocks, the feature ring, the reference tables.
 pub const robot_latent_kit = @import("robot_latent_kit.zig");
+pub const kit_mlp = @import("kit_mlp.zig");
 /// SuperTrack's loop with the data and both networks resident on the GPU - what the training page runs.
 pub const robot_track_resident = @import("robot_track_resident.zig");
 /// SuperTrack (a supervised world model + a policy through it) and its kit driver.
@@ -645,6 +652,9 @@ pub const VertexAttr = material.VertexAttribute;
 
 /// `z.Compute(M)` - run a kompute kernel module on the CPU or GPU (runtime toggle).
 pub const Compute = @import("compute_host.zig").Compute;
+/// A field's buffer on the device, and one copy between two pipelines on one device (`compute_host.zig`).
+pub const DeviceField = @import("compute_host.zig").DeviceField;
+pub const copyFieldBetween = @import("compute_host.zig").copyFieldBetween;
 
 /// The jobs `Registry` for a kompute module - DERIVED, so an example that wants the
 /// `.worker` backend configures nothing. The kernel functions, the header type and the

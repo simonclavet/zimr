@@ -648,14 +648,14 @@ fn yUpOf(z_up_point: Vec) Vec {
 fn drawRobot(s: *State, gl: *z.WgpuGl, d: *const rbt.Data, tint: Color) void {
     const m: *const rbt.Model = &s.imported.model;
     const to_y_up: Mat = zm.zUpToYUp();
-    for (0..m.ngeom) |g| {
+    for (0..m.geom_count) |g| {
         const body: u32 = m.geom_body[g];
-        const body_position: Vec = d.body_xpos[body];
-        const body_rot: Quat = d.body_xrot[body];
+        const body_position: Vec = d.body_positions[body];
+        const body_rot: Quat = d.body_orientations[body];
         // The geom in the world: its offset from its body, turned with the body; its rotation, after the body's.
-        const offset_in_world: Vec = zm.rotate(body_rot, m.geom_pos[g]);
+        const offset_in_world: Vec = zm.rotate(body_rot, m.geom_local_position[g]);
         const world_pos: Vec = body_position + offset_in_world;
-        const world_quaternion: Quat = qmul(body_rot, m.geom_rot[g]);
+        const world_quaternion: Quat = qmul(body_rot, m.geom_local_rotation[g]);
         const world_rot: Mat = quatToMat(world_quaternion);
         // The same place in the drawing, where y is up.
         const world_translation: Mat = translation(world_pos[0], world_pos[1], world_pos[2]);
@@ -772,7 +772,7 @@ fn update(f: *z.Frame, s: *State) void {
     // The reference, where training character 0 should be; then the character itself.
     const fleet: *track.Fleet = s.trainer.env.fleet;
     const frame: usize = @min(@as(usize, fleet.frame[0]), s.clip.frame_count - 1);
-    @memcpy(s.ghost.pos, s.clip.pose(frame));
+    @memcpy(s.ghost.joint_positions, s.clip.pose(frame));
     s.ghost.stage = .stale;
     rbt.kinematics(m, &s.ghost);
     drawRobot(s, gl, &s.ghost, s.look.reference);

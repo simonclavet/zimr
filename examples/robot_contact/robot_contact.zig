@@ -299,8 +299,8 @@ fn update(f: *z.Frame, s: *State) void {
     const target: Vec2 = vec2(sweep_from + (sweep_to - sweep_from) * progress, sweep_y);
     s.target = target;
     if (Ik.solve(target)) |angles| {
-        s.data.ctrl[0] = angles[0];
-        s.data.ctrl[1] = angles[1];
+        s.data.controls[0] = angles[0];
+        s.data.controls[1] = angles[1];
     }
 
     s.accumulator += @min(f.time.delta_time, 0.1);
@@ -364,8 +364,8 @@ fn update(f: *z.Frame, s: *State) void {
 
     // Arm.
     {
-        const elbow: Vec = s.data.body_xpos[2];
-        const tip: Vec = elbow + rotate(s.data.body_xrot[2], vec(0, -2.0 * lower_half, 0));
+        const elbow: Vec = s.data.body_positions[2];
+        const tip: Vec = elbow + rotate(s.data.body_orientations[2], vec(0, -2.0 * lower_half, 0));
         gl.line(
             toScreen(origin, scale, vec2(0, 0)),
             toScreen(origin, scale, vec2(elbow[0], elbow[1])),

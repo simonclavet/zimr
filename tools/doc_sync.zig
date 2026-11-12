@@ -51,6 +51,16 @@ const pairs = [_]Pair{
         .srcs = &.{
             "src/robot.zig",
             "src/robot_mpc.zig",
+            // Part VIII, many worlds on the GPU.
+            "src/robotgpu.zig",
+            "src/robotgpu_host.zig",
+            // The programs: which kernels each part of a decision runs, in order.
+            "src/robotgpu_program.zig",
+            // Its checking of the device: the probes' kernels, and the device test's energy.
+            "src/gpu/robotgpu_probe.zig",
+            "tools/vk_host_test.zig",
+            // One device for the physics and the learner: the copy between two pipelines.
+            "src/compute_host.zig",
         },
     },
     .{
@@ -83,6 +93,12 @@ const pairs = [_]Pair{
             "src/zimrphysics.zig",
             "examples/cartpole_duel/cartpole_duel.zig",
             "tools/lafan_db.zig",
+            // Sources the page's folds name, which the list had not yet followed.
+            "src/robot_lab.zig",
+            "src/robot_bmpc_dance.zig",
+            "src/robot_bmpc_kit.zig",
+            "examples/geno_ppo/geno_ppo.zig",
+            "tools/geno_trainer.zig",
         },
     },
 };

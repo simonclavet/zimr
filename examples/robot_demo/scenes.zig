@@ -118,9 +118,9 @@ fn Chain(comptime n: usize, comptime armature: f32) type {
             };
             live.data = try rbt.Data.init(gpa, &live.model);
             // Start off vertical, or nothing interesting happens.
-            live.data.pos[0] = 2.3;
+            live.data.joint_positions[0] = 2.3;
             if (Model.nv > 1) {
-                live.data.pos[1] = -1.5;
+                live.data.joint_positions[1] = -1.5;
             }
             return live;
         }
@@ -208,8 +208,8 @@ const Arm = struct {
             .elapsed = 0,
         };
         live.data = try rbt.Data.init(gpa, &live.model);
-        live.data.pos[0] = 0.6;
-        live.data.pos[1] = -1.0;
+        live.data.joint_positions[0] = 0.6;
+        live.data.joint_positions[1] = -1.0;
         return live;
     }
 
@@ -293,8 +293,8 @@ fn LimitedArm(comptime soft: bool) type {
                 .elapsed = 0,
             };
             live.data = try rbt.Data.init(gpa, &live.model);
-            live.data.pos[0] = 2.0;
-            live.data.pos[1] = -1.6;
+            live.data.joint_positions[0] = 2.0;
+            live.data.joint_positions[1] = -1.6;
             return live;
         }
     };
@@ -347,7 +347,7 @@ const Imu = struct {
             .elapsed = 0,
         };
         live.data = try rbt.Data.init(gpa, &live.model);
-        live.data.pos[0] = 2.4; // well up, so it swings hard through the bottom
+        live.data.joint_positions[0] = 2.4; // well up, so it swings hard through the bottom
         return live;
     }
 
@@ -378,12 +378,12 @@ fn dragOnly(live: *Live, in: Input) void {
     }
     const m: *const rbt.Model = &live.model;
     const d: *rbt.Data = &live.data;
-    const tip: Vec = d.site_xpos[0];
+    const tip: Vec = d.site_positions[0];
     const pull: Vec = (vec(in.target[0], in.target[1], 0) - tip) * splat(25.0);
-    rbt.applyForceAtPoint(m, d, Arm.tip_body, tip, pull, vec(0, 0, 0), live.jac_p, live.jac_r, d.applied_force);
+    rbt.applyForceAtPoint(m, d, Arm.tip_body, tip, pull, vec(0, 0, 0), live.jac_p, live.jac_r, d.applied_joint_forces);
 }
 
-/// Cancel gravity exactly. `bias_force` IS the force needed to hold still, so applying it
+/// Cancel gravity exactly. `bias_joint_forces` IS the force needed to hold still, so applying it
 /// leaves the arm weightless - it stays wherever you leave it, in any pose.
 ///
 /// This is the cheapest genuinely useful thing an engine like this does, and it needs no
@@ -391,16 +391,16 @@ fn dragOnly(live: *Live, in: Input) void {
 fn gravityCompensation(live: *Live, in: Input) void {
     const m: *const rbt.Model = &live.model;
     const d: *rbt.Data = &live.data;
-    @memcpy(d.applied_force, d.bias_force);
+    @memcpy(d.applied_joint_forces, d.bias_joint_forces);
     if (!in.pointing) {
         return;
     }
     // Drag applies a real force AT THE TIP, mapped into joint torques by the Jacobian
     // transpose. With gravity cancelled and almost no damping the arm keeps whatever motion
     // you give it, which is what "weightless" should look and feel like.
-    const tip: Vec = d.site_xpos[0];
+    const tip: Vec = d.site_positions[0];
     const pull: Vec = (vec(in.target[0], in.target[1], 0) - tip) * splat(12.0);
-    rbt.applyForceAtPoint(m, d, Arm.tip_body, tip, pull, vec(0, 0, 0), live.jac_p, live.jac_r, d.applied_force);
+    rbt.applyForceAtPoint(m, d, Arm.tip_body, tip, pull, vec(0, 0, 0), live.jac_p, live.jac_r, d.applied_joint_forces);
 }
 
 /// Jacobian-transpose reach: pull the tip toward the target.
@@ -414,22 +414,22 @@ fn reachToTarget(live: *Live, in: Input) void {
     const d: *rbt.Data = &live.data;
     // Gravity compensation first, so the arm is weightless and the reach is the only force
     // acting. Without it you would be watching a tug-of-war rather than a controller.
-    @memcpy(d.applied_force, d.bias_force);
+    @memcpy(d.applied_joint_forces, d.bias_joint_forces);
     if (!in.pointing) {
         return;
     }
 
-    const tip: Vec = d.site_xpos[0];
+    const tip: Vec = d.site_positions[0];
     const target: Vec = vec(in.target[0], in.target[1], 0);
     const err: Vec = target - tip;
     const gain: f32 = 40.0;
 
     rbt.jacSite(m, d, @as(u32, 0), live.jac_p, null);
-    for (0..m.nv) |i| {
-        d.applied_force[i] += gain * dot3(live.jac_p[i], err);
+    for (0..m.dof_count) |i| {
+        d.applied_joint_forces[i] += gain * dot3(live.jac_p[i], err);
         // A little joint damping, or the arm rings: the transpose controller has no notion
         // of velocity and will happily oscillate forever around its target.
-        d.applied_force[i] -= 1.2 * d.vel[i];
+        d.applied_joint_forces[i] -= 1.2 * d.joint_velocities[i];
     }
 }
 
@@ -438,16 +438,16 @@ fn reachToTarget(live: *Live, in: Input) void {
 fn servoSweep(live: *Live, in: Input) void {
     const s: f32 = @sin(in.elapsed * 0.9);
     const c: f32 = @cos(in.elapsed * 0.6);
-    live.data.ctrl[0] = 0.9 * s;
-    live.data.ctrl[1] = -1.1 * c;
+    live.data.controls[0] = 0.9 * s;
+    live.data.controls[1] = -1.1 * c;
 }
 
 /// Hold a fixed pose against gravity using ONLY the servos - no gravity compensation. The
 /// steady-state droop is the point: a finite-gain servo settles where its restoring torque
 /// balances the load, and that error is a real property of proportional control.
 fn servoHold(live: *Live, _: Input) void {
-    live.data.ctrl[0] = 1.2;
-    live.data.ctrl[1] = -0.8;
+    live.data.controls[0] = 1.2;
+    live.data.controls[1] = -0.8;
 }
 
 // ============================================================================

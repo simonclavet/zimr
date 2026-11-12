@@ -22,7 +22,7 @@
 // `beginTextureMode`/`endTextureMode`. No inline WGSL - both shader pairs are
 // authored in Zig (shadermath) and embedded as build artifacts.
 //
-// CANNOT be verified in the sandbox (no GPU); Simon verifies in the browser.
+// CANNOT be verified in the sandbox (no GPU); verified by eye in the browser.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

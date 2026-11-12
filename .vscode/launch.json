@@ -1993,6 +1993,28 @@
             "smartStep": true
         },
         {
+            "name": "Debug: robotgpu-lab",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/robotgpu_lab/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build robotgpu-lab",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: robotgpu-sidebyside",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/robotgpu_sidebyside/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build robotgpu-sidebyside",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
             "name": "Debug: rock-demo",
             "type": "chrome",
             "request": "launch",
@@ -5577,6 +5599,28 @@
                 "settings set target.use-fast-stepping false"
             ],
             "preLaunchTask": "zig: build robot-sidebyside (windows)"
+        },
+        {
+            "name": "Debug: robotgpu-lab (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/robotgpu_lab.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build robotgpu-lab (windows)"
+        },
+        {
+            "name": "Debug: robotgpu-sidebyside (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/robotgpu_sidebyside.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build robotgpu-sidebyside (windows)"
         },
         {
             "name": "Debug: rock-demo (windows)",
