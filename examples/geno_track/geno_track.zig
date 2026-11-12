@@ -435,7 +435,7 @@ fn step(s: *State) !void {
 
 /// The reference's pose on the current frame - what the servo is pulling toward.
 fn placeReference(s: *State) void {
-    @memcpy(s.reference.pos, target(s));
+    @memcpy(s.reference.joint_positions, target(s));
     s.reference.stage = .stale;
     rbt.kinematics(&s.imported.model, &s.reference);
 }
@@ -571,7 +571,7 @@ fn update(f: *z.Frame, s: *State) void {
     placeReference(s);
     // Fallen: the reference LOST, by the one failure criterion (`geno.FailureCheck`: the task's own) - which ends
     // the run, unless the ragdoll is being watched on the floor. The hips' distance is still shown.
-    s.off = length3(s.data.body_positions[s.hips] - s.reference.body_xpos[s.hips]);
+    s.off = length3(s.data.body_positions[s.hips] - s.reference.body_positions[s.hips]);
     const clip: *const dance.Clip = &s.clips[s.which];
     if (s.reset_on_fall and s.check.lost(&s.imported.model, &s.data, clip, s.frame)) {
         endRun(s, true);

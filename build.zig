@@ -1282,6 +1282,26 @@ fn addBridgeSource(b: *std.Build, to_c: *Run) void {
     to_c.addFileInput(b.path("src/types.zig"));
 }
 
+/// The shared browser runtime, `zimr.js`: src/bridge.zig transpiled to JavaScript, bare (no `--html`).
+///
+/// THE ONE TRANSPILE OF THE BRIDGE BEHIND EVERY PAGE: a served page loads this file as `../zimr.js` and a
+/// single-file page inlines it (`bridgePage`), so no page's own run transpiles anything. Every page that inlines it
+/// calls this, and each call adds the same two Run steps again; they hash alike, so the cache runs each once, as it
+/// does the worker's and the worklet's programs. `b` must be zimr's own builder: the bridge source is resolved
+/// against it.
+fn runtimeJs(b: *std.Build, c2js_exe: *Compile) LazyPath {
+    const to_c: *Run = b.addSystemCommand(&.{
+        b.graph.zig_exe,       "build-obj",
+        "-ofmt=c",             "-target",
+        "wasm32-freestanding", "-OReleaseSmall",
+    });
+    addBridgeSource(b, to_c);
+    const bridge_c: LazyPath = to_c.addPrefixedOutputFileArg("-femit-bin=", "bridge.c");
+    const to_js: *Run = b.addRunArtifact(c2js_exe);
+    to_js.setStdIn(.{ .lazy_path = bridge_c });
+    return to_js.captureStdOut(.{});
+}
+
 /// Install a built wgpu example's wasm into the shared smoke dir
 /// (zig-out/wgpu-smoke/web/) and wire it onto `wgpu_smoke_install`, but
 /// only when it passes -Dfocus.  `under` is the wasm basename (e.g.
@@ -1307,15 +1327,8 @@ fn addWgpuSmoke(
     // smoke-install step, so one command produces wasm AND page:
     //   zig build smoke-install -Dfocus=<name>
     //   -> zig-out/bridge-pages/<name>.html
-    // The bridge.c Run is byte-identical across examples, so the build
-    // cache collapses it to a single transpile per session.
-    const to_c: *Run = b.addSystemCommand(&.{
-        b.graph.zig_exe,       "build-obj",
-        "-ofmt=c",             "-target",
-        "wasm32-freestanding", "-OReleaseSmall",
-    });
-    addBridgeSource(b, to_c);
-    const bridge_c: LazyPath = to_c.addPrefixedOutputFileArg("-femit-bin=", "bridge.c");
+    // The runtime in it is `runtimeJs`'s one transpile, inlined: this run
+    // only encodes the wasm and wraps the two.
     const to_html: *Run = b.addRunArtifact(c2js_exe);
     to_html.addArgs(&.{
         "--html",
@@ -1324,7 +1337,8 @@ fn addWgpuSmoke(
         "--wasm-embed",
     });
     to_html.addFileArg(exe.getEmittedBin());
-    to_html.setStdIn(.{ .lazy_path = bridge_c });
+    to_html.addArg("--main-js-embed");
+    to_html.addFileArg(runtimeJs(b, c2js_exe));
     const page: LazyPath = to_html.captureStdOut(.{});
     const page_inst: *InstallFile =
         b.addInstallFile(page, b.fmt("bridge-pages/{s}.html", .{under}));
@@ -1567,9 +1581,14 @@ fn buildPageAudioJs(b: *std.Build, c2js_exe: *Compile) LazyPath {
     return to_js.captureStdOut(.{});
 }
 
-/// The single-file bridge page for a wasm app: src/bridge.zig -> C ->
-/// c2js --html --wasm-embed. The bridge transpile Run is byte-identical
-/// across examples, so the build cache collapses it to one execution.
+/// A wasm app's page, as c2js --html writes it: the single-file page, or its served twin (`streaming`).
+///
+/// NO PAGE'S RUN TRANSPILES THE BRIDGE. A page's main script is `runtimeJs`'s `zimr.js`, made once for the whole
+/// build: the single-file page inlines that file (--main-js-embed) and the served page loads it from one directory
+/// up (--external-js). A page's own run only encodes what the page inlines and wraps it, a fraction of a second,
+/// where each used to transpile the bridge again: 3.4 s of every run's 3.5, about 660 runs in a full web build
+/// (measured Nov 11 2026). The served page's run does not read the app's wasm either, so it is made again only when
+/// what the page itself holds changes: its title, the worker's and the worklet's programs, the kernels.
 fn bridgePage(
     b: *std.Build,
     c2js_exe: *Compile,
@@ -1583,13 +1602,6 @@ fn bridgePage(
     /// `App.fullscreen_button`.
     fullscreen_button: bool,
 ) LazyPath {
-    const to_c: *Run = b.addSystemCommand(&.{
-        b.graph.zig_exe,       "build-obj",
-        "-ofmt=c",             "-target",
-        "wasm32-freestanding", "-OReleaseSmall",
-    });
-    addBridgeSource(b, to_c);
-    const bridge_c: LazyPath = to_c.addPrefixedOutputFileArg("-femit-bin=", "bridge.c");
     const to_html: *Run = b.addRunArtifact(c2js_exe);
     // Full-canvas interactive demo on every page: the fullscreen-toggle button, unless the app leaves it out,
     // no orientation lock (portrait works exactly like landscape).
@@ -1603,10 +1615,12 @@ fn bridgePage(
         // instead of inlining 500KB per page. Needs the dev server.
         to_html.addArgs(&.{ "--wasm-url", b.fmt("{s}.wasm", .{exe.name}), "--external-js", "../zimr.js" });
     } else {
-        // The STANDALONE twin: base64-inline BOTH the wasm and the runtime into one
+        // The STANDALONE twin: inline BOTH the wasm (as base64) and the runtime into one
         // self-contained file that opens straight from file://.
         to_html.addArg("--wasm-embed");
         to_html.addFileArg(exe.getEmittedBin());
+        to_html.addArg("--main-js-embed");
+        to_html.addFileArg(runtimeJs(b, c2js_exe));
     }
     // The kernel wasm rides along on BOTH paths - inlined even on the streamed page,
     // because at ~20 KB it is not worth a second request.
@@ -1626,7 +1640,6 @@ fn bridgePage(
     to_html.addArg("--audio-worklet-js-embed");
     to_html.addFileArg(buildAudioWorkletJs(b, c2js_exe));
 
-    to_html.setStdIn(.{ .lazy_path = bridge_c });
     return to_html.captureStdOut(.{});
 }
 
@@ -1772,22 +1785,6 @@ fn finishWgpuApp(
     web_builds.put(name, web_build) catch @panic("oom");
     _ = buildaux_exe;
     return exe;
-}
-
-/// The shared browser runtime, `zimr.js`: src/bridge.zig transpiled to JavaScript, bare (no
-/// `--html`). Every served page loads it as `../zimr.js` (see `bridgePage`). `b` must be
-/// zimr's own builder: the bridge source is resolved against it.
-fn runtimeJs(b: *std.Build, c2js_exe: *Compile) LazyPath {
-    const to_c: *Run = b.addSystemCommand(&.{
-        b.graph.zig_exe,       "build-obj",
-        "-ofmt=c",             "-target",
-        "wasm32-freestanding", "-OReleaseSmall",
-    });
-    addBridgeSource(b, to_c);
-    const bridge_c: LazyPath = to_c.addPrefixedOutputFileArg("-femit-bin=", "bridge.c");
-    const to_js: *Run = b.addRunArtifact(c2js_exe);
-    to_js.setStdIn(.{ .lazy_path = bridge_c });
-    return to_js.captureStdOut(.{});
 }
 
 /// ROBOT.ZIG AND PROFILER.ZIG AS MODULES OF THEIR OWN. The engine imports them by name, and so do robotgpu's kernels
@@ -6179,8 +6176,8 @@ pub fn build(b: *std.Build) void {
     // Shared runtime JS: ONE web/zimr.js (the transpiled bridge) that every
     // served example page references via <script src="../zimr.js"> (--external-js
     // in bridgePage), so the ~500KB runtime is fetched + cached ONCE instead of
-    // inlined into every page. Built exactly like bridgePage but WITHOUT --html
-    // - bare JS to stdout. The standalone twin still inlines (file://-portable).
+    // inlined into every page. c2js WITHOUT --html - bare JS to stdout. The
+    // standalone twin inlines this same file (--main-js-embed; file://-portable).
     {
         const zimr_js: LazyPath = runtimeJs(b, c2js_exe);
         const zimr_js_install: *InstallFile = b.addInstallFileWithDir(zimr_js, web_install, "zimr.js");

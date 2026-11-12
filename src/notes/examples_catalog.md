@@ -442,7 +442,7 @@ The `pipeline_*` series is a progression; each step adds one WebGPU mechanism.
 | music_streaming | 3 | 157 | Stream an OGG: play, pause, seek, volume. | KEEP |
 | audio_scale_star | — | 1104 | The notes and chords of the major scale drawn around a circle in thirds, so that every chord is three neighbours: its root, its third and its fifth. | KEEP |
 | audio_scale_star_hands | — | 7385 | A scale played with two hands - the left chooses a chord, the right plays its notes - and shown several ways at once, each degree of the scale in its own colour in every key. | KEEP |
-| magic_isomorphic_keyboard | — | 1093 | The computer keyboard laid out as the Tonnetz - right a fifth up, down-right a major third up, up-right a minor third up - so each row is the circle of fifths, a major scale is seven keys in a row, every major chord a downward triangle of keys and every minor chord an upward one, the tonic on F. Being built in stages (`src/notes/magic_isomorphic_keyboard_plan.md`). | KEEP |
+| magic_isomorphic_keyboard | — | 1598 | The computer keyboard laid out as the Tonnetz - right a fifth up, down-right a major third up, up-right a minor third up - so each row is the circle of fifths, a major scale is seven keys in a row, every major chord a downward triangle of keys and every minor chord an upward one, the tonic on F; the left side's keys play the scale's chords, one key each, softly under the right hand; the scale chosen in the header. Being built in stages (`src/notes/magic_isomorphic_keyboard_plan.md`). | KEEP |
 
 ### Networking
 

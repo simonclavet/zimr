@@ -1657,7 +1657,7 @@ test "robot_dance: following the retargeted dance LOCALLY - fixed base, both eng
                 model: *const rbt.Model,
                 q: []const f32,
             ) void {
-                @memcpy(t.pos, q);
+                @memcpy(t.joint_positions, q);
                 t.stage = .stale;
                 rbt.forward(model, t);
             }
@@ -1679,14 +1679,14 @@ test "robot_dance: following the retargeted dance LOCALLY - fixed base, both eng
             try zimrphysics.step(&world, dt);
         }
         rbt.forward(m, &fixed.data);
-        const b1_reduced: f32 = worstBodyErrorDeg(m, fixed.data.body_orientations, target.body_xrot);
+        const b1_reduced: f32 = worstBodyErrorDeg(m, fixed.data.body_orientations, target.body_orientations);
         var b1_maximal: f32 = -1.0;
         if (maybe_ragdoll) |*r| {
             for (1..m.body_count) |b| {
                 rots[b] = r.robotBodyFrame(&world, b).rot;
             }
-            rots[0] = target.body_xrot[0];
-            b1_maximal = worstBodyErrorDeg(m, rots, target.body_xrot);
+            rots[0] = target.body_orientations[0];
+            b1_maximal = worstBodyErrorDeg(m, rots, target.body_orientations);
         }
 
         // -- B2: follow the clip from frame 0's pose. --
@@ -1713,13 +1713,14 @@ test "robot_dance: following the retargeted dance LOCALLY - fixed base, both eng
             // Measured against where the clip is NOW - the frame just driven toward.
             setTarget(&target, m, next);
             rbt.forward(m, &fixed.data);
-            var errors: [2]f32 = .{ worstBodyErrorDeg(m, fixed.data.body_orientations, target.body_xrot), -1.0 };
+            const reduced_error: f32 = worstBodyErrorDeg(m, fixed.data.body_orientations, target.body_orientations);
+            var errors: [2]f32 = .{ reduced_error, -1.0 };
             if (maybe_ragdoll) |*r| {
                 for (1..m.body_count) |b| {
                     rots[b] = r.robotBodyFrame(&world, b).rot;
                 }
-                rots[0] = target.body_xrot[0];
-                errors[1] = worstBodyErrorDeg(m, rots, target.body_xrot);
+                rots[0] = target.body_orientations[0];
+                errors[1] = worstBodyErrorDeg(m, rots, target.body_orientations);
             }
             for (0..2) |side| {
                 sum[side] += errors[side];
@@ -2752,7 +2753,7 @@ test "robot_dance: T1b - the retarget through the old mirror cannot fit; through
             if (@abs(values[f]) < least) {
                 continue;
             }
-            @memcpy(kin.pos, clip.pose(f));
+            @memcpy(kin.joint_positions, clip.pose(f));
             kin.stage = .stale;
             rbt.kinematics(m, &kin);
             judged[ci] += 1;

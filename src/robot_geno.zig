@@ -2947,10 +2947,10 @@ pub const Planner = struct {
         var stand_height: f32 = 0.0;
         if (options.posture_gate) {
             posture_body = imported.bodyIndex(options.posture_body) orelse return error.NoBody;
-            @memcpy(probe.pos, m.reference_joint_positions);
+            @memcpy(probe.joint_positions, m.reference_joint_positions);
             probe.stage = .stale;
             rbt.kinematics(m, &probe);
-            stand_height = probe.body_xpos[posture_body][2] - rbt.lowestPoint(m, &probe);
+            stand_height = probe.body_positions[posture_body][2] - rbt.lowestPoint(m, &probe);
         }
         return .{
             .gpa = gpa,
@@ -3070,17 +3070,17 @@ pub const Planner = struct {
         g: usize,
     ) Stray {
         const m: *const rbt.Model = self.run.model;
-        @memcpy(self.probe.pos, clip.targets[g * m.coordinate_count ..][0..m.coordinate_count]);
+        @memcpy(self.probe.joint_positions, clip.targets[g * m.coordinate_count ..][0..m.coordinate_count]);
         self.probe.stage = .stale;
         rbt.kinematics(m, &self.probe);
         const hips: u32 = self.run.hips;
         const sim_root: Quat = conjugate(self.run.data.body_orientations[hips]);
-        const ref_root: Quat = conjugate(self.probe.body_xrot[hips]);
+        const ref_root: Quat = conjugate(self.probe.body_orientations[hips]);
         var sum: f32 = 0.0;
         var heights: f32 = 0.0;
         for (1..m.body_count) |b| {
             const here: Vec = rotate(sim_root, self.run.data.body_positions[b] - self.run.data.body_positions[hips]);
-            const there: Vec = rotate(ref_root, self.probe.body_xpos[b] - self.probe.body_xpos[hips]);
+            const there: Vec = rotate(ref_root, self.probe.body_positions[b] - self.probe.body_positions[hips]);
             sum += length3(here - there);
             if (self.height_set.len == 0) {
                 heights += self.heightGap(b);
@@ -3096,7 +3096,7 @@ pub const Planner = struct {
         const world_up: Vec = vec(0.0, 0.0, 1.0);
         const tilt: f32 = length3(rotate(sim_root, world_up) - rotate(ref_root, world_up));
         const up_apart: f32 = @max(0.0, tilt - self.options.up_tolerance);
-        const off: Vec = self.run.data.body_positions[hips] - self.probe.body_xpos[hips];
+        const off: Vec = self.run.data.body_positions[hips] - self.probe.body_positions[hips];
         return .{
             .shape = sum / float(m.body_count - 1),
             .across = length3(vec(off[0], off[1], 0.0)),
@@ -3114,7 +3114,7 @@ pub const Planner = struct {
         if (!self.options.posture_gate) {
             return 1.0;
         }
-        const height: f32 = self.probe.body_xpos[self.posture_body][2] / self.stand_height;
+        const height: f32 = self.probe.body_positions[self.posture_body][2] / self.stand_height;
         const span: f32 = self.options.posture_high - self.options.posture_low;
         return clamp((self.options.posture_high - height) / span, 0.0, 1.0);
     }
@@ -3122,7 +3122,7 @@ pub const Planner = struct {
     /// One body's height off the reference's (metres), beyond the tolerance - read after `strayFrom` has posed
     /// the probe at the reference.
     fn heightGap(self: *const Planner, b: usize) f32 {
-        const gap: f32 = @abs(self.run.data.body_positions[b][2] - self.probe.body_xpos[b][2]);
+        const gap: f32 = @abs(self.run.data.body_positions[b][2] - self.probe.body_positions[b][2]);
         return @max(0.0, gap - self.options.height_tolerance);
     }
 
@@ -4290,8 +4290,8 @@ test "robot_geno: R6b, R6c, R7 - the model: assembled in the bind pose, standing
     // degrees from their rest, so it does not end flat-footed.)
     var rest: rbt.Data = try .init(gpa, &imported.model);
     defer rest.deinit();
-    @memcpy(rest.pos, imported.model.reference_joint_positions);
-    @memset(rest.vel, 0);
+    @memcpy(rest.joint_positions, imported.model.reference_joint_positions);
+    @memset(rest.joint_velocities, 0);
     rest.stage = .stale;
     rbt.kinematics(&imported.model, &rest);
     const feet = [_][]const u8{ "LeftFoot", "RightFoot" };
@@ -4306,7 +4306,7 @@ test "robot_geno: R6b, R6c, R7 - the model: assembled in the bind pose, standing
             }
         } else return error.FootNotParsed;
         foot_box[k] = robot.geoms[parsed.geom_start].rot;
-        foot_normal[k] = rotate(conjugate(qmul(rest.body_xrot[foot_body[k]], foot_box[k])), vec(0, 0, 1));
+        foot_normal[k] = rotate(conjugate(qmul(rest.body_orientations[foot_body[k]], foot_box[k])), vec(0, 0, 1));
     }
     var worst_tilt: f32 = 0.0;
 
@@ -6023,7 +6023,7 @@ test "robot_geno: the clip's per-frame lift - frames resting on the floor, not i
             const raise: Raise = restClipOnFloor(m, &probe, &clip, 0.001);
             var deepest: f32 = 1.0;
             for (0..clip.frame_count) |f| {
-                @memcpy(probe.pos, clip.targets[f * clip.nq ..][0..clip.nq]);
+                @memcpy(probe.joint_positions, clip.targets[f * clip.nq ..][0..clip.nq]);
                 probe.stage = .stale;
                 rbt.kinematics(m, &probe);
                 deepest = @min(deepest, rbt.lowestPoint(m, &probe));
@@ -6206,13 +6206,13 @@ test "robot_geno: D1 - predictive sampling over the true simulator, against the 
             {
                 const m: *const rbt.Model = run.model;
                 const g: usize = @min(from + planned, clip.frame_count - 1);
-                @memcpy(lift_probe.pos, clip.targets[g * m.coordinate_count ..][0..m.coordinate_count]);
+                @memcpy(lift_probe.joint_positions, clip.targets[g * m.coordinate_count ..][0..m.coordinate_count]);
                 lift_probe.stage = .stale;
                 rbt.kinematics(m, &lift_probe);
-                const hips_off: Vec = run.data.body_positions[run.hips] - lift_probe.body_xpos[run.hips];
+                const hips_off: Vec = run.data.body_positions[run.hips] - lift_probe.body_positions[run.hips];
                 // The pose in each root's OWN frame - heading removed - and the heading difference itself.
                 const sim_root: Quat = run.data.body_orientations[run.hips];
-                const ref_root: Quat = lift_probe.body_xrot[run.hips];
+                const ref_root: Quat = lift_probe.body_orientations[run.hips];
                 var shape: f32 = 0.0;
                 for (1..m.body_count) |b| {
                     const here: Vec = rotate(
@@ -6221,7 +6221,7 @@ test "robot_geno: D1 - predictive sampling over the true simulator, against the 
                     );
                     const there: Vec = rotate(
                         conjugate(ref_root),
-                        lift_probe.body_xpos[b] - lift_probe.body_xpos[run.hips],
+                        lift_probe.body_positions[b] - lift_probe.body_positions[run.hips],
                     );
                     shape += length3(here - there);
                 }
@@ -7688,8 +7688,8 @@ test "robot_geno: D5 (i) - the teacher's decisions replayed in the trainer's fle
     planner.phase = 0;
     @memset(planner.nominal, 0.0);
     // The fleet's character: the teacher's starting state, exactly.
-    @memcpy(fleet.data[0].pos, run.data.joint_positions);
-    @memcpy(fleet.data[0].vel, run.data.joint_velocities);
+    @memcpy(fleet.data[0].joint_positions, run.data.joint_positions);
+    @memcpy(fleet.data[0].joint_velocities, run.data.joint_velocities);
     // Placing a state is a SHOVE: the fleet skips `forward` while the data's stage watermark says its derived
     // quantities are current, so they must be recomputed here - or the first step collides and servos with the
     // body poses of the fleet's own random reset (measured: a 10 mm jolt at step 1).
@@ -8099,10 +8099,10 @@ test "robot_geno: ON.2.1 - feasibility: can the servo alone, or the teacher, tra
         defer gpa.free(heights);
         var lowest: usize = 0;
         for (heights, 0..) |*height, f| {
-            @memcpy(probe.pos, clip.pose(f)[clip.nq - m.coordinate_count ..]);
+            @memcpy(probe.joint_positions, clip.pose(f)[clip.nq - m.coordinate_count ..]);
             probe.stage = .stale;
             rbt.kinematics(m, &probe);
-            height.* = probe.body_xpos[head][2];
+            height.* = probe.body_positions[head][2];
             if (height.* < heights[lowest]) {
                 lowest = f;
             }
@@ -8196,10 +8196,10 @@ test "robot_geno: ON.2.1b - the floor-to-crouch lift: a search problem or a phys
     const heights: []f32 = try gpa.alloc(f32, clip.frame_count);
     defer gpa.free(heights);
     for (heights, 0..) |*height, f| {
-        @memcpy(probe.pos, clip.pose(f)[clip.nq - m.coordinate_count ..]);
+        @memcpy(probe.joint_positions, clip.pose(f)[clip.nq - m.coordinate_count ..]);
         probe.stage = .stale;
         rbt.kinematics(m, &probe);
-        height.* = probe.body_xpos[head][2];
+        height.* = probe.body_positions[head][2];
     }
     // The armature each freedom was built with, restored at the end.
     const built: []f32 = try gpa.dupe(f32, m.dof_armature);
@@ -8338,10 +8338,10 @@ fn floorLift(
     const heights: []f32 = try gpa.alloc(f32, clip.frame_count);
     defer gpa.free(heights);
     for (heights, 0..) |*height, f| {
-        @memcpy(probe.pos, clip.pose(f)[clip.nq - m.coordinate_count ..]);
+        @memcpy(probe.joint_positions, clip.pose(f)[clip.nq - m.coordinate_count ..]);
         probe.stage = .stale;
         rbt.kinematics(m, &probe);
-        height.* = probe.body_xpos[head][2];
+        height.* = probe.body_positions[head][2];
     }
     // Every ball joint, for the variants that plan them all.
     var every: ArrayList([]const u8) = .empty;

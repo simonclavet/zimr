@@ -629,7 +629,7 @@ pub fn main() !void {
             defer cube_model.deinit();
             var cd: rbt.Data = try .init(gpa, &cube_model);
             defer cd.deinit();
-            cd.pos[2] = 1.0;
+            cd.joint_positions[2] = 1.0;
             rbt.forward(&cube_model, &cd);
 
             var cube_world: zimrphysics.World = try .init(gpa, 16);
@@ -665,7 +665,7 @@ pub fn main() !void {
             // lint:off debug-print: a native benchmark whose output is the deliverable.
             std.debug.print(
                 "   cube drop:    start z 1.000  final z {d:.3}  contact {d}/1000  peak swept {d}\n",
-                .{ cd.pos[2], cube_contacts, cube_swept },
+                .{ cd.joint_positions[2], cube_contacts, cube_swept },
             );
         }
 
@@ -694,7 +694,7 @@ pub fn main() !void {
             defer proxy.deinit(&world);
             proxy.listen(&world);
 
-            var grounded_low: f32 = d2.body_xpos[1][2];
+            var grounded_low: f32 = d2.body_positions[1][2];
             var grounded_contacts: usize = 0;
             // The number `dance_track` panics on in wasm: what `harvest` is asked to push,
             // against `Data.contacts.len`. If the peak exceeds the capacity, the assert in
@@ -707,7 +707,7 @@ pub fn main() !void {
                 try zimrphysics.step(&world, 1.0 / 240.0);
                 proxy.harvest(&d2);
                 rbt.step(&imported.model, &d2);
-                const z2: f32 = d2.body_xpos[1][2];
+                const z2: f32 = d2.body_positions[1][2];
                 if (z2 < grounded_low) {
                     grounded_low = z2;
                 }
@@ -727,7 +727,7 @@ pub fn main() !void {
             // lint:off debug-print: a native benchmark whose output is the deliverable.
             std.debug.print(
                 "   with ground:  final z {d:.3}  contact {d}/2000  peak swept {d} + events {d} of {d}\n",
-                .{ d2.body_xpos[1][2], grounded_contacts, peak_swept, peak_events, d2.contacts.len },
+                .{ d2.body_positions[1][2], grounded_contacts, peak_swept, peak_events, d2.contacts.len },
             );
         }
 

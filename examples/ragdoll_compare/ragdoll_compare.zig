@@ -231,7 +231,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.paused = false;
     s.want_reset = false;
     s.target = try rbt.Data.init(gpa, &s.imported.model);
-    @memcpy(s.target.pos, s.imported.model.reference_joint_positions);
+    @memcpy(s.target.joint_positions, s.imported.model.reference_joint_positions);
     _ = rmj.applyKeyframe(&s.imported.model, &s.target, s.robot.keyframes[0]);
     s.target.stage = .stale;
     rbt.forward(&s.imported.model, &s.target);
@@ -284,7 +284,7 @@ fn holdTorques(s: *State) void {
         const q: u32 = m.joint_first_coordinate[j];
         const v: u32 = m.joint_first_dof[j];
         s.a_des[v] = rmx.stableSpringAccel(
-            s.target.pos[q] - s.data.joint_positions[q],
+            s.target.joint_positions[q] - s.data.joint_positions[q],
             s.data.joint_velocities[v],
             hold_frequency_reduced,
             1.0,

@@ -828,3 +828,51 @@ Nov 1 - Simon's drawing, a new layout to focus on: fifths to the right, major th
   * A slip on the way: a shell concatenation wrote over the example with its tests alone (its head file had not been
     written); the head was rebuilt from this session's record of the file, every edit since included, and re-checked
     (fmt, ast-check, lint). A copy of the result is kept in the session's scratchpad.
+
+Nov 11 - R1 measured, and the left side's chord keys (Simon's design, outside the stages above):
+  * R1, KEY ROLLOVER, is real on both of Simon's machines. On the ASUS TUF Gaming A18 a key of a held chord never
+    arrives: a browser page outside zimr, listening to `keydown` alone, misses it too, so neither the events nor the
+    mixer drop it. Read on the way: the Win32 queue holds 512 events a pass and drops only repeats; the page's bridge
+    hands each `keydown` straight to `onInput`; the renderer has 16 instrument voices and a 256-event note queue, and
+    the demo sends at most 12 sound keys. Filter Keys and Sticky Keys are off; no rollover setting was found for the
+    laptop. Which chords fail was not recorded.
+  * Simon's answer: the keyboard's left side plays chords - the keys up to the column of 5, T, G and B whose note is
+    one of the scale's play the scale's triad on it (in C major: major on C, F, G; minor on D, E, A; diminished on B),
+    its notes a strum apart (0.1 s), as on the two-handed star. C major only for now; the scale's dropdown comes
+    later. Whether it replaces 3.6 (b), Shift for a key's chord, is not decided.
+  * Written, not compiled here: `KeyNotes`, `chordOfKey`, `notesOfKey` (pure, tested); `HeldNotes` - what a key or a
+    pointer holds, how many of its notes have started and when the hold began - in place of a key's one sound key;
+    `beginHold`, `startDueNotes` (once a frame), `endHold` (a waiting note never starts). The left side's keys outside
+    the scale play their own note. Chord keys are drawn green, named as chords (`chordLetterName`), and a key is lit
+    while held or while every note it plays sounds (`isKeyLit`).
+  * Tests (3 more, 10 in all): the fifteen chord keys of C major spelled by hand, with a major, a minor and the
+    diminished quality; the left side's sharps and the right side's keys playing one note; G major, the chords moved
+    with the scale.
+  * The headless check plays the right side - I, O, K, H, U alone, then I O K (C), I 9 O (Cm), J I K (Am), O P L (G) -
+    then the seven chord keys F, D, G, X, V, C, B; F held while K plays its third; D let go before its third, under H.
+  * Checked here: `zig fmt --check`, `zig ast-check`, and zimrlint with every rule (60), clean - and red on a copy
+    with a planted finding. Not run: the tests, the headless check, the app.
+
+Nov 11 - the scale's dropdowns and the chords' volume (Simon: "add the scale dropdown like in the star demo, and make
+the volume of the chord tweakable also, so we can play on top of it with the right hand"):
+  * The header is the engine's UI now (`buildHeader`, as star_hands' header): the tonic's dropdown, the mode's - each
+    mode in two lines, its name and alterations, then its seven chords on the tonic - and a slider, "chords". The
+    drawn title is gone; the legend sits under the controls. The tonic stays on F: a scale picked moves every key's
+    note, and the left side's chords are the new scale's. What is held sounds on as struck until let go.
+  * The mode's label is written by `music_theory.writeModeLabel` (new, with `mode_label_capacity` and
+    `mode_label_columns`, and a test of C Dorian's and G Ionian's labels); star_hands' `writeModeLabels` calls it too,
+    its own copy of the writing removed - one copy, as D2 asks.
+  * Two strengths, as star_hands' thumb and full (`HoldLayer`, `SoundKeyHolds`, `strengthOfSoundKey`,
+    `soundStrengthChange`): a chord's key holds its notes softly, at `State.chord_volume` of a note's strength (0.5
+    at the start; star_hands' chooser chord starts at 0.3 - 0.5 keeps the headless check's notes well above its
+    threshold of presence, and is Simon's to tune by ear); a note's own key holds it fully. A note a chord holds,
+    pressed by the right hand, is struck again fully; let go, it rings on as struck. A chord takes the volume of the
+    moment it is struck.
+  * A note of the scale is named as the scale spells it (`noteNameIn`): Bb in F major, not A#.
+  * The pointers leave the controls alone: a list open (or open at the last frame), or a press in the header, lets
+    go of what the pointers hold and makes them wait until lifted (`readPointers`) - the slider's handle dragged over
+    the keys plays none.
+  * The headless check's chord windows are 0.1150 now (three notes at half strength); F held with K: 0.1626.
+  * Checked here: `zig fmt --check`, `zig ast-check` and zimrlint with every rule on the keyboard, music_theory and
+    star_hands - clean (it caught `releasePointers` declared after its use, moved). Not run: the tests
+    (`test-music-theory`, `test-magic-isomorphic-keyboard`), the headless checks, either app.

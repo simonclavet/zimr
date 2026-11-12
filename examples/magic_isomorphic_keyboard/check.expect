@@ -1,9 +1,13 @@
 # magic_isomorphic_keyboard, checked headless (`zig build magic-isomorphic-keyboard-check`), in C major with the tonic C
 # on the F key and fifths along the rows: for each window of the run, in seconds, the pitch classes that must sound -
 # every other must be silent - and the loudness, as RMS, the left channel. A Shepard note at velocity 0.5, centred, is
-# 0.3755 x 0.5 x 0.7071 = 0.1328; three of them, whose partials all differ, 0.1328 x sqrt 3 = 0.2300. Each window
-# starts 0.1 s into a hold and ends 0.05 s before its release. The keys: F, G, V, H, D alone, then the triangles
-# F G V (C major), F T G (C minor), J I K (A minor), G H B (G major).
+# 0.3755 x 0.5 x 0.7071 = 0.1328; three of them, whose partials all differ, 0.1328 x sqrt 3 = 0.2300. A chord's key
+# strikes its notes at half that strength (the chords' volume, 0.5 at the start): a note 0.0664, a chord's three
+# 0.0664 x sqrt 3 = 0.1150.
+#
+# The right side's keys, a note each, pressed at 0.1 s and every second after, held 0.4 s: each window starts 0.1 s
+# into a hold and ends 0.05 s before its release. I, O, K, H, U alone, then the triangles I O K (C major), I 9 O
+# (C minor), J I K (A minor), O P L (G major).
 #
 # start  end    notes      rms
 0.20   0.45   C          0.1328
@@ -15,3 +19,23 @@
 6.20   6.45   C D# G     0.2300
 7.20   7.45   A C E      0.2300
 8.20   8.45   G B D      0.2300
+#
+# The left side's chords, a key each, pressed at 9.1 s and every 1.2 s after, held 0.6 s: the root starts at the press,
+# the third 0.1 s later, the fifth 0.2 s; each window starts 0.35 s into a hold, all three sounding, and ends 0.05 s
+# before its release. F (C major), D (F major), G (G major), X (D minor), V (E minor), C (A minor), B (B diminished).
+9.45   9.65   C E G      0.1150
+10.65  10.85  F A C      0.1150
+11.85  12.05  G B D      0.1150
+13.05  13.25  D F A      0.1150
+14.25  14.45  E G B      0.1150
+15.45  15.65  A C E      0.1150
+16.65  16.85  B D F      0.1150
+#
+# F held from 17.5 s to 18.5 s, C major; K, its third E, pressed at 17.8 s and let go at 18.0 s. K strikes E again,
+# fully; after K's release the chord still holds E, which rings on as K struck it: C and G at the chord's strength,
+# E at full - the square root of 0.1328 squared and twice 0.0664 squared, 0.1626.
+18.15  18.45  C E G      0.1626
+#
+# D, F major, pressed at 19.1 s and let go at 19.15 s, before its third: its A and C never start, and its root F dies
+# away - half every 0.05 s. H, D, held from 19.15 s to 19.95 s: by 19.6 s it sounds alone.
+19.60  19.90  D          0.1328

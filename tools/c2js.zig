@@ -33,6 +33,10 @@
 //!   * `c_to_js            < in.c > out.js`     plain filter, no map.
 //!   * `c_to_js <basename> < in.c > out.js`     also writes "<basename>.js.map"
 //!                                              and appends a sourceMappingURL.
+//!   * `c_to_js --html ... < in.c > out.html`   the JS wrapped in a page (`main`).
+//!     A page may name a main script that is JavaScript already - a file an
+//!     earlier run made (`--main-js-embed`) or a URL (`--external-js`) - and
+//!     that run transpiles nothing and reads nothing from stdin.
 //!   * Uses std.Io (File/Dir via init.io) for all I/O, so it builds and runs on
 //!     Linux and Windows alike. main takes `std.process.Init` (Zig master).
 //!   * All allocation is from one ArenaAllocator freed at exit: the transpiler
@@ -10524,11 +10528,6 @@ fn buildSourceMap(
     return json.toOwnedSlice(gpa);
 }
 
-// Program entry - wires the whole pipeline together. Arena-allocate everything,
-// read C from stdin, preprocess, tokenize (tagging each token with its C line
-// for the source map), then build a Transpiler and run it. Afterwards write the
-// JS to stdout, and if a basename arg was passed, also write "<name>.js.map" and
-// append a //# sourceMappingURL.
 /// The command line (std's cli, `src/command_line.zig`). Without arguments it is a plain stdin -> stdout filter
 /// (the smoke, canary and corpus steps rely on it). The hand parser this replaced already refused unknown flags,
 /// but its usage text had fallen three options behind, and a value-taking option at the end of the line (`--title`
@@ -10546,6 +10545,7 @@ const C2jsArgs = struct {
     @"--worker-js-embed": ?[]const u8 = null,
     @"--audio-worklet-js-embed": ?[]const u8 = null,
     @"--external-js": ?[]const u8 = null,
+    @"--main-js-embed": ?[]const u8 = null,
     basename: ?[]const u8 = null,
 };
 
@@ -10562,41 +10562,31 @@ const c2js_cli: cli.Config(C2jsArgs) = .{
         .@"--wasm-url" = .{ .description = "set window.WASM_URL, so the page fetches a sibling .wasm" },
         .@"--wasm-embed" = .{ .description = "base64-inline this .wasm into the page (self-contained)" },
         .@"--kernel-wasm-embed" = .{ .description = "base64-inline the compute kernels' .wasm too" },
-        // Injected as window.ZIMR_WORKER_JS: the bridge is compiled in six places, and threading a module import
-        // through all of them to carry one string would be worse than reading a global.
+        // Injected as window.ZIMR_WORKER_JS: the bridge is compiled in several places (`addBridgeSource`'s callers in
+        // build.zig), and threading a module import through all of them to carry one string would be worse than
+        // reading a global.
         .@"--worker-js-embed" = .{ .description = "inline the jobs worker's program (itself made by this tool)" },
         .@"--audio-worklet-js-embed" = .{ .description = "inline the audio worklet's program (made by this tool too)" },
+        // With --html, either of the next two names a main script that is JavaScript already, and the run then
+        // reads no C: see `main`.
         .@"--external-js" = .{ .description = "reference a shared runtime JS by URL instead of inlining it" },
+        .@"--main-js-embed" = .{ .description = "inline this file, an earlier run's JS, as the page's main script" },
         .basename = .{ .description = "also write <basename>.js.map and point the JS at it" },
     },
 };
 
-pub fn main(init: std.process.Init) !void {
-    // Use an arena for all transpiler allocations: it frees everything at once on
-    // deinit, so we don't fight the (leak-checking) default gpa over the fact that
-    // this tool intentionally never frees individual allocations.
-    var arena: ArenaAllocator = .init(init.gpa);
-    defer arena.deinit();
-    const gpa: Allocator = arena.allocator();
-
-    const args: C2jsArgs = cli.args(&init, C2jsArgs, c2js_cli);
+/// THE TRANSPILE: the C on stdin to JavaScript, the whole pipeline. Read the C, preprocess, tokenize (tagging each
+/// token with its C line for the source map), then build a Transpiler and run it; refuse output holding anything it
+/// could not model; and if a basename was given, also write "<name>.js.map" and append a //# sourceMappingURL.
+///
+/// A whole program's worth of work - 3.4 s for the bridge, 1.86 MB of C, on Nov 11 2026 - so `main` calls it only for
+/// a run whose JavaScript does not exist yet.
+fn transpileStdin(io: Io, gpa: Allocator, args: C2jsArgs) ![]const u8 {
     const base_opt: ?[]const u8 = args.basename;
     const minify_out: bool = args.@"--min";
     const safe_heap: bool = args.@"--safe";
-    const html_out: bool = args.@"--html";
-    const fullscreen_landscape: bool = args.@"--fullscreen-landscape";
-    const fullscreen_button: bool = !args.@"--no-fullscreen-button";
-    const title_opt: ?[]const u8 = args.@"--title";
-    const wasm_url_opt: ?[]const u8 = args.@"--wasm-url";
-    const wasm_embed_opt: ?[]const u8 = args.@"--wasm-embed";
-    const kernel_wasm_opt: ?[]const u8 = args.@"--kernel-wasm-embed";
-    const worker_js_opt: ?[]const u8 = args.@"--worker-js-embed";
-    const audio_worklet_js_opt: ?[]const u8 = args.@"--audio-worklet-js-embed";
-    const external_js_opt: ?[]const u8 = args.@"--external-js";
 
-    // Args are parsed (so --help / bad-flag errors never blocked on a stdin
-    // read). Now read the C and transpile it.
-    const input: []u8 = try readAllStdin(gpa, init.io);
+    const input: []u8 = try readAllStdin(gpa, io);
     const pp: Preprocessed = try preprocess(gpa, input);
 
     // tokenize, tagging each token with its 1-based line in the C source so the
@@ -10645,7 +10635,7 @@ pub fn main(init: std.process.Init) !void {
         while (indexOfPos(u8, t.out.items, at_from, open)) |at| {
             const body_at: usize = at + open.len;
             const close: usize = indexOfPos(u8, t.out.items, body_at, "*/") orelse t.out.items.len;
-            try writeAllStderr(init.io, try allocPrint(
+            try writeAllStderr(io, try allocPrint(
                 gpa,
                 "c2js: FATAL: unmodeled C construct '{s}' lowered to a constant\n",
                 .{t.out.items[body_at..close]},
@@ -10654,11 +10644,11 @@ pub fn main(init: std.process.Init) !void {
             at_from = close;
         }
         for (t.diags.items) |d| {
-            try writeAllStderr(init.io, try allocPrint(gpa, "c2js: FATAL: {s}\n", .{d}));
+            try writeAllStderr(io, try allocPrint(gpa, "c2js: FATAL: {s}\n", .{d}));
         }
         count += t.diag_count;
         if (count > 0) {
-            try writeAllStderr(init.io, try allocPrint(
+            try writeAllStderr(io, try allocPrint(
                 gpa,
                 "c2js: {d} unmodeled construct(s) — teach c2js these before shipping\n",
                 .{count},
@@ -10679,7 +10669,7 @@ pub fn main(init: std.process.Init) !void {
             pp.src,
             t.line_map.items,
         );
-        try writeFile(init.io, map_name, map);
+        try writeFile(io, map_name, map);
         // append the sourceMappingURL comment (basename of the map path)
         var bn: []const u8 = map_name;
         if (std.mem.lastIndexOfScalar(u8, map_name, '/')) |slash| {
@@ -10689,7 +10679,46 @@ pub fn main(init: std.process.Init) !void {
         try t.emit(tail);
     }
 
-    const js_out: []u8 = if (minify_out) try minify(gpa, t.out.items) else t.out.items;
+    return if (minify_out) try minify(gpa, t.out.items) else t.out.items;
+}
+
+/// Program entry: get the run's JavaScript, then write it to stdout as it is or, with --html, as a page around it.
+pub fn main(init: std.process.Init) !void {
+    // Use an arena for all transpiler allocations: it frees everything at once on
+    // deinit, so we don't fight the (leak-checking) default gpa over the fact that
+    // this tool intentionally never frees individual allocations.
+    var arena: ArenaAllocator = .init(init.gpa);
+    defer arena.deinit();
+    const gpa: Allocator = arena.allocator();
+
+    const args: C2jsArgs = cli.args(&init, C2jsArgs, c2js_cli);
+    const html_out: bool = args.@"--html";
+    const fullscreen_landscape: bool = args.@"--fullscreen-landscape";
+    const fullscreen_button: bool = !args.@"--no-fullscreen-button";
+    const title_opt: ?[]const u8 = args.@"--title";
+    const wasm_url_opt: ?[]const u8 = args.@"--wasm-url";
+    const wasm_embed_opt: ?[]const u8 = args.@"--wasm-embed";
+    const kernel_wasm_opt: ?[]const u8 = args.@"--kernel-wasm-embed";
+    const worker_js_opt: ?[]const u8 = args.@"--worker-js-embed";
+    const audio_worklet_js_opt: ?[]const u8 = args.@"--audio-worklet-js-embed";
+    const external_js_opt: ?[]const u8 = args.@"--external-js";
+    const main_js_embed_opt: ?[]const u8 = args.@"--main-js-embed";
+
+    // Args are parsed (so --help / bad-flag errors never blocked on a stdin read). Now the run's JavaScript.
+    //
+    // ONLY A RUN WHOSE JAVASCRIPT DOES NOT EXIST YET TRANSPILES. The build makes two pages per app, and the main
+    // script of every one is the same bridge: transpiling it again inside each page's run was 3.4 s of that run's
+    // 3.5, about 660 times in a full web build (measured Nov 11 2026). So a page names a main script that is
+    // JavaScript already, and its run reads no C at all: a file an earlier run made (--main-js-embed), inlined as
+    // it is, or a URL the page loads it from (--external-js), which leaves the page no script to hold. Given both,
+    // the URL wins, as it does where the page is written below. Given neither, the C on stdin is the script.
+    const page_loads_its_main_script: bool = html_out and external_js_opt != null;
+    const js_out: []const u8 = if (page_loads_its_main_script)
+        ""
+    else if (main_js_embed_opt) |main_js_path|
+        try readFileAlloc(init.io, gpa, main_js_path)
+    else
+        try transpileStdin(init.io, gpa, args);
     if (html_out) {
         // Minimal page: the document body is built by the Zig program itself (DOM
         // construction), so the skeleton just hosts the script and boots it via

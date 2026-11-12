@@ -192,7 +192,7 @@ pub const Ragdoll = struct {
         return self.handles[part].index();
     }
 
-    /// The world pose of a part's robot-body frame - what `rbt.Data.body_xpos`/`body_orientations`
+    /// The world pose of a part's robot-body frame - what `rbt.Data.body_positions`/`body_orientations`
     /// would say for the same body.
     pub fn bodyFrame(
         self: *const Ragdoll,

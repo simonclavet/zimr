@@ -762,7 +762,7 @@ fn update(f: *z.Frame, s: *State) void {
     // The camera follows training character 0, whom the dance carries around the room: it orbits his root.
     const root_body: usize = 1;
     const shown_character: *const rbt.Data = &s.trainer.env.fleet.data[0];
-    const root_position: Vec = shown_character.body_xpos[root_body];
+    const root_position: Vec = shown_character.body_positions[root_body];
     s.cam.target = yUpOf(root_position);
     const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.5, .max_distance = 10.0 });
     z.beginMode3D(gl, cam);

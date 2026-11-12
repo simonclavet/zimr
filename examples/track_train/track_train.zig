@@ -371,7 +371,7 @@ fn drawScene(s: *State, f: *z.Frame) void {
     const m: *const rbt.Model = &s.imported.model;
     const fleet: *track.Fleet = s.learner.fleet;
     const frame: usize = @min(@as(usize, fleet.frame[0]), s.clip.frame_count - 1);
-    @memcpy(s.ghost.pos, s.clip.pose(frame));
+    @memcpy(s.ghost.joint_positions, s.clip.pose(frame));
     s.ghost.stage = .stale;
     rbt.kinematics(m, &s.ghost);
     drawRobot(s, gl, &s.ghost, ref_col);

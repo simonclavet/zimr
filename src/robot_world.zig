@@ -638,8 +638,8 @@ pub fn Planner(comptime M: type) type {
             for (0..samples) |s| {
                 // Put the scratch simulator exactly where the real one is, then live out this
                 // sample's plan in it.
-                @memcpy(self.data.joint_positions, fleet.data[env].pos);
-                @memcpy(self.data.joint_velocities, fleet.data[env].vel);
+                @memcpy(self.data.joint_positions, fleet.data[env].joint_positions);
+                @memcpy(self.data.joint_velocities, fleet.data[env].joint_velocities);
                 self.data.stage = .stale;
                 rbt.forward(m, &self.data);
                 @memcpy(self.applied, fleet.applied_actions[env * action_size ..][0..action_size]);

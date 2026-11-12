@@ -190,19 +190,19 @@ fn drawSceneA(f: *z.Frame, s: *State, dt: f32) void {
     const w: f32 = float(s.rt_a.width);
     const h: f32 = float(s.rt_a.height);
     for (&s.discs) |*d| {
-        d.joint_positions += d.joint_velocities * splat2(dt);
-        if (d.joint_positions[0] < d.radius or d.joint_positions[0] > w - d.radius) {
-            d.joint_velocities[0] = -d.joint_velocities[0];
-            d.joint_positions[0] = clamp(d.joint_positions[0], d.radius, w - d.radius);
+        d.pos += d.vel * splat2(dt);
+        if (d.pos[0] < d.radius or d.pos[0] > w - d.radius) {
+            d.vel[0] = -d.vel[0];
+            d.pos[0] = clamp(d.pos[0], d.radius, w - d.radius);
         }
-        if (d.joint_positions[1] < d.radius or d.joint_positions[1] > h - d.radius) {
-            d.joint_velocities[1] = -d.joint_velocities[1];
-            d.joint_positions[1] = clamp(d.joint_positions[1], d.radius, h - d.radius);
+        if (d.pos[1] < d.radius or d.pos[1] > h - d.radius) {
+            d.vel[1] = -d.vel[1];
+            d.pos[1] = clamp(d.pos[1], d.radius, h - d.radius);
         }
     }
     z.beginTextureMode(f.gl, s.rt_a, .{ .r = 18, .g = 20, .b = 30, .a = 255 });
     for (s.discs) |d| {
-        f.gl.circle(d.joint_positions, d.radius, .{ .color = d.color });
+        f.gl.circle(d.pos, d.radius, .{ .color = d.color });
     }
     z.endTextureMode(f.gl);
 }

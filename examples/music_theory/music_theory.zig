@@ -711,6 +711,51 @@ pub fn writeAlterations(buffer: []u8, mode: Mode) []const u8 {
     return buffer[0..alterations_length];
 }
 
+/// The room one mode's label takes in the mode dropdown's list (`writeModeLabel`): a line of its name and
+/// alterations, and a line of seven chord names of at most five bytes each - a letter, two accidentals at most and a
+/// degree sign of two.
+pub const mode_label_capacity: usize = 96;
+
+/// How many columns the first line of a mode's label spans: its name at the left, its alterations at the right - in
+/// a monospaced font the alterations then line up down the list.
+pub const mode_label_columns: usize = 28;
+
+/// Writes a mode's label for the mode dropdown's list into `buffer`, in two lines: the mode's name with the notes it
+/// alters from the major scale at the right (`writeAlterations`), the line `columns` wide where they fit; then its
+/// seven chords on the tonic `tonic_letter` with `tonic_accidental` - C Dorian's are Cm, Dm, Eb, F, Gm, A diminished
+/// and Bb. `buffer` holds `mode_label_capacity` bytes or more.
+pub fn writeModeLabel(
+    buffer: []u8,
+    tonic_letter: u8,
+    tonic_accidental: i8,
+    mode: Mode,
+    columns: usize,
+) []const u8 {
+    const scale: Scale = .ofTonic(tonic_letter, tonic_accidental, mode);
+    var alteration_buffer: [32]u8 = undefined;
+    const alterations: []const u8 = writeAlterations(&alteration_buffer, mode);
+    const name: []const u8 = listed_mode_names[@backingInt(mode)];
+    const gap: usize = @max(2, columns -| (name.len + alterations.len));
+    var label_length: usize = 0;
+    @memcpy(buffer[0..name.len], name);
+    label_length += name.len;
+    @memset(buffer[label_length..][0..gap], ' ');
+    label_length += gap;
+    @memcpy(buffer[label_length..][0..alterations.len], alterations);
+    label_length += alterations.len;
+    buffer[label_length] = '\n';
+    label_length += 1;
+    for (scale.chords, 0..) |chord, chord_index| {
+        var name_buffer: [8]u8 = undefined;
+        const chord_name: []const u8 = chordLetterName(&name_buffer, &scale, chord);
+        const separator: []const u8 = if (chord_index == 0) "" else " ";
+        const room: []u8 = buffer[label_length..];
+        const written: []const u8 = bufPrint(room, "{s}{s}", .{ separator, chord_name }) catch break;
+        label_length += written.len;
+    }
+    return buffer[0..label_length];
+}
+
 // ---- Naming the chord ----
 
 /// A set of pitch classes - the twelve notes of the octave, C to B, without regard to which octave - as twelve bits:
@@ -1176,6 +1221,16 @@ test "music_theory: a song's key and a mode's alterations, as the options write 
     try expectEqualStrings("b3 b7", writeAlterations(&buffer, .dorian));
     try expectEqualStrings("b2 b3 b5 b6 b7", writeAlterations(&buffer, .locrian));
     try expectEqualStrings("b3 b6", writeAlterations(&buffer, .harmonic_minor));
+}
+
+test "music_theory: a mode's label is its name and alterations across 28 columns, then its chords on the tonic" {
+    var buffer: [mode_label_capacity]u8 = undefined;
+    // "Dorian" is 6 columns and "b3 b7" 5: 17 spaces between them fill the 28.
+    const c_dorian_label: []const u8 = "Dorian                 b3 b7\nCm Dm Eb F Gm A\u{B0} Bb";
+    try expectEqualStrings(c_dorian_label, writeModeLabel(&buffer, 0, 0, .dorian, mode_label_columns));
+    // The major scale alters nothing - a dash: "Ionian", 21 spaces, the dash.
+    const g_ionian_label: []const u8 = "Ionian                     -\nG Am Bm C D Em F#\u{B0}";
+    try expectEqualStrings(g_ionian_label, writeModeLabel(&buffer, 4, 0, .ionian, mode_label_columns));
 }
 
 test "music_theory: a song's tonic among the twelve offered" {

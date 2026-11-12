@@ -4139,10 +4139,10 @@ test "robot_track: the servo on a fixed base - computed torque against the PD la
             @memcpy(rig.data.applied_joint_forces, torque);
             rbt.step(m, &rig.data);
             rbt.forward(m, &rig.data);
-            @memcpy(target.pos, next);
+            @memcpy(target.joint_positions, next);
             target.stage = .stale;
             rbt.kinematics(m, &target);
-            const off: f32 = dance.worstBodyErrorDeg(m, rig.data.body_orientations, target.body_xrot);
+            const off: f32 = dance.worstBodyErrorDeg(m, rig.data.body_orientations, target.body_orientations);
             worst[law] = @max(worst[law], off);
             mean[law] += off / float(clip.frame_count - 2);
         }
@@ -5027,10 +5027,10 @@ test "robot_track: skipping a forward pass that is already current changes nothi
     }
     try expect(careful.episodes == quick.episodes and careful.episodes > 0);
     for (careful.data, quick.data) |a, b| {
-        for (a.pos, b.pos) |x, y| {
+        for (a.joint_positions, b.joint_positions) |x, y| {
             try expect(x == y);
         }
-        for (a.vel, b.vel) |x, y| {
+        for (a.joint_velocities, b.joint_velocities) |x, y| {
             try expect(x == y);
         }
     }
@@ -5146,17 +5146,17 @@ test "robot_track: a push changes the whole body's velocity by its speed, in its
     const fleet: *Fleet = try .init(gpa, m, &clips, .{ .envs = 1, .capacity = 16 });
     defer fleet.deinit();
     fleet.startAt(0, 0, 10);
-    const before: []f32 = try gpa.dupe(f32, fleet.data[0].vel);
+    const before: []f32 = try gpa.dupe(f32, fleet.data[0].joint_velocities);
     defer gpa.free(before);
     const segment_before: u32 = fleet.segment[0];
     // Zero: nothing moves.
     fleet.push(0, 0, 1.0);
-    try expectEqualSlices(f32, before, fleet.data[0].vel);
+    try expectEqualSlices(f32, before, fleet.data[0].joint_velocities);
     // 1.5 m/s a quarter turn round: along y, the whole body - only the root's linear velocity changes.
     fleet.push(0, 1.5, pi / 2.0);
-    try expectApproxEqAbs(before[0], fleet.data[0].vel[0], 1e-6);
-    try expectApproxEqAbs(before[1] + 1.5, fleet.data[0].vel[1], 1e-6);
-    try expectEqualSlices(f32, before[2..], fleet.data[0].vel[2..]);
+    try expectApproxEqAbs(before[0], fleet.data[0].joint_velocities[0], 1e-6);
+    try expectApproxEqAbs(before[1] + 1.5, fleet.data[0].joint_velocities[1], 1e-6);
+    try expectEqualSlices(f32, before[2..], fleet.data[0].joint_velocities[2..]);
     // Each push begins a new segment.
     try expect(fleet.segment[0] != segment_before);
 }

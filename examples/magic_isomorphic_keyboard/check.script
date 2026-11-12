@@ -1,5 +1,8 @@
-// magic_isomorphic_keyboard: five keys alone, then four triangles of keys, in C major with the tonic C on the F key
-// and fifths along the rows; each held 0.4 s with 0.6 s of silence after, and the sound saved.
+// magic_isomorphic_keyboard: in C major with the tonic C on the F key and fifths along the rows - five keys of the
+// right side alone, then four triangles of them, each held 0.4 s with 0.6 s of silence after; then the left side's
+// seven chords, a key each, held 0.6 s - its third starts 0.1 s after its root, its fifth 0.2 s, each at half a
+// note's strength, the chords' volume - with 0.6 s of silence after; then a chord's key held while a key of the right
+// side plays one of its notes, fully; then a chord's key let go before its third starts; and the sound saved.
 // `zig build magic-isomorphic-keyboard-check` runs it headless and checks the sound against check.expect
 // (`tools/sound_capture_check.zig`). It first presses the start screen's button, in the middle of the 1000 x 560
 // window, within the six frames before the first key.
@@ -8,48 +11,48 @@
 .{ .advance = 1 }
 .{ .release = .left }
 .{ .advance = 5 }
-// the F key: the tonic, C
-.{ .key_down = .f }
+// the I key, four right of F and one up: C, as F plays on the right side
+.{ .key_down = .i }
 .{ .advance = 24 }
-.{ .key_up = .f }
+.{ .key_up = .i }
 .{ .advance = 36 }
-// G, right of F: a fifth up, G
-.{ .key_down = .g }
+// O, right of I: a fifth up, G
+.{ .key_down = .o }
 .{ .advance = 24 }
-.{ .key_up = .g }
+.{ .key_up = .o }
 .{ .advance = 36 }
-// V, down-right of F: a major third up, E
-.{ .key_down = .v }
+// K, down-right of I: a major third up, E
+.{ .key_down = .k }
 .{ .advance = 24 }
-.{ .key_up = .v }
+.{ .key_up = .k }
 .{ .advance = 36 }
-// H, two right of F: two fifths up, D
+// H, right of G: D
 .{ .key_down = .h }
 .{ .advance = 24 }
 .{ .key_up = .h }
 .{ .advance = 36 }
-// D, left of F: a fifth down, F
-.{ .key_down = .d }
+// U, left of I: a fifth down, F
+.{ .key_down = .u }
 .{ .advance = 24 }
-.{ .key_up = .d }
+.{ .key_up = .u }
 .{ .advance = 36 }
-// F G V, a downward triangle: C major, I
-.{ .key_down = .f }
-.{ .key_down = .g }
-.{ .key_down = .v }
+// I O K, a downward triangle: C major, I
+.{ .key_down = .i }
+.{ .key_down = .o }
+.{ .key_down = .k }
 .{ .advance = 24 }
-.{ .key_up = .f }
-.{ .key_up = .g }
-.{ .key_up = .v }
+.{ .key_up = .i }
+.{ .key_up = .o }
+.{ .key_up = .k }
 .{ .advance = 36 }
-// F T G, an upward triangle: C minor, its parallel
-.{ .key_down = .f }
-.{ .key_down = .t }
-.{ .key_down = .g }
+// I 9 O, an upward triangle: C minor, its parallel
+.{ .key_down = .i }
+.{ .key_down = .nine }
+.{ .key_down = .o }
 .{ .advance = 24 }
-.{ .key_up = .f }
-.{ .key_up = .t }
-.{ .key_up = .g }
+.{ .key_up = .i }
+.{ .key_up = .nine }
+.{ .key_up = .o }
 .{ .advance = 36 }
 // J I K, an upward triangle: A minor, vi
 .{ .key_down = .j }
@@ -60,14 +63,68 @@
 .{ .key_up = .i }
 .{ .key_up = .k }
 .{ .advance = 36 }
-// G H B, a downward triangle: G major, V
-.{ .key_down = .g }
-.{ .key_down = .h }
-.{ .key_down = .b }
+// O P L, a downward triangle: G major, V
+.{ .key_down = .o }
+.{ .key_down = .p }
+.{ .key_down = .l }
 .{ .advance = 24 }
+.{ .key_up = .o }
+.{ .key_up = .p }
+.{ .key_up = .l }
+.{ .advance = 36 }
+// the left side's chords, one key each. F: C major, I
+.{ .key_down = .f }
+.{ .advance = 36 }
+.{ .key_up = .f }
+.{ .advance = 36 }
+// D: F major, IV
+.{ .key_down = .d }
+.{ .advance = 36 }
+.{ .key_up = .d }
+.{ .advance = 36 }
+// G: G major, V
+.{ .key_down = .g }
+.{ .advance = 36 }
 .{ .key_up = .g }
-.{ .key_up = .h }
+.{ .advance = 36 }
+// X: D minor, ii
+.{ .key_down = .x }
+.{ .advance = 36 }
+.{ .key_up = .x }
+.{ .advance = 36 }
+// V: E minor, iii
+.{ .key_down = .v }
+.{ .advance = 36 }
+.{ .key_up = .v }
+.{ .advance = 36 }
+// C: A minor, vi
+.{ .key_down = .c }
+.{ .advance = 36 }
+.{ .key_up = .c }
+.{ .advance = 36 }
+// B: B diminished, vii
+.{ .key_down = .b }
+.{ .advance = 36 }
 .{ .key_up = .b }
+.{ .advance = 36 }
+// F held, C major; K, its third E, pressed 0.3 s in - E struck again, fully - and let go 0.2 s later: E sounds on,
+// held by the chord
+.{ .key_down = .f }
+.{ .advance = 18 }
+.{ .key_down = .k }
+.{ .advance = 12 }
+.{ .key_up = .k }
+.{ .advance = 30 }
+.{ .key_up = .f }
+.{ .advance = 36 }
+// D, F major, let go after 0.05 s, before its third: only its root has started, and its third and fifth never do.
+// H, D, held from then for 0.8 s: once the root has died away, D sounds alone
+.{ .key_down = .d }
+.{ .advance = 3 }
+.{ .key_up = .d }
+.{ .key_down = .h }
+.{ .advance = 48 }
+.{ .key_up = .h }
 .{ .advance = 36 }
 .{ .capture_audio_to = "zig-out/headless/magic_isomorphic_keyboard_check.wav" }
 .quit

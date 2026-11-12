@@ -165,8 +165,7 @@ const ListedTonic = music_theory.ListedTonic;
 const listed_tonics = music_theory.listed_tonics;
 const listed_tonic_names = music_theory.listed_tonic_names;
 const songKeyTonic = music_theory.songKeyTonic;
-const listed_mode_names = music_theory.listed_mode_names;
-const writeAlterations = music_theory.writeAlterations;
+const writeModeLabel = music_theory.writeModeLabel;
 const PitchClassSet = music_theory.PitchClassSet;
 const interval_names = music_theory.interval_names;
 const ChordName = music_theory.ChordName;
@@ -3256,34 +3255,19 @@ fn updatePedals(f: *z.Frame, s: *State) void {
 }
 
 /// Writes the header's mode list for the tonic chosen (`State.mode_labels`), each label two lines: the mode's name
-/// with the notes it alters from the major scale at the right (`writeAlterations`), then its seven chords on that
-/// tonic - C Dorian's are Cm, Dm, Eb, F, Gm, A diminished and Bb.
+/// with the notes it alters from the major scale at the right, then its seven chords on that tonic - C Dorian's are
+/// Cm, Dm, Eb, F, Gm, A diminished and Bb (`music_theory.writeModeLabel`, which the magic isomorphic keyboard's
+/// header shares).
 fn writeModeLabels(s: *State) void {
     for (&s.mode_label_buffers, &s.mode_labels, 0..) |*buffer, *label, mode_index| {
         const mode: Mode = @fromBackingInt(@intCast(mode_index));
-        const scale: Scale = .ofTonic(s.chosen_scale.tonic_letter, s.chosen_scale.tonic_accidental, mode);
-        var alteration_buffer: [32]u8 = undefined;
-        const alterations: []const u8 = writeAlterations(&alteration_buffer, mode);
-        const name: []const u8 = listed_mode_names[mode_index];
-        const gap: usize = @max(2, params.limits.mode_label_columns -| (name.len + alterations.len));
-        var label_length: usize = 0;
-        @memcpy(buffer[0..name.len], name);
-        label_length += name.len;
-        @memset(buffer[label_length..][0..gap], ' ');
-        label_length += gap;
-        @memcpy(buffer[label_length..][0..alterations.len], alterations);
-        label_length += alterations.len;
-        buffer[label_length] = '\n';
-        label_length += 1;
-        for (scale.chords, 0..) |chord, chord_index| {
-            var name_buffer: [8]u8 = undefined;
-            const chord_name: []const u8 = chordLetterName(&name_buffer, &scale, chord);
-            const separator: []const u8 = if (chord_index == 0) "" else " ";
-            const room: []u8 = buffer[label_length..];
-            const written: []const u8 = bufPrint(room, "{s}{s}", .{ separator, chord_name }) catch break;
-            label_length += written.len;
-        }
-        label.* = buffer[0..label_length];
+        label.* = writeModeLabel(
+            buffer,
+            s.chosen_scale.tonic_letter,
+            s.chosen_scale.tonic_accidental,
+            mode,
+            params.limits.mode_label_columns,
+        );
     }
 }
 

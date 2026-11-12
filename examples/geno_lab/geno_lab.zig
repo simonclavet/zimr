@@ -1385,7 +1385,7 @@ fn update(f: *z.Frame, s: *State) void {
     if (s.shown) |*shown| {
         const root_body: usize = 1;
         const character: *const rbt.Data = &shown.show.fleet.data[0];
-        const root_position: Vec = character.body_xpos[root_body];
+        const root_position: Vec = character.body_positions[root_body];
         s.cam.target = yUpOf(root_position);
     }
     const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.5, .max_distance = 10.0 });
@@ -1398,7 +1398,7 @@ fn update(f: *z.Frame, s: *State) void {
         const character_frame: usize = fleet.frame[0];
         const last_frame: usize = s.clip.frame_count - 1;
         const frame: usize = @min(character_frame, last_frame);
-        @memcpy(s.ghost.pos, s.clip.pose(frame));
+        @memcpy(s.ghost.joint_positions, s.clip.pose(frame));
         s.ghost.stage = .stale;
         rbt.kinematics(model, &s.ghost);
         drawRobot(gl, model, &s.meshes, &s.transform, &s.ghost, s.look.reference);
