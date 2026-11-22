@@ -41,3 +41,7 @@ reference/
 # sitting in the repo root (1.4 MB) and shipping inside every snapshot zip.
 *.js.map
 /train/
+
+# Training runs' folders (`geno_trainer --run=runs\<name>`): each run's logs, policies and state, local to the machine
+# that trained it.
+/runs/

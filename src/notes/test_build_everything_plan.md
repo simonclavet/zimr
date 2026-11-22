@@ -1,7 +1,7 @@
 # test-everything and build-everything: two commands for all of it (PLAN v10, FINAL Nov 22, D5 revised that day)
 
-Status: **FINAL (Nov 22, Simon: "Agreed, all of it"), NOT implemented.** The eight decisions (section 7) and the
-plan's own proposals (section 8) are agreed. S1 starts only when Simon says so - a final plan is not permission.
+Status (Nov 22, 16:21): **being implemented - S1 to S4 written, S5 next; what remains is the journal's last entry,
+"WHAT REMAINS".** FINAL Nov 22 (Simon: "Agreed, all of it"); D5 revised and D8 dropped the same day (section 7).
 
 build.zig is being edited while this plan is written (it changed at 12:14 on Nov 22), so the plan names what it
 cites - a function, a variable, a step, a comment's words - rather than a line number that moves.
@@ -843,3 +843,38 @@ its Runs are also `test-everything`'s checks, D4), `geno-trainer`, `geno-trainer
 - Nov 22, 16:15: **D8 dropped** (Simon: "Drop it"): every page is smoked once, in the `-Dmode` given;
   `-Dmode=release` smokes the release wasm. Section 3a, S4, D8 (7), section 8's item 8 and appendix A say so. S4 is
   now the shots alone, written at 16:13; its `-Dfocus` note comes with S5's `-Dskip` note. Next: S5.
+- Nov 22, 16:21: **WHAT REMAINS** (Simon: "stop. Just note in the plan of what remains").
+  Done: S1 (verified), S2a-S2d (verified by `help-checks`), S3a-S3b and S4's shots (written; Simon's
+  `zig build test-fast -Dslow-tests` ran the new run names; `zig build help-checks` configured cleanly at 16:20 with
+  them - Simon asked to make sure it compiles: `test-everything` holds 90 members, 35 `(slow tests)` runs, no quick
+  fast-root run, no `gate`/`test`/`test-fast`; `headless-test` waits for its probe; rule 2's list 360). Fixed then:
+  `tier-a-check` (it depends on `test` itself) read as outside once `test-everything` opened `test` - the registry
+  now keeps the steps `holdInPlace` opens (`opened`), and `tierReach` counts them as run. Nothing committed.
+  Not run yet: S2b's four `*-verify` checks with `dag-check`/`dag-report`; `doc-sync` since 14:50; `test-fast`
+  plainly; `build-everything` itself; the end of Simon's `-Dslow-tests` run, whose one failure seen
+  (`robotgpu_tests` `expectWorldsIdentical`, `error.WorldsDiffer`) is another session's uncommitted robotgpu work.
+  **S5, next, nothing written** - the design, worked out: (1) tools/vk_shader_probe.zig gets `--device`: `Probe.open`
+  quiet (the device line in `choosePhysicalDevice` printed only when not probing), exit 0 silently; on failure
+  exit 2 with the reason, the fix and "or pass -Dskip=vulkan-device". (2) build.zig: a `--device` Run of the
+  probe's exe (`has_side_effects`), the registry's probe for `vulkan_device` (an `EnumArray(Need, ?*Step)`). (3)
+  `composeTiers`: a check with a need joins its tier unless `-Dskip` names the need; every direct dependency of it
+  that is a Run (`step.tag == .run`) depends on the need's probe; a build with a need (`gallery-shots`) joins
+  `build-everything` the same way. `audio-scale-star-check` and `magic-isomorphic-keyboard-check` first depend
+  directly on their GPU runs (their direct deps are the sound checks). (4) `-Dskip=<need>[,<need>]`
+  (`vulkan-device`, `vulkan-headers`), an unknown name a Fail; a note - a `has_side_effects` Run of build_note (keep
+  its exe from `addHelpChecks`) - lists what was left out, and with `-Dfocus` "every page but x's in smoke-test";
+  `test-everything` (and `build-everything`, for builds) depend on it. (5) `vk-abi-check`'s Fail message gains "or
+  pass -Dskip=vulkan-headers". (6) vk-host-test's long checks: a second `addVulkanHostTest` with `long_checks`
+  on (it makes no top-level step), its run standing in for `host_test_run` (`standIn`); its timings, printed under
+  `if (test_options.long_checks)` in tools/vk_host_test.zig (~7525, 9358-9721), only under a report option - that
+  file is the robotgpu session's (changed 15:53): coordinate. Seen to fail: the validation layer hidden
+  (`VK_LOADER_LAYERS_DISABLE`) - the probe the one failure, no GPU check run; `-Dskip=vulkan-device` green, the
+  note listing them. Rule 2's list should then fall to 28: the 24 robot `test-<stem>` copies, `corpus-diff` and
+  `check` (each needs 4d's one-sentence copy note), `doc-folds-test` (S7, item 2) and `test-all-examples` (S7, item
+  3); then rule 2 becomes a Fail of its own in `finish`.
+  Then: **S6** - zbuild runs `gate`, `test-everything` and `build-everything` with `--complete` by default (4g);
+  readme.html and claude.md rewritten around the ladder; section 5's stale text (claude.md's `tier-a-check` advice,
+  the `focus` option's description). **S7** - section 5's seven simplifications, in order, each its own green step.
+  **The first full run**, timed per tier, and S3's seen-to-fail there: a slow test made to fail fails
+  `test-everything`, not `gate`. Quiet-on-a-pass candidates noted on the way: `c2js-canary`'s line, `doc-sync`'s
+  two summary lines, `geno-trainer-layout`'s eight, `vk-shader-probe`'s summary.

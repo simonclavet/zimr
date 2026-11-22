@@ -295,6 +295,49 @@ OPEN BESIDE IT:
       yet run again.
     - Turn 3's `zig build test`: one failure, the pages' ring, fixed.
     - The trainer was built for the first check.
+  THE SLOW TESTS (Simon's `zig build test-fast -Dslow-tests`, Nov 22): three failures and three noisy passes,
+    diagnosed by reading the code. NOTHING IS FIXED YET (Simon: "stop. Take note in the plan of what you wanted to
+    fix"). All of them are slow tests, run only under `-Dslow-tests`, so they went stale unseen. Their fix is one small
+    turn, on Simon's go:
+    (1) "the judge's actor - zero weights ARE the servo, ..." (robot_track_resident_tests.zig:352), failed without
+        output.
+        CAUSE: since the slow average (v3's I2, Nov 17) the judge's actor plays `host.judged` (`actOnJudgedFleet`,
+        robot_track_resident.zig:5476-5509), and `init` seeds it from the first readback (`syncMirror`, :2503). The
+        test zeroes only `host.mirror` (:391), so its "zero weights" judgement plays the seeded policy, not the
+        servo. Also, its `host.element_count = @max(learner.data.end, ...)` (:383) can narrow the readback below
+        `params_end`: turn 3 made `data.end` smaller by moving the ring out. `syncMirror` then keeps the old weights
+        (:2986), so "trained ones act" would judge the seeded policy.
+        FIX: zero `host.judged`; widen the readback only, `@max(host.element_count, learner.data.end)`.
+    (2) "a planning character acts from its own plan, at the step the stamp says" (:1515): the slices differ, the
+        actions found about a quarter of those expected.
+        CAUSE: every chosen action reaches the character's slot through the action filter (`giveAction`,
+        robot_track_resident.zig:3243-3270), at `Options.filter`, 0.25 by default since Nov 11 (commit f8fb3101). The
+        test (Oct 31, commit 73b20aa6) compares the slot with the unfiltered policy row plus the plan's correction.
+        FIX: filter the expectation as `giveAction` does - the slot's previous action copied before the step, then
+        blended at `options.filter` (`robot.filterAction`; a plain copy at a share of 1) - and set `host.applied` to the
+        character's slot before `policyRow`, as `computeAction` does (:3095).
+    (3) "planning keeps to its frame - one decision per call, the judge sees the policy alone" (:1622), failed without
+        output: one of its bare `expect`s after six calls of eight steps (`decisions_made > 0`, or `slots[0] !=
+        null`). Which one is not known.
+        CAUSE, probably: the pushed character's first decision, or its slot, no longer falls inside those 48 steps.
+        Its last check has (2)'s filter problem too.
+        FIX: call `act(8, ...)` until a replan has been made while character 0 plans (`decisions_made >= 2`, its slot
+        held), at most 30 calls, each still making at most one decision. Then filter the judged step's expectation
+        as in (2). Replace the bare `expect`s with checks that print their numbers (`report.failure`), so a failure
+        says which one.
+    (4) NOISE: robotgpu_tests' "a world made a copy of another steps as its source does" (robotgpu_tests.zig:2223)
+        passes but prints "joint_positions[0]: world 1 0.1026532, world 2 0.1538313". Its seen-to-fail half expects
+        `error.WorldsDiffer` (:2261), and `expectWorldsIdentical` prints the first difference before it returns that
+        error (:2186, :2208). The comment above the call says world 3 where the call compares world 2.
+        FIX: a quiet form that returns the first difference (or null), printed only by the helper that fails; the
+        test's second half asks the quiet form.
+    (5) NOISE: robot_track's "the recovery probe - a nudge survived more often than a hard push; every loss accounted
+        for" (robot_track.zig:6383) prints its bands with `std.log.warn` (:6412, :6431). It runs in robot_lab's slow
+        tests and in robot_tests' shard 2, which pass.
+        FIX: `report.print`, silent unless `-Dtest-report`.
+        ALSO FOUND: the servo reads "survived 0.00" at 0 m/s as well as at 1.5, with one push a band. So the check that
+        a nudge is survived more often than a hard push holds only as 0 >= 0, and cannot fail as it stands. It needs a
+        setup where the servo survives the nudge (more starts, or the clip not lifted), and an assertion that it does.
   TWO GPUs (V4). Simon's runs go on either of two GPUs, indiscriminately: the RTX 5070 that v1-v3 name, and the
     Windows laptop's NVIDIA GeForce RTX 5060 Laptop GPU (8 GB, 7,899 MB device-local, bindings up to 4 GB). The first
     check ran on the 5060, its buffers 4.6 GB of it (58%), and so did Nov 22's device test with I26's failure. The
@@ -755,3 +798,9 @@ CAPS in T1; the left-out list (section 9). v4 IS FINAL.
     either, one setup for both. Then every decision and choice listed back: "agree".
   - v4 FINAL, the official version. claude.md names the two current plans: this one and the flow-matching plan.
   NEXT, ON SIMON's GO ONLY: 5.1's turn, `stop_after_training_rounds`; then the first check again, to iteration 200.
+
+- Nov 22: THE SLOW TESTS' FAILURES NOTED (section 4, "THE SLOW TESTS"). Simon ran `zig build test-fast -Dslow-tests`:
+  three failures in robot_track_resident_tests, and two tests printing in three passing binaries. Each was traced by
+  reading the code: two stale expectations (the judge plays `host.judged`; the action filter at 0.25 since Nov 11), an
+  unknown bare `expect` in the frame test, and two prints that a passing test must not make. Simon: "stop. Take note
+  in the plan of what you wanted to fix" - so no code changed. NEXT: their fix, one turn, on Simon's go.
