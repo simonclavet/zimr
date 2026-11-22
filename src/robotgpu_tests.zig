@@ -8,7 +8,9 @@ const zm = @import("zm");
 /// The MJCF importer, as a module: its own tests stay in its own roots.
 const robot_import = @import("robot_import");
 const robotgpu = @import("robotgpu.zig");
+const report = robot_import.report;
 const kuka = @import("tests/fixtures/robot/kuka_iiwa.zig");
+const sites_and_activations_arm = @import("tests/fixtures/robot/sites_and_activations_arm.zig");
 
 const Allocator = std.mem.Allocator;
 const Wyhash = std.hash.Wyhash;
@@ -193,10 +195,89 @@ test "robotgpu: an arena too small for its arrays is refused by the arena's name
     try expectError(robotgpu.LayoutError.ModelConstantsTooSmall, robotgpu.layoutFor(geno, .{ .model_f = 10 }));
 }
 
+/// THE TRAINER's ARENA LENGTHS, in its two builds (build.zig's `addGenoTrainer`): a desktop GPU's, and the portable
+/// ones every device binds - imported by path beside the tests' own lengths, which this module names `robotgpu_sizes`.
+/// Only their numbers are read here, as a layout's capacities.
+const desktop_trainer_sizes = @import("robotgpu_sizes.zig");
+const portable_trainer_sizes = @import("robotgpu_sizes_portable.zig");
+
+/// A file of arena lengths as the capacities a layout is checked against (`robotgpu.layoutFor`).
+fn capacitiesOf(comptime sizes_file: type) robotgpu.Capacities {
+    const capacities: robotgpu.Capacities = .{
+        .world_f = sizes_file.world_f,
+        .world_u = sizes_file.world_u,
+        .efc_f = sizes_file.efc_f,
+        .model_u = sizes_file.model_u,
+        .model_f = sizes_file.model_f,
+        .io = sizes_file.io,
+    };
+    return capacities;
+}
+
+/// THE TRAINER's RUN as its simulator counts it: `worlds` worlds of Geno and the run's clips - the minute of motion
+/// with every variant a run takes (`robot_lab.ClipVariants`: each clip's mirror image, and two speeds beside each),
+/// 24 clips of 22,192 frames as the trainer's start line counts them - every frame observed and judged, and the most
+/// curriculum bins a curriculum can cut, one a frame. The counts are set from those totals, as `countsWithClips` sets
+/// them: a layout reads nothing else of a clip.
+fn trainerRunCounts(geno: *const robot.Model, worlds: u32) robotgpu.Counts {
+    const run_clip_count: u32 = 24;
+    const run_frame_count: u32 = 22_192;
+    var counts: robotgpu.Counts = robotgpu.countsOf(geno, worlds);
+    counts.clip_count = run_clip_count;
+    counts.clip_frame_total = run_frame_count;
+    counts.reference_feature_frames = run_frame_count;
+    counts.curriculum_bin_total = run_frame_count;
+    return counts;
+}
+
+/// That every arena of `build`'s capacities holds `counts` - or, said with the build's name, the arena that refuses
+/// them.
+fn expectArenasHold(
+    build: []const u8,
+    counts: robotgpu.Counts,
+    capacities: robotgpu.Capacities,
+) !void {
+    _ = robotgpu.layoutFor(counts, capacities) catch |refusal| {
+        std.log.warn("the {s} trainer's arenas refuse its run: {s}", .{ build, @errorName(refusal) });
+        return refusal;
+    };
+}
+
+test "robotgpu: the trainer's arenas hold its run - Geno and the minute with every variant, in either build" {
+    var fixtures: Fixtures = try .load(testing_allocator);
+    defer fixtures.deinit();
+    const geno: *const robot.Model = &fixtures.geno.model;
+    // A desktop GPU's build: 2,048 worlds - the first night's 1,536 (1,024 characters, the teacher's 512 candidates)
+    // with room.
+    const desktop_counts: robotgpu.Counts = trainerRunCounts(geno, 2048);
+    try expectArenasHold("desktop", desktop_counts, capacitiesOf(desktop_trainer_sizes));
+    // The portable build: 1,024 worlds, every arena within the 128 MB one storage binding holds on every device.
+    const portable_counts: robotgpu.Counts = trainerRunCounts(geno, 1024);
+    try expectArenasHold("portable", portable_counts, capacitiesOf(portable_trainer_sizes));
+    const binding_bytes: u64 = 128 << 20;
+    inline for (@typeInfo(robotgpu.Buffers).@"struct".field_names) |arena_name| {
+        const arena_length: u64 = @field(portable_trainer_sizes, arena_name);
+        const element_bytes: u64 = @sizeOf(std.meta.Elem(@FieldType(robotgpu.Buffers, arena_name)));
+        const arena_bytes: u64 = arena_length * element_bytes;
+        const within_binding: bool = arena_bytes <= binding_bytes;
+        if (!within_binding) {
+            std.log.warn("the portable trainer's {s} is {d} bytes; one binding holds {d}", .{
+                arena_name,
+                arena_bytes,
+                binding_bytes,
+            });
+        }
+        try expect(within_binding);
+    }
+}
+
 test "robotgpu: the actuators are packed as robot.zig has them, each dof's actuators in actuator order" {
     var fixtures: Fixtures = try .load(testing_allocator);
     defer fixtures.deinit();
-    const models = [_]*const robot.Model{ &fixtures.kuka, &fixtures.humanoid.model, &fixtures.geno.model };
+    // The arm's actuators carry every activation kind, one of them none.
+    var arm_model: robot.Model = try sites_and_activations_arm.Model.build(testing_allocator);
+    defer arm_model.deinit();
+    const models = [_]*const robot.Model{ &fixtures.kuka, &fixtures.humanoid.model, &fixtures.geno.model, &arm_model };
     var actuators_seen: u32 = 0;
     for (models) |model| {
         const twin: Twin = try .init(model, 4);
@@ -686,7 +767,9 @@ test "robotgpu: Geno, packed and read back through the accessors, is the model's
 
 /// THE R1 GATE - TEMPORARY, the check of the Nov 1 tidy of robot.zig's `kinematics`, removed once it has run:
 /// robot.zig's state after 200 steps, hashed. The expected values are the ones recorded on Oct 31, when `moveByJoint`
-/// was extracted under the same gate: the same steps and the same hash, so equal values mean not one bit moved.
+/// was extracted under the same gate: the same steps and the same hash, so equal values mean not one bit moved. Geno's
+/// was recorded again on Nov 16, when its model was made symmetric (`robot_geno.writeSymmetricModel`): the model
+/// moved and robot.zig did not - the humanoid's value is still Oct 31's.
 fn fingerprintOf200Steps(gpa: Allocator, source: []const u8) !u64 {
     var imported: robot_import.Imported = try modelFromMjcf(gpa, source);
     defer imported.deinit();
@@ -707,7 +790,7 @@ test "R1 gate: robot.zig's 200-step fingerprints are unchanged" {
     const humanoid_fingerprint: u64 = try fingerprintOf200Steps(testing_allocator, humanoid_xml);
     const geno_fingerprint: u64 = try fingerprintOf200Steps(testing_allocator, geno_xml);
     try expectEqual(@as(u64, 0x2acacc17d2834891), humanoid_fingerprint);
-    try expectEqual(@as(u64, 0xb51c1eb44de302bf), geno_fingerprint);
+    try expectEqual(@as(u64, 0xbc408390cb5091ee), geno_fingerprint);
 }
 
 test "robotgpu: the twin, run directly - clear_overflow clears every world's word and writes nothing else" {
@@ -821,6 +904,11 @@ test "robotgpu: kinematics on the twin poses every body, geom and site as robot.
     var geno: robot_import.Imported = try modelFromMjcf(gpa, geno_xml);
     defer geno.deinit();
     try expectTwinKinematics(gpa, &geno.model);
+    // The only robot here with sites, one of them turned on its body.
+    var arm_model: robot.Model = try sites_and_activations_arm.Model.build(gpa);
+    defer arm_model.deinit();
+    try expectEqual(@as(u32, 3), arm_model.site_count);
+    try expectTwinKinematics(gpa, &arm_model);
 }
 
 /// Actuator `actuator`'s control in world `world`, for actuation's check: it changes sign and size with the actuator
@@ -2082,6 +2170,97 @@ test "robotgpu: on the twin, the dynamics after kinematics match robot.zig, bit 
     try expectTwinComPos(gpa, &geno.model);
 }
 
+/// The two worlds' whole blocks, every array of both layouts but the copy table, compared to the bit - read from the
+/// twin's arenas, which are the module's own arrays (`robotgpu.g.B`).
+fn expectWorldsIdentical(twin: Twin, first: u32, second: u32) !void {
+    const numbers: robotgpu.WorldStateLayout = twin.layout.world_f;
+    inline for (@typeInfo(robotgpu.WorldStateLayout).@"struct".field_names) |field_name| {
+        const array: @FieldType(robotgpu.WorldStateLayout, field_name) = @field(numbers, field_name);
+        var number: u32 = 0;
+        while (number < array.stride) : (number += 1) {
+            const first_value: f32 = robotgpu.g.B.world_f[array.offset + first * array.stride + number];
+            const second_value: f32 = robotgpu.g.B.world_f[array.offset + second * array.stride + number];
+            const first_bits: u32 = @bitCast(first_value);
+            const second_bits: u32 = @bitCast(second_value);
+            if (first_bits != second_bits) {
+                report.failure("\n{s}[{d}]: world {d} {d}, world {d} {d}\n", .{
+                    field_name,
+                    number,
+                    first,
+                    first_value,
+                    second,
+                    second_value,
+                });
+                return error.WorldsDiffer;
+            }
+        }
+    }
+    const integers: robotgpu.WorldIntegersLayout = twin.layout.world_u;
+    inline for (@typeInfo(robotgpu.WorldIntegersLayout).@"struct".field_names) |field_name| {
+        const is_copy_table: bool = comptime eql(u8, field_name, "copy_source");
+        if (!is_copy_table) {
+            const array: @FieldType(robotgpu.WorldIntegersLayout, field_name) = @field(integers, field_name);
+            var number: u32 = 0;
+            while (number < array.stride) : (number += 1) {
+                const first_value: u32 = robotgpu.g.B.world_u[array.offset + first * array.stride + number];
+                const second_value: u32 = robotgpu.g.B.world_u[array.offset + second * array.stride + number];
+                if (first_value != second_value) {
+                    report.failure("\n{s}[{d}]: world {d} {d}, world {d} {d}\n", .{
+                        field_name,
+                        number,
+                        first,
+                        first_value,
+                        second,
+                        second_value,
+                    });
+                    return error.WorldsDiffer;
+                }
+            }
+        }
+    }
+}
+
+test "robotgpu: a world made a copy of another steps as its source does, every number to the bit" {
+    const gpa: Allocator = testing_allocator;
+    var geno: robot_import.Imported = try modelFromMjcf(gpa, geno_xml);
+    defer geno.deinit();
+    const world_count: u32 = 4;
+    const twin: Twin = try .init(&geno.model, world_count);
+    // Every world its own pose and inputs, three steps in: the copy is taken mid-motion, its warm start set.
+    giveTwinWorldsInputs(&geno.model, twin, world_count);
+    const steps_before: u32 = 3;
+    const steps_after: u32 = 10;
+    var step: u32 = 0;
+    while (step < steps_before) : (step += 1) {
+        inline for (robotgpu.step_program) |dispatch| {
+            Twin.run(dispatch.kernel, robotgpu.invocationCount(dispatch.invocations, twin.counts));
+        }
+    }
+    // World 3 made a copy of world 1; the others keep their own.
+    const source: u32 = 1;
+    const copy: u32 = 3;
+    const integers: robotgpu.WorldIntegersLayout = twin.layout.world_u;
+    var world: u32 = 0;
+    while (world < world_count) : (world += 1) {
+        const entry: u32 = if (world == copy) robotgpu.copySourceEntry(source) else robotgpu.no_copy_source;
+        integers.copy_source.store(world, 0, entry);
+    }
+    inline for (robotgpu.copy_program) |dispatch| {
+        Twin.run(dispatch.kernel, robotgpu.invocationCount(dispatch.invocations, twin.counts));
+    }
+    try expectWorldsIdentical(twin, source, copy);
+    // Ten more steps of every world: the copy and its source stay the same to the bit.
+    step = 0;
+    while (step < steps_after) : (step += 1) {
+        inline for (robotgpu.step_program) |dispatch| {
+            Twin.run(dispatch.kernel, robotgpu.invocationCount(dispatch.invocations, twin.counts));
+        }
+    }
+    try expectWorldsIdentical(twin, source, copy);
+    // And it was a real copy: world 3 had differed from world 1 before it.
+    try expectError(error.WorldsDiffer, expectWorldsIdentical(twin, source, 2));
+}
+
 test "robotgpu: the twin steps as robot.zig does, every world to the bit after twenty steps" {
     const gpa: Allocator = testing_allocator;
     const step_count: u32 = 20;
@@ -2109,6 +2288,11 @@ test "robotgpu: the twin steps as robot.zig does, every world to the bit after t
     var geno: robot_import.Imported = try modelFromMjcf(gpa, geno_xml);
     defer geno.deinit();
     try expectTwinSteps(gpa, &geno.model, step_count);
+    // The only robot here whose actuators carry a state: an integrator and two filters, beside a servo with none.
+    var arm_model: robot.Model = try sites_and_activations_arm.Model.build(gpa);
+    defer arm_model.deinit();
+    try expectEqual(@as(u32, 3), arm_model.activation_count);
+    try expectTwinSteps(gpa, &arm_model, step_count);
 }
 
 test "Newton's warm start: the humanoid stepping into its limits - each state's answer the same either way" {
@@ -2157,4 +2341,36 @@ test "Newton's warm start: the humanoid stepping into its limits - each state's 
     try expect(steps_with_rows > 50);
     try expect(cold_rounds > 0 and warm_rounds > 0);
     try expect(largest_gap < 1.0e-4);
+}
+
+test "robotgpu: a record's moment says the decision before it failed where it lost or ended at a loss, and only there" {
+    // Each decision's flags as the judgement and the pushes leave them, and the moment of the next record
+    // (`recordMomentOf`): its stretch broken by an episode's end or a push, and the decision before FAILED where it
+    // lost the reference or ended its episode at a loss - a loss, a loss without an aftermath, an aftermath run out.
+    // A return, an episode capped and a push are no failures.
+    const Flag = robotgpu.EpisodeFlag;
+    const Case = struct { flags: []const Flag, breaks_stretch: bool, failed: bool };
+    const cases = [_]Case{
+        .{ .flags = &.{}, .breaks_stretch = false, .failed = false },
+        .{ .flags = &.{ .lost, .aftermath_begins }, .breaks_stretch = false, .failed = true },
+        .{ .flags = &.{ .lost, .finished, .ends_at_loss }, .breaks_stretch = true, .failed = true },
+        .{ .flags = &.{ .in_aftermath, .finished, .ends_at_loss }, .breaks_stretch = true, .failed = true },
+        .{ .flags = &.{ .in_aftermath, .returned }, .breaks_stretch = false, .failed = false },
+        .{ .flags = &.{ .finished, .capped }, .breaks_stretch = true, .failed = false },
+        .{ .flags = &.{.pushed}, .breaks_stretch = true, .failed = false },
+    };
+    for (cases) |case| {
+        var flags: u32 = 0;
+        for (case.flags) |flag| {
+            flags |= robotgpu.episodeFlagBit(flag);
+        }
+        const episode_steps: u32 = 7;
+        const aftermath_steps_left: u32 = 0;
+        const moment: robot.RecordMoment = robotgpu.recordMomentOf(flags, episode_steps, aftermath_steps_left);
+        try expectEqual(case.breaks_stretch, moment.starts_segment);
+        try expectEqual(case.failed, moment.previous_decision_failed);
+        try expectEqual(episode_steps, moment.episode_step);
+        // A label is the host's to say, from the world's plan.
+        try expect(!moment.labelled);
+    }
 }

@@ -16,6 +16,7 @@
 const std = @import("std");
 const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
+const expect = std.testing.expect;
 const zm = @import("zm");
 const float = zm.float;
 const ui = @import("ui.zig");
@@ -26,6 +27,8 @@ const Vec2 = zm.Vec2;
 const Color = zm.Color;
 const Range = zm.Range;
 const inf = zm.inf;
+const exp10 = zm.exp10;
+const log10 = zm.log10;
 const clamp = zm.clamp;
 const floori = zm.floori;
 const DataRange = Range(f64);
@@ -822,7 +825,15 @@ fn pickScale(
     return .linear;
 }
 
-fn padRange(r: DataRange) DataRange {
+/// A fitted range with room around the data: 5% of its span on each side - on a log axis, 5% of its DECADES. Padded
+/// linearly, a log axis reached below zero as soon as its smallest value was under a twentieth of its largest, and a
+/// log axis has no zero: zimrnum_fit's loss chart panicked in its ticks (Nov 22).
+fn padRange(r: DataRange, is_log: bool) DataRange {
+    const pads_in_decades: bool = is_log and r.min > 0;
+    if (pads_in_decades) {
+        const decades: DataRange = padRange(.{ .min = log10(r.min), .max = log10(r.max) }, false);
+        return .{ .min = exp10(decades.min), .max = exp10(decades.max) };
+    }
     if (r.size() == 0) {
         const pad: f64 = if (r.min == 0) 0.5 else @abs(r.min) * 0.1;
         return .{ .min = r.min - pad, .max = r.max + pad };
@@ -831,7 +842,24 @@ fn padRange(r: DataRange) DataRange {
     return .{ .min = r.min - pad, .max = r.max + pad };
 }
 
-fn fitToSeries(state: *PlotState, series: []const Series) void {
+/// Widen `range` to take in `value` - unless the axis is a log axis and the value is not above zero, which it cannot
+/// show.
+fn expandShown(range: *DataRange, value: f64, is_log: bool) void {
+    const log_axis_cannot_show: bool = is_log and !(value > 0);
+    if (log_axis_cannot_show) {
+        return;
+    }
+    range.expand(value);
+}
+
+/// The view fitted to the series' data, each primary axis as its scale reads it: `x_is_log` and `y_is_log` fit a log
+/// axis to the values above zero and pad it in decades (`padRange`).
+fn fitToSeries(
+    state: *PlotState,
+    series: []const Series,
+    x_is_log: bool,
+    y_is_log: bool,
+) void {
     var xr: DataRange = .{ .min = inf(f64), .max = -inf(f64) };
     var yr: DataRange = .{ .min = inf(f64), .max = -inf(f64) };
     var y2r: DataRange = .{ .min = inf(f64), .max = -inf(f64) };
@@ -864,46 +892,49 @@ fn fitToSeries(state: *PlotState, series: []const Series) void {
             continue;
         }
         const xrng: *DataRange = if (s.x_axis == .x2) &x2r else &xr;
+        // The secondary axes are linear.
+        const x_shown_is_log: bool = x_is_log and s.x_axis != .x2;
         if (s.xs.len == 0) {
             // Implicit-x: the series spans sample indices [0, len-1].
             if (s.ys.len > 0) {
-                xrng.expand(0);
-                xrng.expand(@floatFromInt(s.ys.len - 1));
+                expandShown(xrng, 0, x_shown_is_log);
+                expandShown(xrng, @floatFromInt(s.ys.len - 1), x_shown_is_log);
             }
         } else {
             for (s.xs) |v| {
-                xrng.expand(v);
+                expandShown(xrng, v, x_shown_is_log);
             }
         }
         const tr: *DataRange = if (s.axis == .y2) &y2r else &yr;
+        const y_shown_is_log: bool = y_is_log and s.axis != .y2;
         if (s.kind == .candlestick) {
             if (s.lows) |l| {
                 for (l) |v| {
-                    tr.expand(v);
+                    expandShown(tr, v, y_shown_is_log);
                 }
             }
             if (s.highs) |h| {
                 for (h) |v| {
-                    tr.expand(v);
+                    expandShown(tr, v, y_shown_is_log);
                 }
             }
         } else {
             for (s.ys) |v| {
-                tr.expand(v);
+                expandShown(tr, v, y_shown_is_log);
             }
         }
     }
     if (xr.min <= xr.max) {
-        state.x = padRange(xr);
+        state.x = padRange(xr, x_is_log);
     }
     if (yr.min <= yr.max) {
-        state.y = padRange(yr);
+        state.y = padRange(yr, y_is_log);
     }
     if (y2r.min <= y2r.max) {
-        state.y2 = padRange(y2r);
+        state.y2 = padRange(y2r, false);
     }
     if (x2r.min <= x2r.max) {
-        state.x2 = padRange(x2r);
+        state.x2 = padRange(x2r, false);
     }
 }
 
@@ -1103,12 +1134,16 @@ pub fn show(
     const cbar_w: f32 = if (opts.colorbar != null) 64 else 0;
     const frame: plot.Rect = .{ .x = origin[0], .y = origin[1], .w = size[0] - cbar_w, .h = size[1] };
 
+    // The axes' scales, which the fit reads too: a log axis is fitted in decades.
+    const x_scale: plot.Scale = pickScale(opts.x_transform, opts.x_symlog, opts.x_time, opts.x_log);
+    const y_scale: plot.Scale = pickScale(opts.y_transform, opts.y_symlog, false, opts.y_log);
+
     // First-frame auto-fit to the data extents (or every frame if auto_fit).
     if (opts.auto_fit) {
         state.fitted = false;
     }
     if (!state.fitted) {
-        fitToSeries(state, series);
+        fitToSeries(state, series, x_scale == .log10, y_scale == .log10);
         state.fitted = true;
     }
 
@@ -1128,8 +1163,8 @@ pub fn show(
     p.style = opts.style;
     p.x.range = state.x;
     p.y.range = state.y;
-    p.x.scale = pickScale(opts.x_transform, opts.x_symlog, opts.x_time, opts.x_log);
-    p.y.scale = pickScale(opts.y_transform, opts.y_symlog, false, opts.y_log);
+    p.x.scale = x_scale;
+    p.y.scale = y_scale;
     p.x.linthresh = opts.x_linthresh;
     p.y.linthresh = opts.y_linthresh;
     p.x.transform = opts.x_transform;
@@ -1451,6 +1486,21 @@ pub fn show(
     state.q_y2 = p.y2;
     state.q_mouse = u.getMousePos();
     state.q_valid = true;
+}
+
+test "fitToSeries: a log axis is fitted in decades to the values above zero, and never reaches zero" {
+    // zimrnum_fit's loss chart: losses from 0.4 down to 0.001 on a log y axis, fitted every frame. Padded by 5% of the
+    // span, the fit reached below zero - which a log axis cannot show - and the ticks then panicked (Nov 22). The zero
+    // here is a value the log axis must leave out of its fit.
+    const xs = [_]f64{ 0, 1, 2, 3 };
+    const ys = [_]f64{ 0.4, 0.05, 0.001, 0 };
+    const series = [_]Series{.{ .xs = &xs, .ys = &ys }};
+    var state: PlotState = .{};
+    fitToSeries(&state, &series, false, true);
+    const log_axis_holds_the_data: bool = state.y.min > 0 and state.y.min < 0.001 and state.y.max > 0.4;
+    try expect(log_axis_holds_the_data);
+    // The linear axis is padded as before: 5% of its span, below its smallest value.
+    try expect(state.x.min < 0);
 }
 
 test "DrawListSink is a graphics sink" {

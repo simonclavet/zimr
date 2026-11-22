@@ -848,6 +848,17 @@
     },
     {
         "adapter": "JavaScript",
+        "label": "Debug: geno-mirror",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/geno_mirror/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build geno-mirror"
+    },
+    {
+        "adapter": "JavaScript",
         "label": "Debug: geno-ppo",
         "type": "chrome",
         "request": "launch",
@@ -1021,6 +1032,17 @@
         "sourceMaps": true,
         "smartStep": true,
         "build": "zig: build hello-world"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: hello-world-owned-main",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/hello_world_owned_main/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build hello-world-owned-main"
     },
     {
         "adapter": "JavaScript",
@@ -4544,6 +4566,18 @@
     },
     {
         "adapter": "CodeLLDB",
+        "label": "Debug: geno-mirror (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/geno_mirror.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build geno-mirror (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
         "label": "Debug: geno-ppo (windows)",
         "request": "launch",
         "program": "$ZED_WORKTREE_ROOT/zig-out/windows/geno_ppo.exe",
@@ -4733,6 +4767,18 @@
             "settings set target.use-fast-stepping false"
         ],
         "build": "zig: build hello-world (windows)"
+    },
+    {
+        "adapter": "CodeLLDB",
+        "label": "Debug: hello-world-owned-main (windows)",
+        "request": "launch",
+        "program": "$ZED_WORKTREE_ROOT/zig-out/windows/hello_world_owned_main.exe",
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "initCommands": [
+            "settings set plugin.symbol-file.pdb.reader native",
+            "settings set target.use-fast-stepping false"
+        ],
+        "build": "zig: build hello-world-owned-main (windows)"
     },
     {
         "adapter": "CodeLLDB",

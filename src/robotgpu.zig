@@ -32,6 +32,9 @@
 //!       kinematics and velocity kernels, then observe_character and observe_reference, into `observations`
 //!     then the JUDGEMENT PROGRAM (in `Sim.submitDecisionEnd`): body_lowest_points, judge_tracking, judge_rewards -
 //!       each world's tracking error and rewards                  THE TRACKING TASK, THE OBSERVATION AND THE JUDGEMENT
+//!     then the RESET PROGRAM (`Sim.runResets`): the pushes, the curriculum's round (curriculum_round: the ended
+//!       episodes folded into their start bins, the bins refreshed) and the new episodes (begin_reset ...)
+//!     - the three one submission, a decision recorded whole (`Sim.stepDecision`)
 //!     on the CPU, the same kernels as loops - CpuTwin                       DISPATCHING AND THE CPU TWIN
 //!
 //! Every kernel reads and writes through params.layout.<arena>.<array>.load / .store / .loadVec ..., and calls
@@ -49,7 +52,8 @@
 //!     world_f   world_u      each world's state and everything derived from it; its integers
 //!     efc_f                  each world's constraint rows
 //!     scratch                each world's solver workspace
-//!     io                     the host's window: what it uploads each step, and the little it reads back
+//!     io                     the host's window: the little the worlds share and the host gives or reads - the
+//!                            start curriculum's bins
 //!
 //! An arena holds many ARRAYS - `joint_positions`, `body_positions`, `body_inertias`... - one after another. Where each
 //! begins, and how far apart its worlds lie, is the LAYOUT, computed on the host once per model (`layoutFor`) and
@@ -90,12 +94,18 @@ const splat = zm.splat;
 const dot3 = zm.dot3;
 const cross = zm.cross;
 const clamp = zm.clamp;
+const float = zm.float;
 const assertf = zm.assertf;
 const isFinite = zm.isFinite;
 const vec = zm.vec;
+const poseSeenFrom = zm.poseSeenFrom;
+const pose_numbers = zm.pose_numbers;
 const robot = @import("robot");
 const program = @import("robotgpu_program.zig");
 const sizes = @import("robotgpu_sizes");
+/// Whether this build keeps the simulator's CPU twin (the sizes file says; `compute_host.Compute`'s `has_cpu_twin`):
+/// the trainer, which simulates on a device alone, leaves it out, and with it every arena's static array.
+pub const cpu_twin: bool = sizes.cpu_twin;
 
 // ==================================================================================================================
 // THE ARENAS
@@ -180,7 +190,9 @@ fn storeVector(comptime arena: Arena, first: u32, vector: Vec) void {
 /// THE MODEL'S SIZES AND THE NUMBER OF WORLDS - what every layout is computed from (`countsOf` reads them from a
 /// model). The names are MuJoCo's.
 pub const Counts = extern struct {
-    /// Worlds simulated together, each a copy of the model with a state of its own.
+    /// Worlds simulated together, each a copy of the model with a state of its own. A batch may lower it at run time to
+    /// step its first worlds alone - a planner's lookahead, its candidates: every dispatch is sized to it and every
+    /// kernel keeps to it, while the layouts stay those of every world.
     world_count: u32,
     /// Bodies, the world body 0 among them.
     body_count: u32,
@@ -226,8 +238,12 @@ pub const Counts = extern struct {
     clip_frame_total: u32 = 0,
     /// Every clip's curriculum bins together (`ClipPoses.curriculum_bins`), 0 for a run without a curriculum.
     curriculum_bin_total: u32 = 0,
+    /// THE FIRST WORLD A PROGRAM RUNS OVER: every dispatch is sized to the worlds from it to `world_count`, and
+    /// every kernel's first invocation is this world (`worldOf`). 0 - every world - but where a trainer's decisions
+    /// leave the planners' candidates out: they are the batch's first worlds, and between replans nothing reads their
+    /// state - the next replan copies its planner over it (`Sim.actTrainerOnDevice`). The layouts stay every world's.
+    first_world: u32 = 0,
     /// The rest of the bin total's row: the counts stay whole 16-byte rows of the uniform.
-    _padding_curriculum_0: u32 = 0,
     _padding_curriculum_1: u32 = 0,
     _padding_curriculum_2: u32 = 0,
     /// The policy's action: a number per dof but the free root's six (`robot.actionSize`), then one per limb - its
@@ -240,6 +256,14 @@ pub const Counts = extern struct {
     /// How many clip frames carry the reference's half of the observation (`ClipPoses.reference_features`): every
     /// clip's frames, or none - for a simulator whose worlds are never observed, which then keeps no such table.
     reference_feature_frames: u32 = 0,
+    /// THE PLAN's SHAPE (`plan_knots`, `follow_plans`): the action at `plan_knot_count` knots spread evenly over
+    /// `plan_horizon` decisions, straight lines between - 3 knots over 8 decisions by default, the horizon's start,
+    /// middle and end. At least two knots: a plan is a line. Run options, set before the simulator is made - the knot
+    /// count sizes every world's knots. A row with its padding.
+    plan_knot_count: u32 = 3,
+    plan_horizon: u32 = 8,
+    _padding_plan_0: u32 = 0,
+    _padding_plan_1: u32 = 0,
 };
 
 /// A dof's place in a body's chain when the dof does not move the body (`ModelTablesLayout.body_chain_place`).
@@ -347,6 +371,7 @@ pub const ItemKind = enum {
     clip_coordinates,
     actions,
     observations,
+    policy_input_numbers,
     clip_reference_numbers,
     clip_reference_body_numbers,
     tracking_error_terms,
@@ -355,6 +380,8 @@ pub const ItemKind = enum {
     joint_box_numbers,
     curriculum_bins,
     state_features,
+    record_floats,
+    plan_knot_numbers,
 
     /// How many items one copy holds, for a model of `counts`.
     fn itemsPerCopy(item_kind: ItemKind, counts: Counts) u32 {
@@ -385,6 +412,13 @@ pub const ItemKind = enum {
             .actions => counts.action_count,
             // Two halves of robot_track's `local` each: the character's, and the reference's.
             .observations => 2 * localSizeOf(counts),
+            // The policy's inputs (`policy_inputs`): the goal's features, the root target's slots, the state's.
+            .policy_input_numbers => 2 * localSizeOf(counts) + @as(u32, robot.root_target_size),
+            // One record of the learner's ring (`record_rows`): the character's half of an observation, the action,
+            // the table row of its frame, and the root's world pose.
+            .record_floats => localSizeOf(counts) + counts.action_count + 1 + @as(u32, pose_numbers),
+            // A plan: the whole action at each knot, knot after knot.
+            .plan_knot_numbers => counts.plan_knot_count * counts.action_count,
             .clip_reference_numbers => counts.reference_feature_frames * localSizeOf(counts),
             .clip_reference_body_numbers => counts.reference_feature_frames * counts.body_count *
                 @as(u32, @intCast(robot.reference_body_numbers)),
@@ -430,6 +464,7 @@ pub const ItemKind = enum {
             .clip_coordinates,
             .actions,
             .observations,
+            .policy_input_numbers,
             .clip_reference_numbers,
             .clip_reference_body_numbers,
             .tracking_error_terms,
@@ -438,6 +473,8 @@ pub const ItemKind = enum {
             .joint_box_numbers,
             .curriculum_bins,
             .state_features,
+            .record_floats,
+            .plan_knot_numbers,
             => 1,
             .joint_pairs, .actuator_pairs => 2,
             .body_vectors, .joint_vectors, .geom_vectors, .site_vectors, .actuator_vectors, .floor_slot_vectors => 4,
@@ -764,6 +801,45 @@ pub fn ModelTable(comptime arena: Arena, comptime kind_of_item: ItemKind) type {
     };
 }
 
+/// WHERE ONE SHARED ARRAY LIVES: in arena `arena`, a single copy for every world, made of `elements` - a model table's
+/// sixteen bytes and shape (`ModelTable`), but STATE: the kernels write it as well as read it. What the worlds keep
+/// together rather than each for itself - the start curriculum's bins (`HostWindowLayout`).
+pub fn SharedArray(comptime arena: Arena, comptime kind_of_item: ItemKind) type {
+    return extern struct {
+        offset: u32 = 0,
+        stride: u32 = 0,
+        count: u32 = 0,
+        _padding: u32 = 0,
+
+        const Shared = @This();
+        const Element: type = ArenaElement(arena);
+
+        /// The arena the array lives in, and what one item of it is.
+        pub const home: Arena = arena;
+        pub const item_kind: ItemKind = kind_of_item;
+        /// One copy, shared by every world (`placeArrays`).
+        pub const per_world: bool = false;
+
+        /// The arena index of item `item` - its first number.
+        pub fn at(shared: Shared, item: u32) u32 {
+            const numbers_per_item: u32 = comptime item_kind.numbersPerItem();
+            return shared.offset + item * numbers_per_item;
+        }
+
+        /// Item `item`, one number.
+        pub fn load(shared: Shared, item: u32) Element {
+            comptime requireItemWidth(item_kind, 1, "load");
+            return loadNumber(arena, shared.at(item));
+        }
+
+        /// Item `item` set to `value`, one number.
+        pub fn store(shared: Shared, item: u32, value: Element) void {
+            comptime requireItemWidth(item_kind, 1, "store");
+            storeNumber(arena, shared.at(item), value);
+        }
+    };
+}
+
 // ==================================================================================================================
 // THE LAYOUT
 // ==================================================================================================================
@@ -896,9 +972,27 @@ pub const WorldStateLayout = extern struct {
     /// in the root's frame as robot_track's `local` lays it out - written once a decision by `observe_program`.
     observations: WorldArray(.world_f, .observations) = .{},
     /// THE POLICY's ROW for each world (`policy_inputs`), in the order the policy's first layer reads it: the goal -
-    /// the reference one frame ahead - then the state, both in their root's frame and normalised. One block, world
-    /// after world, so a single copy hands every world's row to the learning kit.
-    policy_inputs: WorldArray(.world_f, .observations) = .{},
+    /// the reference one frame ahead, then the root target's slots - then the state, the features in their root's
+    /// frame and normalised. One block, world after world, so a single copy hands every world's row to the learning
+    /// kit.
+    policy_inputs: WorldArray(.world_f, .policy_input_numbers) = .{},
+    /// EACH WORLD's RECORD for the learner's ring (`record_rows`), as the learning kit lays a record out: the
+    /// character's raw features, the action it took, the table row of the frame it was at, its root's world pose. A
+    /// world's block is the
+    /// record's length in the ring (zn_mlp's `latRecordWidth`: the live floats padded to four), so a single copy
+    /// hands every world's record to the ring.
+    records: WorldArray(.world_f, .record_floats) = .{},
+    /// A CANDIDATE's SCORE over its lookahead (`score_candidates`): its SuperMimic rewards discounted from the
+    /// lookahead's first decision, less the cost of losing its reference if it did - and the discount its next
+    /// decision's reward will take.
+    candidate_scores: WorldArray(.world_f, .single) = .{},
+    /// A WORLD's PLAN (`follow_plans`): its whole action at each knot, knot after knot - the host's to write: a
+    /// candidate's drawn plan, a planner's winning one.
+    plan_knots: WorldArray(.world_f, .plan_knot_numbers) = .{},
+    /// THE OFFSET A WORLD's PLAN ADDED to its choice at this decision, around the policy (`addPlanOffset`): what a
+    /// following planner's flow would have had to add - teacher 2's example (`robot_track_resident.FlowExamples`).
+    plan_offsets: WorldArray(.world_f, .actions) = .{},
+    candidate_discount_powers: WorldArray(.world_f, .single) = .{},
     /// EACH WORLD's TRACKING ERROR at a decision's end (`judge_tracking`): `robot.TrackingError`'s terms, in order.
     tracking_errors: WorldArray(.world_f, .tracking_error_terms) = .{},
     /// Each world's tracker reward at a decision's end (`judge_rewards`: `robot.reward` of its tracking error).
@@ -909,11 +1003,20 @@ pub const WorldStateLayout = extern struct {
     /// Whether the termination rule fires on each world's tracking error at a decision's end (`robot.terminated`, 1 or
     /// 0) - before the episode's grace and aftermath weigh it.
     termination_rule: WorldArray(.world_f, .single) = .{},
+    /// HOW FAR TOWARD LOSING ITS REFERENCE each world is at a decision's end (`robot.lossFraction`: 1 where the
+    /// termination rule fires), and at the decision's before - its rise, which the teacher's choice of planners
+    /// projects (`robot.projectedHazard`).
+    loss_fraction: WorldArray(.world_f, .single) = .{},
+    previous_loss_fraction: WorldArray(.world_f, .single) = .{},
     /// Each world's previous decision's action, for SuperMimic's action rate - zero at an episode's start.
     previous_actions: WorldArray(.world_f, .actions) = .{},
     /// THE POLICY's CHOICE AT THIS DECISION, explored (`explore_actions`): what the action filter blends into the
     /// action given at the previous decision (`filter_decision`), the blend becoming `actions`.
     chosen_actions: WorldArray(.world_f, .actions) = .{},
+    /// THE FLOW's CORRECTION AT THIS DECISION, from the learner's flow actor (`LatentKit.correctOnRows`): added to the
+    /// policy's choice before it is given (`add_flow_corrections`), where `StepOptions.flow_corrections` says this
+    /// decision has one.
+    flow_corrections: WorldArray(.world_f, .actions) = .{},
     /// EACH WORLD's SUPERMIMIC REWARD at a decision's end, whole: its tracking total and its penalties - the action
     /// rate,
     /// the joints past their limits, the effort's cost - as the CPU fleet's `superMimicReward` sums them.
@@ -928,6 +1031,36 @@ pub const WorldStateLayout = extern struct {
     effort_energy: WorldArray(.world_f, .single) = .{},
     effort_torque_squares: WorldArray(.world_f, .single) = .{},
 };
+
+/// HOW A PLANNING WORLD FOLLOWS ITS PLAN until its next replan (`follow_plans`): set for each planner at each
+/// replan, by a draw at the run's following share (O2's beta); cleared by a new episode (`begin_reset`), whose start
+/// the plan was not made for, and by a push (`push_worlds`), after which the plan answers states that never come.
+/// Every planner takes its plan's action at the replan's own decision - the planner's
+/// choice for exactly the state it planned from, so every replan yields a label - and only one that drew to follow
+/// keeps taking it after. A decision that takes the plan's action is a LABELLED one: the action is the planner's.
+///
+///     replan            0      1      2      3      replan
+///     first_decision    plan   pi     pi     pi
+///     every_decision    plan   plan   plan   plan
+pub const PlanFollowing = enum(u32) {
+    /// The policy acts at every decision: a world that is no planner, or a planner whose episode began since its
+    /// last replan. Zero, as a fresh arena holds it.
+    none = 0,
+    /// The plan's action at the replan's own decision, the policy's after it.
+    first_decision = 1,
+    /// The plan's action at every decision until the next replan.
+    every_decision = 2,
+};
+
+/// WHETHER A WORLD WHOSE FOLLOWING IS `following` (`PlanFollowing`, as its `plan_following` holds it) TAKES ITS PLAN's
+/// ACTION at a decision of its plan - the replan's own (`is_replan_decision`), or a later one. The one rule, read by
+/// the kernel that gives the actions (`follow_plans`) and by the host that labels the records
+/// (`Sim.actTrainerOnDevice`): a record is labelled exactly when its action was its plan's.
+pub fn followsPlanAt(following: u32, is_replan_decision: bool) bool {
+    const at_every_decision: bool = following == @backingInt(PlanFollowing.every_decision);
+    const at_first_decision: bool = following == @backingInt(PlanFollowing.first_decision);
+    return at_every_decision or (at_first_decision and is_replan_decision);
+}
 
 /// THE PER-WORLD INTEGERS OF `world_u`.
 pub const WorldIntegersLayout = extern struct {
@@ -965,8 +1098,22 @@ pub const WorldIntegersLayout = extern struct {
     aftermath_steps_left: WorldArray(.world_u, .single) = .{},
     return_streaks: WorldArray(.world_u, .single) = .{},
     steps_since_loss: WorldArray(.world_u, .single) = .{},
+    /// The decisions left of each world's watched push (`robot.PushBrake`), 0 for none: set by `push_worlds`, counted
+    /// down and ended by `judge_episode` (`robot.settleWatchedPush`). While it lasts the world takes no other push.
+    watched_push_left: WorldArray(.world_u, .single) = .{},
     /// The last decision's verdict on each world's episode, a bit per `EpisodeFlag`.
     episode_flags: WorldArray(.world_u, .single) = .{},
+    /// THE WORLD THIS ONE IS A COPY OF (`copy_world_state`), as an entry of the host's copy table: the source world's
+    /// index plus one, or `no_copy_source` - zero - for a world that is no copy (`copySourceOf`). Zero meaning none,
+    /// a fresh arena holds no copies. Never copied itself; a world whose entry names another is a candidate
+    /// (`isCandidate`) until the host clears it.
+    copy_source: WorldArray(.world_u, .single) = .{},
+    /// Whether a candidate has lost its reference in its lookahead (`score_candidates`): 1 from its first loss on,
+    /// after which its score takes nothing more.
+    candidate_lost: WorldArray(.world_u, .single) = .{},
+    /// HOW EACH WORLD FOLLOWS ITS PLAN until its next replan (`PlanFollowing`, `follow_plans`): set by the host at
+    /// each replan, cleared by a new episode; `none` in a fresh arena, so no world follows a plan until the host says.
+    plan_following: WorldArray(.world_u, .single) = .{},
     /// EACH WORLD's EPISODE NUMBER, advanced at every start (`begin_reset`): the counter of every draw its start makes
     /// (`robot.drawWord`), as the CPU fleet's `episode_numbers`.
     episode_numbers: WorldArray(.world_u, .single) = .{},
@@ -1230,14 +1377,29 @@ pub const ModelConstantsLayout = extern struct {
     character_mass: ModelTable(.model_f, .model_single) = .{},
     /// Each clip's seconds between frames (`ClipPoses.frame_time`), for a reset world's velocities (`reset_pose`).
     clip_frame_time: ModelTable(.model_f, .clips) = .{},
-    /// THE CURRICULUM's MIXTURE as running sums, bin after bin within each clip (`robot.startBinMixture`, summed in
-    /// order): a start draws a uniform number and takes the first bin whose sum exceeds it. Uploaded by the host each
-    /// round, after its folds (`rbt.updateStartBinReturn`) and the round's softmax and history.
-    bin_running_sums: ModelTable(.model_f, .curriculum_bins) = .{},
     /// THE POLICY's NORMALISER (`policy_inputs`): each feature's mean and spread, a feature read by the policy as
     /// `(x - mean) / spread` - the learner's `Normalizer`, uploaded by the host whenever it changes.
     feature_means: ModelTable(.model_f, .state_features) = .{},
     feature_spreads: ModelTable(.model_f, .state_features) = .{},
+};
+
+/// THE HOST's WINDOW, the arrays of `io`: the little state the worlds share and the host gives or reads - none of it
+/// per world, none of it the model's.
+///
+/// SUPERMIMIC's START CURRICULUM lives here, one number per bin of every clip, bin after bin and clip after clip
+/// (`ModelTablesLayout.clip_first_bin`): each bin's return estimate G, its softmax share, its long-run weight, and the
+/// mixture as running sums within its clip. The device keeps them itself: each decision one kernel folds the episodes
+/// that ended into their start bins and, if any did, refreshes the shares and the sums (`curriculum_round`), and the
+/// resets that follow draw their starts against the sums (`begin_reset`) - the CPU fleet's own order
+/// (robot_track's `Fleet.step`, `restartEnded`), with nothing read back and nothing uploaded. The host gives the bins
+/// once, before a run's first decision (`Sim.uploadStartBins`).
+pub const HostWindowLayout = extern struct {
+    bin_returns: SharedArray(.io, .curriculum_bins) = .{},
+    bin_softmax: SharedArray(.io, .curriculum_bins) = .{},
+    bin_history_weights: SharedArray(.io, .curriculum_bins) = .{},
+    /// The mixture as running sums, bin after bin within each clip (`robot.startBinProbability`, summed in order): a
+    /// start draws a uniform number and takes the first bin whose sum exceeds it.
+    bin_running_sums: SharedArray(.io, .curriculum_bins) = .{},
 };
 
 /// THE LAYOUT: where every array the kernels read and write lives, one struct per arena, each field named after its
@@ -1248,6 +1410,7 @@ pub const Layout = extern struct {
     efc_f: ConstraintRowsLayout = .{},
     model_u: ModelTablesLayout = .{},
     model_f: ModelConstantsLayout = .{},
+    io: HostWindowLayout = .{},
 };
 
 /// A model option the device reads as on or off (`StepOptions`): robot.zig's, as the tracking settings carry it.
@@ -1257,11 +1420,55 @@ pub const Switch = robot.Switch;
 pub const ServoMode = robot.ServoMode;
 
 /// A DECISION's VERDICT ON AN EPISODE, a bit each in `episode_flags` (`robot.EpisodeVerdict`'s booleans).
-pub const EpisodeFlag = enum(u5) { lost, returned, in_aftermath, aftermath_begins, finished, ends_at_loss, capped };
+pub const EpisodeFlag = enum(u5) {
+    lost,
+    returned,
+    in_aftermath,
+    aftermath_begins,
+    finished,
+    ends_at_loss,
+    capped,
+    /// The world was pushed this decision (`push_worlds`), its episode going on. Set after the judgement, which
+    /// writes the word afresh, so it lasts one decision as the others do. A learner's books start a new stretch of
+    /// unbroken motion at it, as at an episode's end: no window crosses a push.
+    pushed,
+    /// A watched push ended with this decision in a way the brake counts - kept, returned or failed - and whether the
+    /// world came back from it: kept or returned (`robot.WatchedPushEnd`). The host counts both for the pushes' top.
+    watched_push_settled,
+    watched_push_came_back,
+};
 
 /// The bit of `flag` in a world's `episode_flags`.
 pub fn episodeFlagBit(flag: EpisodeFlag) u32 {
     return @as(u32, 1) << @backingInt(flag);
+}
+
+/// A WORLD's NEXT RECORD IN A LEARNER's BOOKS (`robot.RecordMoment`), from the world's flags and counters as a
+/// decision's resets leave them - what the host reads back once a decision. A new stretch of unbroken motion when the
+/// decision ended the world's episode (`finished`) or pushed it (`pushed`): its next record follows a jump no model
+/// could predict. The step in the episode is the world's count, which a restart sets to 0 (`begin_reset`). After the
+/// loss while an aftermath has steps left - the CPU fleet records `aftermath_steps_left > 0` the same way. The
+/// decision before FAILED when it lost the reference (`lost`) or ended its episode at a loss (`ends_at_loss`): a break,
+/// or an aftermath run out. Whether the record is a label is the host's to say, from the world's plan
+/// (`robotgpu_host.recordMomentsFrom`).
+pub fn recordMomentOf(
+    flags: u32,
+    episode_steps: u32,
+    aftermath_steps_left: u32,
+) robot.RecordMoment {
+    const episode_ended: bool = flags & episodeFlagBit(.finished) != 0;
+    const world_was_pushed: bool = flags & episodeFlagBit(.pushed) != 0;
+    const motion_was_broken: bool = episode_ended or world_was_pushed;
+    const still_in_aftermath: bool = aftermath_steps_left > 0;
+    const lost_the_reference: bool = flags & episodeFlagBit(.lost) != 0;
+    const ended_at_a_loss: bool = flags & episodeFlagBit(.ends_at_loss) != 0;
+    const decision_failed: bool = lost_the_reference or ended_at_a_loss;
+    return .{
+        .starts_segment = motion_was_broken,
+        .episode_step = episode_steps,
+        .after_loss = still_in_aftermath,
+        .previous_decision_failed = decision_failed,
+    };
 }
 
 /// THE EPISODE's RULES as the device takes them (`StepOptions.setEpisodeRules`), robot.zig's: every length in
@@ -1352,24 +1559,36 @@ pub const StepOptions = extern struct {
     start_noise_velocity: f32 = 0,
     _padding_noise_0: u32 = 0,
     _padding_noise_1: u32 = 0,
-    /// THE PUSHES (`push_worlds`, `start_in_trouble`, the fleet's `Pushes`), two rows: a scheduled push every this
+    /// THE PUSHES (`push_worlds`, `start_in_trouble`, the fleet's `Pushes`), three rows: a scheduled push every this
     /// many decisions of an episode (0: none), random pushes at this rate per second, their speeds' range, the share of
-    /// starts in trouble; then, set each decision by the host, the schedule's share (`Pushes.scheduleShare`), the
-    /// decision's number (the counter of its pushes' draws) and its seconds.
+    /// starts in trouble; then, set each decision by the host, how far the range has opened (`robot.PushTop`), the
+    /// decision's number (the counter of its pushes' draws) and its seconds; then the brake's watch
+    /// (`robot.PushBrake`) - the top share of the open range whose pushes are watched, 0 for none, and the decisions
+    /// a watch lasts.
     push_every: u32 = 0,
     push_rate_per_second: f32 = 0,
     push_speed_min: f32 = 0,
     push_speed_max: f32 = 0,
     push_start_share: f32 = 0,
-    push_schedule_share: f32 = 0,
+    push_top_share: f32 = 0,
     decision_number: u32 = 0,
     decision_seconds: f32 = 0,
-    /// Whether starts follow SuperMimic's curriculum (`begin_reset`, the accumulators of `judge_rewards`), and the
-    /// discount of its episode returns; a row with its padding.
+    push_watched_share: f32 = 0,
+    push_watch_decisions: u32 = 0,
+    _padding_push_0: u32 = 0,
+    _padding_push_1: u32 = 0,
+    /// SUPERMIMIC's CURRICULUM, two rows: whether starts follow it (`begin_reset`, the accumulators of
+    /// `judge_rewards`, `curriculum_round`), the discount of its episode returns, the largest return - the scale its
+    /// softmax compares returns at - and a bin's memory of its return; then its mixture's two shares, its softmax's
+    /// sharpness and its long-run average's memory (`robot.StartCurriculumRule`, `curriculumRule`).
     curriculum: Switch = .disabled,
     curriculum_discount: f32 = 0.99,
-    _padding_curriculum_0: u32 = 0,
-    _padding_curriculum_1: u32 = 0,
+    curriculum_return_scale: f32 = 1,
+    curriculum_return_memory: f32 = 0,
+    curriculum_uniform_share: f32 = 1,
+    curriculum_hard_share: f32 = 0,
+    curriculum_sharpness: f32 = 0,
+    curriculum_history_memory: f32 = 0,
     /// The exploration's spread this decision (`explore_actions`, the decision's clock): the noise scale times sigma; a
     /// row with its padding.
     exploration_spread: f32 = 0,
@@ -1388,6 +1607,24 @@ pub const StepOptions = extern struct {
     decision_stiffness_filter: f32 = 1,
     _padding_decision_filter_0: u32 = 0,
     _padding_decision_filter_1: u32 = 0,
+    /// A CANDIDATE's SCORE (`score_candidates`): the discount of its rewards from one lookahead decision to the next,
+    /// and the cost of losing its reference, in the reward's units - larger than any lookahead's rewards can differ
+    /// by, so a candidate that loses ranks below every one that does not. Both run options, to be measured. Then the
+    /// decision of a plan whose action the plans give next (`follow_plans`), counted from the plan's first - its
+    /// replan's own decision - and what the plans' numbers are (`robot.PlanForm`): whole actions, or offsets added to
+    /// the policy's choice. A row.
+    plan_discount: f32 = 0.99,
+    plan_loss_cost: f32 = 10,
+    plan_decision: f32 = 0,
+    plan_form: robot.PlanForm = .whole_actions,
+    /// WHETHER THIS DECISION's CHOICES HAVE A FLOW's CORRECTION to take (`add_flow_corrections`): the learner's flow
+    /// actor wrote one for every acting world into `flow_corrections`. Then whether the policy's inputs hold the ROOT
+    /// TARGET in their slots (`policy_inputs`, `robot.root_target_size`) - where the goal's reference root is, seen
+    /// from the character's - or zeros (`Sim.setRootTarget`). A row with its padding.
+    flow_corrections: Switch = .disabled,
+    root_target: Switch = .disabled,
+    _padding_flow_corrections_1: u32 = 0,
+    _padding_flow_corrections_2: u32 = 0,
 
     /// The options of `model`, as a step reads them.
     pub fn of(model: *const robot.Model) StepOptions {
@@ -1461,6 +1698,12 @@ pub const StepOptions = extern struct {
         options.limb_stiffness = limb_stiffness;
     }
 
+    /// Whether the policy's inputs hold the root target in their slots or zeros (`policy_inputs`), from the next
+    /// inputs on.
+    pub fn setRootTarget(options: *StepOptions, root_target: bool) void {
+        options.root_target = if (root_target) .enabled else .disabled;
+    }
+
     /// The head body the judgement measures, or none (robot_track's `Fleet.head`).
     pub fn setHeadBody(options: *StepOptions, head: ?usize) void {
         options.head_body = if (head) |body| @intCast(body) else no_head_body;
@@ -1474,6 +1717,37 @@ pub const StepOptions = extern struct {
         options.max_steps = rules.max_steps;
         options.aftermath_world_count = rules.aftermath_world_count;
         options.decision_physics_steps = rules.decision_physics_steps;
+    }
+
+    /// SuperMimic's curriculum, for the decisions after: whether starts follow it, its returns' discount, the largest
+    /// return and its rule (`robot.StartCurriculumRule`), a number each in the uniform.
+    pub fn setCurriculum(
+        options: *StepOptions,
+        curriculum: Switch,
+        discount: f32,
+        return_scale: f32,
+        rule: robot.StartCurriculumRule,
+    ) void {
+        options.curriculum = curriculum;
+        options.curriculum_discount = discount;
+        options.curriculum_return_scale = return_scale;
+        options.curriculum_return_memory = rule.return_memory;
+        options.curriculum_uniform_share = rule.uniform_share;
+        options.curriculum_hard_share = rule.hard_share;
+        options.curriculum_sharpness = rule.sharpness;
+        options.curriculum_history_memory = rule.history_memory;
+    }
+
+    /// The curriculum's rule as the uniform holds it (`setCurriculum`), robot.zig's value again.
+    pub fn curriculumRule(options: StepOptions) robot.StartCurriculumRule {
+        const rule: robot.StartCurriculumRule = .{
+            .uniform_share = options.curriculum_uniform_share,
+            .hard_share = options.curriculum_hard_share,
+            .sharpness = options.curriculum_sharpness,
+            .history_memory = options.curriculum_history_memory,
+            .return_memory = options.curriculum_return_memory,
+        };
+        return rule;
     }
 };
 
@@ -1504,9 +1778,10 @@ comptime {
     // Every array's place is one 16-byte row, so a layout of them is packed as a uniform expects; `Params` is a whole
     // number of rows.
     const arrays_are_rows: bool = @sizeOf(WorldArray(.world_f, .single)) == 16 and
-        @sizeOf(ModelTable(.model_u, .single)) == 16;
+        @sizeOf(ModelTable(.model_u, .single)) == 16 and
+        @sizeOf(SharedArray(.io, .single)) == 16;
     if (!arrays_are_rows) {
-        @compileError("WorldArray and ModelTable must be 16 bytes");
+        @compileError("WorldArray, ModelTable and SharedArray must be 16 bytes");
     }
     if (@sizeOf(Params) % 16 != 0) {
         @compileError("Params must be a whole number of 16-byte rows");
@@ -1520,6 +1795,7 @@ pub const Capacities = struct {
     efc_f: u32 = sizes.efc_f,
     model_u: u32 = sizes.model_u,
     model_f: u32 = sizes.model_f,
+    io: u32 = sizes.io,
 };
 
 /// A layout that does not fit its arena, by the arena's name.
@@ -1534,6 +1810,8 @@ pub const LayoutError = error{
     ModelTablesTooSmall,
     /// `model_f`: this model's real-valued constants need more floats than the arena holds.
     ModelConstantsTooSmall,
+    /// `io`: the shared state - the curriculum's bins - needs more floats than the arena holds.
+    HostWindowTooSmall,
 };
 
 /// Four-number alignment: every array's start and every world's block.
@@ -1577,9 +1855,26 @@ fn placeArrays(
     return true;
 }
 
+/// HOW FAR ARENA `arena` REACHES in `layout` for `counts`: the end of its last array - every world's block counted for
+/// a per-world array, the one copy for a shared one. Everything a simulation holds in that arena lies below it: what a
+/// caller reads or uploads to take every world's state at once, and what the arena must hold at least.
+pub fn arenaEnd(layout: Layout, counts: Counts, comptime arena: Arena) u32 {
+    const ArenaLayout: type = @FieldType(Layout, @tagName(arena));
+    const arena_layout: ArenaLayout = @field(layout, @tagName(arena));
+    var used_end: u32 = 0;
+    inline for (@typeInfo(ArenaLayout).@"struct".field_names) |array_name| {
+        const ArrayType: type = @FieldType(ArenaLayout, array_name);
+        const array: ArrayType = @field(arena_layout, array_name);
+        const copies: u32 = if (ArrayType.per_world) counts.world_count else 1;
+        const array_end: u32 = array.offset + array.stride * copies;
+        used_end = @max(used_end, array_end);
+    }
+    return used_end;
+}
+
 /// THE LAYOUT FOR A MODEL'S COUNTS: each arena's arrays placed in their declared order (`placeArrays`) - the
-/// per-world ones once per world, the model's tables once - every block padded to four numbers, and an arena too small
-/// for its arrays refused by name.
+/// per-world ones once per world, the model's tables and the shared arrays once - every block padded to four numbers,
+/// and an arena too small for its arrays refused by name.
 pub fn layoutFor(counts: Counts, capacities: Capacities) LayoutError!Layout {
     var layout: Layout = .{};
     const world_state_fits: bool = placeArrays(.world_f, &layout, counts, capacities.world_f);
@@ -1601,6 +1896,10 @@ pub fn layoutFor(counts: Counts, capacities: Capacities) LayoutError!Layout {
     const model_constants_fit: bool = placeArrays(.model_f, &layout, counts, capacities.model_f);
     if (!model_constants_fit) {
         return LayoutError.ModelConstantsTooSmall;
+    }
+    const host_window_fits: bool = placeArrays(.io, &layout, counts, capacities.io);
+    if (!host_window_fits) {
+        return LayoutError.HostWindowTooSmall;
     }
     return layout;
 }
@@ -2298,12 +2597,17 @@ const WorldElement = struct {
     in_range: bool,
 };
 
+/// The world of a per-world kernel's invocation: the program's first world (`Counts.first_world`) and on.
+fn worldOf(invocation: u32) u32 {
+    return params.counts.first_world + invocation;
+}
+
 fn worldElementOf(invocation: u32, elements_per_world: u32) WorldElement {
     if (elements_per_world == 0) {
         const nothing: WorldElement = .{ .world = 0, .element = 0, .in_range = false };
         return nothing;
     }
-    const world: u32 = invocation / elements_per_world;
+    const world: u32 = params.counts.first_world + invocation / elements_per_world;
     const element: u32 = invocation % elements_per_world;
     const handled: WorldElement = .{
         .world = world,
@@ -2327,7 +2631,7 @@ fn worldElementOf(invocation: u32, elements_per_world: u32) WorldElement {
 /// CLEAR EVERY WORLD'S OVERFLOW WORD, one invocation per world - the first kernel of every step, so the bits the host
 /// reads afterwards are that step's alone, not left over from an earlier one.
 pub fn clear_overflow(invocation: u32) void {
-    const world: u32 = invocation;
+    const world: u32 = worldOf(invocation);
     if (world >= params.counts.world_count) {
         return;
     }
@@ -2609,7 +2913,7 @@ pub fn site_poses(invocation: u32) void {
 ///     divide:   subtree_centres_of_mass[b] = S[b] / subtree_mass[b]
 ///               (body_centres_of_mass[b] for a massless subtree)
 pub fn subtree_centres_of_mass(invocation: u32) void {
-    const world: u32 = invocation;
+    const world: u32 = worldOf(invocation);
     if (world >= params.counts.world_count) {
         return;
     }
@@ -2717,7 +3021,7 @@ pub fn dof_axes(invocation: u32) void {
 /// not attached to it rigidly. In the frame of the tree's centre of mass, these sums are plain additions
 /// (`Inertia.add`).
 pub fn composite_inertias(invocation: u32) void {
-    const world: u32 = invocation;
+    const world: u32 = worldOf(invocation);
     if (world >= params.counts.world_count) {
         return;
     }
@@ -2929,7 +3233,7 @@ inline fn massMatrixEntry(world: u32, higher: u32, lower: u32) f32 {
 /// robot.zig's own `factorLdlInPlace` - the CPU engine's arithmetic in its order, so the twin matches it to the bit.
 /// One invocation per world is the first form, the exact one; the storage decides where the factor lives.
 pub fn factor_mass_matrix(invocation: u32) void {
-    const world: u32 = invocation;
+    const world: u32 = worldOf(invocation);
     if (world >= params.counts.world_count) {
         return;
     }
@@ -3112,7 +3416,7 @@ pub fn body_bias_forces(invocation: u32) void {
 /// parent's, last body first, so a body's force becomes the force its whole subtree needs - the force its joint must
 /// transmit. A tree's root adds nothing into the world body, which holds it by no joint.
 pub fn subtree_bias_forces(invocation: u32) void {
-    const world: u32 = invocation;
+    const world: u32 = worldOf(invocation);
     if (world >= params.counts.world_count) {
         return;
     }
@@ -3493,7 +3797,7 @@ fn rootBlockSystem(world: u32) [6][7]f32 {
 /// `inverseDynamics` on the whole: M a by robot.zig's product into the applied forces, the bias forces added, and a
 /// free root's six torques zero - nothing actuates the root.
 pub fn servo_torques(invocation: u32) void {
-    const world: u32 = invocation;
+    const world: u32 = worldOf(invocation);
     if (world >= params.counts.world_count) {
         return;
     }
@@ -3527,7 +3831,7 @@ pub fn servo_torques(invocation: u32) void {
 /// `driveOnce` adding its own: every actuated dof's torque at the velocity it acts through (`robot.addDofEffort`, dof
 /// after dof), added into the world's sums for its decision.
 pub fn accumulate_effort(invocation: u32) void {
-    const world: u32 = invocation;
+    const world: u32 = worldOf(invocation);
     if (world >= params.counts.world_count) {
         return;
     }
@@ -3551,7 +3855,7 @@ pub fn accumulate_effort(invocation: u32) void {
 /// EACH WORLD's EFFORT ZEROED, one invocation per world, at a decision's start (`decision_start_program`), as the CPU
 /// fleet's `step` zeroes its characters'.
 pub fn zero_effort(invocation: u32) void {
-    const world: u32 = invocation;
+    const world: u32 = worldOf(invocation);
     if (world >= params.counts.world_count) {
         return;
     }
@@ -3601,7 +3905,7 @@ pub fn smooth_joint_forces(invocation: u32) void {
 /// acceleration the forces other than the constraints' would cause - the forces copied into the acceleration and solved
 /// in place with the factor (`robot.solveLdl`), as robot.zig's `forwardDynamics` solves.
 pub fn solve_smooth_acceleration(invocation: u32) void {
-    const world: u32 = invocation;
+    const world: u32 = worldOf(invocation);
     if (world >= params.counts.world_count) {
         return;
     }
@@ -3897,7 +4201,7 @@ fn packContactRows(world: u32, first_row: u32) u32 {
 /// (`packContactRows`), when the worlds have a floor. The world's row count follows. The device's rows hold every
 /// candidate and four rows a floor slot (`Counts.constraint_capacity`), so a world never runs out of them.
 pub fn constraint_rows(invocation: u32) void {
-    const world: u32 = invocation;
+    const world: u32 = worldOf(invocation);
     if (world >= params.counts.world_count) {
         return;
     }
@@ -4786,12 +5090,33 @@ fn newtonStore(context: NewtonContext, lane: u32) void {
     }
 }
 
-/// The first lane: whether the world has any row - the workgroup's first decision, read by all.
+/// WHAT A WORKGROUP's WORLD NEEDS - its first decision, made by the first lane and read by all (`newton_decision`).
+const NewtonStart = enum(u32) {
+    /// The workgroup's world is past the batch's world count: nothing to solve, and nothing written. A lookahead lowers
+    /// the count to step its candidates alone (`Sim.stepCandidatesAhead`) while the dispatch stays sized for every
+    /// world, so the workgroups of the worlds after the candidates must leave them exactly as they are - a solve
+    /// would rewrite their accelerations and their warm start, and their next step would begin elsewhere.
+    no_world = 0,
+    /// A world with no constraint row: the free acceleration at once (`newtonStoreFree`).
+    no_rows = 1,
+    /// A world with rows: Newton's rounds.
+    rows = 2,
+};
+
+/// The first lane: what the workgroup's world needs (`NewtonStart`) - its first decision, read by all. The world's
+/// rows are counted only for a world in the batch.
 fn newtonDecideRows(context: NewtonContext, lane: u32) void {
     if (lane != 0) {
         return;
     }
-    newton_decision[0] = @intFromBool(newtonRowCount(context.world) > 0);
+    const in_batch: bool = context.world < params.counts.world_count;
+    const start: NewtonStart = if (!in_batch)
+        .no_world
+    else if (newtonRowCount(context.world) > 0)
+        .rows
+    else
+        .no_rows;
+    newton_decision[0] = @backingInt(start);
 }
 /// A WORLD WITH NO ROWS: robot.zig's answer at once (`solveConstraints` with no rows) - the free acceleration, saved as
 /// the next step's warm start too, no joint force, no round, no line evaluated - without the Hessian of a problem that
@@ -4836,16 +5161,19 @@ inline fn newtonDerivatives(lane: u32, context: NewtonContext) void {
 /// phase by phase (the section's comment above).
 pub fn newton_solve(invocation: u32) void {
     const workgroup_size: u32 = config.workgroup;
-    const world: u32 = invocation / workgroup_size;
+    const world: u32 = params.counts.first_world + invocation / workgroup_size;
     const lane: u32 = invocation % workgroup_size;
     if (!k.is_gpu and lane != 0) {
         return;
     }
     var context: NewtonContext = .{ .world = world };
     runPhase(lane, newtonDecideRows, context);
-    // A BRANCH, NOT AN EARLY RETURN: the decision is uniform - every lane reads it through `workgroupUniformLoad` -
-    // but a barrier after a `return` is refused by the WGSL translator (`spv2wgsl`), which cannot see that.
-    const has_rows: bool = k.workgroupUniformLoad(u32, 1, newton_decision, 0) != 0;
+    // BRANCHES, NOT AN EARLY RETURN: the decision is uniform - every lane reads it through `workgroupUniformLoad` -
+    // but a barrier after a `return` is refused by the WGSL translator (`spv2wgsl`), which cannot see that. A world
+    // past the batch (`NewtonStart.no_world`) takes neither branch.
+    const start_decision: u32 = k.workgroupUniformLoad(u32, 1, newton_decision, 0);
+    const has_rows: bool = start_decision == @backingInt(NewtonStart.rows);
+    const has_no_rows: bool = start_decision == @backingInt(NewtonStart.no_rows);
     if (has_rows) {
         runPhase(lane, newtonStartRows, context);
         runPhase(lane, newtonChooseStart, context);
@@ -4868,7 +5196,7 @@ pub fn newton_solve(invocation: u32) void {
         }
         context.iterations = iteration;
         runPhase(lane, newtonStore, context);
-    } else {
+    } else if (has_no_rows) {
         runPhase(lane, newtonStoreFree, context);
     }
 }
@@ -4905,7 +5233,7 @@ pub fn newton_solve(invocation: u32) void {
 /// EACH WORLD'S DAMPED VELOCITY CHANGE, one invocation per world - robot.zig's `dampedVelocityStep` for a model with
 /// damping, in its four steps (the section's introduction); a model without damping has nothing to do here.
 pub fn damped_velocity_changes(invocation: u32) void {
-    const world: u32 = invocation;
+    const world: u32 = worldOf(invocation);
     if (world >= params.counts.world_count) {
         return;
     }
@@ -5092,7 +5420,13 @@ pub const observe_program = program.observe_program;
 pub const decision_start_program = program.decision_start_program;
 pub const judge_program = program.judge_program;
 pub const reset_program = program.reset_program;
+pub const new_episodes_program = program.new_episodes_program;
 pub const policy_inputs_program = program.policy_inputs_program;
+pub const record_program = program.record_program;
+pub const begin_candidate_scores_program = program.begin_candidate_scores_program;
+pub const score_candidates_program = program.score_candidates_program;
+pub const follow_plans_program = program.follow_plans_program;
+pub const copy_program = program.copy_program;
 pub const give_program = program.give_program;
 
 // ------------------------------------------------------------------------------------------------------------------
@@ -5123,7 +5457,7 @@ fn storeObservationVector(world: u32, at: u32, v: Vec) void {
 /// observation program brings forward first: the bodies' poses, the subtrees' centres of mass, the bodies' spatial
 /// velocities.
 pub fn observe_character(invocation: u32) void {
-    const world: u32 = invocation;
+    const world: u32 = worldOf(invocation);
     if (world >= params.counts.world_count) {
         return;
     }
@@ -5133,12 +5467,12 @@ pub fn observe_character(invocation: u32) void {
     const to_local: robot.Quat = conjugate(state.body_orientations.loadVec(world, root));
     const origin: Vec = state.body_positions.loadVec(world, root);
     // `local`'s layout: every body's position, then every body's rotation, velocity, angular velocity, height; the up.
-    const character_bodies: u32 = params.counts.body_count - 1;
-    const rotations_at: u32 = 3 * character_bodies;
-    const velocities_at: u32 = 9 * character_bodies;
-    const angular_at: u32 = 12 * character_bodies;
-    const heights_at: u32 = 15 * character_bodies;
-    const up_at: u32 = 16 * character_bodies;
+    const layout: robot.LocalLayout = .of(params.counts.body_count);
+    const rotations_at: u32 = layout.rotations_at;
+    const velocities_at: u32 = layout.velocities_at;
+    const angular_at: u32 = layout.angular_at;
+    const heights_at: u32 = layout.heights_at;
+    const up_at: u32 = layout.up_at;
     var body: u32 = 1;
     while (body < params.counts.body_count) : (body += 1) {
         const position: Vec = state.body_positions.loadVec(world, body);
@@ -5182,7 +5516,7 @@ fn referenceFrameRow(world: u32) u32 {
 /// clip on the host (`ClipPoses.reference_features`) and copied after the character's half - the frame clamped to the
 /// clip's last, as `referenceStateInto` clamps it.
 pub fn observe_reference(invocation: u32) void {
-    const world: u32 = invocation;
+    const world: u32 = worldOf(invocation);
     if (world >= params.counts.world_count) {
         return;
     }
@@ -5204,84 +5538,9 @@ pub fn observe_reference(invocation: u32) void {
     }
 }
 
-/// THE POLICY's INPUTS for one world - SuperTrack's two feature vectors as the learner reads them
-/// (`robot_track_resident.supertrackFeaturesInto`): the GOAL, the reference one frame ahead of the world's frame (held
-/// at the clip's last frame, as the fleet holds it), read from the clips' precomputed reference features; then the
-/// STATE, the observation's first half - the simulated bodies in the root's frame. Each feature becomes
-/// `(x - mean) / spread` with the normaliser's tables. Run after the observation program.
-pub fn policy_inputs(invocation: u32) void {
-    const world: u32 = invocation;
-    if (world >= params.counts.world_count) {
-        return;
-    }
-    if (params.counts.reference_feature_frames == 0) {
-        return;
-    }
-    const constants: ModelConstantsLayout = params.layout.model_f;
-    const state: WorldStateLayout = params.layout.world_f;
-    const counters: WorldIntegersLayout = params.layout.world_u;
-    const tables: ModelTablesLayout = params.layout.model_u;
-    const feature_count: u32 = @intCast(robot.localSize(params.counts.body_count));
-    const clip: u32 = counters.world_clip.load(world, 0);
-    const frame: u32 = counters.world_frame.load(world, 0);
-    const last_frame: u32 = tables.clip_frame_count.load(clip) - 1;
-    const goal_frame: u32 = @min(frame + 1, last_frame);
-    const goal_row: u32 = tables.clip_first_frame.load(clip) + goal_frame;
-    const goal_first: u32 = goal_row * feature_count;
-    var feature: u32 = 0;
-    while (feature < feature_count) : (feature += 1) {
-        const mean: f32 = constants.feature_means.load(feature);
-        const spread: f32 = constants.feature_spreads.load(feature);
-        const goal_raw: f32 = constants.clip_reference_features.load(goal_first + feature);
-        state.policy_inputs.store(world, feature, (goal_raw - mean) / spread);
-        const state_raw: f32 = state.observations.load(world, feature);
-        state.policy_inputs.store(world, feature_count + feature, (state_raw - mean) / spread);
-    }
-}
-
-/// EACH BODY's LOWEST POINT, one invocation per world and body, at a decision's end - `robot.bodyLowestPoints`: the
-/// lowest of its geoms' lowest points, each geom placed on its body as robot.zig places it (`geomLowestPoint`) and
-/// measured by robot.zig's own functions for its shape. The world, and a body with no geom, keep
-/// `robot.no_shape_height`. (The device takes no hulls, as its floor contacts take none.)
-pub fn body_lowest_points(invocation: u32) void {
-    const handled: WorldElement = worldElementOf(invocation, params.counts.body_count);
-    if (!handled.in_range) {
-        return;
-    }
-    const world: u32 = handled.world;
-    const body: u32 = handled.element;
-    const state: WorldStateLayout = params.layout.world_f;
-    const tables: ModelTablesLayout = params.layout.model_u;
-    const constants: ModelConstantsLayout = params.layout.model_f;
-    var lowest: f32 = robot.no_shape_height;
-    if (body != 0) {
-        const body_position: Vec = state.body_positions.loadVec(world, body);
-        const body_orientation: Vec = state.body_orientations.loadVec(world, body);
-        var geom: u32 = 0;
-        while (geom < params.counts.geom_count) : (geom += 1) {
-            if (tables.geom_body.load(geom) != body) {
-                continue;
-            }
-            const rotation: Vec = qmul(body_orientation, constants.geom_local_rotation.loadVec(geom));
-            const center: Vec = body_position + rotate(body_orientation, constants.geom_local_position.loadVec(geom));
-            const size: Vec = constants.geom_size.loadVec(geom);
-            const geom_type: GeomType = typeOfGeom(geom);
-            const geom_lowest: f32 = switch (geom_type) {
-                .sphere => robot.sphereLowestPoint(center, size[0]),
-                .capsule, .cylinder => robot.segmentLowestPoint(center, rotation, size[0], size[1]),
-                .box => robot.boxLowestPoint(center, rotation, size),
-                // robot.zig makes no plane, height field or ellipsoid; a hull - MuJoCo's mesh - has no points packed
-                // on the device, which leaves it out, as its floor contacts leave it out.
-                .plane, .height_field, .ellipsoid, .mesh => robot.no_shape_height,
-            };
-            lowest = @min(lowest, geom_lowest);
-        }
-    }
-    state.body_lowest_points.store(world, body, lowest);
-}
-
 /// THE BODIES THE JUDGEMENT READS on the device (`robot.trackingErrorOver`'s storage; robot.zig's `BodySlices` on
-/// the CPU) - one type for both of its sides, as the judgement takes one, and a field saying which:
+/// the CPU) - one type for both of its sides, as the judgement takes one, and a field saying which. The policy's root
+/// target reads its two roots through it too (`rootTargetOfWorld`):
 ///
 ///     a world's        each body's pose, the velocity of its frame origin (`robot.motionPointVelocity`, as
 ///                      `stateOf` takes it), its angular velocity and its lowest point - the derived quantities
@@ -5353,11 +5612,425 @@ const DeviceBodies = struct {
     }
 };
 
+/// THE ROOT TARGET of world `world` toward the reference at clip row `goal_row` (`robot.root_target_size`): the
+/// reference's root as `clip_reference_bodies` holds it - the reference state the judgement reads - seen from the
+/// world's root (`poseSeenFrom`).
+fn rootTargetOfWorld(world: u32, goal_row: u32) [robot.root_target_size]f32 {
+    const frame_numbers: u32 = params.counts.body_count * @as(u32, @intCast(robot.reference_body_numbers));
+    const sim: DeviceBodies = .{ .source = .world, .world = world };
+    const reference: DeviceBodies = .{ .source = .reference, .first_number = goal_row * frame_numbers };
+    const root: usize = params.counts.root_body;
+    const character_root: robot.Pose = .{ .pos = sim.position(root), .rot = sim.rotation(root) };
+    const reference_root: robot.Pose = .{
+        .pos = reference.position(root),
+        .rot = reference.rotation(root),
+    };
+    return poseSeenFrom(character_root, reference_root);
+}
+
+/// THE POLICY's INPUTS for one world - SuperTrack's two feature vectors as the learner reads them
+/// (`robot_track_resident.supertrackFeaturesInto`), the root target's slots between them:
+///
+///     [ goal | root target | state ]
+///
+/// the GOAL, the reference one frame ahead of the world's frame (held at the clip's last frame, as the fleet holds
+/// it), read from the clips' precomputed reference features; the ROOT TARGET, where that frame's reference root is
+/// seen from the world's root (`rootTargetOfWorld`) - or zeros, with the root target off (`StepOptions.root_target`);
+/// then the STATE, the observation's first half - the simulated bodies in the root's frame. Each feature becomes
+/// `(x - mean) / spread` with the normaliser's tables; the root target's numbers, metres and unit axes already, are
+/// read as they are. Run after the observation program.
+pub fn policy_inputs(invocation: u32) void {
+    const world: u32 = worldOf(invocation);
+    if (world >= params.counts.world_count) {
+        return;
+    }
+    if (params.counts.reference_feature_frames == 0) {
+        return;
+    }
+    const constants: ModelConstantsLayout = params.layout.model_f;
+    const state: WorldStateLayout = params.layout.world_f;
+    const counters: WorldIntegersLayout = params.layout.world_u;
+    const tables: ModelTablesLayout = params.layout.model_u;
+    const feature_count: u32 = @intCast(robot.localSize(params.counts.body_count));
+    const clip: u32 = counters.world_clip.load(world, 0);
+    const frame: u32 = counters.world_frame.load(world, 0);
+    const last_frame: u32 = tables.clip_frame_count.load(clip) - 1;
+    const goal_frame: u32 = @min(frame + 1, last_frame);
+    const goal_row: u32 = tables.clip_first_frame.load(clip) + goal_frame;
+    const goal_first: u32 = goal_row * feature_count;
+    const root_target_size: u32 = @intCast(robot.root_target_size);
+    const state_at: u32 = feature_count + root_target_size;
+    var feature: u32 = 0;
+    while (feature < feature_count) : (feature += 1) {
+        const mean: f32 = constants.feature_means.load(feature);
+        const spread: f32 = constants.feature_spreads.load(feature);
+        const goal_raw: f32 = constants.clip_reference_features.load(goal_first + feature);
+        state.policy_inputs.store(world, feature, (goal_raw - mean) / spread);
+        const state_raw: f32 = state.observations.load(world, feature);
+        state.policy_inputs.store(world, state_at + feature, (state_raw - mean) / spread);
+    }
+    const root_target_on: bool = params.options.root_target == .enabled;
+    const no_target: [robot.root_target_size]f32 = @splat(0);
+    const target: [robot.root_target_size]f32 = if (root_target_on) rootTargetOfWorld(world, goal_row) else no_target;
+    var slot: u32 = 0;
+    while (slot < root_target_size) : (slot += 1) {
+        state.policy_inputs.store(world, feature_count + slot, target[slot]);
+    }
+}
+
+/// The copy table's entry for a world copied from no other (`copy_source`): zero, what a fresh arena holds.
+pub const no_copy_source: u32 = 0;
+
+/// The copy table's entry for a world made a copy of `source`: its index plus one, so that zero stays "none".
+pub fn copySourceEntry(source: u32) u32 {
+    return source + 1;
+}
+
+/// Whether world `world` is a copy of another, by its entry in the copy table (`copy_source`).
+fn isCopy(world: u32) bool {
+    const entry: u32 = params.layout.world_u.copy_source.load(world, 0);
+    return entry != no_copy_source;
+}
+
+/// The world `world` is a copy of, for a world that is one (`isCopy`): its entry in the copy table, less one.
+fn copySourceOf(world: u32) u32 {
+    const entry: u32 = params.layout.world_u.copy_source.load(world, 0);
+    const source: u32 = entry - 1;
+    return source;
+}
+
+/// One world's block of one array copied over another world's, number by number - the whole block, its padding
+/// with it, so nothing of the source is left out however the array's items are shaped.
+fn copyWorldBlock(
+    comptime arena: Arena,
+    array_offset: u32,
+    array_stride: u32,
+    source: u32,
+    destination: u32,
+) void {
+    const source_first: u32 = array_offset + source * array_stride;
+    const destination_first: u32 = array_offset + destination * array_stride;
+    var number: u32 = 0;
+    while (number < array_stride) : (number += 1) {
+        const value: ArenaElement(arena) = loadNumber(arena, source_first + number);
+        storeNumber(arena, destination_first + number, value);
+    }
+}
+
+/// WHETHER A WORLD IS A CANDIDATE: a copy of a planning world (`copy_world_state`), run ahead of it to see where an
+/// action would lead, its copy table still naming that world. A candidate lives by the same physics and is judged
+/// as any world is - its losses and rewards are what its planner scores - but it is no episode of its own: no reset
+/// restarts it when it loses its reference, and no push reaches it. Its records are packed as any world's; a
+/// trainer keeps them only from its lookaheads, in a ring of their own. It stays a candidate until the host clears
+/// its entry in the copy table (`Sim.copyWorlds`). Candidates are the FIRST worlds of the batch, the planning
+/// characters after them: a lookahead then steps the candidates alone by lowering the batch's world count to theirs
+/// (`Sim.stepCandidatesAhead`).
+fn isCandidate(world: u32) bool {
+    return isCopy(world);
+}
+
+/// A WORLD MADE A COPY OF ANOTHER, one invocation per world: every world whose `copy_source` names a world takes
+/// that world's whole state - every array of the world's numbers and of its integers, as the layouts list them:
+/// coordinates, velocities, the applied and chosen actions, the warm start, the clip and frame, the episode's
+/// counters and flags. The arrays are walked at compile time from the layouts' fields, so an array added to a
+/// layout is copied without being named here. Only the copy table itself is not copied. From then on the copy
+/// steps exactly as its source would: the physics reads nothing but this state. Its random draws are its own,
+/// keyed by its world's index. A world copied from must not be a copy in the same run - the table is checked by
+/// the host (`Sim.copyWorlds`).
+pub fn copy_world_state(invocation: u32) void {
+    const destination: u32 = worldOf(invocation);
+    if (destination >= params.counts.world_count) {
+        return;
+    }
+    const integers: WorldIntegersLayout = params.layout.world_u;
+    if (!isCopy(destination)) {
+        return;
+    }
+    const source: u32 = copySourceOf(destination);
+    const numbers: WorldStateLayout = params.layout.world_f;
+    inline for (@typeInfo(WorldStateLayout).@"struct".field_names) |field_name| {
+        const array: @FieldType(WorldStateLayout, field_name) = @field(numbers, field_name);
+        copyWorldBlock(.world_f, array.offset, array.stride, source, destination);
+    }
+    inline for (@typeInfo(WorldIntegersLayout).@"struct".field_names) |field_name| {
+        const is_copy_table: bool = comptime eql(u8, field_name, "copy_source");
+        if (!is_copy_table) {
+            const array: @FieldType(WorldIntegersLayout, field_name) = @field(integers, field_name);
+            copyWorldBlock(.world_u, array.offset, array.stride, source, destination);
+        }
+    }
+}
+
+/// A CANDIDATE's SCORE BEGUN, one invocation per world, before a lookahead: its score zero, its next reward's
+/// discount one, not yet lost. Worlds that are no candidates are left alone.
+pub fn begin_candidate_scores(invocation: u32) void {
+    const world: u32 = worldOf(invocation);
+    if (world >= params.counts.world_count) {
+        return;
+    }
+    if (!isCandidate(world)) {
+        return;
+    }
+    params.layout.world_f.candidate_scores.store(world, 0, 0);
+    params.layout.world_f.candidate_discount_powers.store(world, 0, 1);
+    params.layout.world_u.candidate_lost.store(world, 0, 0);
+}
+
+/// A CANDIDATE's DECISION SCORED, one invocation per world, after each decision of a lookahead: the decision's
+/// SuperMimic reward - what the policy itself is trained on (`judge_rewards`) - added at its discount, the discount
+/// carried on to the next decision. If the decision lost the candidate its reference, the loss's cost is taken at the
+/// same discount (a loss later in the lookahead costs less), and from then on the candidate scores nothing: a body
+/// that has fallen keeps being judged, but what it earns after the fall is no part of the plan.
+///
+///     score  =  sum over decisions d before the loss of  gamma^d r_d   -   gamma^loss  cost   (if it lost)
+pub fn score_candidates(invocation: u32) void {
+    const world: u32 = worldOf(invocation);
+    if (world >= params.counts.world_count) {
+        return;
+    }
+    if (!isCandidate(world)) {
+        return;
+    }
+    const state: WorldStateLayout = params.layout.world_f;
+    const counters: WorldIntegersLayout = params.layout.world_u;
+    const lost_before: bool = counters.candidate_lost.load(world, 0) != 0;
+    if (lost_before) {
+        return;
+    }
+    const discount_power: f32 = state.candidate_discount_powers.load(world, 0);
+    const reward: f32 = state.super_mimic_rewards.load(world, 0);
+    const score_before: f32 = state.candidate_scores.load(world, 0);
+    const flags: u32 = counters.episode_flags.load(world, 0);
+    const lost_now: bool = flags & episodeFlagBit(.lost) != 0;
+    const loss_cost: f32 = if (lost_now) params.options.plan_loss_cost else 0;
+    const score_after: f32 = score_before + discount_power * (reward - loss_cost);
+    state.candidate_scores.store(world, 0, score_after);
+    state.candidate_discount_powers.store(world, 0, discount_power * params.options.plan_discount);
+    if (lost_now) {
+        counters.candidate_lost.store(world, 0, 1);
+    }
+}
+
+/// WHERE A PLAN's DECISION FALLS AMONG ITS KNOTS. A plan is `plan_knot_count` knots of the whole action's numbers (the
+/// joints', then the limbs' stiffnesses), in the world's `plan_knots`, spread evenly over the plan's horizon H; the
+/// plan at decision d lies on the straight line between the two knots around knot position d (K - 1) / H:
+///
+///     knots      k0 ---------------- k1 ---------------- k2           K = 3, H = 8
+///     decision   0    1    2    3    4    5    6    7    8
+///     d = 6      position 6 x 2 / 8 = 1.5   ->   halfway from k1 to k2: lower knot 1, share of the upper 0.5
+///
+/// Past the horizon the last knot is held. A plan has two knots at least (`Counts.plan_knot_count`), so the last
+/// segment's start is the lower knot at the very end.
+const PlanPoint = struct {
+    lower_knot: u32,
+    share_of_upper: f32,
+};
+
+fn planPointAt(plan_decision: f32) PlanPoint {
+    const knot_count: u32 = params.counts.plan_knot_count;
+    const last_knot: f32 = @floatFromInt(knot_count - 1);
+    const horizon: f32 = @floatFromInt(params.counts.plan_horizon);
+    const knot_position: f32 = plan_decision * last_knot / horizon;
+    const clamped_position: f32 = clamp(knot_position, 0, last_knot);
+    const knot_at_or_before: u32 = @trunc(clamped_position);
+    const lower_knot: u32 = @min(knot_at_or_before, knot_count - 2);
+    const share_of_upper: f32 = clamped_position - float(lower_knot);
+    return .{ .lower_knot = lower_knot, .share_of_upper = share_of_upper };
+}
+
+/// A world's plan at `point`, its number `number`: the straight line between the two knots around it.
+fn planNumberAt(world: u32, point: PlanPoint, number: u32) f32 {
+    const state: WorldStateLayout = params.layout.world_f;
+    const action_count: u32 = params.counts.action_count;
+    const at_lower: f32 = state.plan_knots.load(world, point.lower_knot * action_count + number);
+    const at_upper: f32 = state.plan_knots.load(world, (point.lower_knot + 1) * action_count + number);
+    return at_lower + point.share_of_upper * (at_upper - at_lower);
+}
+
+/// A WHOLE-ACTION PLAN's ACTION at decision `plan_decision` (`robot.PlanForm.whole_actions`), written into `actions` -
+/// where the physics' servo reads its target - over what the decision gave.
+fn storePlanAction(world: u32, plan_decision: f32) void {
+    const state: WorldStateLayout = params.layout.world_f;
+    const point: PlanPoint = planPointAt(plan_decision);
+    var number: u32 = 0;
+    while (number < params.counts.action_count) : (number += 1) {
+        const action: f32 = planNumberAt(world, point, number);
+        state.actions.store(world, number, action);
+    }
+}
+
+/// A PLAN AROUND THE POLICY at decision `plan_decision` (`robot.PlanForm.offsets_around_policy`): its offset added to
+/// the policy's choice (`chosen_actions`), before the action is given - so the action filter blends the choice and
+/// its offset together, as it blends any choice. The offset is kept too (`plan_offsets`), for the flow to learn.
+fn addPlanOffset(world: u32, plan_decision: f32) void {
+    const state: WorldStateLayout = params.layout.world_f;
+    const point: PlanPoint = planPointAt(plan_decision);
+    var number: u32 = 0;
+    while (number < params.counts.action_count) : (number += 1) {
+        const offset: f32 = planNumberAt(world, point, number);
+        state.plan_offsets.store(world, number, offset);
+        const chosen: f32 = state.chosen_actions.load(world, number);
+        const chosen_with_offset: f32 = chosen + offset;
+        state.chosen_actions.store(world, number, chosen_with_offset);
+    }
+}
+
+/// Whether a world follows its plan at the plan's decision `params.options.plan_decision`, by its `plan_following`
+/// (`PlanFollowing`): at every decision, or at its replan's own alone (decision 0), or never.
+fn followsByItsFollowing(world: u32) bool {
+    const following: u32 = params.layout.world_u.plan_following.load(world, 0);
+    const is_replan_decision: bool = params.options.plan_decision == 0;
+    return followsPlanAt(following, is_replan_decision);
+}
+
+/// Whether a world follows its plan now: a candidate always (a lookahead follows its whole plan; the following it
+/// copied from its planner does not decide for it), any other world by its following.
+fn followsPlanNow(world: u32) bool {
+    return isCandidate(world) or followsByItsFollowing(world);
+}
+
+/// Whether a world acts on a plan around the policy at this decision: the plans are offsets around it
+/// (`robot.PlanForm.offsets_around_policy`) and the world follows its plan now.
+fn followsPlanAroundPolicyNow(world: u32) bool {
+    const around_policy: bool = params.options.plan_form == .offsets_around_policy;
+    if (!around_policy) {
+        return false;
+    }
+    return followsPlanNow(world);
+}
+
+/// A WORLD's PLAN AT THIS DECISION, one invocation per world, before the physics: its plan at
+/// `params.options.plan_decision` - the decisions since its plan began - in the plans' form (`robot.PlanForm`).
+/// Which worlds follow:
+///
+///     a candidate         always: its plan is what its lookahead runs, to be scored (`Sim.stepCandidatesAhead`)
+///     a planner           by its following (`PlanFollowing`): at every decision, at its replan's own alone, or never
+///     any other world     never: its following is `none`
+///
+/// WHOLE ACTIONS: run after the decision's action is given; the plan's action replaces `actions` whole - the decision
+/// filter's blend of the policy's choice is not applied to it (`storePlanAction`). AROUND THE POLICY: run after the
+/// policy has chosen and before the action is given; the plan's offset is added to the choice (`addPlanOffset`), and
+/// the giving that follows filters it, without exploration (`explore_actions`). Either way a planner that follows its
+/// plan takes, decision by decision, the actions its winning candidate was scored with, from the same state.
+pub fn follow_plans(invocation: u32) void {
+    const world: u32 = worldOf(invocation);
+    if (world >= params.counts.world_count) {
+        return;
+    }
+    if (!followsPlanNow(world)) {
+        return;
+    }
+    const plan_decision: f32 = params.options.plan_decision;
+    const around_policy: bool = params.options.plan_form == .offsets_around_policy;
+    if (around_policy) {
+        addPlanOffset(world, plan_decision);
+        return;
+    }
+    storePlanAction(world, plan_decision);
+}
+
+/// EACH WORLD's RECORD for the learner's ring, one invocation per world - the row robot_latent_kit's
+/// `buildStepRecords` packs on the host from a CPU fleet's replay, in the kit's layout (zn_mlp's `latRecordAction`,
+/// `latRecordTableRow`, `latRecordRootPose`): the character's raw features, the action it took, the table row of the
+/// frame it was at, and the root's world pose (`Pose.numbers`) - where the character stood, which its
+/// features, all in the root's own frame, do not say.
+/// Run WHERE THE FLEET's `step` RECORDS: after the decision's action is given and before its physics, so the row is
+/// the state the action was taken from. The features are the observation's first half - the character in its
+/// root's frame, robot_track's `local` - as the observation program has just written it; the action is `actions`;
+/// the frame is the world's own, held at its clip's last as the host holds it. The table row is kept as a float,
+/// like everything else in the ring. What is left of the block after the root pose is padding: nothing writes it -
+/// the arena's zero stays, the zero a host's record holds there - and nothing reads it.
+/// Every world of the batch packs its record - a candidate too, in its lookahead (`Sim.stepCandidatesAhead`); which
+/// worlds' records a ring keeps is the ring's to choose: a trainer's characters' ring takes its characters' blocks,
+/// its candidates' ring their blocks during a lookahead.
+pub fn record_rows(invocation: u32) void {
+    const world: u32 = worldOf(invocation);
+    if (world >= params.counts.world_count) {
+        return;
+    }
+    if (params.counts.reference_feature_frames == 0) {
+        return;
+    }
+    const state: WorldStateLayout = params.layout.world_f;
+    const counters: WorldIntegersLayout = params.layout.world_u;
+    const tables: ModelTablesLayout = params.layout.model_u;
+    const feature_count: u32 = @intCast(robot.localSize(params.counts.body_count));
+    const action_count: u32 = params.counts.action_count;
+    var feature: u32 = 0;
+    while (feature < feature_count) : (feature += 1) {
+        const raw_feature: f32 = state.observations.load(world, feature);
+        state.records.store(world, feature, raw_feature);
+    }
+    var number: u32 = 0;
+    while (number < action_count) : (number += 1) {
+        const action: f32 = state.actions.load(world, number);
+        state.records.store(world, feature_count + number, action);
+    }
+    const clip: u32 = counters.world_clip.load(world, 0);
+    const frame: u32 = counters.world_frame.load(world, 0);
+    const last_frame: u32 = tables.clip_frame_count.load(clip) - 1;
+    const held_frame: u32 = @min(frame, last_frame);
+    const table_row: f32 = @floatFromInt(tables.clip_first_frame.load(clip) + held_frame);
+    state.records.store(world, feature_count + action_count, table_row);
+    const root: u32 = params.counts.root_body;
+    const root_pose: robot.Pose = .{
+        .pos = state.body_positions.loadVec(world, root),
+        .rot = state.body_orientations.loadVec(world, root),
+    };
+    const pose_at: u32 = feature_count + action_count + 1;
+    const root_pose_numbers: [pose_numbers]f32 = root_pose.numbers();
+    var pose_number: u32 = 0;
+    while (pose_number < pose_numbers) : (pose_number += 1) {
+        state.records.store(world, pose_at + pose_number, root_pose_numbers[pose_number]);
+    }
+}
+
+/// EACH BODY's LOWEST POINT, one invocation per world and body, at a decision's end - `robot.bodyLowestPoints`: the
+/// lowest of its geoms' lowest points, each geom placed on its body as robot.zig places it (`geomLowestPoint`) and
+/// measured by robot.zig's own functions for its shape. The world, and a body with no geom, keep
+/// `robot.no_shape_height`. (The device takes no hulls, as its floor contacts take none.)
+pub fn body_lowest_points(invocation: u32) void {
+    const handled: WorldElement = worldElementOf(invocation, params.counts.body_count);
+    if (!handled.in_range) {
+        return;
+    }
+    const world: u32 = handled.world;
+    const body: u32 = handled.element;
+    const state: WorldStateLayout = params.layout.world_f;
+    const tables: ModelTablesLayout = params.layout.model_u;
+    const constants: ModelConstantsLayout = params.layout.model_f;
+    var lowest: f32 = robot.no_shape_height;
+    if (body != 0) {
+        const body_position: Vec = state.body_positions.loadVec(world, body);
+        const body_orientation: Vec = state.body_orientations.loadVec(world, body);
+        var geom: u32 = 0;
+        while (geom < params.counts.geom_count) : (geom += 1) {
+            if (tables.geom_body.load(geom) != body) {
+                continue;
+            }
+            const rotation: Vec = qmul(body_orientation, constants.geom_local_rotation.loadVec(geom));
+            const center: Vec = body_position + rotate(body_orientation, constants.geom_local_position.loadVec(geom));
+            const size: Vec = constants.geom_size.loadVec(geom);
+            const geom_type: GeomType = typeOfGeom(geom);
+            const geom_lowest: f32 = switch (geom_type) {
+                .sphere => robot.sphereLowestPoint(center, size[0]),
+                .capsule, .cylinder => robot.segmentLowestPoint(center, rotation, size[0], size[1]),
+                .box => robot.boxLowestPoint(center, rotation, size),
+                // robot.zig makes no plane, height field or ellipsoid; a hull - MuJoCo's mesh - has no points packed
+                // on the device, which leaves it out, as its floor contacts leave it out.
+                .plane, .height_field, .ellipsoid, .mesh => robot.no_shape_height,
+            };
+            lowest = @min(lowest, geom_lowest);
+        }
+    }
+    state.body_lowest_points.store(world, body, lowest);
+}
+
 /// EACH WORLD's TRACKING ERROR, one invocation per world, at a decision's end - what the CPU fleet's `step` measures
 /// after its physics (`trackingErrorWithHead`): the world against the reference at its clip frame (held at the
 /// clip's last), by robot.zig's own `trackingErrorOver` over the device's storages. Its terms into `tracking_errors`.
 pub fn judge_tracking(invocation: u32) void {
-    const world: u32 = invocation;
+    const world: u32 = worldOf(invocation);
     if (world >= params.counts.world_count) {
         return;
     }
@@ -5422,8 +6095,10 @@ fn actionWidth() u32 {
 /// EACH WORLD's REWARDS, one invocation per world, after its tracking error - what the CPU fleet's `step` earns after
 /// its physics: the tracker's reward (`robot.reward` of the tracking error `judge_tracking` stored) and SuperMimic's
 /// tracking reward (`robot.superMimicTrackingOver` over the same storages) - their weights from `judgement_weights`.
+/// With them, the termination rule's verdict on the error and how far toward it the world is (`robot.lossFraction`),
+/// the decision before's kept beside it.
 pub fn judge_rewards(invocation: u32) void {
-    const world: u32 = invocation;
+    const world: u32 = worldOf(invocation);
     if (world >= params.counts.world_count) {
         return;
     }
@@ -5440,6 +6115,10 @@ pub fn judge_rewards(invocation: u32) void {
     // The termination rule's verdict on this error, before the episode's grace and aftermath weigh it.
     const rule_fires: bool = robot.terminated(err, judgement_weights.termination);
     state.termination_rule.store(world, 0, if (rule_fires) 1.0 else 0.0);
+    // How far toward the rule firing, now and at the decision before.
+    const fraction_before: f32 = state.loss_fraction.load(world, 0);
+    state.previous_loss_fraction.store(world, 0, fraction_before);
+    state.loss_fraction.store(world, 0, robot.lossFraction(err, judgement_weights.termination));
     // SuperMimic's, the world against the same reference row the tracking error read.
     const row: u32 = referenceFrameRow(world);
     const frame_numbers: u32 = params.counts.body_count * @as(u32, @intCast(robot.reference_body_numbers));
@@ -5510,6 +6189,114 @@ pub fn judge_rewards(invocation: u32) void {
     }
 }
 
+/// THE CURRICULUM's ROUND ON THE DEVICE, one invocation a decision, after its judgement and before its resets - what
+/// the CPU fleet does between an episode's end and the starts that follow (robot_track's `Fleet.step` and
+/// `restartEnded`), in the fleet's own order:
+///
+///     1  every episode the decision ended, folded into its start bin's return (`robot.startBinReturnAfter`) - the
+///        worlds walked in their order, because two episodes that end in one bin are folded one after the other, and
+///        the bin's average depends on which comes first
+///     2  if any ended: each clip's softmax over its bins' returns, folded into the bins' long-run weights
+///        (`robot.startBinExponent`, `robot.startBinHistoryAfter`)
+///     3  and each clip's mixture as running sums (`robot.startBinProbability`), which the resets that follow draw
+///        their starts against (`begin_reset`)
+///
+/// A decision that ended no episode changes nothing: the fleet refreshes its bins only for a round with a start, and
+/// the long-run weights are folded once a round. ONE INVOCATION (`Invocations.once`), not one a world: the folds are
+/// a sequence, and the worlds' flags and the bins are a few thousand numbers. A candidate is no episode of its own
+/// (`isCandidate`). The bins live on the device (`HostWindowLayout`): nothing is read back and nothing uploaded.
+pub fn curriculum_round(invocation: u32) void {
+    if (invocation != 0) {
+        return;
+    }
+    const options: StepOptions = params.options;
+    const bin_total: u32 = params.counts.curriculum_bin_total;
+    const has_curriculum: bool = options.curriculum == .enabled and bin_total > 0;
+    if (!has_curriculum) {
+        return;
+    }
+    const counters: WorldIntegersLayout = params.layout.world_u;
+    const episode_sums: WorldStateLayout = params.layout.world_f;
+    const bins: HostWindowLayout = params.layout.io;
+    const rule: robot.StartCurriculumRule = options.curriculumRule();
+    // 1  The ended episodes into their start bins, in world order.
+    var ended_count: u32 = 0;
+    var world: u32 = params.counts.first_world;
+    while (world < params.counts.world_count) : (world += 1) {
+        if (isCandidate(world)) {
+            continue;
+        }
+        const flags: u32 = counters.episode_flags.load(world, 0);
+        const finished: bool = flags & episodeFlagBit(.finished) != 0;
+        if (!finished) {
+            continue;
+        }
+        const capped: bool = flags & episodeFlagBit(.capped) != 0;
+        const ended_at_a_loss: bool = flags & episodeFlagBit(.ends_at_loss) != 0;
+        const in_aftermath: bool = flags & episodeFlagBit(.in_aftermath) != 0;
+        const ended: robot.EndedEpisode = .{
+            .start_bin = counters.start_bins.load(world, 0),
+            .discounted_return = episode_sums.episode_discounted_returns.load(world, 0),
+            .reward_sum = episode_sums.episode_reward_sums.load(world, 0),
+            .decisions = counters.episode_decisions.load(world, 0),
+            .ended_by_failure = robot.episodeEndedByFailure(capped, ended_at_a_loss, in_aftermath),
+        };
+        const bin_return: f32 = bins.bin_returns.load(ended.start_bin);
+        const folded_return: f32 = robot.startBinReturnAfter(rule, options.curriculum_discount, bin_return, ended);
+        bins.bin_returns.store(ended.start_bin, folded_return);
+        ended_count += 1;
+    }
+    if (ended_count == 0) {
+        return;
+    }
+    // 2 and 3  Each clip's bins refreshed, in robot.zig's order of operations (`startBinSoftmax`,
+    // `foldStartBinHistory`, `startBinMixture`): a pass over the clip's bins for each.
+    const tables: ModelTablesLayout = params.layout.model_u;
+    const return_scale: f32 = options.curriculum_return_scale;
+    var clip: u32 = 0;
+    while (clip < params.counts.clip_count) : (clip += 1) {
+        const first_bin: u32 = tables.clip_first_bin.load(clip);
+        const bin_count: u32 = tables.clip_bin_count.load(clip);
+        // The largest exponent, searched from below any a return gives (`startBinSoftmax`'s own start).
+        var largest: f32 = -1.0e30;
+        var bin: u32 = 0;
+        while (bin < bin_count) : (bin += 1) {
+            const bin_return: f32 = bins.bin_returns.load(first_bin + bin);
+            largest = @max(largest, robot.startBinExponent(rule, bin_return, return_scale));
+        }
+        // Each bin's exponential, the largest exponent subtracted so none overflows, and their sum.
+        var exponent_sum: f32 = 0;
+        bin = 0;
+        while (bin < bin_count) : (bin += 1) {
+            const bin_return: f32 = bins.bin_returns.load(first_bin + bin);
+            const exponential: f32 = @exp(robot.startBinExponent(rule, bin_return, return_scale) - largest);
+            bins.bin_softmax.store(first_bin + bin, exponential);
+            exponent_sum += exponential;
+        }
+        // The softmax's shares, each folded into its bin's long-run weight, and the weights' sum.
+        var long_run_sum: f32 = 0;
+        bin = 0;
+        while (bin < bin_count) : (bin += 1) {
+            const share: f32 = bins.bin_softmax.load(first_bin + bin) / exponent_sum;
+            bins.bin_softmax.store(first_bin + bin, share);
+            const weight_before: f32 = bins.bin_history_weights.load(first_bin + bin);
+            const weight: f32 = robot.startBinHistoryAfter(rule, weight_before, share);
+            bins.bin_history_weights.store(first_bin + bin, weight);
+            long_run_sum += weight;
+        }
+        // The mixture, summed in order: the sums a start's draw is read against.
+        const bins_in_clip: f32 = float(bin_count);
+        var running_sum: f32 = 0;
+        bin = 0;
+        while (bin < bin_count) : (bin += 1) {
+            const share: f32 = bins.bin_softmax.load(first_bin + bin);
+            const weight: f32 = bins.bin_history_weights.load(first_bin + bin);
+            running_sum += robot.startBinProbability(rule, bins_in_clip, share, weight, long_run_sum);
+            bins.bin_running_sums.store(first_bin + bin, running_sum);
+        }
+    }
+}
+
 /// A START FRAME BY SUPERMIMIC's CURRICULUM - the fleet's `drawStartFrame`, line for line: a bin by one uniform draw
 /// against the clip's running sums (the first bin whose sum exceeds it, else the last), then a frame uniform within the
 /// bin by another, held inside the frames that leave a decision before the clip's end.
@@ -5519,7 +6306,7 @@ fn curriculumStartFrame(world: u32, episode: u32, clip: u32, last_start: u32) u3
     const first_bin: u32 = tables.clip_first_bin.load(clip);
     const bin_count: u32 = tables.clip_bin_count.load(clip);
     const bin_draw: f32 = robot.drawUniform(options.draw_seed, world, episode, .start_frame, 1);
-    const sums: ModelTable(.model_f, .curriculum_bins) = params.layout.model_f.bin_running_sums;
+    const sums: SharedArray(.io, .curriculum_bins) = params.layout.io.bin_running_sums;
     var bin: u32 = 0;
     const chosen: u32 = while (bin < bin_count) : (bin += 1) {
         if (bin_draw < sums.load(first_bin + bin)) {
@@ -5539,12 +6326,18 @@ fn curriculumStartFrame(world: u32, episode: u32, clip: u32, last_start: u32) u3
 
 /// A WORLD WHOSE EPISODE ENDED BEGINS ANOTHER - the CPU fleet's `restart` and its `startEpisodeAt`, up to the pose: its
 /// episode number advanced (the counter of every draw its start makes), its clip chosen and its start frame drawn as
-/// the fleet draws them, and what a start clears, cleared. The start frame is uniform over the frames that leave a
-/// whole decision before the clip's end (the fleet's `lastStartFrame`). Not cleared, as the fleet does not: the steps
-/// since a loss. A world still in its episode is left alone.
+/// the fleet draws them, and what a start clears, cleared - the episode's sums among them, which the curriculum's
+/// round has folded into its start bin just before (`curriculum_round`, the dispatch before this one). The start
+/// frame is uniform over the frames that leave a whole decision before the clip's end (the fleet's
+/// `lastStartFrame`), or drawn from the curriculum's mixture (`curriculumStartFrame`). Not cleared, as the fleet does
+/// not: the steps since a loss. A world still in its episode is left alone.
 pub fn begin_reset(invocation: u32) void {
-    const world: u32 = invocation;
+    const world: u32 = worldOf(invocation);
     if (world >= params.counts.world_count) {
+        return;
+    }
+    // A candidate is no episode of its own (`isCandidate`).
+    if (isCandidate(world)) {
         return;
     }
     const counters: WorldIntegersLayout = params.layout.world_u;
@@ -5586,6 +6379,7 @@ pub fn begin_reset(invocation: u32) void {
     counters.episode_steps.store(world, 0, 0);
     counters.aftermath_steps_left.store(world, 0, 0);
     counters.return_streaks.store(world, 0, 0);
+    counters.watched_push_left.store(world, 0, 0);
     const arrays: WorldStateLayout = params.layout.world_f;
     var number: u32 = 0;
     while (number < params.counts.action_count) : (number += 1) {
@@ -5595,6 +6389,9 @@ pub fn begin_reset(invocation: u32) void {
         // episode, as the trainer forgets an ended episode's action (`forgetEndedEpisodes`).
         arrays.actions.store(world, number, 0);
     }
+    // A plan it was following (`follow_plans`): drawn from the ended episode's state, it means nothing from the new
+    // start - the world's policy acts until its next replan.
+    counters.plan_following.store(world, 0, @backingInt(PlanFollowing.none));
 }
 
 /// A RESET WORLD's POSE - the CPU fleet's `resetToFrame`, one joint per invocation: the joint's coordinates at the
@@ -5603,7 +6400,7 @@ pub fn begin_reset(invocation: u32) void {
 /// a fresh `Data` has none: Newton's next solve starts from nothing. A world still in its episode is left alone.
 pub fn reset_pose(invocation: u32) void {
     const joint_count: u32 = params.counts.joint_count;
-    const world: u32 = invocation / joint_count;
+    const world: u32 = params.counts.first_world + invocation / joint_count;
     const joint: u32 = invocation % joint_count;
     if (world >= params.counts.world_count) {
         return;
@@ -5662,7 +6459,7 @@ fn restWorldOnFloor(world: u32) void {
 /// least of its geoms', `body_lowest_points`, so the same minimum as `robot.lowestPoint`, exact in any order), lifted
 /// to the clearance by raising the free root (`robot.restLift`: never down). Only when the run rests its starts.
 pub fn rest_on_floor(invocation: u32) void {
-    const world: u32 = invocation;
+    const world: u32 = worldOf(invocation);
     if (world >= params.counts.world_count) {
         return;
     }
@@ -5683,7 +6480,7 @@ pub fn rest_on_floor(invocation: u32) void {
 /// does - and the root's two horizontal velocities kicked at the next two indices. Nothing without noise.
 pub fn perturb_start(invocation: u32) void {
     const joint_count: u32 = params.counts.joint_count;
-    const world: u32 = invocation / joint_count;
+    const world: u32 = params.counts.first_world + invocation / joint_count;
     const joint: u32 = invocation % joint_count;
     if (world >= params.counts.world_count) {
         return;
@@ -5732,7 +6529,7 @@ pub fn perturb_start(invocation: u32) void {
 /// A RESET WORLD RESTS AGAIN AFTER ITS NOISE - `perturbStart`'s own rest, whatever the task says about resting starts:
 /// a turned pose can put a foot into the floor. Only when there was noise.
 pub fn rest_after_noise(invocation: u32) void {
-    const world: u32 = invocation;
+    const world: u32 = worldOf(invocation);
     if (world >= params.counts.world_count) {
         return;
     }
@@ -5758,13 +6555,19 @@ fn pushRoot(world: u32, speed: f32, direction_rad: f32) void {
     velocities.store(world, 1, velocities.load(world, 1) + velocity_change_y);
 }
 
-/// A DECISION's PUSHES, for every world still in its episode - the fleet's step's: on the schedule (every
-/// `push_every` decisions of the episode), or at a random moment, a Poisson process of `push_rate_per_second` made one
-/// decision at a time (the chance the rate times the schedule's share times the decision's seconds); the speed uniform
-/// in the range the schedule has opened, the direction uniform round the vertical - each draw at the decision's number.
+/// A DECISION's PUSHES, for every world still in its episode - the fleet's step's, by robot.zig's one rule
+/// (`robot.drawPush`): on the schedule (every `push_every` decisions of the episode), or at a random moment, a Poisson
+/// process of `push_rate_per_second` made one decision at a time; the speed uniform in the range as far as it has
+/// opened (`push_top_share`), the direction uniform round the vertical - each draw at the decision's number. A world
+/// with a watched push takes none, and a push near the top of the range begins a watch (`watched_push_left`). A pushed
+/// world is flagged for the learner's books, and stops following any plan (`PlanFollowing`) until its next replan.
 pub fn push_worlds(invocation: u32) void {
-    const world: u32 = invocation;
+    const world: u32 = worldOf(invocation);
     if (world >= params.counts.world_count) {
+        return;
+    }
+    // A candidate is no episode of its own (`isCandidate`).
+    if (isCandidate(world)) {
         return;
     }
     const counters: WorldIntegersLayout = params.layout.world_u;
@@ -5773,27 +6576,51 @@ pub fn push_worlds(invocation: u32) void {
         return;
     }
     const options: StepOptions = params.options;
+    const rule: robot.PushRule = .{
+        .every = options.push_every,
+        .rate_per_second = options.push_rate_per_second,
+        .speed_min = options.push_speed_min,
+        .speed_max = options.push_speed_max,
+        .top_share = options.push_top_share,
+        .watched_share = options.push_watched_share,
+        .watch_decisions = options.push_watch_decisions,
+        .decision_seconds = options.decision_seconds,
+        .grace_steps = options.grace_steps,
+    };
     const steps: u32 = counters.episode_steps.load(world, 0);
-    const scheduled: bool = options.push_every > 0 and steps % options.push_every == 0;
-    const decision: u32 = options.decision_number;
-    const chance: f32 = options.push_rate_per_second * options.push_schedule_share * options.decision_seconds;
-    const chance_draw: f32 = robot.drawUniform(options.draw_seed, world, decision, .push_chance, 0);
-    const at_random: bool = options.push_rate_per_second > 0 and chance_draw < chance;
-    if (!scheduled and !at_random) {
+    const watched_left: u32 = counters.watched_push_left.load(world, 0);
+    const in_aftermath: bool = counters.aftermath_steps_left.load(world, 0) > 0;
+    const drawn: robot.DrawnPush = robot.drawPush(
+        rule,
+        options.draw_seed,
+        world,
+        options.decision_number,
+        steps,
+        watched_left,
+        in_aftermath,
+    );
+    if (!drawn.is_pushed) {
         return;
     }
-    const speed_range: f32 = (options.push_speed_max - options.push_speed_min) * options.push_schedule_share;
-    const speed_draw: f32 = robot.drawUniform(options.draw_seed, world, decision, .push_speed, 0);
-    const direction_draw: f32 = robot.drawUniform(options.draw_seed, world, decision, .push_direction, 0);
-    const speed: f32 = options.push_speed_min + speed_range * speed_draw;
-    pushRoot(world, speed, 2.0 * pi * direction_draw);
+    pushRoot(world, drawn.speed, drawn.direction_rad);
+    counters.watched_push_left.store(world, 0, drawn.watch_decisions);
+    // Said in the world's flags, beside the judgement's - for the host, which keeps the learner's books.
+    const flags_with_push: u32 = counters.episode_flags.load(world, 0) | episodeFlagBit(.pushed);
+    counters.episode_flags.store(world, 0, flags_with_push);
+    // A plan it was following (`follow_plans`) answered the states before the push, which will never come: the
+    // world's policy acts until its next replan, as after a new episode's start (`begin_reset`).
+    counters.plan_following.store(world, 0, @backingInt(PlanFollowing.none));
 }
 
 /// A RESET WORLD's START IN TROUBLE - the fleet's `restart`'s: drawn at the episode against the start share times the
-/// schedule's share; a push at the schedule's top speed, the direction uniform round the vertical.
+/// top's share (`robot.PushTop`); a push at the top of the range open, the direction uniform round the vertical.
 pub fn start_in_trouble(invocation: u32) void {
-    const world: u32 = invocation;
+    const world: u32 = worldOf(invocation);
     if (world >= params.counts.world_count) {
+        return;
+    }
+    // A candidate is no episode of its own (`isCandidate`).
+    if (isCandidate(world)) {
         return;
     }
     const options: StepOptions = params.options;
@@ -5806,25 +6633,55 @@ pub fn start_in_trouble(invocation: u32) void {
         return;
     }
     const episode: u32 = counters.episode_numbers.load(world, 0);
-    const share: f32 = options.push_schedule_share;
+    const share: f32 = options.push_top_share;
     const trouble_draw: f32 = robot.drawUniform(options.draw_seed, world, episode, .start_in_trouble, 0);
     if (!(trouble_draw < options.push_start_share * share)) {
         return;
     }
-    const top_speed: f32 = options.push_speed_min + (options.push_speed_max - options.push_speed_min) * share;
+    const top_speed: f32 = robot.pushSpeed(options.push_speed_min, options.push_speed_max, share, 1.0);
     const direction_draw: f32 = robot.drawUniform(options.draw_seed, world, episode, .start_push_direction, 0);
     pushRoot(world, top_speed, 2.0 * pi * direction_draw);
 }
 
+/// A WORLD's FLOW CORRECTION, after the policy has written its choice and before its exploration: the correction the
+/// learner's flow actor wrote for it added to the choice (`flow_corrections`) - the policy's choice plus the flow's
+/// residual is the actor's. Nothing where the decision has none (`StepOptions.flow_corrections`), and nothing for a
+/// world that follows a plan around the policy now (`followsPlanAroundPolicyNow`): its plan's offset takes the
+/// flow's place, so it acts as its winning candidate - which no flow corrected - was scored.
+pub fn add_flow_corrections(invocation: u32) void {
+    const world: u32 = worldOf(invocation);
+    if (world >= params.counts.world_count) {
+        return;
+    }
+    if (params.options.flow_corrections != .enabled) {
+        return;
+    }
+    if (followsPlanAroundPolicyNow(world)) {
+        return;
+    }
+    const arrays: WorldStateLayout = params.layout.world_f;
+    var number: u32 = 0;
+    while (number < params.counts.action_count) : (number += 1) {
+        const chosen: f32 = arrays.chosen_actions.load(world, number);
+        const correction: f32 = arrays.flow_corrections.load(world, number);
+        arrays.chosen_actions.store(world, number, chosen + correction);
+    }
+}
+
 /// A WORLD's EXPLORATION, after the policy has written its actions: every action plus its noise
-/// (`robot.explorationNoise`, at the decision's number). Nothing at a spread of zero - acting without exploring.
+/// (`robot.explorationNoise`, at the decision's number). Nothing at a spread of zero - acting without exploring - and
+/// nothing for a world that follows a plan around the policy now (`followsPlanAroundPolicyNow`): its plan's offset is
+/// its exploration, and the action it takes is the one its plan was scored with.
 pub fn explore_actions(invocation: u32) void {
-    const world: u32 = invocation;
+    const world: u32 = worldOf(invocation);
     if (world >= params.counts.world_count) {
         return;
     }
     const options: StepOptions = params.options;
     if (options.exploration_spread == 0) {
+        return;
+    }
+    if (followsPlanAroundPolicyNow(world)) {
         return;
     }
     const chosen_actions: WorldArray(.world_f, .actions) = params.layout.world_f.chosen_actions;
@@ -5846,7 +6703,7 @@ pub fn explore_actions(invocation: u32) void {
 /// `robot.filteredActionNumber`. A number at a share of 1 is copied exactly - a blend would turn a negative zero
 /// positive. The result is the decision's action, which the physics-rate filter then ramps in (`filter_actions`).
 pub fn filter_decision(invocation: u32) void {
-    const world: u32 = invocation;
+    const world: u32 = worldOf(invocation);
     if (world >= params.counts.world_count) {
         return;
     }
@@ -5874,7 +6731,7 @@ pub fn filter_decision(invocation: u32) void {
 /// fleet's own rule: its counters advanced (a decision more), grace, failure, aftermath, return and end decided from
 /// the tracking error `judge_tracking` stored and the termination's limits, the verdict into `episode_flags`.
 pub fn judge_episode(invocation: u32) void {
-    const world: u32 = invocation;
+    const world: u32 = worldOf(invocation);
     if (world >= params.counts.world_count) {
         return;
     }
@@ -5913,7 +6770,17 @@ pub fn judge_episode(invocation: u32) void {
     integers.aftermath_steps_left.store(world, 0, counters.aftermath_steps_left);
     integers.return_streaks.store(world, 0, counters.return_streak);
     integers.steps_since_loss.store(world, 0, counters.steps_since_loss);
+    // A watched push, after the judgement - the fleet's step's (`robot.settleWatchedPush`).
+    var watched_left: u32 = integers.watched_push_left.load(world, 0);
+    const watched_end: robot.WatchedPushEnd = robot.settleWatchedPush(&watched_left, verdict);
+    integers.watched_push_left.store(world, 0, watched_left);
     var flags: u32 = 0;
+    if (watched_end.isCounted()) {
+        flags |= episodeFlagBit(.watched_push_settled);
+    }
+    if (watched_end.cameBack()) {
+        flags |= episodeFlagBit(.watched_push_came_back);
+    }
     if (verdict.lost) {
         flags |= episodeFlagBit(.lost);
     }
@@ -6025,7 +6892,7 @@ pub fn reference_targets(invocation: u32) void {
 /// EACH WORLD's FRAME ADVANCED, one invocation per world, after each physics step: the clock of robot_track's
 /// `Fleet.step`, which moves every character's reference on a frame after each of a decision's physics steps.
 pub fn advance_frames(invocation: u32) void {
-    const world: u32 = invocation;
+    const world: u32 = worldOf(invocation);
     if (world >= params.counts.world_count) {
         return;
     }
@@ -6042,20 +6909,27 @@ pub fn advance_frames(invocation: u32) void {
 
 /// The number of invocations a dispatch of shape `invocations` runs, for a model of `counts`.
 pub fn invocationCount(invocations: Invocations, counts: Counts) u32 {
+    assertf(counts.first_world <= counts.world_count, @src(), "worlds from {d} of {d}", .{
+        counts.first_world,
+        counts.world_count,
+    });
+    // The worlds a program runs over: from its first to the batch's count (`Counts.first_world`).
+    const worlds: u32 = counts.world_count - counts.first_world;
     return switch (invocations) {
-        .per_world => counts.world_count,
-        .per_world_and_body => counts.world_count * counts.body_count,
-        .per_world_and_branch => counts.world_count * counts.branch_count,
-        .per_world_and_geom => counts.world_count * counts.geom_count,
-        .per_world_and_site => counts.world_count * counts.site_count,
-        .per_world_and_dof => counts.world_count * counts.dof_count,
-        .per_world_and_actuator => counts.world_count * counts.actuator_count,
-        .per_world_and_activation => counts.world_count * counts.activation_count,
-        .per_world_and_joint => counts.world_count * counts.joint_count,
-        .per_world_and_action => counts.world_count * counts.action_count,
-        .per_world_and_limit_candidate => counts.world_count * counts.limit_candidate_count,
-        .per_world_and_constraint_row => counts.world_count * counts.constraint_capacity,
-        .per_world_workgroup => counts.world_count * config.workgroup,
+        .per_world => worlds,
+        .per_world_and_body => worlds * counts.body_count,
+        .per_world_and_branch => worlds * counts.branch_count,
+        .per_world_and_geom => worlds * counts.geom_count,
+        .per_world_and_site => worlds * counts.site_count,
+        .per_world_and_dof => worlds * counts.dof_count,
+        .per_world_and_actuator => worlds * counts.actuator_count,
+        .per_world_and_activation => worlds * counts.activation_count,
+        .per_world_and_joint => worlds * counts.joint_count,
+        .per_world_and_action => worlds * counts.action_count,
+        .per_world_and_limit_candidate => worlds * counts.limit_candidate_count,
+        .per_world_and_constraint_row => worlds * counts.constraint_capacity,
+        .per_world_workgroup => worlds * config.workgroup,
+        .once => 1,
     };
 }
 
@@ -6076,19 +6950,19 @@ pub fn rotationBoxNumbers(boxes: []const ?robot.RotationBox, out: []f32) void {
 }
 
 /// A DECISION's CLOCK, what changes from one decision to the next: its number (the counter of its draws - its pushes'
-/// and its exploration's), the share of the push schedule opened by then (`Pushes.scheduleShare`), and the
-/// exploration's spread, which training anneals. Every program that draws takes it as an argument (`runResets`,
-/// `giveActions`), so no draw is made at a stale number.
+/// and its exploration's), how far the pushes' range of speeds has opened by then (`robot.PushTop`: 1 for the full
+/// range), and the exploration's spread, which training anneals. Every program that draws takes it as an argument
+/// (`runResets`, `giveActions`), so no draw is made at a stale number.
 pub const DecisionClock = struct {
     number: u32,
-    push_schedule_share: f32,
+    push_top_share: f32,
     /// The exploration's spread (`explore_actions`): the noise scale times sigma, which training anneals.
     exploration_spread: f32 = 0,
 
     /// The clock written into the uniform.
     pub fn applyTo(clock: DecisionClock, options: *StepOptions) void {
         options.decision_number = clock.number;
-        options.push_schedule_share = clock.push_schedule_share;
+        options.push_top_share = clock.push_top_share;
         options.exploration_spread = clock.exploration_spread;
     }
 };
@@ -6121,9 +6995,15 @@ pub fn applyTrackingSettings(settings: TrackingSettings, options: *StepOptions) 
     options.push_speed_min = settings.push_speed_min;
     options.push_speed_max = settings.push_speed_max;
     options.push_start_share = settings.push_start_share;
+    options.push_watched_share = settings.push_watched_share;
+    options.push_watch_decisions = settings.push_watch_decisions;
     options.decision_seconds = settings.decision_seconds;
-    options.curriculum = settings.curriculum;
-    options.curriculum_discount = settings.curriculum_discount;
+    options.setCurriculum(
+        settings.curriculum,
+        settings.curriculum_discount,
+        settings.curriculum_return_scale,
+        settings.curriculum_rule,
+    );
 }
 
 /// A JUDGED SIMULATOR TAKES NO HULLS: the device packs no hull's points, so a hull would have no floor contact and no
@@ -6208,16 +7088,16 @@ pub const CpuTwin = struct {
         return initTracking(model, world_count, &.{});
     }
 
-    /// `world_count` worlds of `model` in the twin's arenas with a tracking task's `clips`: the worlds' arenas
-    /// cleared, then counted, laid out, packed - the clips beside the model - and the uniform set. CLEARED, because
-    /// the twin's arenas are the module's own arrays: a twin would otherwise start from whatever the last one left,
-    /// its warm start among it, where robot.zig's new `Data` holds zeros.
     /// The judgement's weights for the twin's worlds (`writeJudgementWeights`): the tracker's reward weights and
     /// SuperMimic's scales, as robot_track's `Task` holds them.
     pub fn setJudgementWeights(twin: CpuTwin, weights: JudgementWeights) void {
         writeJudgementWeights(twin.layout.model_f, &g.B.model_f, weights);
     }
 
+    /// `world_count` worlds of `model` in the twin's arenas with a tracking task's `clips`: the worlds' arenas and
+    /// the host's window cleared, then counted, laid out, packed - the clips beside the model - and the uniform set.
+    /// CLEARED, because the twin's arenas are the module's own arrays: a twin would otherwise start from whatever the
+    /// last one left, its warm start and its curriculum's bins among it, where robot.zig's new `Data` holds zeros.
     pub fn initTracking(
         model: *const robot.Model,
         world_count: u32,
@@ -6227,6 +7107,7 @@ pub const CpuTwin = struct {
         @memset(&g.B.world_f, 0);
         @memset(&g.B.world_u, 0);
         @memset(&g.B.efc_f, 0);
+        @memset(&g.B.io, 0);
         const counts: Counts = countsWithClips(countsOf(model, world_count), clips);
         const layout: Layout = try layoutFor(counts, .{});
         pack(model, layout, &g.B.model_u, &g.B.model_f);
@@ -6261,9 +7142,6 @@ pub const CpuTwin = struct {
         }
     }
 
-    /// ONE DECISION of `physics_steps` steps: for each, the tracking task's dispatches before the step, the step
-    /// program, and those after it - as `Sim.submitDecision` submits them to a device, and as robot_track's
-    /// `Fleet.step` takes a decision of `decide_every` physics steps.
     /// THE TRACKING TASK's SETTINGS for the twin's worlds, all of them (`TrackingSettings`): the uniform's, then the
     /// judgement's weights in the model's table.
     pub fn setTracking(twin: CpuTwin, settings: TrackingSettings) !void {
@@ -6276,6 +7154,27 @@ pub const CpuTwin = struct {
         const boxes_at: u32 = twin.layout.model_f.ball_boxes.at(0);
         const box_numbers: []f32 = g.B.model_f[boxes_at..][0 .. 12 * twin.counts.joint_count];
         rotationBoxNumbers(settings.rotation_boxes, box_numbers);
+    }
+
+    /// THE CURRICULUM's BINS GIVEN TO THE TWIN, as a fleet holds them (the host's `Sim.uploadStartBins`): every bin's
+    /// return, softmax share and long-run weight, and each clip's mixture as running sums (robot_track's
+    /// `Fleet.startBinRunningSums`) - once, before the first decision. From then on the twin keeps them itself
+    /// (`curriculum_round`).
+    pub fn setStartBins(
+        twin: CpuTwin,
+        returns: []const f32,
+        softmax: []const f32,
+        long_run_weights: []const f32,
+        running_sums: []const f32,
+    ) void {
+        const bins: HostWindowLayout = twin.layout.io;
+        for (returns, softmax, long_run_weights, running_sums, 0..) |bin_return, share, weight, sum, index| {
+            const bin: u32 = @intCast(index);
+            bins.bin_returns.store(bin, bin_return);
+            bins.bin_softmax.store(bin, share);
+            bins.bin_history_weights.store(bin, weight);
+            bins.bin_running_sums.store(bin, sum);
+        }
     }
 
     /// A DECISION's END on the twin, as the host's `submitDecisionEnd`: the observation, then the judgement - the
@@ -6324,8 +7223,9 @@ pub const CpuTwin = struct {
         twin.runResets(clock);
     }
 
-    /// THE RESETS on the twin (`reset_program`), after a decision's end: the decision's pushes, then every world whose
-    /// episode ended begins another - at the decision's clock (`DecisionClock`), taken here so it cannot be forgotten.
+    /// THE RESETS on the twin (`reset_program`), after a decision's end: the decision's pushes, the curriculum's
+    /// round, then every world whose episode ended begins another - at the decision's clock (`DecisionClock`), taken
+    /// here so it cannot be forgotten.
     /// Then the observation program again - its kinematics and its observation - so a reset world's next action reads
     /// its new episode's state, not its old one's last (worlds that did not reset recompute the same).
     pub fn runResets(twin: CpuTwin, clock: DecisionClock) void {
@@ -6334,6 +7234,9 @@ pub const CpuTwin = struct {
         twin.runProgram(&observe_program);
     }
 
+    /// ONE DECISION of `physics_steps` steps: for each, the tracking task's dispatches before the step, the step
+    /// program, and those after it - as `Sim.submitDecision` submits them to a device, and as robot_track's
+    /// `Fleet.step` takes a decision of `decide_every` physics steps.
     pub fn runDecision(twin: CpuTwin, physics_steps: u32) void {
         twin.runProgram(&decision_start_program);
         var physics_step: u32 = 0;

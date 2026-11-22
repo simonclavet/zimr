@@ -1244,6 +1244,55 @@ fn zeroPolicy(
     return policy;
 }
 
+test "PolicyShow: where episodes do not restart, a fall is counted once, however long the character lies" {
+    // The servo alone - a policy of zero weights - loses the walk within a second or two. A show told not to restart
+    // its episodes, as a viewer may (`robot_track.Fleet.Options.restarts_episodes` off), lives on after the loss: the
+    // fleet judges the reference lost again at every step it stays lost, while the show counts a failure only at a
+    // step that lost a reference held at the step before. Ten seconds, two characters: the show's count is the
+    // number of such steps, and far fewer than the steps lost.
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    var setup: Setup = undefined;
+    setup.init(gpa, threaded.io(), "assets/lafan1/walk1_subject2.bvh", walk_first) catch return error.SkipZigTest;
+    defer setup.deinit();
+    const m: *rbt.Model = &setup.imported.model;
+    const names: []const []const u8 = setup.imported.names;
+    const clips = [_]*const dance.Clip{&setup.clip};
+    const options: Options = .{};
+    var arena_state: ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    const bodies: robot_policy.Bodies = options.bodies;
+    const subset: robot_policy.Subset = try robot_policy.subsetFor(arena, m, names, bodies.watched, bodies.actuated);
+    const observation_size: usize = robot_policy.observationSize(subset);
+    const policy: lab.GenoPolicy = try zeroPolicy(arena, observation_size, 8, subset.dofs, options);
+    const characters: usize = 2;
+    var show: lab.PolicyShow = try .start(arena, m, names, &clips, &policy, .{
+        .character_count = characters,
+        .task = options.task,
+        .bodies = bodies,
+    });
+    defer show.end();
+    show.fleet.options.restarts_episodes = false;
+    var lost_before: [characters]bool = @splat(false);
+    var new_losses: u32 = 0;
+    var steps_lost: u32 = 0;
+    for (0..600) |_| {
+        show.step(&policy);
+        for (0..characters) |character| {
+            const is_lost: bool = show.fleet.failures[character];
+            steps_lost += @intFromBool(is_lost);
+            new_losses += @intFromBool(is_lost and !lost_before[character]);
+            lost_before[character] = is_lost;
+        }
+    }
+    try expectEqual(@as(usize, 0), show.fleet.episodes);
+    try expect(new_losses >= characters);
+    try expectEqual(new_losses, show.failure_count);
+    try expect(steps_lost > 10 * show.failure_count);
+}
+
 test "judgePolicy: zero weights are judged as the servo alone, twice the same; a policy at its limit is not the servo" {
     // The judge is the measuring instrument every comparison of runs rests on, so before its verdicts are trusted, its
     // controls. A policy whose every weight and bias is zero acts with zero offsets - the servo alone - and must be

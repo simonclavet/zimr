@@ -112,6 +112,7 @@ const swap = std.mem.swap;
 const sortSlice = std.mem.sort;
 const indexOf = std.mem.indexOf;
 const startsWith = std.mem.startsWith;
+const zeroes = std.mem.zeroes;
 
 const zm = @import("zm");
 const float = zm.float;
@@ -124,6 +125,11 @@ const profiler = @import("profiler");
 // also keeps the maths below readable as maths.
 pub const Vec = zm.Vec;
 pub const Quat = zm.Quat;
+/// A rigid placement - a body's, a joint's, a site's, a root's (zm's `Pose`, where the kit's kernels reach it too).
+pub const Pose = zm.Pose;
+pub const normalizeQuat = zm.normalizeQuat;
+pub const rotateQuatByAngularVel = zm.rotateQuatByAngularVel;
+pub const twoAxis = zm.twoAxis;
 const vec = zm.vec;
 const vec_zero = zm.vec_zero;
 const quat = zm.quat;
@@ -410,38 +416,6 @@ pub const Inertia = struct {
             mx * cx[1] * cx[2] + my * cy[1] * cy[2] + mz * cz[1] * cz[2],
         );
         return .{ .diag = diag, .off = off, .h = com * splat(mass), .mass = mass };
-    }
-};
-
-/// Normalize a quaternion, falling back to identity if it has collapsed. Integration and
-/// user input both walk quaternions off the unit sphere, and a zero-norm quaternion has no
-/// orientation to recover - identity keeps the simulation running instead of emitting NaN. Shared with robotgpu's
-/// kinematics kernel.
-pub fn normalizeQuat(q: Quat) Quat {
-    const n: f32 = @sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
-    return if (n > 1.0e-9) q / splat(n) else quat_identity;
-}
-
-/// A rigid placement in some frame. Named rather than anonymous because a pose is a real
-/// concept here - bodies, joints and sites all have one, and `compose` is how they relate.
-pub const Pose = struct {
-    pos: Vec = vec_zero,
-    rot: Quat = quat_identity,
-
-    pub const identity: Pose = .{};
-
-    /// Place `local` inside `self`. Rotation composes; translation is this pose's origin
-    /// plus the child's offset rotated into this frame.
-    ///
-    /// The order is the whole content of the function: `qmul(a, b)` applies `b` FIRST,
-    /// so `parent.compose(local)` reads "start at the parent, then go local", which is
-    /// the direction a tree walk travels. Swapping the operands compiles and puts every
-    /// body in the wrong place in a way that still looks like a robot.
-    pub fn compose(self: Pose, local: Pose) Pose {
-        return .{
-            .pos = self.pos + rotate(self.rot, local.pos),
-            .rot = qmul(self.rot, local.rot),
-        };
     }
 };
 
@@ -5780,6 +5754,97 @@ pub fn applyForceAtPoint(
     }
 }
 
+/// THE MASS A POINT OF A BODY MOVES WITH, in the articulated system around it: how heavy a push at `point` (world) on
+/// `body` finds the whole robot - 3 over the trace of the point's inverse inertia J M^-1 J^T, the point's Jacobian
+/// carried through the inverse mass matrix (MuJoCo's `mjv_initPerturb`, its `localmass`). A free body pushed at its
+/// centre of mass gives its own mass; a hand at the end of an arm gives far less than the whole body - the arm turns
+/// before the body moves - and the pelvis nearly all of it. A point nothing can move - a trace of zero - gets a mass of
+/// 1, as MuJoCo gives it, and a trace above zero is floored at MuJoCo's smallest denominator (`mjMINVAL`).
+///
+/// Factors the mass matrix in `d` (`factorM`): `d` must have its mass matrix (`crb`), and is left at the position
+/// stage, its forward to run again before a step. `jac_p` and `column` are scratch, `dof_count` long.
+pub fn pointMass(
+    m: *const Model,
+    d: *Data,
+    body: u32,
+    point: Vec,
+    jac_p: []Vec,
+    column: []f32,
+) f32 {
+    assertf(column.len == m.dof_count, @src(), "a column of {d}, the model has {d} dofs", .{
+        column.len,
+        m.dof_count,
+    });
+    factorM(m, d);
+    jacPoint(m, d, body, point, jac_p, null);
+    // trace(J M^-1 J^T): each of the point's three directions, through M^-1 and back.
+    var inverse_mass_trace: f32 = 0;
+    inline for (0..3) |direction| {
+        for (jac_p, column) |jacobian_column, *entry| {
+            entry.* = jacobian_column[direction];
+        }
+        solveM(m, d, column);
+        for (jac_p, column) |jacobian_column, solved| {
+            inverse_mass_trace += jacobian_column[direction] * solved;
+        }
+    }
+    if (inverse_mass_trace == 0) {
+        return 1;
+    }
+    const smallest_denominator: f32 = 1.0e-15;
+    return 3.0 / @max(inverse_mass_trace, smallest_denominator);
+}
+
+/// A HAND PULLING A BODY: a spring from a point fixed on `body` - `point_local`, in the body's own frame - to `target`
+/// in the world, as a viewer's mouse pulls a body it has grabbed (MuJoCo's `mjv_applyPerturbForce`, translation).
+pub const Pull = struct {
+    body: u32,
+    point_local: Vec,
+    target: Vec,
+    /// The mass the spring is set for: the point's own (`pointMass`), measured when the hand took hold - MuJoCo's
+    /// `localmass`, so the point follows at the same pace whichever body it is on.
+    mass: f32,
+    /// The spring's stiffness per unit of mass, 1/s^2: MuJoCo's `vis.map.stiffness`, 100 - a natural frequency of
+    /// 10 rad/s, damped at its square root, half the critical damping.
+    stiffness: f32 = 100,
+
+    /// Where the pulled point is now: the body's place, the point carried with it.
+    pub fn point(pull: Pull, d: *const Data) Vec {
+        const body_position: Vec = d.body_positions[pull.body];
+        const body_rotation: Quat = d.body_orientations[pull.body];
+        return body_position + rotate(body_rotation, pull.point_local);
+    }
+};
+
+/// THE PULL's FORCE, added to `forces` as joint forces (`J^T f`, as `applyForceAtPoint` adds one): at the point's
+/// place p and velocity v - its Jacobian times the joint velocities -
+///
+///     f = mass x ( stiffness x (target - p) - sqrt(stiffness) x v )
+///
+/// MuJoCo's perturbation force, with no cap, as MuJoCo has none. Returns f. `jac_p` is scratch, `dof_count` long; `d`
+/// at the position stage at least, its joint velocities those of this state.
+pub fn addPullForce(
+    m: *const Model,
+    d: *const Data,
+    pull: Pull,
+    jac_p: []Vec,
+    forces: []f32,
+) Vec {
+    const pulled_at: Vec = pull.point(d);
+    jacPoint(m, d, pull.body, pulled_at, jac_p, null);
+    var point_velocity: Vec = vec_zero;
+    for (jac_p, d.joint_velocities) |jacobian_column, joint_velocity| {
+        point_velocity += jacobian_column * splat(joint_velocity);
+    }
+    const spring: Vec = (pull.target - pulled_at) * splat(pull.stiffness);
+    const damping: Vec = point_velocity * splat(@sqrt(pull.stiffness));
+    const force: Vec = (spring - damping) * splat(pull.mass);
+    for (jac_p, forces) |jacobian_column, *joint_force| {
+        joint_force.* += dot3(jacobian_column, force);
+    }
+    return force;
+}
+
 // =============================================================================
 // Constraints - phase 6a: the ROWS, with no solver
 //
@@ -7937,23 +8002,11 @@ pub fn bodyAccelerations(m: *const Model, d: *Data) void {
 //
 // `pos` and `vel` have different lengths and different geometry. Orientations live on the
 // unit sphere in 4D; velocities live in its 3D tangent space. So you cannot subtract two
-// positions to get a velocity, and you cannot add a velocity to a position. These three
-// functions are the only legal bridges, and everything else must go through them.
+// positions to get a velocity, and you cannot add a velocity to a position. The functions below
+// are the only legal bridges - `integratePos` and `differentiatePos`, one joint's
+// `integrateJointPosition` and `jointPositionDifference`, with zm's `rotateQuatByAngularVel`
+// turning a quaternion - and everything else must go through them.
 // =============================================================================
-
-/// Rotate `q` by an angular velocity applied for `dt`. Exact for a constant `w`: build the
-/// rotation the velocity describes over the interval, then compose.
-/// Shared with robotgpu's integrator kernel.
-pub fn rotateQuatByAngularVel(q: Quat, w: Vec, dt: f32) Quat {
-    const speed: f32 = length3(w);
-    if (speed < 1.0e-12) {
-        return q;
-    }
-    const axis: Vec = w / splat(speed);
-    const delta: Quat = zm.quatFromNormAxisAngle(axis, speed * dt);
-    // The velocity is in the joint's own frame, so the increment applies on the right.
-    return normalizeQuat(qmul(q, delta));
-}
 
 /// ONE JOINT's `integratePos`: its coordinates carried by `velocity` over `dt` - for a slide or a hinge the rate
 /// times the step added; for a ball its quaternion turned by its angular velocity (`rotateQuatByAngularVel`); for a
@@ -8234,14 +8287,6 @@ pub fn filterAction(factor: f32, asked: []const f32, applied: []f32) void {
     }
 }
 
-/// A ROTATION AS TWO AXES: the first two columns of its matrix - what a network sees and predicts instead of a
-/// quaternion, being continuous and free of the quaternion's sign.
-pub fn twoAxis(q: Quat) [6]f32 {
-    const x: Vec = rotate(q, vec(1, 0, 0));
-    const y: Vec = rotate(q, vec(0, 1, 0));
-    return .{ x[0], x[1], x[2], y[0], y[1], y[2] };
-}
-
 /// HOW FAST A POINT OF A BODY MOVES, in the world, from the body's spatial velocity `motion` in robot.zig's shared
 /// frame (`Data.body_velocities`): world axes, the origin `origin` at its root's subtree centre of mass, where the
 /// velocities down a chain simply add. `motion.lin` is the velocity of whichever point of the body sits at that
@@ -8289,6 +8334,73 @@ pub fn localBody(
 pub fn localSize(bodies: usize) usize {
     return (bodies - 1) * (3 + 6 + 3 + 3 + 1) + 3;
 }
+
+/// THE KINDS OF NUMBER robot_track's `local` writes, each in its own unit: metres for the positions and heights,
+/// the numbers of unit vectors for the rotations' two axes and the world's up (radians, for a small turn), metres a
+/// second and radians a second for the velocities.
+pub const LocalFeatureKind = enum { position, rotation_axis, velocity, angular_velocity, height, up };
+
+/// WHERE EACH KIND OF NUMBER STARTS in `local`'s layout (`localSize` numbers), for a model of `bodies` bodies, the
+/// world among them - B = bodies - 1 character bodies, the positions from 0:
+///
+///     positions    0      3 B numbers
+///     rotations    3 B    6 B
+///     velocities   9 B    3 B
+///     angular     12 B    3 B
+///     heights     15 B      B
+///     up          16 B      3
+///
+/// One layout for the host's `local`, the device's observation (robotgpu's `observe_character`) and whatever reads a
+/// number by its kind (`kindOf`).
+pub const LocalLayout = struct {
+    rotations_at: u32,
+    velocities_at: u32,
+    angular_at: u32,
+    heights_at: u32,
+    up_at: u32,
+
+    pub fn of(bodies: u32) LocalLayout {
+        const character_bodies: u32 = bodies - 1;
+        return .{
+            .rotations_at = 3 * character_bodies,
+            .velocities_at = 9 * character_bodies,
+            .angular_at = 12 * character_bodies,
+            .heights_at = 15 * character_bodies,
+            .up_at = 16 * character_bodies,
+        };
+    }
+
+    /// The kind of number `feature` is, below `localSize`.
+    pub fn kindOf(layout: LocalLayout, feature: u32) LocalFeatureKind {
+        if (feature < layout.rotations_at) {
+            return .position;
+        }
+        if (feature < layout.velocities_at) {
+            return .rotation_axis;
+        }
+        if (feature < layout.angular_at) {
+            return .velocity;
+        }
+        if (feature < layout.heights_at) {
+            return .angular_velocity;
+        }
+        if (feature < layout.up_at) {
+            return .height;
+        }
+        return .up;
+    }
+};
+
+/// THE ROOT TARGET: where the reference's root is, seen from the character's (`zm.poseSeenFrom`) - its position
+/// less the character's, turned into the character's root frame, and its rotation relative to the character's as two
+/// axes, less the two axes of no rotation at all; nine zeros for a reference root exactly where the character's is.
+/// How many numbers it takes: 3 for the position, 6 for the rotation's two axes.
+///
+/// The local features say how the character and the reference each stand, each in its own root's frame; they say
+/// nothing of where the reference is. The root target does - the distance and the heading the judgement loses a
+/// character by. A simulated character can measure it, as a robot cannot. Its numbers are metres and unit axes, of
+/// the order of the normalised features beside them: the policy reads them as they are.
+pub const root_target_size: usize = zm.pose_seen_numbers;
 
 /// HOW MANY NUMBERS ONE BODY OF A REFERENCE STATE TAKES as a table holds it, frame after frame (robot_track's
 /// `Fleet.clipReferenceBodies`, robotgpu's `clip_reference_bodies`): its position, rotation, velocity and angular
@@ -8378,7 +8490,7 @@ pub const TrackingError = struct {
     /// Needs `State.lowest` (filled by `stateOf`); a state without geometry never touches, so this reads 0.
     unexpected_contact: f32,
     /// The HEAD's height off the reference head's (metres, world z) - SuperTrack's whole failure rule: an episode
-    /// ends when this passes 25 cm (plan F3b). 0 when no head was given (`trackingError`); a judge names the head
+    /// ends when this passes 25 cm. 0 when no head was given (`trackingError`); a judge names the head
     /// per robot (`Task.head_body`) and asks `trackingErrorWithHead`.
     head_height: f32,
 };
@@ -8388,15 +8500,8 @@ pub const TrackingError = struct {
 /// centimetre up is clearly not bearing on it.
 pub const contact_band: f32 = 0.01;
 
-/// The angle between two rotations, taken from the vector part of their difference so that small
-/// angles stay accurate in f32 (`acos` of a w near 1 loses half its digits).
-pub fn angleBetween(a: Quat, b: Quat) f32 {
-    var rel: Quat = qmul(a, conjugate(b));
-    if (rel[3] < 0.0) {
-        rel = -rel;
-    }
-    return 2.0 * asinRad(@min(1.0, length3(vec(rel[0], rel[1], rel[2]))));
-}
+/// The angle between two rotations (`zm.angleBetween`): one definition for the judgement and the device.
+pub const angleBetween = zm.angleBetween;
 
 /// `trackingError` with the head's height gap measured too (`TrackingError.head_height`) - what a judge asks, having
 /// resolved the robot's head (`Task.head_body`). One implementation: `trackingError` is this with no head.
@@ -8566,6 +8671,12 @@ pub const SuperMimicTracking = struct {
     root_rotation: f32,
     /// The weighted sum: at most `SuperMimicScales.maxStepTracking`.
     total: f32,
+    /// The squared errors three of the terms are made of: the bodies' re-anchored positions (m^2) and rotations
+    /// (rad^2), each the mean over the bodies, and the root's distance squared (m^2) - what tracking quality is
+    /// reported in (`robot_track.QualityStep`).
+    body_position_error: f32,
+    body_rotation_error: f32,
+    root_position_error: f32,
 };
 
 /// Where a rotation points the frame's x axis, as an angle about the vertical seen from above - its heading.
@@ -8640,6 +8751,9 @@ pub fn superMimicTrackingOver(
         .root_position = root_position,
         .root_rotation = root_rotation,
         .total = scales.body_weight * body_terms + scales.root_weight * root_terms,
+        .body_position_error = position_error,
+        .body_rotation_error = rotation_error,
+        .root_position_error = root_position_error,
     };
 }
 
@@ -8904,6 +9018,46 @@ pub fn terminated(err: TrackingError, limits: Termination) bool {
     return false;
 }
 
+/// HOW FAR TOWARD LOSING ITS REFERENCE a character is, by the termination's own measures: the largest of its error
+/// terms' fractions of their limits,
+///
+///     loss fraction = max over the limited terms of  error / limit
+///
+/// 0 on the reference, 1 where the termination rule fires (`terminated`: a term past its limit). A term whose limit
+/// is out of reach (1e30) adds nothing. The judgement's own scale for trouble - the teacher's planners are chosen by
+/// it, projected along its rise (`projectedHazard`).
+///
+/// Worked: a root 0.3 m from the reference's against a limit of 0.6, and a pose 0.6 rad off against 1.2 - each half
+/// of the way: 0.5. The root at 0.45 m instead: 0.75.
+pub fn lossFraction(err: TrackingError, limits: Termination) f32 {
+    var largest: f32 = 0;
+    const info = @typeInfo(Termination).@"struct";
+    inline for (info.field_names, info.field_types) |name, field_type| {
+        if (field_type == f32) {
+            const fraction: f32 = @field(err, name) / @field(limits, name);
+            largest = @max(largest, fraction);
+        }
+    }
+    return largest;
+}
+
+/// A hazard PROJECTED ahead along its rise, so a fall in progress is caught early:
+///
+///     projected = hazard + lookahead x max(0, hazard - previous hazard)
+///
+/// The hazard of one step, `hazard`, and of the step before, `previous_hazard`; their difference is how fast the
+/// character is heading toward its margins, and `lookahead_steps` steps of it are added. Only a RISING hazard is
+/// projected: a falling one is not trusted to keep falling - a character that has only begun to recover is still in
+/// danger - so it is read as it is.
+///
+/// Worked: a hazard rising from 0.2 to 0.3 in one step, ten steps ahead, reads 0.3 + 10 x 0.1 = 1.3 - past a start
+/// threshold of 0.5 already, where the hazard itself would have needed two more steps of that rise; falling from 0.4
+/// to 0.3, it reads 0.3.
+pub fn projectedHazard(hazard: f32, previous_hazard: f32, lookahead_steps: f32) f32 {
+    const rise_per_step: f32 = @max(hazard - previous_hazard, 0);
+    return hazard + lookahead_steps * rise_per_step;
+}
+
 /// AN EPISODE's COUNTERS for one character, carried by the judgement from decision to decision.
 pub const EpisodeCounters = struct {
     /// Decisions since the episode began - advanced before the judgement reads it.
@@ -8944,6 +9098,41 @@ pub const EpisodeVerdict = struct {
     capped: bool,
     /// A return's length, the decisions since the loss - 0 unless `returned`.
     return_length: u32,
+};
+
+/// WHAT A WORLD's NEXT RECORD IS IN A LEARNER's BOOKS, as the books keep it: whether it starts a new stretch of
+/// unbroken motion - the world's episode ended, or the world was pushed, since its record before - how far into its
+/// episode its step is (0 on an episode's first step), whether it comes after its episode lost the reference (an
+/// aftermath with steps left), whether its action was a planner's, and whether the decision before it failed. A CPU
+/// fleet knows the first three as it records (`robot_track.Fleet.step`); a simulator on a device says them all in a
+/// world's flags and counters, read once a decision (`robotgpu.recordMomentOf`).
+pub const RecordMoment = struct {
+    /// Whether the record begins a new SEGMENT - a stretch of unbroken motion. A learner's windows never cross from
+    /// one segment into the next: between them the character was restarted or pushed, a jump no model of the
+    /// physics could predict.
+    starts_segment: bool,
+    /// How many decisions into its episode the record's step is: 0 on an episode's first decision.
+    episode_step: u32,
+    /// Whether the record's step came after its episode lost the reference, in the aftermath a character may live
+    /// through on its way back.
+    after_loss: bool,
+    /// Whether the record's action was a planner's: its world followed its plan at that decision (robotgpu's
+    /// `PlanFollowing`), so the action is a label the policy may learn from. Never so on a CPU fleet's records, which
+    /// no planner acts in.
+    labelled: bool = false,
+    /// Whether the record's action BEGAN a plan: a labelled record at its plan's first decision, the replan's own -
+    /// the planner's choice for exactly the state it planned from. It begins a new stretch of plan, even right after
+    /// another's (`robot_track.LabelBooks`).
+    begins_plan: bool = false,
+    /// Whether the DECISION BEFORE this record FAILED: it lost the reference, or ended its episode at a loss - a
+    /// break, or an aftermath run out without a return. That decision took the record before's action, so a stretch of
+    /// plan the record before belonged to failed with it, and its labels are not kept (`robot_track.LabelBooks`).
+    previous_decision_failed: bool = false,
+    /// The reference frame the record tracks, and the clip it is of (robotgpu's `world_frame` and `world_clip`, a CPU
+    /// replay's own `frames` and `clips`): how many of its clip's frames follow it, so a policy's start is drawn only
+    /// where a whole horizon of reference follows (`robot_track.Replay.Books.sampleStart`).
+    frame: u32 = 0,
+    clip: u16 = 0,
 };
 
 /// WHAT A RANDOM DRAW IS FOR - each purpose its own stream (`drawUniform`), so a draw added later never shifts the
@@ -9096,6 +9285,191 @@ pub const DecisionFilterShares = struct {
     stiffness: f32 = 1,
 };
 
+/// WHAT A PLAN's NUMBERS ARE (robotgpu's `follow_plans`), knot by knot:
+///
+///     whole_actions           the action itself - the joints' offsets on the reference and the limbs' stiffnesses -
+///                             given to the world over whatever the policy chose. The teacher's form while the policy
+///                             is no anchor: in the training's first phase, a policy still learning to stand.
+///     offsets_around_policy   an offset ADDED TO THE POLICY's CHOICE at each decision: the world acts with the
+///                             policy's action plus the plan's offset, through the action filter as any choice. A plan
+///                             of zeros is the policy itself, so the search explores around what the policy already
+///                             does - the form of the model's own planner's plans, corrections around the policy.
+///
+/// A plan's shape, its warm start and its draws are the same in both forms; what changes is what the numbers are
+/// added to - nothing, or the policy's choice at the state the world is in.
+pub const PlanForm = enum(u32) {
+    whole_actions = 0,
+    offsets_around_policy = 1,
+};
+
+/// HOW A REPLAN DRAWS ITS CANDIDATES (robotgpu_host's `drawPlanAbout`), in the units the planning is thought in. The
+/// joints' offsets: noise of `offset_noise_radians` about the warm start at every knot, each offset kept within
+/// `offset_reach_radians` of the reference - a planned offset past it asks the servo for a pose the motion never
+/// needs. The limbs' stiffnesses, after the offsets in an action: noise of `stiffness_noise`, in the action's own
+/// units, zero by default - the plan moves the joints, and the stiffnesses keep the warm start's.
+pub const PlanDrawing = struct {
+    offset_noise_radians: f32 = 0.3,
+    offset_reach_radians: f32 = 0.6,
+    stiffness_noise: f32 = 0,
+};
+
+/// HOW A TRAINER's PLANNERS PLAN (robotgpu_host's `Planning`): how many candidates each planner runs ahead, how often
+/// it replans, how often it follows a plan whole, and how it draws its candidates - every one a run option
+/// (robot_lab's `Teacher`).
+pub const PlanningOptions = struct {
+    /// Candidates a planner runs ahead at each replan, its warm start among them.
+    candidates_per_planner: u32 = 16,
+    /// Decisions from one replan to the next: a new plan starts this far into its predecessor.
+    replan_interval: u32 = 4,
+    /// THE SHARE OF REPLANS AFTER WHICH A PLANNER FOLLOWS ITS PLAN AT EVERY DECISION: at each replan every planner
+    /// takes its new plan's action at the replan's own decision, and draws whether it keeps taking it until the next
+    /// replan or lets its policy act after (robotgpu's `PlanFollowing`). 0 is a planner that takes its plan's first
+    /// action alone; 1 one that follows every plan whole.
+    plan_following_share: f32 = 0.5,
+    drawing: PlanDrawing = .{},
+    /// The form of the plans once the training's second phase begins (`PlanForm`): offsets around the policy, the
+    /// search around what the policy does; whole actions keeps the first phase's form throughout. Before the second
+    /// phase, and in a run without phases, plans are whole actions.
+    phase_two_form: PlanForm = .offsets_around_policy,
+    /// THE PLANNERS CHOSEN BY TROUBLE, from the training's second phase: at each replan the planners are this many of
+    /// the characters, those in most trouble - their loss fraction (`lossFraction`) projected along its rise over
+    /// `trouble_lookahead_decisions` decisions (`projectedHazard`). The physics' search then goes where the policy
+    /// and the world model are least right, at a share of the physics this count sets: P planners of C candidates
+    /// over a horizon of H decisions, replanning every R, step P C H / R candidate decisions a decision. 0: the first
+    /// phase's planners plan throughout. At most the teacher's planners, and with plans around the policy only - a
+    /// character that begins to plan starts from the policy itself, a plan of zero offsets.
+    trouble_planners: u32 = 0,
+    trouble_lookahead_decisions: f32 = 4,
+    /// THE PLANS THAT TEACH (robotgpu_host's `Planning.judgePlans`): a plan's ADVANTAGE is its lookahead score less
+    /// its baseline's - the plan of zeros every lookahead runs (`baseline_candidate`), the same physics from the same
+    /// state - and a plan teaches only when it beats the baseline and its advantage is in the top `teach_share` of
+    /// the last `teach_window` plans'. A share, not a bar: the bar rises as the plans improve, and the student is
+    /// taught at a steady rate. 1: every plan that beats its baseline. Around the policy a plan teaches the flow
+    /// (teacher 2); as whole actions it is the one a planner follows, and so the one its records label - every plan
+    /// that beats the servo, whatever the share; a plan that does not teach is followed by no one, its planner's
+    /// character acting from the policy until the next replan.
+    teach_share: f32 = 1.0,
+    teach_window: u32 = 256,
+    /// WHETHER EVERY LOOKAHEAD RUNS ITS BASELINE, right after the warm start: a plan of zeros - around the policy, the
+    /// policy itself; as whole actions, THE SERVO, every joint on the reference and every limb at the servo law's own
+    /// stiffness (stiffness 0, `limbSpringFrequency`). Each plan's advantage is measured against it, and no plan worse
+    /// than it is chosen: the baseline is among the candidates. Off, there is none: every plan teaches.
+    baseline_candidate: bool = true,
+};
+
+/// THE PARTS OF A TRAINING ROUND, as its time is accounted (robot_lab's `RoundTimeLog`): what the device's dispatches
+/// are timed under and the host's time is counted under. A round acts for some decisions, then trains:
+///
+///     each decision    [ replans ] -> books -> acting -> physics -> judgement -> resets
+///     then             the world model's updates, the policy's
+///
+/// The numbers are the phases' own (`@intFromEnum`): what a pipe is told its dispatches are for (`Compute.setPhase`).
+pub const RoundPhase = enum(u32) {
+    /// Whatever falls outside the parts below - and the host's wait, at a round's end, for the device's last work.
+    other,
+    /// The teacher's replans: the planners' states copied into their candidates, the candidates run ahead through
+    /// the physics, their scores read back, each planner's best its new plan.
+    replans,
+    /// The worlds' integers read back and the trainer's books kept from them. The host waits here for the device to
+    /// finish the decision before.
+    books,
+    /// Acting: the policy's inputs, the policy, the action given to each world, the record and its copy into the
+    /// replay.
+    acting,
+    /// A decision's physics steps.
+    physics,
+    /// The observation after them, and the judgement.
+    judgement,
+    /// The pushes, the curriculum's round, the new episodes and their observation.
+    resets,
+    /// The world model's updates - on windows of the replay and of the candidates - and its gate's measurements.
+    world_model,
+    /// The policy's updates: through the world model, and on the teacher's labels.
+    policy,
+    /// The model's own planner: its searches through the world model (robot_track_resident's `TrackingPlanner`).
+    planner,
+
+    /// How many phases there are: the length of every per-phase list.
+    pub const count: usize = @typeInfo(RoundPhase).@"enum".field_names.len;
+};
+
+/// THE HOST's CLOCK OVER A ROUND's PHASES: how long the host spent in each phase and, inside that, how long it waited
+/// for the device. The host is in one phase at a time, so the phases' times add up to the round's:
+///
+///     begin ----- enter(books) -------- enter(acting) --- enter(physics) ... end
+///       other    |  books: 3.1 ms, of which 2.9 waiting  |  acting: 0.4 ms  |
+///
+/// The clock reads no time itself: every call is given the host's time in milliseconds, so the same clock serves a
+/// program, with its own clock's readings, and a test, with times of its choosing.
+pub const PhaseClock = struct {
+    /// The phase the host is in, and the host's time when it entered it.
+    phase: RoundPhase = .other,
+    entered_ms: f64 = 0,
+    /// The host's time in each phase since `begin`, and the part of it spent waiting for the device, by the phase's
+    /// number.
+    host_ms: [RoundPhase.count]f64 = @splat(0),
+    wait_ms: [RoundPhase.count]f64 = @splat(0),
+
+    /// A round begins at `now_ms`: every sum cleared, the host in `other`.
+    pub fn begin(clock: *PhaseClock, now_ms: f64) void {
+        clock.* = .{ .entered_ms = now_ms };
+    }
+
+    /// The host enters `phase` at `now_ms`: the time since it entered the phase before is that phase's.
+    pub fn enter(
+        clock: *PhaseClock,
+        now_ms: f64,
+        phase: RoundPhase,
+    ) void {
+        const left: usize = @backingInt(clock.phase);
+        clock.host_ms[left] += now_ms - clock.entered_ms;
+        clock.phase = phase;
+        clock.entered_ms = now_ms;
+    }
+
+    /// `waited_ms` of the phase the host is in went by waiting for the device.
+    pub fn addWait(clock: *PhaseClock, waited_ms: f64) void {
+        const current: usize = @backingInt(clock.phase);
+        clock.wait_ms[current] += waited_ms;
+    }
+
+    /// The round ends at `now_ms`: the time since the last phase was entered is that phase's, and the host is back in
+    /// `other`.
+    pub fn end(clock: *PhaseClock, now_ms: f64) void {
+        clock.enter(now_ms, .other);
+    }
+
+    /// The host's time over every phase: the round's, from `begin` to `end`.
+    pub fn hostTotalMs(clock: *const PhaseClock) f64 {
+        var total_ms: f64 = 0;
+        for (clock.host_ms) |phase_ms| {
+            total_ms += phase_ms;
+        }
+        return total_ms;
+    }
+
+    /// The host's waits for the device, over every phase.
+    pub fn waitTotalMs(clock: *const PhaseClock) f64 {
+        var total_ms: f64 = 0;
+        for (clock.wait_ms) |phase_ms| {
+            total_ms += phase_ms;
+        }
+        return total_ms;
+    }
+};
+
+/// SUPERMIMIC's START CURRICULUM, its numbers - their constants (`manager_terms.py`) as the defaults. A start's bin is
+/// drawn `uniform_share` uniformly, `hard_share` by a softmax of -`sharpness` G / scale (towards bins of low return),
+/// and the rest by that softmax's long-run average, which keeps `history_memory` of itself at each draw; a finished
+/// episode moves its start bin's G to `return_memory` G + (1 - `return_memory`) of its return.
+pub const StartCurriculumRule = struct {
+    uniform_share: f32 = 0.5,
+    hard_share: f32 = 0.4,
+    sharpness: f32 = 25.0,
+    history_memory: f32 = 0.999,
+    return_memory: f32 = 0.8,
+};
+
 /// THE TRACKING TASK's SETTINGS, every world's, as ONE VALUE - what a CPU fleet's options and task say (robot_track's
 /// `Fleet.trackingSettings` builds it), and what a simulator on a device takes in one call (robotgpu's
 /// `CpuTwin.setTracking`, the host's `Sim.setTracking`), so no setting is left at a default nobody chose: the floor,
@@ -9128,32 +9502,38 @@ pub const TrackingSettings = struct {
     /// A start's noise, the fleet's `start_noise` (`perturb_start`).
     start_noise_pose: f32,
     start_noise_velocity: f32,
-    /// The pushes (`push_worlds`, `start_in_trouble`): the fleet's `Pushes`, and a decision's seconds.
+    /// The pushes (`push_worlds`, `start_in_trouble`): the fleet's `Pushes`, the brake's watch - the top share of the
+    /// open range whose pushes are watched, 0 without a brake, and the decisions a watch lasts (`PushBrake`) - and a
+    /// decision's seconds.
     push_every: u32,
     push_rate_per_second: f32,
     push_speed_min: f32,
     push_speed_max: f32,
     push_start_share: f32,
+    push_watched_share: f32 = 0,
+    push_watch_decisions: u32 = 0,
     decision_seconds: f32,
-    /// SuperMimic's curriculum on the device (`begin_reset`), and its returns' discount.
+    /// SuperMimic's curriculum on the device (`curriculum_round`, `begin_reset`): whether starts follow it, its
+    /// returns' discount, its rule, and the largest return - the largest step reward over 1 - the discount, the scale
+    /// its softmax compares returns at.
     curriculum: Switch,
     curriculum_discount: f32,
+    curriculum_rule: StartCurriculumRule = .{},
+    curriculum_return_scale: f32 = 1,
     /// Each joint's rotation box, or null (the fleet's `rotation_boxes`): each ball's servo target clamped into its
     /// own.
     rotation_boxes: []const ?RotationBox,
 };
 
-/// SUPERMIMIC's START CURRICULUM, its numbers - their constants (`manager_terms.py`) as the defaults. A start's bin is
-/// drawn `uniform_share` uniformly, `hard_share` by a softmax of -`sharpness` G / scale (towards bins of low return),
-/// and the rest by that softmax's long-run average, which keeps `history_memory` of itself at each draw; a finished
-/// episode moves its start bin's G to `return_memory` G + (1 - `return_memory`) of its return.
-pub const StartCurriculumRule = struct {
-    uniform_share: f32 = 0.5,
-    hard_share: f32 = 0.4,
-    sharpness: f32 = 25.0,
-    history_memory: f32 = 0.999,
-    return_memory: f32 = 0.8,
-};
+/// ONE BIN's EXPONENT in the softmax (`startBinSoftmax`): -sharpness G / scale. The one expression the CPU's loop
+/// and a device's kernel (robotgpu's `curriculum_round`) both evaluate, so a twin's bins are the fleet's to the bit.
+pub fn startBinExponent(
+    rule: StartCurriculumRule,
+    bin_return: f32,
+    return_scale: f32,
+) f32 {
+    return -rule.sharpness * bin_return / return_scale;
+}
 
 /// SUPERMIMIC's START CURRICULUM, ITS SOFTMAX: each bin's share of the hard draws, `exp(-sharpness G / scale)`
 /// normalized over the bins - bins of low return G favoured. `return_scale` is the largest return (the largest step
@@ -9166,16 +9546,22 @@ pub fn startBinSoftmax(
 ) void {
     var largest: f32 = -1.0e30;
     for (bin_returns) |bin_return| {
-        largest = @max(largest, -rule.sharpness * bin_return / return_scale);
+        largest = @max(largest, startBinExponent(rule, bin_return, return_scale));
     }
     var exponent_sum: f32 = 0;
     for (bin_returns, out) |bin_return, *share| {
-        share.* = @exp(-rule.sharpness * bin_return / return_scale - largest);
+        share.* = @exp(startBinExponent(rule, bin_return, return_scale) - largest);
         exponent_sum += share.*;
     }
     for (out) |*share| {
         share.* /= exponent_sum;
     }
+}
+
+/// ONE BIN's LONG-RUN AVERAGE after a round (`foldStartBinHistory`): `history_memory` of itself, the rest of the
+/// round's softmax share - the one expression the CPU's loop and a device's kernel both evaluate.
+pub fn startBinHistoryAfter(rule: StartCurriculumRule, average: f32, share: f32) f32 {
+    return rule.history_memory * average + (1.0 - rule.history_memory) * share;
 }
 
 /// THE SOFTMAX's LONG-RUN AVERAGE, folded once per sampling round - SuperMimic folds it once per call of its sampler,
@@ -9186,8 +9572,25 @@ pub fn foldStartBinHistory(
     softmax: []const f32,
 ) void {
     for (long_run, softmax) |*average, share| {
-        average.* = rule.history_memory * average.* + (1.0 - rule.history_memory) * share;
+        average.* = startBinHistoryAfter(rule, average.*, share);
     }
+}
+
+/// ONE BIN's PROBABILITY in the mixture (`startBinMixture`), among its clip's `bin_count` bins: `uniform_share`
+/// spread evenly, `hard_share` of its softmax share, and the rest by its long-run average over the clip's sum of
+/// them - the one expression the CPU's loop and a device's kernel both evaluate.
+pub fn startBinProbability(
+    rule: StartCurriculumRule,
+    bin_count: f32,
+    share: f32,
+    average: f32,
+    long_run_sum: f32,
+) f32 {
+    const history_share: f32 = 1.0 - rule.uniform_share - rule.hard_share;
+    const uniform_part: f32 = rule.uniform_share / bin_count;
+    const hard_part: f32 = rule.hard_share * share;
+    const history_part: f32 = history_share * average / long_run_sum;
+    return uniform_part + hard_part + history_part;
 }
 
 /// THE MIXTURE A START IS DRAWN FROM - pure, so a start reads it without changing it: `uniform_share` spread evenly,
@@ -9199,16 +9602,12 @@ pub fn startBinMixture(
     out: []f32,
 ) void {
     const bin_count: f32 = float(softmax.len);
-    const history_share: f32 = 1.0 - rule.uniform_share - rule.hard_share;
     var long_run_sum: f32 = 0;
     for (long_run) |average| {
         long_run_sum += average;
     }
     for (out, softmax, long_run) |*probability, share, average| {
-        const uniform_part: f32 = rule.uniform_share / bin_count;
-        const hard_part: f32 = rule.hard_share * share;
-        const history_part: f32 = history_share * average / long_run_sum;
-        probability.* = uniform_part + hard_part + history_part;
+        probability.* = startBinProbability(rule, bin_count, share, average, long_run_sum);
     }
 }
 
@@ -9242,6 +9641,62 @@ pub fn updateStartBinReturn(
     const tail: f32 = if (ended_by_failure) 0.0 else @exp(length * @log(gamma)) * mean_reward / (1.0 - gamma);
     const episode_return: f32 = discounted_return + tail;
     bin_return.* = rule.return_memory * bin_return.* + (1.0 - rule.return_memory) * episode_return;
+}
+
+/// AN EPISODE AS IT ENDED - all SuperMimic's curriculum keeps of it (`startBinReturnAfter`): the bin it started in,
+/// its discounted SuperMimic return and its rewards' plain sum, its length in decisions, and whether it ended by
+/// failure (`episodeEndedByFailure`). The CPU fleet holds these in its own arrays while the episode runs, and a device
+/// in each world's (robotgpu's `start_bins`, `episode_decisions` and the episode's two sums); each folds the episode
+/// into its start bin as it ends - the fleet in its step, the device in a kernel (`curriculum_round`).
+pub const EndedEpisode = struct {
+    start_bin: u32,
+    discounted_return: f32,
+    reward_sum: f32,
+    decisions: u32,
+    ended_by_failure: bool,
+};
+
+/// WHETHER AN EPISODE ENDED BY FAILURE, for its start bin's return (`updateStartBinReturn`): it lost its reference -
+/// ending at the loss, or once its aftermath ran out - and the longest episode's cap did not end it first. Every other
+/// end - the cap, the clip's last frame - cut it short, and the return it would have gone on to earn is estimated.
+pub fn episodeEndedByFailure(capped: bool, ends_at_loss: bool, in_aftermath: bool) bool {
+    const lost_its_reference: bool = ends_at_loss or in_aftermath;
+    return !capped and lost_its_reference;
+}
+
+/// A START BIN's RETURN AFTER A FINISHED EPISODE (`updateStartBinReturn`), from the return it held: the episode's
+/// mean reward over its decisions and its length in them, one decision at least. On values, so the CPU fleet
+/// (`foldEndedEpisode`) and a device's kernel (robotgpu's `curriculum_round`) fold by the same arithmetic.
+pub fn startBinReturnAfter(
+    rule: StartCurriculumRule,
+    discount: f32,
+    bin_return: f32,
+    ended: EndedEpisode,
+) f32 {
+    const decisions: f32 = float(@max(ended.decisions, 1));
+    const mean_reward: f32 = ended.reward_sum / decisions;
+    var folded_return: f32 = bin_return;
+    updateStartBinReturn(
+        rule,
+        &folded_return,
+        ended.discounted_return,
+        mean_reward,
+        decisions,
+        discount,
+        ended.ended_by_failure,
+    );
+    return folded_return;
+}
+
+/// A FINISHED EPISODE INTO ITS START BIN's RETURN, one of `bin_returns` (`startBinReturnAfter`).
+pub fn foldEndedEpisode(
+    rule: StartCurriculumRule,
+    discount: f32,
+    bin_returns: []f32,
+    ended: EndedEpisode,
+) void {
+    const bin_return: *f32 = &bin_returns[ended.start_bin];
+    bin_return.* = startBinReturnAfter(rule, discount, bin_return.*, ended);
 }
 
 /// THE EPISODE JUDGED after a decision - grace, failure, aftermath, return and end, the one rule the CPU fleet and the
@@ -9304,6 +9759,310 @@ pub fn judgeEpisode(
         .return_length = return_length,
     };
     return verdict;
+}
+
+// ------------------------------------------------------------------------------------------------------------------
+// THE PUSHES' RAMP: how hard a fleet pushes its characters as training goes on
+// ------------------------------------------------------------------------------------------------------------------
+
+/// THE BRAKE ON THE PUSHES' TOP SPEED (`PushTop`).
+///
+/// A fleet draws each push's speed between a lowest speed and a TOP that opens as training goes on. The top follows
+/// the training clock, and the brake holds it wherever the characters stop coming back from the hardest pushes they
+/// are given. A top set by the clock alone would go on raising pushes nobody recovers from; one set by competence
+/// alone might never open. The rule is automatic domain randomization's (OpenAI et al. 2019, arXiv 1910.07113: a
+/// range widens only while the performance measured at its boundary clears a threshold) and the terrain curriculum
+/// of Rudin et al. 2021 (arXiv 2109.11978: a robot's terrain gets harder as it succeeds on it).
+///
+/// THE WATCHED PUSHES are the ones near the top: a push whose speed is drawn in the top `watched_share` of the range
+/// open at the time, given to a character that is being judged (`drawPush`). A character takes no other push while
+/// one is watched, so what happens next is that push's doing. The watch ends in one of four ways
+/// (`settleWatchedPush`):
+///
+///     kept        `watch_seconds` passed and the reference was never lost
+///     returned    the reference was lost, and the character came back to it within its aftermath
+///     failed      the episode ended at the loss, or in the aftermath that followed it
+///     dropped     the episode ended for another reason - the clip's end, the longest episode - which says nothing
+///
+/// Kept and returned are COMING BACK. Over each window of `window_minutes` of training, the share of the watched
+/// pushes ended - kept, returned or failed - that the characters came back from is held against `come_back_bar`. At
+/// or above it, or with no watched push ended, the top advances through the next window; below it, the top holds.
+/// It never retreats: a top that fell would make a night's pushes depend on its worst minute.
+pub const PushBrake = struct {
+    /// The share of the watched pushes the characters must come back from for the top to advance. 0: no brake - the
+    /// top follows the clock, and no push is watched.
+    come_back_bar: f32 = 0,
+    /// The top share of the open range whose pushes are watched: a fifth.
+    watched_share: f32 = 0.2,
+    /// How long a watched push that loses nothing is watched before it counts as kept.
+    watch_seconds: f32 = 2.0,
+    /// The training time the bar is held over.
+    window_minutes: f32 = 1.0,
+    /// How fast the top may catch up with the clock's line after a hold: this many times the line's own pace.
+    catch_up_pace: f32 = 2.0,
+
+    /// Whether the brake is on: a bar to hold the watched pushes against.
+    pub fn isOn(brake: PushBrake) bool {
+        return brake.come_back_bar > 0;
+    }
+
+    /// Whether a window's watched pushes let the top advance: always without a brake, and with no watched push ended
+    /// - nothing says the characters fail; otherwise when the share they came back from is at the bar or above.
+    pub fn allowsAdvance(
+        brake: PushBrake,
+        settled: u32,
+        came_back: u32,
+    ) bool {
+        if (!brake.isOn()) {
+            return true;
+        }
+        if (settled == 0) {
+            return true;
+        }
+        const came_back_share: f32 = float(came_back) / float(settled);
+        return came_back_share >= brake.come_back_bar;
+    }
+};
+
+/// THE PUSHES' TOP: how far a fleet's range of push speeds has opened, from 0 - every push at the lowest speed - to
+/// 1, the full range. The program that trains tells it the training hours (`advanceTo`), and the fleet or the
+/// device's host each watched push that ends (`noteSettled`).
+///
+/// THE CLOCK's LINE is a straight line from 0 at the run's start to 1 at `full_hours` (`lineShare`). The top follows
+/// it while the brake allows (`PushBrake.allowsAdvance`), holds while it does not, and after a hold gains on the line
+/// at `catch_up_pace` times the line's own pace until it is back on it - never ahead of it, never falling. A run of
+/// eight hours whose line is full at the sixth, pushes from 0.5 to 5 m/s, the top held through the third hour:
+///
+///     hours               0      1      2      3      4      5      6      7      8
+///     the clock's line    0     1/6    2/6    3/6    4/6    5/6     1      1      1
+///     the top             0     1/6    2/6    2/6    4/6    5/6     1      1      1
+///     top speed (m/s)    0.5   1.25    2.0    2.0    3.5   4.25    5.0    5.0    5.0
+///
+/// Held from hour 2 to hour 3, the top then gains 2/6 an hour - twice the line's 1/6 - and is back on the line at
+/// hour 4. THE RATE of the pushes is not the top's: they come as often in the first minute as in the last, and only
+/// their speeds grow - early pushes are small, not rare.
+pub const PushTop = struct {
+    /// How far the range has opened.
+    share: f32 = 1,
+    /// The training hours last told, null before the first: a run's start, or its resume - the top then starts its
+    /// clock at the hours it is told first, wherever in the run they are.
+    told_hours: ?f32 = null,
+    /// Whether the last whole window let the top advance (`PushBrake.allowsAdvance`).
+    is_advancing: bool = true,
+    /// The window in progress: the hours it began at, the watched pushes ended in it, and those of them the
+    /// characters came back from.
+    window_began_hours: f32 = 0,
+    window_settled: u32 = 0,
+    window_came_back: u32 = 0,
+
+    /// The top at a run's start: closed with a line to follow (`full_hours` above 0), fully open without one.
+    pub fn startingWith(full_hours: f32) PushTop {
+        const has_line: bool = full_hours > 0;
+        const top: PushTop = .{ .share = if (has_line) 0 else 1 };
+        return top;
+    }
+
+    /// The top of a resumed run: as far open as it was saved, its clock and its window starting afresh at the hours
+    /// it is told first.
+    pub fn resumedAt(share: f32) PushTop {
+        const top: PushTop = .{ .share = share };
+        return top;
+    }
+
+    /// The clock's line at `hours`: 0 at the start, 1 from `full_hours` on, straight between - and 1 throughout
+    /// without a line (`full_hours` 0).
+    pub fn lineShare(full_hours: f32, hours: f32) f32 {
+        const has_line: bool = full_hours > 0;
+        if (!has_line) {
+            return 1;
+        }
+        return clamp(hours / full_hours, 0, 1);
+    }
+
+    /// A watched push ended - kept, returned or failed (`WatchedPushEnd.isCounted`) - in the window in progress.
+    pub fn noteSettled(top: *PushTop, came_back: bool) void {
+        top.window_settled += 1;
+        if (came_back) {
+            top.window_came_back += 1;
+        }
+    }
+
+    /// THE TOP ADVANCED TO `hours` OF TRAINING. A window that has lasted `brake.window_minutes` is judged and a new
+    /// one begins; then, where the last window judged allows it, the top moves on by the hours since it was last
+    /// told, at up to `catch_up_pace` times the line's pace and no further than the line.
+    pub fn advanceTo(
+        top: *PushTop,
+        brake: PushBrake,
+        full_hours: f32,
+        hours: f32,
+    ) void {
+        const has_line: bool = full_hours > 0;
+        if (!has_line) {
+            top.share = 1;
+            return;
+        }
+        const last_hours: f32 = top.told_hours orelse {
+            top.told_hours = hours;
+            top.window_began_hours = hours;
+            return;
+        };
+        const window_hours: f32 = brake.window_minutes / 60.0;
+        const window_is_over: bool = hours - top.window_began_hours >= window_hours;
+        if (window_is_over) {
+            top.is_advancing = brake.allowsAdvance(top.window_settled, top.window_came_back);
+            top.window_began_hours = hours;
+            top.window_settled = 0;
+            top.window_came_back = 0;
+        }
+        top.told_hours = hours;
+        if (!top.is_advancing) {
+            return;
+        }
+        const elapsed_hours: f32 = @max(hours - last_hours, 0);
+        const line_pace: f32 = 1.0 / full_hours;
+        const reach: f32 = top.share + brake.catch_up_pace * line_pace * elapsed_hours;
+        const on_or_behind_the_line: f32 = @min(reach, lineShare(full_hours, hours));
+        top.share = @max(top.share, on_or_behind_the_line);
+    }
+};
+
+/// HOW A WATCHED PUSH STANDS after a decision's judgement (`settleWatchedPush`, `PushBrake`).
+pub const WatchedPushEnd = enum {
+    /// No push is watched.
+    none,
+    /// The watch goes on.
+    watched,
+    kept,
+    returned,
+    failed,
+    dropped,
+
+    /// Whether the watch ended in a way the brake counts: kept, returned or failed - not dropped.
+    pub fn isCounted(end: WatchedPushEnd) bool {
+        return end == .kept or end == .returned or end == .failed;
+    }
+
+    /// Whether the character came back from the push: kept the reference, or returned to it.
+    pub fn cameBack(end: WatchedPushEnd) bool {
+        return end == .kept or end == .returned;
+    }
+};
+
+/// A WATCHED PUSH AFTER A DECISION's JUDGEMENT - the one rule the CPU fleet and the device both follow.
+/// `decisions_left` is what is left of the watch, 0 when no push is watched; it is counted down while the reference
+/// is held, and set to 0 where the watch ends:
+///
+///     the verdict                                     the watch
+///     returned to the reference                       ends: returned
+///     the episode ended by failure                    ends: failed    (`episodeEndedByFailure`: at the loss, or in
+///                                                                      the aftermath that followed)
+///     the episode ended otherwise                     ends: dropped   (the clip's end, the longest episode)
+///     the reference lost, or still lost               goes on: the aftermath decides, however long it lasts
+///     the reference held, the last decision counted   ends: kept
+///     the reference held                              goes on, a decision fewer
+pub fn settleWatchedPush(decisions_left: *u32, verdict: EpisodeVerdict) WatchedPushEnd {
+    const is_watched: bool = decisions_left.* > 0;
+    if (!is_watched) {
+        return .none;
+    }
+    if (verdict.returned) {
+        decisions_left.* = 0;
+        return .returned;
+    }
+    if (verdict.finished) {
+        decisions_left.* = 0;
+        const by_failure: bool = episodeEndedByFailure(verdict.capped, verdict.ends_at_loss, verdict.in_aftermath);
+        return if (by_failure) .failed else .dropped;
+    }
+    const reference_is_lost: bool = verdict.lost or verdict.in_aftermath;
+    if (reference_is_lost) {
+        return .watched;
+    }
+    decisions_left.* -= 1;
+    return if (decisions_left.* == 0) .kept else .watched;
+}
+
+/// A FLEET's PUSHES AS A DECISION DRAWS THEM: the numbers a CPU fleet's settings and a device's uniform both hold
+/// (`drawPush`).
+pub const PushRule = struct {
+    /// A push every this many decisions of an episode; 0 for none.
+    every: u32,
+    /// Random pushes a second: a Poisson process made one decision at a time, the chance in a decision the rate times
+    /// `decision_seconds`. 0 for none.
+    rate_per_second: f32,
+    /// The speeds' range when fully open, in m/s, and how far it is open (`PushTop.share`).
+    speed_min: f32,
+    speed_max: f32,
+    top_share: f32,
+    /// The brake's watch (`PushBrake`): the top share of the open range whose pushes are watched - 0 for no watch -
+    /// and the decisions a watched push that loses nothing is watched.
+    watched_share: f32,
+    watch_decisions: u32,
+    decision_seconds: f32,
+    /// The decisions an episode's start is graced (`EpisodeRules.grace_steps`): no push given in them is watched,
+    /// since no rule judges what it does.
+    grace_steps: u32,
+};
+
+/// WHAT A DECISION DRAWS FOR ONE WORLD (`drawPush`): no push, or a push of a speed in a horizontal direction - and,
+/// for a push the brake watches, the decisions it is watched for.
+pub const DrawnPush = struct {
+    is_pushed: bool = false,
+    speed: f32 = 0,
+    direction_rad: f32 = 0,
+    watch_decisions: u32 = 0,
+};
+
+/// A push's speed from its draw in [0, 1): the lowest speed plus the draw's share of the range open.
+pub fn pushSpeed(
+    speed_min: f32,
+    speed_max: f32,
+    top_share: f32,
+    speed_draw: f32,
+) f32 {
+    const open_range: f32 = (speed_max - speed_min) * top_share;
+    return speed_min + open_range * speed_draw;
+}
+
+/// ONE WORLD's PUSH AT A DECISION - the one rule the CPU fleet's step and the device's `push_worlds` both follow, each
+/// draw the world's own at the decision's number (`drawUniform`), so both draw the same pushes.
+///
+/// A world with a watched push takes none (`watched_left` above 0). Otherwise it is pushed on the schedule, or at
+/// random with the rate's chance - the same chance however far the top has opened. The speed is uniform in the open
+/// range and the direction uniform round the vertical. The push is WATCHED when its speed's draw falls in the top
+/// `watched_share` of the range and the world is being judged: out of its start's grace, and not in an aftermath,
+/// where the reference is lost already.
+pub fn drawPush(
+    rule: PushRule,
+    seed: u32,
+    world: u32,
+    decision: u32,
+    episode_steps: u32,
+    watched_left: u32,
+    in_aftermath: bool,
+) DrawnPush {
+    const no_push: DrawnPush = .{};
+    if (watched_left > 0) {
+        return no_push;
+    }
+    const is_scheduled: bool = rule.every > 0 and episode_steps % rule.every == 0;
+    const chance: f32 = rule.rate_per_second * rule.decision_seconds;
+    const chance_draw: f32 = drawUniform(seed, world, decision, .push_chance, 0);
+    const is_random: bool = rule.rate_per_second > 0 and chance_draw < chance;
+    if (!is_scheduled and !is_random) {
+        return no_push;
+    }
+    const speed_draw: f32 = drawUniform(seed, world, decision, .push_speed, 0);
+    const direction_draw: f32 = drawUniform(seed, world, decision, .push_direction, 0);
+    const is_near_top: bool = rule.watched_share > 0 and speed_draw >= 1.0 - rule.watched_share;
+    const is_judged: bool = episode_steps >= rule.grace_steps and !in_aftermath;
+    const push: DrawnPush = .{
+        .is_pushed = true,
+        .speed = pushSpeed(rule.speed_min, rule.speed_max, rule.top_share, speed_draw),
+        .direction_rad = 2.0 * pi * direction_draw,
+        .watch_decisions = if (is_near_top and is_judged) rule.watch_decisions else 0,
+    };
+    return push;
 }
 
 /// Renormalize every quaternion in `pos`. Integration walks a quaternion off the unit
@@ -11352,6 +12111,56 @@ const FreeBody = Spec(.{
         }},
     }},
 });
+
+test "robot: a point's mass, and a pull bringing the point to its target" {
+    // A free box of 24 kg (0.2 x 0.4 x 0.6 m at 500 kg/m^3), weightless: pushed at its centre of mass it moves as its
+    // whole mass; pushed at a corner, lighter - it turns as well as moves. A pull at its centre, a metre from its
+    // target, starts with the spring's force alone (the box at rest), and within two seconds - ten of the spring's
+    // time constants at its damping - has the centre at the target. (Pulled at a corner, the box would settle spinning
+    // about it, nothing damping that turn: the corner held off the target by what keeps the spin going.)
+    const gpa: Allocator = testing_allocator;
+    var m: Model = try FreeBody.build(gpa);
+    defer m.deinit();
+    m.opt.gravity = vec_zero;
+    var d: Data = try .init(gpa, &m);
+    defer d.deinit();
+    forward(&m, &d);
+    const body: u32 = 1;
+    const jac_p: []Vec = try gpa.alloc(Vec, m.dof_count);
+    defer gpa.free(jac_p);
+    const column: []f32 = try gpa.alloc(f32, m.dof_count);
+    defer gpa.free(column);
+    const box_mass: f32 = m.body_mass[body];
+    try expectApproxEqRel(@as(f32, 24), box_mass, 1.0e-4);
+    const centre: Vec = d.body_centres_of_mass[body];
+    try expectApproxEqRel(box_mass, pointMass(&m, &d, body, centre, jac_p, column), 1.0e-4);
+    const corner_local: Vec = vec(0.1, 0.2, 0.3);
+    const corner: Vec = d.body_positions[body] + rotate(d.body_orientations[body], corner_local);
+    forward(&m, &d);
+    const corner_mass: f32 = pointMass(&m, &d, body, corner, jac_p, column);
+    try expect(corner_mass < 0.5 * box_mass);
+    forward(&m, &d);
+    const centre_local: Vec = rotate(conjugate(d.body_orientations[body]), centre - d.body_positions[body]);
+    const pull: Pull = .{
+        .body = body,
+        .point_local = centre_local,
+        .target = centre + vec(1, 0, 0),
+        .mass = box_mass,
+    };
+    @memset(d.applied_joint_forces, 0);
+    const first_force: Vec = addPullForce(&m, &d, pull, jac_p, d.applied_joint_forces);
+    try expectApproxEqRel(box_mass * 100.0, first_force[0], 1.0e-5);
+    try expectApproxEqAbs(@as(f32, 0), length3(vec(0, first_force[1], first_force[2])), 1.0e-5);
+    const steps: usize = @trunc(2.0 / m.opt.timestep);
+    for (0..steps) |_| {
+        forward(&m, &d);
+        @memset(d.applied_joint_forces, 0);
+        _ = addPullForce(&m, &d, pull, jac_p, d.applied_joint_forces);
+        step(&m, &d);
+    }
+    forward(&m, &d);
+    try expectApproxEqAbs(@as(f32, 0), length3(pull.target - pull.point(&d)), 0.02);
+}
 
 const BallChain = Spec(.{
     .bodies = &.{
@@ -20081,6 +20890,27 @@ test "counter-based indices: always below their count, every index reached" {
     try expect((largest_top_bits * 600) >> 16 < 600);
 }
 
+test "the loss fraction: the largest limited term's share of its limit, 1 where the termination rule fires" {
+    // The worked example: the root 0.3 m off against 0.6, the pose 0.6 rad against 1.2 - half way each; the root at
+    // 0.45 m - three quarters. The unlimited terms (height, up, ...) add nothing however large.
+    const limits: Termination = .{};
+    var err: TrackingError = zeroes(TrackingError);
+    err.root_position = 0.3;
+    err.pose_rotation = 0.6;
+    err.height = 5.0;
+    try expectApproxEqAbs(@as(f32, 0.5), lossFraction(err, limits), 1.0e-6);
+    err.root_position = 0.45;
+    try expectApproxEqAbs(@as(f32, 0.75), lossFraction(err, limits), 1.0e-6);
+    // Past a limit, the rule fires and the fraction is above 1; at it, neither.
+    try expect(!terminated(err, limits) and lossFraction(err, limits) < 1);
+    err.root_rotation = 1.8;
+    try expect(terminated(err, limits));
+    try expectApproxEqAbs(@as(f32, 1.2), lossFraction(err, limits), 1.0e-6);
+    // The projection reads a rise ahead and a fall as it is.
+    try expectApproxEqAbs(@as(f32, 1.3), projectedHazard(0.3, 0.2, 10), 1.0e-6);
+    try expectEqual(@as(f32, 0.3), projectedHazard(0.3, 0.4, 10));
+}
+
 test "SuperMimic's start curriculum: their mixture, low-return bins favoured, a cut-short episode's tail" {
     // Three bins, returns 10, 5, 0 against a largest return of 20: the softmax of -25 G / 20, its long-run average from
     // equal shares, half uniform - computed here from their formula, and the lowest-return bin the most probable.
@@ -20109,4 +20939,261 @@ test "SuperMimic's start curriculum: their mixture, low-return bins favoured, a 
     updateStartBinReturn(.{}, &cut_estimate, 4.0, 0.5, 20.0, 0.99, false);
     const tail: f32 = @exp(20.0 * @log(@as(f32, 0.99))) * 0.5 / 0.01;
     try expect(@abs(cut_estimate - (0.8 * 10.0 + 0.2 * (4.0 + tail))) < 1.0e-3);
+}
+
+test "PhaseClock: a phase's time runs until the next is entered, and a wait is counted where the host is" {
+    // One round, in milliseconds of the test's choosing: 10 before the first phase, the physics from 110 to 150, the
+    // books from 150 to 180 with a wait of 25 inside them, the physics again until the round ends at 200.
+    var clock: PhaseClock = .{};
+    clock.begin(100);
+    clock.enter(110, .physics);
+    clock.enter(150, .books);
+    clock.addWait(25);
+    clock.enter(180, .physics);
+    clock.end(200);
+    var expected_host_ms: [RoundPhase.count]f64 = @splat(0);
+    expected_host_ms[@backingInt(RoundPhase.other)] = 10;
+    expected_host_ms[@backingInt(RoundPhase.physics)] = 40 + 20;
+    expected_host_ms[@backingInt(RoundPhase.books)] = 30;
+    var expected_wait_ms: [RoundPhase.count]f64 = @splat(0);
+    expected_wait_ms[@backingInt(RoundPhase.books)] = 25;
+    try expectEqual(expected_host_ms, clock.host_ms);
+    try expectEqual(expected_wait_ms, clock.wait_ms);
+    // The phases' times are the round's, from its beginning to its end; the round over, the host is in `other`.
+    try expectEqual(@as(f64, 200 - 100), clock.hostTotalMs());
+    try expectEqual(@as(f64, 25), clock.waitTotalMs());
+    try expectEqual(RoundPhase.other, clock.phase);
+    // The next round begins from nothing.
+    clock.begin(500);
+    const no_time: [RoundPhase.count]f64 = @splat(0);
+    try expectEqual(no_time, clock.host_ms);
+    try expectEqual(no_time, clock.wait_ms);
+    try expectEqual(@as(f64, 500), clock.entered_ms);
+}
+
+test "PushTop: the top follows the clock's line, holds below the brake's bar, catches up at twice the pace" {
+    // A line full at hour 6, a brake with a bar of 0.6 and - so that a line of the test is an hour - a window of an
+    // hour: every hour's watched pushes decide that hour's advance.
+    const full_hours: f32 = 6;
+    const brake: PushBrake = .{ .come_back_bar = 0.6, .window_minutes = 60 };
+    const Hour = struct { settled: u32, came_back: u32, top_sixths: f32 };
+    // THE HOURS, each with the watched pushes that ended in it and the top at its end, in sixths of the range:
+    const hours = [_]Hour{
+        // nothing watched yet: the top is on the line
+        .{ .settled = 0, .came_back = 0, .top_sixths = 1 },
+        // 8 of 10 came back: on the line
+        .{ .settled = 10, .came_back = 8, .top_sixths = 2 },
+        // 5 of 10, and then 5 of 10 again: held for two hours, the line at 4
+        .{ .settled = 10, .came_back = 5, .top_sixths = 2 },
+        .{ .settled = 10, .came_back = 5, .top_sixths = 2 },
+        // 6 of 10, the bar itself: it advances, two sixths an hour - twice the line's pace - and is still behind
+        .{ .settled = 10, .came_back = 6, .top_sixths = 4 },
+        // back on the line at the full range, and no further
+        .{ .settled = 10, .came_back = 10, .top_sixths = 6 },
+        .{ .settled = 10, .came_back = 10, .top_sixths = 6 },
+        // nothing comes back any more: the top holds - it never falls
+        .{ .settled = 10, .came_back = 0, .top_sixths = 6 },
+    };
+    var top: PushTop = .startingWith(full_hours);
+    try expectEqual(@as(f32, 0), top.share);
+    top.advanceTo(brake, full_hours, 0);
+    for (hours, 1..) |hour, hour_number| {
+        var settled: u32 = 0;
+        while (settled < hour.settled) : (settled += 1) {
+            top.noteSettled(settled < hour.came_back);
+        }
+        top.advanceTo(brake, full_hours, float(hour_number));
+        try expectApproxEqAbs(hour.top_sixths / 6.0, top.share, 1.0e-6);
+    }
+    // WITHOUT A BRAKE the same pushes hold nothing: the top is the line.
+    const no_brake: PushBrake = .{ .window_minutes = 60 };
+    var unbraked: PushTop = .startingWith(full_hours);
+    unbraked.advanceTo(no_brake, full_hours, 0);
+    for (hours, 1..) |hour, hour_number| {
+        var settled: u32 = 0;
+        while (settled < hour.settled) : (settled += 1) {
+            unbraked.noteSettled(settled < hour.came_back);
+        }
+        unbraked.advanceTo(no_brake, full_hours, float(hour_number));
+        const line_share: f32 = PushTop.lineShare(full_hours, float(hour_number));
+        try expectApproxEqAbs(line_share, unbraked.share, 1.0e-6);
+    }
+    // WITHOUT A LINE the range is fully open from the start, told its hours or not.
+    var open: PushTop = .startingWith(0);
+    try expectEqual(@as(f32, 1), open.share);
+    open.advanceTo(brake, 0, 3);
+    try expectEqual(@as(f32, 1), open.share);
+    // A RESUMED RUN: the top as far open as it was saved - 0.4 at hour 3, behind the line's 0.5. The first hours told
+    // start its clock and move nothing; half an hour later it has gained that half hour at twice the line's pace.
+    var resumed: PushTop = .resumedAt(0.4);
+    resumed.advanceTo(brake, full_hours, 3.0);
+    try expectEqual(@as(f32, 0.4), resumed.share);
+    resumed.advanceTo(brake, full_hours, 3.5);
+    try expectApproxEqAbs(@as(f32, 0.4 + 2.0 * 0.5 / 6.0), resumed.share, 1.0e-6);
+    // A TOP SAVED AHEAD OF THE LINE - a run resumed with a longer line, full at hour 12 - does not retreat: it stays
+    // where it was until the line passes it, 0.9 against the line's 0.25 and then its 0.5.
+    const longer_full_hours: f32 = 12;
+    var ahead: PushTop = .resumedAt(0.9);
+    ahead.advanceTo(brake, longer_full_hours, 3.0);
+    ahead.advanceTo(brake, longer_full_hours, 6.0);
+    try expectEqual(@as(f32, 0.9), ahead.share);
+    // A RUN RESUMED WITHOUT A LINE opens the whole range at the first hours told, wherever its top was saved.
+    var opened: PushTop = .resumedAt(0.4);
+    opened.advanceTo(brake, 0, 3.0);
+    try expectEqual(@as(f32, 1), opened.share);
+}
+
+test "settleWatchedPush: kept, returned, failed or dropped - and counted down only while the reference is held" {
+    const Case = struct {
+        left_before: u32,
+        verdict: EpisodeVerdict,
+        end: WatchedPushEnd,
+        left_after: u32,
+    };
+    const held: EpisodeVerdict = .{
+        .in_aftermath = false,
+        .lost = false,
+        .returned = false,
+        .aftermath_begins = false,
+        .finished = false,
+        .ends_at_loss = false,
+        .capped = false,
+        .return_length = 0,
+    };
+    var lost_into_aftermath: EpisodeVerdict = held;
+    lost_into_aftermath.lost = true;
+    lost_into_aftermath.aftermath_begins = true;
+    var lost_and_ended: EpisodeVerdict = held;
+    lost_and_ended.lost = true;
+    lost_and_ended.finished = true;
+    lost_and_ended.ends_at_loss = true;
+    var still_lost: EpisodeVerdict = held;
+    still_lost.in_aftermath = true;
+    var returned: EpisodeVerdict = still_lost;
+    returned.returned = true;
+    returned.return_length = 12;
+    var aftermath_ran_out: EpisodeVerdict = still_lost;
+    aftermath_ran_out.finished = true;
+    var clip_over: EpisodeVerdict = held;
+    clip_over.finished = true;
+    var capped: EpisodeVerdict = held;
+    capped.finished = true;
+    capped.capped = true;
+    var capped_in_aftermath: EpisodeVerdict = still_lost;
+    capped_in_aftermath.finished = true;
+    capped_in_aftermath.capped = true;
+    const cases = [_]Case{
+        // No push is watched: nothing, whatever the verdict.
+        .{ .left_before = 0, .verdict = lost_and_ended, .end = .none, .left_after = 0 },
+        // The reference held: a decision fewer, and kept at the last.
+        .{ .left_before = 3, .verdict = held, .end = .watched, .left_after = 2 },
+        .{ .left_before = 1, .verdict = held, .end = .kept, .left_after = 0 },
+        // Lost into an aftermath, and still lost: the watch waits, not counted down - even at its last decision.
+        .{ .left_before = 1, .verdict = lost_into_aftermath, .end = .watched, .left_after = 1 },
+        .{ .left_before = 1, .verdict = still_lost, .end = .watched, .left_after = 1 },
+        // Back with the reference.
+        .{ .left_before = 1, .verdict = returned, .end = .returned, .left_after = 0 },
+        // The episode ended by failure: at the loss, or when the aftermath ran out.
+        .{ .left_before = 5, .verdict = lost_and_ended, .end = .failed, .left_after = 0 },
+        .{ .left_before = 5, .verdict = aftermath_ran_out, .end = .failed, .left_after = 0 },
+        // The episode cut short: the clip's end, the longest episode - in an aftermath too.
+        .{ .left_before = 5, .verdict = clip_over, .end = .dropped, .left_after = 0 },
+        .{ .left_before = 5, .verdict = capped, .end = .dropped, .left_after = 0 },
+        .{ .left_before = 5, .verdict = capped_in_aftermath, .end = .dropped, .left_after = 0 },
+    };
+    for (cases) |case| {
+        var left: u32 = case.left_before;
+        const end: WatchedPushEnd = settleWatchedPush(&left, case.verdict);
+        try expectEqual(case.end, end);
+        try expectEqual(case.left_after, left);
+    }
+    // What the brake counts, and what is coming back.
+    const counted = [_]WatchedPushEnd{ .kept, .returned, .failed };
+    for (counted) |end| {
+        try expect(end.isCounted());
+    }
+    const not_counted = [_]WatchedPushEnd{ .none, .watched, .dropped };
+    for (not_counted) |end| {
+        try expect(!end.isCounted());
+        try expect(!end.cameBack());
+    }
+    try expect(WatchedPushEnd.kept.cameBack());
+    try expect(WatchedPushEnd.returned.cameBack());
+    try expect(!WatchedPushEnd.failed.cameBack());
+}
+
+test "drawPush: the rate is the same however far the top has opened, the speeds grow, and a fifth are watched" {
+    // Pushes of a run: one every two seconds per character at 30 decisions a second, 0.5 to 5 m/s, a watch of 60
+    // decisions on the top fifth, a start graced for 10 decisions.
+    const full_rule: PushRule = .{
+        .every = 0,
+        .rate_per_second = 0.5,
+        .speed_min = 0.5,
+        .speed_max = 5.0,
+        .top_share = 1.0,
+        .watched_share = 0.2,
+        .watch_decisions = 60,
+        .decision_seconds = 1.0 / 30.0,
+        .grace_steps = 10,
+    };
+    var closed_rule: PushRule = full_rule;
+    closed_rule.top_share = 0;
+    var half_rule: PushRule = full_rule;
+    half_rule.top_share = 0.5;
+    const seed: u32 = 7;
+    const worlds: u32 = 64;
+    const decisions: u32 = 3000;
+    const judged_step: u32 = 100;
+    var pushes: u32 = 0;
+    var watched: u32 = 0;
+    var world: u32 = 0;
+    while (world < worlds) : (world += 1) {
+        var decision: u32 = 0;
+        while (decision < decisions) : (decision += 1) {
+            const at_full: DrawnPush = drawPush(full_rule, seed, world, decision, judged_step, 0, false);
+            const at_half: DrawnPush = drawPush(half_rule, seed, world, decision, judged_step, 0, false);
+            const at_closed: DrawnPush = drawPush(closed_rule, seed, world, decision, judged_step, 0, false);
+            // THE RATE IS NOT THE TOP's: the same worlds are pushed at the same decisions, in the same direction.
+            try expectEqual(at_full.is_pushed, at_half.is_pushed);
+            try expectEqual(at_full.is_pushed, at_closed.is_pushed);
+            try expectEqual(at_full.direction_rad, at_closed.direction_rad);
+            // A world with a watched push takes none.
+            const while_watched: DrawnPush = drawPush(full_rule, seed, world, decision, judged_step, 5, false);
+            try expect(!while_watched.is_pushed);
+            if (!at_full.is_pushed) {
+                continue;
+            }
+            pushes += 1;
+            // THE SPEEDS: the lowest alone with the top closed; within the open range otherwise, half of it at half.
+            try expectEqual(@as(f32, 0.5), at_closed.speed);
+            try expect(at_full.speed >= 0.5 and at_full.speed <= 5.0);
+            try expectApproxEqAbs(0.5 + (at_full.speed - 0.5) / 2.0, at_half.speed, 1.0e-5);
+            // WATCHED: a push in the top fifth of the open range - and only for a world that is judged.
+            const is_near_top: bool = at_full.speed >= 0.5 + 0.8 * 4.5;
+            const is_watched: bool = at_full.watch_decisions > 0;
+            try expectEqual(is_near_top, is_watched);
+            if (is_watched) {
+                watched += 1;
+                try expectEqual(@as(u32, 60), at_full.watch_decisions);
+                try expectEqual(@as(u32, 60), at_closed.watch_decisions);
+                const in_grace: DrawnPush = drawPush(full_rule, seed, world, decision, 9, 0, false);
+                const in_aftermath: DrawnPush = drawPush(full_rule, seed, world, decision, judged_step, 0, true);
+                try expect(in_grace.is_pushed and in_grace.watch_decisions == 0);
+                try expect(in_aftermath.is_pushed and in_aftermath.watch_decisions == 0);
+            }
+        }
+    }
+    // 192,000 decisions at a chance of 1 in 60: 3,200 pushes expected, a fifth of them watched. Each count within
+    // five of its standard deviations (57 pushes, 23 watched).
+    const expected_pushes: f32 = float(worlds * decisions) / 60.0;
+    try expectApproxEqAbs(expected_pushes, float(pushes), 5.0 * 57.0);
+    try expectApproxEqAbs(0.2 * float(pushes), float(watched), 5.0 * 23.0);
+    // WITHOUT A BRAKE's WATCH no push is watched.
+    var unwatched_rule: PushRule = full_rule;
+    unwatched_rule.watched_share = 0;
+    var unwatched_decision: u32 = 0;
+    while (unwatched_decision < decisions) : (unwatched_decision += 1) {
+        const drawn: DrawnPush = drawPush(unwatched_rule, seed, 0, unwatched_decision, judged_step, 0, false);
+        try expectEqual(@as(u32, 0), drawn.watch_decisions);
+    }
 }

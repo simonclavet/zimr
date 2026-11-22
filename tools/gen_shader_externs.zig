@@ -40,7 +40,7 @@ const indexOf = std.mem.indexOf;
 /// The `.decoration` half of every descriptor-bound `@extern` this file emits,
 /// as a `print` format fragment - takes the set, then the binding. One spelling
 /// for the Ubo, loose uniforms, textures and samplers, so they cannot drift.
-const descriptor_decoration_fmt = ".decoration = .{{ .descriptor = .{{ .set = {d}, .binding = {d} }} }}";
+const descriptor_decoration_fmt: []const u8 = ".decoration = .{{ .descriptor = .{{ .set = {d}, .binding = {d} }} }}";
 const eql = std.mem.eql;
 
 /// Map a `shader_interface.ElemKind` (used in VS Attributes) to its

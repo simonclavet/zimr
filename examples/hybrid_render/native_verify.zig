@@ -37,11 +37,13 @@ const quad_positions = [_][2]f32{
 };
 const quad_indices = [_]u32{ 0, 1, 2, 3, 4, 5 };
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     const gpa: Allocator = std.heap.page_allocator;
-    var io_threaded: Io.Threaded = .init(gpa, .{});
-    defer io_threaded.deinit();
-    const io: Io = io_threaded.io();
+    const io: Io = init.io;
+    // The picture goes where the build says (`ZIMR_CAPTURE_DIR`, zig-out/verify) - by hand, the working directory.
+    const capture_path: []const u8 = init.environ_map.get("ZIMR_CAPTURE_DIR") orelse ".";
+    const capture_dir: Io.Dir = try Io.Dir.cwd().createDirPathOpen(io, capture_path, .{});
+    defer capture_dir.close(io);
 
     // The example's camera at a frozen, photogenic instant.
     const t: f32 = 1.4;
@@ -107,18 +109,18 @@ pub fn main() !void {
             sky += 1; // STRONGLY blue gradient
         }
     }
-    std.debug.print(
-        "hybrid_verify: sky {d}, floor light {d}, floor dark {d}, blob {d} (all must be >0)\n",
-        .{ sky, floor_light, floor_dark, blob },
-    );
-
     const png: []u8 = try z.codecs.png.encode(gpa, sliceAsBytes(img[0..]), img_w, img_h);
     defer gpa.free(png);
-    try Io.Dir.cwd().writeFile(io, .{ .sub_path = "hybrid_verify.png", .data = png });
-    std.debug.print("  wrote hybrid_verify.png\n", .{});
+    try capture_dir.writeFile(io, .{ .sub_path = "hybrid_verify.png", .data = png });
 
-    if (sky == 0 or floor_light == 0 or floor_dark == 0 or blob == 0) {
+    // Silent when the look is right (a passing check prints nothing); its counts, and the picture's place, when not.
+    const look_is_right: bool = sky > 0 and floor_light > 0 and floor_dark > 0 and blob > 0;
+    if (!look_is_right) {
+        std.debug.print(
+            "hybrid_verify: sky {d}, floor light {d}, floor dark {d}, blob {d} (all must be >0) - " ++
+                "see {s}/hybrid_verify.png\n",
+            .{ sky, floor_light, floor_dark, blob, capture_path },
+        );
         return error.HybridLookWrong;
     }
-    std.debug.print("  OK\n", .{});
 }

@@ -1,0 +1,63 @@
+// THE FOUNDATION's FIRST CHECK, ITS SECOND SEED (robotgpu_plan.md 4, C6: two seeds a run), as 01_first_check.zon:
+// plain SuperTrack's objective and action - the three hours' run 2, its squared distances, its stiffness per limb,
+// its filter at 0.25, the noise in its rollouts - with the foundation's world model, data and iteration under it (S1
+// to S3), for 13 minutes:
+//   S1  the world model as XMimic's: its change in units of its running statistics, its inputs by their running
+//       moments, the normed form 3 x 1,024, MuonAdam at 4e-4 with its gradient bounded at 1 - the learner's defaults
+//       now, so nothing here names them - and its loss logged in its own units (`world_loss`, its step 8).
+//   S2  the data: the world model's windows of 8 from any record, the falls' included; the policy's starts single
+//       records, the last horizon before a fall among them; the replay 20 s (600 decisions); 256 decisions of warm-up.
+//   S3  the iteration, halved for the trainer's 2 GB of activations (C1): 10 decisions collected, 10 updates of the
+//       world model on 1,024 windows and 2 of the policy on 1,024 starts of 20 decisions - XMimic's 5 and 1 on 2,048 -
+//       each rate over the square root of 2; the policy's rate x 4 for 1,400 rounds, then a ramp to 1 over 300.
+// PASS: the world model's loss in its units falling at BlinkMimic's pace by iteration (0.75 at 100, 0.41 at 200, in
+// kind), and the training's episodes never shorter than the servo's after iteration 100.
+.{
+    .task = .{ .motion = .one_minute, .variants = .{ .mirrored = true, .speed_change = 0.2 } },
+    .learner = .{ .supertrack = .{
+        // Run 2's characters, decisions and episodes; XMimic's replay of 20 s (C2).
+        .characters = 1024,
+        .physics = .device,
+        .limb_stiffness = true,
+        .decide_every = 2,
+        .max_steps = 300,
+        .replay_steps = 600,
+        .warmup_decisions = 256,
+        // The halved batches (C1): 1,024 windows of 8 for the world model, 1,024 starts of 20 decisions (0.67 s) for
+        // the policy. The world model 3 x 1,024 wide; the policy run 2's 680.
+        .rows = 1024,
+        .window = 8,
+        .policy_window = 20,
+        .hidden = 1024,
+        .policy_hidden = 680,
+        // XMimic's iteration halved: 10 decisions of every character, then 10 updates of the world model and 2 of the
+        // policy.
+        .collect = 10,
+        .world_updates = 10,
+        .policy_updates = 2,
+        // XMimic's rates over the square root of 2 for the halved batches: the world model's 4e-4, the policy's 4e-4
+        // with its boost of 4 (`pi_mult`) for 1,400 rounds, ramped to 1 over 300. The policy's optimiser otherwise run
+        // 2's (C4: nothing the policy is asked changes yet).
+        .world_rate = 2.8284271e-4,
+        .policy_rate = 2.8284271e-4,
+        .policy_rate_boost = .{ .multiplier = 4, .held_rounds = 1400, .ramp_rounds = 300 },
+        .policy_beta2 = 0.95,
+        .policy_gradient_clip = 1,
+        .policy_element_clip = 0.1,
+        .policy_muon = true,
+        .rate_decay_hours = 8,
+        .rate_floor_share = 0.03,
+        // Judged as its slow average, as run 2 is; the second seed.
+        .policy_average_decay = 0.995,
+        .seed = 2,
+    } },
+    .controls = .{
+        // 13 minutes of training, as the three hours' runs; judged once at the end, without the recovery probe.
+        .stop_after_hours = 0.21666667,
+        .judge_minutes = 13,
+        .probe = .{ .speeds = .{} },
+        .save_minutes = 2,
+        .checkpoint_minutes = 4,
+        .kept_state_checkpoints = 0,
+    },
+}

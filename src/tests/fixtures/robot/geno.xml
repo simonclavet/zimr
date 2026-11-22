@@ -4,72 +4,72 @@
     <geom name="floor" type="plane" size="20 20 0.1"/>
     <body name="Hips" pos="0.000136 0.021367 0.855290" quat="0.7190179 0.6949371 0.0066784 0.0055692">
       <freejoint/>
-      <inertial pos="-0.002797 0.044457 0.024092" mass="4.45589" fullinertia="1.416881e-2 4.166509e-2 3.345195e-2 4.384086e-4 -3.429711e-4 4.219764e-4"/>
-      <geom name="Hips" type="sphere" pos="-0.000517 0.025090 0.020067" size="0.083130" mass="0"/>
+      <inertial pos="0.000000 0.044457 0.024092" mass="4.45589" fullinertia="1.416881e-2 4.166509e-2 3.345195e-2 0.000000e0 0.000000e0 4.219764e-4"/>
+      <geom name="Hips" type="sphere" pos="0.000000 0.025090 0.020067" size="0.083130" mass="0"/>
       <body name="Spine" pos="0.000000 0.088142 -0.020800" quat="0.9998620 0.0151347 -0.0023620 0.0064243">
         <joint name="Spine" type="ball" range="0 11.21" armature="0.01" damping="0.2"/>
-        <inertial pos="0.002484 0.043300 0.056409" mass="4.08115" fullinertia="1.405166e-2 3.181992e-2 2.314766e-2 4.918427e-4 3.236678e-5 -4.556020e-4"/>
-        <geom name="Spine" type="capsule" fromto="-0.036303 0.060079 0.043650 0.036727 0.059267 0.044583" size="0.088850" mass="0"/>
+        <inertial pos="0.000000 0.043300 0.056409" mass="4.08115" fullinertia="1.405166e-2 3.181992e-2 2.314766e-2 0.000000e0 0.000000e0 -4.556020e-4"/>
+        <geom name="Spine" type="capsule" fromto="-0.036515 0.059673 0.044117 0.036515 0.059673 0.044117" size="0.088850" mass="0"/>
         <body name="Spine1" pos="0.000000 0.088441 -0.000000" quat="0.9999121 0.0123071 -0.0048690 -0.0007149">
           <joint name="Spine1" type="ball" range="0 18.96" armature="0.01" damping="0.2"/>
-          <inertial pos="0.001022 0.059312 0.062439" mass="4.55067" fullinertia="1.594185e-2 2.975274e-2 2.435049e-2 1.011372e-4 -9.664256e-5 2.502705e-4"/>
-          <geom name="Spine1" type="capsule" fromto="-0.033319 0.071789 0.052966 0.036517 0.071126 0.053195" size="0.082490" mass="0"/>
-          <body name="Spine2" pos="-0.000000 0.116823 0.000000" quat="0.9999123 0.0123117 -0.0048472 -0.0006809">
+          <inertial pos="0.000000 0.059312 0.062439" mass="4.55067" fullinertia="1.594185e-2 2.975274e-2 2.435049e-2 0.000000e0 0.000000e0 2.502705e-4"/>
+          <geom name="Spine1" type="capsule" fromto="-0.034918 0.071457 0.053081 0.034918 0.071457 0.053081" size="0.082490" mass="0"/>
+          <body name="Spine2" pos="0.000000 0.116823 0.000000" quat="0.9999123 0.0123117 -0.0048472 -0.0006809">
             <joint name="Spine2" type="ball" range="0 18.96" armature="0.01" damping="0.2"/>
-            <inertial pos="0.003052 0.064627 0.037981" mass="5.95934" fullinertia="2.652761e-2 5.119871e-2 3.785424e-2 1.557172e-4 5.341413e-5 1.251421e-3"/>
-            <geom name="Spine2" type="capsule" fromto="-0.032477 0.030267 0.055403 0.038059 0.029691 0.054966" size="0.112590" mass="0"/>
+            <inertial pos="0.000000 0.064627 0.037981" mass="5.95934" fullinertia="2.652761e-2 5.119871e-2 3.785424e-2 0.000000e0 0.000000e0 1.251421e-3"/>
+            <geom name="Spine2" type="capsule" fromto="-0.035268 0.029979 0.055184 0.035268 0.029979 0.055184" size="0.112590" mass="0"/>
             <body name="Spine3" pos="0.000000 0.117467 -0.000000" quat="0.9999002 0.0123961 0.0066540 -0.0013138">
               <joint name="Spine3" type="ball" range="0 18.80" armature="0.01" damping="0.2"/>
-              <inertial pos="0.002882 0.054869 0.005577" mass="6.54204" fullinertia="3.225313e-2 6.693120e-2 4.849690e-2 6.867091e-4 -3.467677e-4 7.612631e-6"/>
-              <geom name="Spine3" type="capsule" fromto="-0.040853 0.026610 0.022166 0.047143 0.026124 0.022808" size="0.129550" mass="0"/>
+              <inertial pos="0.000000 0.054869 0.005577" mass="6.54204" fullinertia="3.225313e-2 6.693120e-2 4.849690e-2 0.000000e0 0.000000e0 7.612631e-6"/>
+              <geom name="Spine3" type="capsule" fromto="-0.043998 0.026367 0.022487 0.043998 0.026367 0.022487" size="0.129550" mass="0"/>
               <body name="Neck" pos="0.000000 0.176583 -0.000001" quat="0.9999711 -0.0009803 -0.0016147 -0.0073652">
                 <joint name="Neck" type="ball" range="0 26.45" armature="0.01" damping="0.2"/>
-                <inertial pos="-0.007228 0.026166 -0.021022" mass="0.45049" fullinertia="5.296824e-4 7.544096e-4 4.395163e-4 -5.079582e-5 -2.347617e-5 -6.816015e-5"/>
+                <inertial pos="0.000000 0.026166 -0.021022" mass="0.45049" fullinertia="5.296824e-4 7.544096e-4 4.395163e-4 0.000000e0 0.000000e0 -6.816015e-5"/>
                 <body name="Neck1" pos="0.000000 0.051015 0.000000" quat="0.9998862 -0.0106710 -0.0009015 0.0106326">
                   <joint name="Neck1" type="ball" range="0 25.87" armature="0.01" damping="0.2"/>
-                  <inertial pos="0.004790 0.025451 0.024238" mass="0.94423" fullinertia="2.028932e-3 2.730615e-3 1.209336e-3 -8.382928e-6 1.242427e-5 5.000565e-5"/>
-                  <geom name="Neck1" type="capsule" fromto="-0.001087 -0.050996 -0.001086 -0.000001 0.051013 0.000005" size="0.044260" mass="0"/>
-                  <body name="Head" pos="-0.000000 0.051015 0.000000" quat="0.9997055 -0.0241908 -0.0008839 -0.0017602">
+                  <inertial pos="0.000000 0.025451 0.024238" mass="0.94423" fullinertia="2.028932e-3 2.730615e-3 1.209336e-3 0.000000e0 0.000000e0 5.000565e-5"/>
+                  <geom name="Neck1" type="capsule" fromto="0.000000 -0.050996 -0.001086 0.000000 0.051013 0.000005" size="0.044260" mass="0"/>
+                  <body name="Head" pos="0.000000 0.051015 0.000000" quat="0.9997055 -0.0241908 -0.0008839 -0.0017602">
                     <joint name="Head" type="ball" range="0 68.29" armature="0.01" damping="0.2"/>
-                    <inertial pos="0.004759 0.068083 0.017647" mass="3.20320" fullinertia="1.227063e-2 1.177448e-2 9.639017e-3 -5.301857e-5 2.517261e-5 4.215603e-4"/>
-                    <geom name="Head" type="capsule" fromto="0.004894 0.069709 0.014015 0.004092 -0.023048 0.061185" size="0.095000" mass="0"/>
+                    <inertial pos="0.000406 0.068113 0.017632" mass="3.20320" fullinertia="1.227138e-2 1.177382e-2 9.638926e-3 -4.892268e-6 1.209445e-5 4.218183e-4"/>
+                    <geom name="Head" type="capsule" fromto="0.000430 0.069740 0.014000 -0.000372 -0.023018 0.061169" size="0.095000" mass="0"/>
                   </body>
                 </body>
               </body>
               <body name="RightShoulder" pos="-0.026254 0.111752 -0.000000" quat="0.7207133 -0.0480071 -0.0200096 0.6912795">
                 <joint name="RightShoulder" type="ball" range="0 51.58" armature="0.01" damping="0.2"/>
-                <inertial pos="0.024763 0.056958 -0.026115" mass="1.37239" fullinertia="6.932922e-3 2.655144e-3 5.147230e-3 1.788989e-4 6.598627e-5 -8.186329e-4"/>
-                <body name="RightArm" pos="0.000000 0.104347 0.000000" quat="0.9174249 -0.0166565 -0.0312683 0.3963291">
+                <inertial pos="0.029062 0.055507 -0.017611" mass="1.41054" fullinertia="7.010372e-3 2.607496e-3 5.595553e-3 5.521726e-4 6.539853e-5 -9.981945e-5"/>
+                <body name="RightArm" pos="-0.000000 0.106242 0.000000" quat="0.9174249 -0.0166565 -0.0312683 0.3963291">
                   <joint name="RightArm" type="ball" range="0 121.39" armature="0.01" damping="0.2"/>
-                  <inertial pos="-0.004037 0.117248 -0.003779" mass="2.01781" fullinertia="1.201333e-2 3.342168e-3 1.194582e-2 -6.004349e-4 1.310759e-4 -5.533244e-5"/>
-                  <geom name="RightArm" type="capsule" fromto="0.025703 -0.001495 -0.011785 -0.011113 0.229003 -0.003679" size="0.042130" mass="0"/>
-                  <body name="RightForeArm" pos="0.000700 0.258718 -0.005370" quat="0.9933285 0.1137151 -0.0055202 0.0183670">
+                  <inertial pos="-0.003360 0.111694 -0.003006" mass="2.08968" fullinertia="1.402672e-2 3.760618e-3 1.395642e-2 -1.246174e-3 1.733713e-4 2.079826e-4"/>
+                  <geom name="RightArm" type="capsule" fromto="0.025785 0.000996 -0.007862 -0.008449 0.231939 -0.005219" size="0.042130" mass="0"/>
+                  <body name="RightForeArm" pos="0.000696 0.257340 -0.005341" quat="0.9933285 0.1137151 -0.0055202 0.0183670">
                     <joint name="RightForeArm" type="ball" range="0 145.08" armature="0.01" damping="0.2"/>
-                    <inertial pos="0.001672 0.104831 0.004978" mass="1.03858" fullinertia="4.947034e-3 7.897659e-4 4.932617e-3 -1.582228e-4 -2.505104e-5 -2.423182e-5"/>
-                    <geom name="RightForeArm" type="capsule" fromto="-0.003560 0.032661 0.003150 0.007905 0.251886 0.002527" size="0.044030" mass="0"/>
-                    <body name="RightHand" pos="0.002990 0.248929 -0.000338" quat="0.9931041 0.0852536 0.0222739 0.0773324">
-                      <joint name="RightHand" type="ball" range="0 79.11" armature="0.01" damping="0.2"/>
-                      <inertial pos="-0.005691 0.065490 0.001969" mass="0.43554" fullinertia="1.046350e-3 4.353276e-4 7.780540e-4 -7.684642e-6 6.810656e-5 4.327392e-5"/>
-                      <geom name="RightHand" type="capsule" fromto="0.006658 0.003381 0.008732 -0.004050 0.081477 0.003713" size="0.034900" mass="0"/>
+                    <inertial pos="0.001897 0.106960 0.001518" mass="1.06592" fullinertia="5.302929e-3 8.092842e-4 5.282245e-3 -6.521460e-5 -2.476814e-5 1.791245e-5"/>
+                    <geom name="RightForeArm" type="capsule" fromto="-0.001503 0.036308 0.000058 0.004722 0.255669 -0.001979" size="0.044030" mass="0"/>
+                    <body name="RightHand" pos="0.003054 0.254235 -0.000345" quat="0.9931041 0.0852536 0.0222739 0.0773324">
+                      <joint name="RightHand" type="ball" range="0 103.52" armature="0.01" damping="0.2"/>
+                      <inertial pos="-0.009160 0.064128 -0.002423" mass="0.43098" fullinertia="1.015557e-3 4.369662e-4 7.508516e-4 -9.475985e-6 7.392398e-5 4.364671e-5"/>
+                      <geom name="RightHand" type="capsule" fromto="0.003329 0.001692 0.004363 -0.007380 0.079788 -0.000655" size="0.034900" mass="0"/>
                     </body>
                   </body>
                 </body>
               </body>
               <body name="LeftShoulder" pos="0.026254 0.111752 -0.000000" quat="0.7285084 -0.0557227 0.0403427 -0.6815739">
-                <joint name="LeftShoulder" type="ball" range="0 48.23" armature="0.01" damping="0.2"/>
-                <inertial pos="-0.033361 0.054056 -0.009106" mass="1.44869" fullinertia="7.087823e-3 2.559847e-3 6.043877e-3 -9.254463e-4 -6.481078e-5 6.189940e-4"/>
-                <body name="LeftArm" pos="0.000000 0.108136 -0.000000" quat="0.9100260 0.0216595 0.0100473 -0.4138629">
-                  <joint name="LeftArm" type="ball" range="0 113.07" armature="0.01" damping="0.2"/>
-                  <inertial pos="0.005023 0.106062 -0.001892" mass="2.16155" fullinertia="1.611792e-2 4.098529e-3 1.596975e-2 1.629118e-3 -1.999572e-4 4.388655e-4"/>
-                  <geom name="LeftArm" type="capsule" fromto="-0.025782 0.004069 -0.003939 0.010964 0.234711 -0.006006" size="0.042130" mass="0"/>
-                  <body name="LeftForeArm" pos="0.004952 0.255930 -0.004494" quat="0.9932600 0.1109474 0.0119880 0.0313284">
-                    <joint name="LeftForeArm" type="ball" range="0 144.71" armature="0.01" damping="0.2"/>
-                    <inertial pos="0.004125 0.108976 -0.003983" mass="1.09327" fullinertia="5.639841e-3 8.516646e-4 5.627993e-3 -3.029915e-4 3.355343e-5 1.480540e-4"/>
-                    <geom name="LeftForeArm" type="capsule" fromto="0.001734 0.039857 -0.003781 0.013311 0.258947 -0.011334" size="0.044030" mass="0"/>
-                    <body name="LeftHand" pos="0.011741 0.259241 -0.005205" quat="0.9868162 0.0318785 -0.0276721 -0.1562421">
+                <joint name="LeftShoulder" type="ball" range="0 51.58" armature="0.01" damping="0.2"/>
+                <inertial pos="-0.029062 0.055507 -0.017611" mass="1.41054" fullinertia="7.010372e-3 2.607496e-3 5.595553e-3 -5.521726e-4 -6.539853e-5 -9.981945e-5"/>
+                <body name="LeftArm" pos="0.000000 0.106242 0.000000" quat="0.9100260 0.0216595 0.0100473 -0.4138629">
+                  <joint name="LeftArm" type="ball" range="0 121.39" armature="0.01" damping="0.2"/>
+                  <inertial pos="0.005822 0.111602 -0.002647" mass="2.08968" fullinertia="1.407681e-2 3.709434e-3 1.395751e-2 1.019167e-3 -1.654364e-4 1.795594e-4"/>
+                  <geom name="LeftArm" type="capsule" fromto="-0.025753 0.001589 -0.007870 0.013562 0.231712 -0.004474" size="0.042130" mass="0"/>
+                  <body name="LeftForeArm" pos="0.004979 0.257308 -0.004518" quat="0.9932600 0.1109474 0.0119880 0.0313284">
+                    <joint name="LeftForeArm" type="ball" range="0 145.08" armature="0.01" damping="0.2"/>
+                    <inertial pos="0.004228 0.106903 -0.000483" mass="1.06592" fullinertia="5.295675e-3 8.187297e-4 5.280053e-3 -1.914425e-4 2.933549e-5 1.000121e-4"/>
+                    <geom name="LeftForeArm" type="capsule" fromto="0.003579 0.036157 -0.000619 0.009918 0.255438 -0.006761" size="0.044030" mass="0"/>
+                    <body name="LeftHand" pos="0.011501 0.253942 -0.005099" quat="0.9868162 0.0318785 -0.0276721 -0.1562421">
                       <joint name="LeftHand" type="ball" range="0 103.52" armature="0.01" damping="0.2"/>
-                      <inertial pos="0.009379 0.063651 -0.002494" mass="0.42641" fullinertia="9.827932e-4 4.371545e-4 7.270702e-4 4.474766e-5 -7.801054e-5 2.068141e-5"/>
-                      <geom name="LeftHand" type="capsule" fromto="0.000001 0.000003 -0.000005 0.006656 0.078708 0.000306" size="0.034900" mass="0"/>
+                      <inertial pos="0.005825 0.064533 0.001953" mass="0.43098" fullinertia="1.013636e-3 4.355586e-4 7.541799e-4 4.425630e-5 -7.218638e-5 1.866348e-5"/>
+                      <geom name="LeftHand" type="capsule" fromto="-0.003430 0.001220 0.004441 0.003225 0.079925 0.004753" size="0.034900" mass="0"/>
                     </body>
                   </body>
                 </body>
@@ -78,42 +78,42 @@
           </body>
         </body>
       </body>
-      <body name="RightUpLeg" pos="-0.112899 -0.000000 0.000000" quat="0.9974454 0.0288468 0.0198167 -0.0622722">
+      <body name="RightUpLeg" pos="-0.113028 -0.000000 0.000000" quat="0.9974454 0.0288468 0.0198167 -0.0622722">
         <joint name="RightUpLeg" type="ball" range="0 153.96" armature="0.01" damping="0.2"/>
-        <inertial pos="0.017543 -0.152412 0.016316" mass="5.84707" fullinertia="7.784939e-2 2.042338e-2 7.890235e-2 -8.725573e-3 -7.597809e-4 -8.999378e-3"/>
-        <geom name="RightUpLeg" type="capsule" fromto="0.001549 -0.064501 0.025390 0.011611 -0.380252 -0.012723" size="0.082460" mass="0"/>
-        <body name="RightLeg" pos="0.000000 -0.382003 -0.000002" quat="0.9975101 0.0662387 -0.0239163 -0.0037189">
-          <joint name="RightLeg" type="ball" range="0 148.92" armature="0.01" damping="0.2"/>
-          <inertial pos="-0.004812 -0.170048 -0.036385" mass="3.07622" fullinertia="3.783292e-2 4.880782e-3 3.651683e-2 9.583037e-4 -1.442494e-4 3.090964e-3"/>
-          <geom name="RightLeg" type="capsule" fromto="-0.007464 -0.005354 -0.050748 0.001044 -0.352168 -0.017809" size="0.064070" mass="0"/>
-          <body name="RightFoot" pos="0.000000 -0.399008 -0.000000" quat="0.9829418 0.1597410 -0.0809280 0.0419338">
+        <inertial pos="0.015004 -0.158009 0.016762" mass="5.63174" fullinertia="7.246627e-2 1.778876e-2 7.108694e-2 -4.927162e-3 -3.550632e-4 -8.847642e-3"/>
+        <geom name="RightUpLeg" type="capsule" fromto="0.001795 -0.064399 0.026946 0.014659 -0.379790 -0.013110" size="0.082460" mass="0"/>
+        <body name="RightLeg" pos="0.000000 -0.382004 -0.000002" quat="0.9975101 0.0662387 -0.0239163 -0.0037189">
+          <joint name="RightLeg" type="ball" range="0 153.59" armature="0.01" damping="0.2"/>
+          <inertial pos="-0.002920 -0.169123 -0.041052" mass="3.09547" fullinertia="3.817015e-2 4.818648e-3 3.698130e-2 8.012475e-4 -1.208326e-4 2.367867e-3"/>
+          <geom name="RightLeg" type="capsule" fromto="-0.004678 -0.003994 -0.051615 0.002055 -0.351409 -0.026499" size="0.064070" mass="0"/>
+          <body name="RightFoot" pos="0.000000 -0.399008 0.000000" quat="0.9829418 0.1597410 -0.0809280 0.0419338">
             <joint name="RightFoot" type="ball" range="0 71.15" armature="0.01" damping="0.2"/>
-            <inertial pos="-0.000831 -0.033604 0.044814" mass="1.07740" fullinertia="3.929912e-3 3.718404e-3 1.246483e-3 -1.924265e-5 1.227123e-4 -7.859172e-4"/>
-            <geom name="RightFoot" type="box" pos="-0.001339 -0.037983 0.050393" quat="0.6661902 -0.1131844 -0.7094225 0.2002426" size="0.089970 0.034900 0.036180" mass="0"/>
+            <inertial pos="0.000225 -0.036657 0.037643" mass="1.10870" fullinertia="4.340772e-3 4.153554e-3 1.260279e-3 -1.143291e-5 1.708723e-4 -8.140456e-4"/>
+            <geom name="RightFoot" type="box" pos="-0.000034 -0.041831 0.040172" quat="0.6621741 -0.0884781 -0.7142325 0.2087321" size="0.089970 0.034900 0.036180" mass="0"/>
             <body name="RightToeBase" pos="0.000000 -0.000000 0.152617" quat="0.9861133 -0.1660610 -0.0015025 0.0013379">
-              <joint name="RightToeBase" type="ball" range="0 47.85" armature="0.01" damping="0.2"/>
-              <inertial pos="0.000907 -0.004122 0.019932" mass="0.12362" fullinertia="3.987718e-5 8.752541e-5 7.208285e-5 -5.903843e-6 -4.191459e-6 -4.646142e-6"/>
-              <geom name="RightToeBase" type="box" pos="-0.011820 -0.003959 0.035152" quat="0.6770684 -0.0016327 -0.7316713 0.0789332" size="0.025000 0.017450 0.036180" mass="0"/>
+              <joint name="RightToeBase" type="ball" range="0 68.99" armature="0.01" damping="0.2"/>
+              <inertial pos="0.000559 -0.007175 0.015025" mass="0.09339" fullinertia="2.601548e-5 5.822965e-5 4.987677e-5 -4.848067e-6 -3.074747e-6 -3.067579e-6"/>
+              <geom name="RightToeBase" type="box" pos="-0.012651 -0.008096 0.023825" quat="0.6704875 0.0251132 -0.7370716 0.0808783" size="0.025000 0.017450 0.036180" mass="0"/>
             </body>
           </body>
         </body>
       </body>
-      <body name="LeftUpLeg" pos="0.113157 0.000000 0.000000" quat="0.9960126 0.0217091 -0.0498111 0.0707549">
-        <joint name="LeftUpLeg" type="ball" range="0 143.21" armature="0.01" damping="0.2"/>
-        <inertial pos="-0.012464 -0.163604 0.017225" mass="5.41642" fullinertia="6.708313e-2 1.515231e-2 6.327340e-2 1.129289e-3 -4.968466e-5 -8.690740e-3"/>
-        <geom name="LeftUpLeg" type="capsule" fromto="-0.002040 -0.064295 0.028509 -0.017703 -0.379329 -0.013456" size="0.082460" mass="0"/>
+      <body name="LeftUpLeg" pos="0.113028 -0.000000 0.000000" quat="0.9960126 0.0217091 -0.0498111 0.0707549">
+        <joint name="LeftUpLeg" type="ball" range="0 153.96" armature="0.01" damping="0.2"/>
+        <inertial pos="-0.015003 -0.158007 0.016779" mass="5.63174" fullinertia="7.246617e-2 1.778697e-2 7.108884e-2 4.927773e-3 3.546269e-4 -8.841917e-3"/>
+        <geom name="LeftUpLeg" type="capsule" fromto="-0.001794 -0.064397 0.026953 -0.014655 -0.379791 -0.013069" size="0.082460" mass="0"/>
         <body name="LeftLeg" pos="0.000004 -0.382004 0.000039" quat="0.9980025 0.0504194 0.0370947 -0.0085329">
           <joint name="LeftLeg" type="ball" range="0 153.59" armature="0.01" damping="0.2"/>
-          <inertial pos="0.001029 -0.168197 -0.045719" mass="3.11473" fullinertia="3.850738e-2 4.756514e-3 3.744577e-2 -6.441914e-4 9.741593e-5 1.644770e-3"/>
-          <geom name="LeftLeg" type="capsule" fromto="0.001892 -0.002635 -0.052481 -0.003067 -0.350649 -0.035189" size="0.064070" mass="0"/>
-          <body name="LeftFoot" pos="0.000000 -0.399008 0.000000" quat="0.9836823 0.1637325 0.0730477 0.0149902">
-            <joint name="LeftFoot" type="ball" range="0 57.12" armature="0.01" damping="0.2"/>
-            <inertial pos="-0.001280 -0.039710 0.030473" mass="1.14000" fullinertia="4.751633e-3 4.588706e-3 1.274074e-3 3.623172e-6 -2.190323e-4 -8.421740e-4"/>
-            <geom name="LeftFoot" type="box" pos="-0.001272 -0.045679 0.029951" quat="0.6576784 -0.0637078 0.7185252 -0.2170705" size="0.089970 0.034900 0.036180" mass="0"/>
-            <body name="LeftToeBase" pos="0.000000 -0.000000 0.152616" quat="0.9840154 -0.1779332 0.0052535 -0.0050582">
+          <inertial pos="0.002920 -0.169123 -0.041052" mass="3.09547" fullinertia="3.817015e-2 4.818648e-3 3.698130e-2 -8.012475e-4 1.208326e-4 2.367867e-3"/>
+          <geom name="LeftLeg" type="capsule" fromto="0.004678 -0.003994 -0.051615 -0.002055 -0.351409 -0.026499" size="0.064070" mass="0"/>
+          <body name="LeftFoot" pos="-0.000000 -0.399008 0.000000" quat="0.9836823 0.1637325 0.0730477 0.0149902">
+            <joint name="LeftFoot" type="ball" range="0 71.15" armature="0.01" damping="0.2"/>
+            <inertial pos="-0.000225 -0.036657 0.037643" mass="1.10870" fullinertia="4.340772e-3 4.153554e-3 1.260279e-3 1.143291e-5 -1.708723e-4 -8.140456e-4"/>
+            <geom name="LeftFoot" type="box" pos="0.000034 -0.041831 0.040172" quat="0.6621741 -0.0884781 0.7142325 -0.2087321" size="0.089970 0.034900 0.036180" mass="0"/>
+            <body name="LeftToeBase" pos="-0.000000 -0.000000 0.152617" quat="0.9840154 -0.1779332 0.0052535 -0.0050582">
               <joint name="LeftToeBase" type="ball" range="0 68.99" armature="0.01" damping="0.2"/>
-              <inertial pos="-0.000212 -0.010227 0.010117" mass="0.06316" fullinertia="1.215378e-5 2.893389e-5 2.767069e-5 3.792290e-6 1.958035e-6 -1.489016e-6"/>
-              <geom name="LeftToeBase" type="box" pos="0.013483 -0.012232 0.012498" quat="0.6633742 0.0518392 0.7418866 -0.0827592" size="0.025000 0.017450 0.036180" mass="0"/>
+              <inertial pos="-0.000559 -0.007175 0.015025" mass="0.09339" fullinertia="2.601548e-5 5.822965e-5 4.987677e-5 4.848067e-6 3.074747e-6 -3.067579e-6"/>
+              <geom name="LeftToeBase" type="box" pos="0.012651 -0.008096 0.023825" quat="0.6704875 0.0251132 0.7370716 -0.0808783" size="0.025000 0.017450 0.036180" mass="0"/>
             </body>
           </body>
         </body>

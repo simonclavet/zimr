@@ -97,7 +97,7 @@ const std = @import("std");
 const z = @import("zimr");
 const double_it = @import("double_it.zig");
 
-pub const std_options = z.std_options;
+pub const std_options: std.Options = z.std_options;
 const ROBOTO_MONO_TTF = @embedFile("roboto_mono_ttf");
 // The compiled WGSL of double_it.zig (built by addComputeImport + spv2wgsl).
 const DOUBLE_WGSL = @embedFile("double_it_wgsl");
@@ -286,7 +286,7 @@ const z = @import("zimr");
 const zm = z.math;
 const particle_step = @import("particle_step.zig");
 
-pub const std_options = z.std_options;
+pub const std_options: std.Options = z.std_options;
 const ROBOTO_MONO_TTF = @embedFile("roboto_mono_ttf");
 const STEP_WGSL = @embedFile("particle_step_wgsl");
 

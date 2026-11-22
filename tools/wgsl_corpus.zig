@@ -719,7 +719,7 @@ fn printInterfaceChange(
     removed: []const []const u8,
     added: []const []const u8,
 ) !void {
-    try out.print("\u{2717} {s}: interface changed\n", .{name});
+    try out.print("FAIL {s}: interface changed\n", .{name});
     var shown: usize = 0;
     for (removed) |line| {
         if (shown == max_interface_lines_shown) {
@@ -766,7 +766,7 @@ fn checkCorpus(
     for (built) |shader| {
         if (shader.unresolved > 0) {
             try out.print(
-                "\u{2717} {s}: {d} unresolved ids (`__unresolved_N__`) in its WGSL\n",
+                "FAIL {s}: {d} unresolved ids (`__unresolved_N__`) in its WGSL\n",
                 .{ shader.name, shader.unresolved },
             );
             kinds.unresolved = true;
@@ -796,7 +796,7 @@ fn checkCorpus(
             outputs_unchanged += 1;
         } else {
             try out.print(
-                "\u{2717} {s}: spv2wgsl wrote different WGSL for SPIR-V it has seen before\n    now: {s}\n",
+                "FAIL {s}: spv2wgsl wrote different WGSL for SPIR-V it has seen before\n    now: {s}\n",
                 .{ shader.name, shader.wgsl_path },
             );
             kinds.output = true;
@@ -838,16 +838,16 @@ fn checkCorpus(
 
     if (interfaces_compared == 0) {
         try out.writeAll(
-            "\u{2717} WGSL corpus: no shader of this build is pinned, so nothing was compared. Pin them with " ++
+            "FAIL WGSL corpus: no shader of this build is pinned, so nothing was compared. Pin them with " ++
                 "`zig build corpus-refresh`, and commit the fixture.\n",
         );
         return 1;
     }
     if (problem_count == 0) {
-        try out.writeAll("\u{2713} WGSL corpus: no regressions\n");
+        try out.writeAll("ok WGSL corpus: no regressions\n");
         return 0;
     }
-    try out.print("\u{2717} WGSL corpus: {d} problems. What to do:\n", .{problem_count});
+    try out.print("FAIL WGSL corpus: {d} problems. What to do:\n", .{problem_count});
     if (kinds.interface) {
         try out.writeAll(
             "  interface changed - what a shader shows the host is not what was pinned. If you changed its schema " ++
@@ -1026,7 +1026,7 @@ fn runCorpus(
 ) !u8 {
     const built: []const Built = try readCorpus(arena, io, args.corpus);
     if (built.len == 0) {
-        try out.print("\u{2717} WGSL corpus: the build collected no shaders into {s}\n", .{args.corpus});
+        try out.print("FAIL WGSL corpus: the build collected no shaders into {s}\n", .{args.corpus});
         return 1;
     }
     const transpiler: []const u8 = try transpilerFingerprint(arena, io, args.@"transpiler-sources");
@@ -1037,7 +1037,7 @@ fn runCorpus(
         fixture = parseFixture(arena, text, &bad_line) catch |err| switch (err) {
             error.FixtureNotUnderstood => {
                 try out.print(
-                    "\u{2717} {s}:{d}: not a line this tool writes. Restore the file from git, or delete it and " ++
+                    "FAIL {s}:{d}: not a line this tool writes. Restore the file from git, or delete it and " ++
                         "run `zig build corpus-refresh`.\n",
                     .{ args.fixture, bad_line },
                 );
@@ -1051,7 +1051,7 @@ fn runCorpus(
     }
     if (fixture_text == null) {
         try out.print(
-            "\u{2717} WGSL corpus: {s} does not exist, so nothing was compared. Create it with " ++
+            "FAIL WGSL corpus: {s} does not exist, so nothing was compared. Create it with " ++
                 "`zig build corpus-refresh`, and commit it.\n",
             .{args.fixture},
         );

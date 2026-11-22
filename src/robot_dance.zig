@@ -51,6 +51,7 @@ const dot3 = zm.dot3;
 const dot4 = zm.dot4;
 const atan2Rad = zm.atan2Rad;
 const cross = zm.cross;
+const float64 = zm.float64;
 const expectEqual = std.testing.expectEqual;
 const Io = std.Io;
 const Random = std.Random;
@@ -107,6 +108,24 @@ pub const RetargetOptions = struct {
     /// the bodies with "foot" in their name.
     ground: bool = true,
 };
+
+/// THE POSE A FRACTION OF THE WAY from `from` to `to`, each joint along its own kind of path: a place along the
+/// straight line, a hinge's or a slide's coordinate between its two, a quaternion along the shortest arc between its
+/// two - a slerp. Written with the engine's own pose calculus: the velocity that carries `from` to `to` in one second
+/// (`rbt.differentiatePos`), applied for `fraction` of a second (`rbt.integratePos`) - for a quaternion a turn about
+/// one fixed axis at a steady rate, which is what a slerp is. `between` is scratch, `m.dof_count` numbers.
+pub fn interpolatePose(
+    m: *const rbt.Model,
+    from: []const f32,
+    to: []const f32,
+    fraction: f32,
+    between: []f32,
+    out: []f32,
+) void {
+    rbt.differentiatePos(m, between, from, to, 1.0);
+    @memcpy(out, from);
+    rbt.integratePos(m, out, between, fraction);
+}
 
 /// A retargeted clip: one complete robot pose (`qpos`) per frame, plus a note of how well the IK
 /// managed on each frame.
@@ -244,6 +263,71 @@ pub const Clip = struct {
 
     pub fn pose(self: *const Clip, frame: usize) []const f32 {
         return self.targets[frame * self.nq ..][0..self.nq];
+    }
+
+    /// THE CLIP PLAYED FASTER OR SLOWER: a copy whose frame f shows this clip at f x `speed` of its frames, played at
+    /// the same frame rate - `speed` 1.2 is the motion 20% faster in 1/1.2 of the frames, 0.8 the motion 20% slower
+    /// in 1/0.8 of them. One factor over the whole clip: every pose moves at it, a flight's included.
+    ///
+    /// A copy frame between two of this clip's is the pose between them (`interpolatePose`): a place along the
+    /// straight line, a hinge's angle between its two, a quaternion along the shortest arc. A copy frame that lands on
+    /// one of this clip's frames - to within a ten-thousandth of a frame, the rounding of f x `speed` - is that frame,
+    /// exactly. Its residual is the larger of its two frames'. The caller owns the copy, and grounds it: a pose between
+    /// two frames that rest on the floor can dip a little below it.
+    pub fn atSpeed(self: *const Clip, m: *const rbt.Model, speed: f32) !Clip {
+        const playable: bool = speed > 0 and self.frame_count > 1 and self.nq == m.coordinate_count;
+        assertf(playable, @src(), "atSpeed: speed {d}, {d} frames of {d} coordinates, the model's {d}", .{
+            speed,
+            self.frame_count,
+            self.nq,
+            m.coordinate_count,
+        });
+        const gpa: Allocator = self.gpa;
+        const last_frame: usize = self.frame_count - 1;
+        const last_time: f64 = @floatFromInt(last_frame);
+        const step: f64 = speed;
+        // How close f x speed must come to a frame of this clip to be that frame: its rounding, and no more.
+        const landing: f64 = 1.0e-4;
+        const whole_steps: usize = @floor(last_time / step + landing);
+        const count: usize = whole_steps + 1;
+        const targets: []f32 = try gpa.alloc(f32, count * self.nq);
+        errdefer gpa.free(targets);
+        const residual: []f32 = try gpa.alloc(f32, count);
+        errdefer gpa.free(residual);
+        const residual_body: []u32 = try gpa.alloc(u32, count);
+        errdefer gpa.free(residual_body);
+        const between: []f32 = try gpa.alloc(f32, m.dof_count);
+        defer gpa.free(between);
+        for (0..count) |frame| {
+            const source_time: f64 = float64(frame) * step;
+            // The frame at or before the source time - the one it lands on, if it lands within `landing` of one.
+            const landed_or_before: f64 = @min(@floor(source_time + landing), last_time);
+            const first: usize = @trunc(landed_or_before);
+            const past_first: f64 = source_time - landed_or_before;
+            const out: []f32 = targets[frame * self.nq ..][0..self.nq];
+            const lands: bool = past_first < landing or first == last_frame;
+            if (lands) {
+                @memcpy(out, self.pose(first));
+                residual[frame] = self.residual[first];
+                residual_body[frame] = self.residual_body[first];
+                continue;
+            }
+            const fraction: f32 = @floatCast(past_first);
+            interpolatePose(m, self.pose(first), self.pose(first + 1), fraction, between, out);
+            const later_is_larger: bool = self.residual[first + 1] > self.residual[first];
+            const larger: usize = if (later_is_larger) first + 1 else first;
+            residual[frame] = self.residual[larger];
+            residual_body[frame] = self.residual_body[larger];
+        }
+        return .{
+            .gpa = gpa,
+            .frame_count = count,
+            .frame_time = self.frame_time,
+            .nq = self.nq,
+            .targets = targets,
+            .residual = residual,
+            .residual_body = residual_body,
+        };
     }
 
     /// A smoothed copy of the clip: its motion low-passed at `cutoff_hz`, with no delay.
@@ -3825,4 +3909,113 @@ test "robot_dance: the get-up reference on the robot - are its feet flat when th
         gap_sum / float(clip.frame_count),
     });
     try expect(clip.frame_count > 0);
+}
+
+/// The angle of the turn between two quaternions, from the turn's own sine and cosine - exact for the small angles
+/// between two frames, where an arccosine of their dot product would not be.
+fn angleBetweenTurns(a: Quat, b: Quat) f32 {
+    const between: Quat = qmul(conjugate(a), b);
+    const sine_half: f32 = length3(vec(between[0], between[1], between[2]));
+    return 2.0 * atan2Rad(sine_half, @abs(between[3]));
+}
+
+test "robot_dance: a clip at another speed - landing frames the clip's own, the poses between on each joint's path" {
+    // flex2's baked get-up: a free root and hinges, so the place's straight line, the hinges' and the root
+    // quaternion's arc are each taken. Three speeds:
+    //   - 1: the clip itself, bit for bit;
+    //   - 0.8 and 1.2: floor((n - 1) / s) + 1 frames, and every fifth copy frame landing on a frame of the clip -
+    //     5 x 0.8 = 4, 5 x 1.2 = 6 - which it is, bit for bit;
+    //   - between: each coordinate on its own path at the fraction, found here without the pose calculus, from the
+    //     exact source time f x 4/5 or f x 6/5 - a place or a hinge on the straight line between its two frames, the
+    //     root's quaternion t of the way along the arc: its angle from the first frame t times the whole, from the
+    //     second (1 - t) times it.
+    // Within bars set from this measurement - the worst found: places and hinges 3.7e-7, arcs 6.6e-7 rad.
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    const io: Io = threaded.io();
+    var file: Io.File = Io.Dir.cwd().openFile(io, "examples/getup_train/getup.zclip", .{}) catch
+        return error.SkipZigTest;
+    defer file.close(io);
+    const info: Io.File.Stat = try file.stat(io);
+    const bytes: []u8 = try gpa.alloc(u8, info.size);
+    defer gpa.free(bytes);
+    _ = try file.readPositionalAll(io, bytes, 0);
+    var clip: Clip = try .fromBytes(gpa, bytes);
+    defer clip.deinit();
+    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, flex2_xml, null);
+    defer doc.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+    defer robot.deinit();
+    const options: rbt.Options = .{ .timestep = 1.0 / 60.0, .gravity = vec(0, 0, -9.81) };
+    var imported: robot_mjcf.Imported = try robot_mjcf.build(gpa, &robot, options);
+    defer imported.deinit();
+    const m: *const rbt.Model = &imported.model;
+
+    var same: Clip = try clip.atSpeed(m, 1.0);
+    defer same.deinit();
+    try expectEqual(clip.frame_count, same.frame_count);
+    try expect(eql(f32, clip.targets, same.targets));
+
+    // Each speed as the source frames five copy frames cover: 0.8 is 4 of them, 1.2 is 6.
+    const Speed = struct { speed: f32, source_per_five: usize };
+    const speeds = [_]Speed{ .{ .speed = 0.8, .source_per_five = 4 }, .{ .speed = 1.2, .source_per_five = 6 } };
+    var worst_line: f32 = 0;
+    var worst_arc: f32 = 0;
+    for (speeds) |case| {
+        var copy: Clip = try clip.atSpeed(m, case.speed);
+        defer copy.deinit();
+        const expected_count: usize = (clip.frame_count - 1) * 5 / case.source_per_five + 1;
+        try expectEqual(expected_count, copy.frame_count);
+        try expectEqual(clip.frame_time, copy.frame_time);
+        var landing: usize = 0;
+        while (landing < copy.frame_count) : (landing += 5) {
+            const source: usize = landing / 5 * case.source_per_five;
+            try expect(eql(f32, copy.pose(landing), clip.pose(source)));
+        }
+        for (0..copy.frame_count) |frame| {
+            const scaled: usize = frame * case.source_per_five;
+            const first: usize = scaled / 5;
+            const fraction: f32 = float(scaled % 5) / 5.0;
+            if (fraction == 0) {
+                continue;
+            }
+            const from: []const f32 = clip.pose(first);
+            const to: []const f32 = clip.pose(first + 1);
+            const found: []const f32 = copy.pose(frame);
+            for (0..m.joint_count) |joint| {
+                const at: usize = m.joint_first_coordinate[joint];
+                // The coordinates on a straight line - a free root's place, a hinge's or a slide's angle - and the
+                // quaternion on an arc, if the joint has one.
+                const line_count: usize = switch (m.joint_type[joint]) {
+                    .free => 3,
+                    .ball => 0,
+                    .hinge, .slide => 1,
+                };
+                for (at..at + line_count) |coordinate| {
+                    const expected: f32 = from[coordinate] + fraction * (to[coordinate] - from[coordinate]);
+                    worst_line = @max(worst_line, @abs(found[coordinate] - expected));
+                }
+                const has_turn: bool = m.joint_type[joint] == .free or m.joint_type[joint] == .ball;
+                if (!has_turn) {
+                    continue;
+                }
+                const turn_at: usize = at + line_count;
+                const from_turn: Quat = from[turn_at..][0..4].*;
+                const to_turn: Quat = to[turn_at..][0..4].*;
+                const found_turn: Quat = found[turn_at..][0..4].*;
+                const whole: f32 = angleBetweenTurns(from_turn, to_turn);
+                const from_first: f32 = angleBetweenTurns(from_turn, found_turn);
+                const to_second: f32 = angleBetweenTurns(found_turn, to_turn);
+                worst_arc = @max(worst_arc, @abs(from_first - fraction * whole));
+                worst_arc = @max(worst_arc, @abs(to_second - (1.0 - fraction) * whole));
+            }
+        }
+    }
+    report.print("\n  a clip at another speed: the lines within {e:.2}, the arcs within {e:.2} rad\n", .{
+        worst_line,
+        worst_arc,
+    });
+    try expect(worst_line < 2.0e-6);
+    try expect(worst_arc < 2.0e-6);
 }

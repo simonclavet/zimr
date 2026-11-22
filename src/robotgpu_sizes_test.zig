@@ -2,6 +2,9 @@
 //! size of Geno, every arena far within lavapipe's 128 MB binding and the test binaries' memory (the CPU twin keeps
 //! every arena as a static). Desktop builds use robotgpu_sizes.zig instead, chosen by the build.
 
+/// The CPU twin kept: the tests check the device against it.
+pub const cpu_twin: bool = true;
+
 /// The model's constants, and a tracking task's clips beside them: every frame's coordinates and, where the task
 /// observes, its reference's half of the observation (a few hundred numbers a frame, for a clip of hundreds of frames).
 pub const model_f: u32 = 1 << 18;

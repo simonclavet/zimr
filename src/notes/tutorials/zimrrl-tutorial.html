@@ -664,6 +664,7 @@ pub fn Graph(comptime T: type) type {
                 .none =&gt; x,
                 .relu =&gt; try self.relu(x),
                 .mish =&gt; try self.mish(x),
+                .silu =&gt; try self.silu(x),
                 .sim_norm =&gt; |group| try self.simNorm(x, group),
             };
         }
@@ -4265,6 +4266,23 @@ two actions. With more, the steps follow the bend. Two actions 1.2 apart, learne
 <p>A flow with a single mode needs few steps - on its straight paths Euler is close to exact - while a flow whose job
 is to keep different answers apart needs enough steps to follow the bends between them.</p>
 
+<p id="flowmode"><strong>The main mode.</strong> Sampled from the centre of its noise, x<sub>0</sub> = 0, a flow
+gives one action for a situation - and not the average of the actions it learned. Along one number the flow keeps
+the noise's order: two paths that crossed would meet at a point, and the field gives a point one velocity, so a lower
+noise never ends above a higher one. The centre of the noise is its median, so it goes to the median of the actions
+the flow carries the noise onto - which lies in whichever way holds more than half of them:</p>
+
+<pre class="sketch"><code>   the actions learned     three at -0.4, two at +0.4
+   their average           (3 x -0.4 + 2 x 0.4) / 5 = -0.08     between the two, where none of them is
+   the noise, in order     its lowest three fifths to -0.4, the rest to +0.4
+   from the centre         the median noise -> -0.4             the heavier way</code></pre>
+
+<p>With an even split the centre falls on the boundary between the ways, and the sample lands between them until
+the balance tips. A policy that must give one action - a deterministic controller distilled from the flow - learns
+the main mode this way: a target from the noise's centre rather than the mean of every answer. Euler's straight steps
+follow the flow closely enough to keep the order; across a bend near the boundary a few samples land between the ways,
+as above.</p>
+
 <p><strong>Learning from a gradient.</strong> A critic, or a world model's backward pass, says how a cost changes
 with the action: g = d cost / d a. FlowDPG turns it into a better target, without differentiating through the
 sampler. From x<sub>t</sub>, one velocity evaluation estimates where the flow is heading - the clean action
@@ -5961,7 +5979,7 @@ template of its <code>Dense</code> layer &mdash; a layer owns its tensors and re
 <li><code>LayerNorm</code> &mdash; each row brought to mean 0 and spread 1, then a learned gain and bias per feature.</li>
 <li><code>NormedDense</code> &mdash; BMPC's layer: <code>Dense</code>, optional dropout, <code>LayerNorm</code>, an
 activation.</li>
-<li><code>Activation</code> &mdash; none (a head's raw output), ReLU, Mish, or SimNorm. SimNorm softmaxes small groups
+<li><code>Activation</code> &mdash; none (a head's raw output), ReLU, Mish, SiLU, or SimNorm. SimNorm softmaxes small groups
 of features, so an encoder's or a dynamics network's output is a bundle of small probability vectors, bounded however
 large the inputs, which keeps a rolled-out latent from wandering off.</li>
 <li><code>Mlp</code> &mdash; a stack of layers described by a <code>Spec</code>, so an architecture is data; its last
@@ -6001,6 +6019,8 @@ pub const Activation = union(enum) {
     relu,
     /// TD-MPC2's choice inside every layer.
     mish,
+    /// x times its sigmoid (`zm.silu`): the hidden layers' activation in SuperMimic's reproductions' world models.
+    silu,
     /// SimNorm with this group size - how TD-MPC2's encoder and dynamics end (`simNormRows`).
     sim_norm: usize,
 };
@@ -11835,6 +11855,7 @@ other lacks. Names appearing twice belong to different types; the signature colu
 <tr><td><code>build</code></td><td><code>build(graph: *Graph(T), latents: Var, unfinished: []const Tensor(T), policy_network: Mlp(T), policy_bound: []const Var, options: Options, allocator: Allocator) Error!Self</code></td><td><span class="host">method</span></td><td>Build a rollout, a loss, a policy head or a plan scorer on a graph once; refill and recompute.</td></tr>
 <tr><td><code>updateScale</code></td><td><code>updateScale(self: Self, graph: *const Graph(T), kl_scale: *RunningScale(T), scratch: []T) Error!void</code></td><td><span class="host">method</span></td><td>PolicyDistillationLoss: move the RunningScale with step 0's divergences, then set 1 / scale.</td></tr>
 <tr><td><code>PlanObjective</code></td><td><code>PlanObjective = enum(u32)</code></td><td><span class="host">host</span></td><td>A plan's score: final (BMPC) or the mean over prefixes (EfficientTDMPC).</td></tr>
+<tr><td><code>planObjectiveWeightsOver</code></td><td><code>planObjectiveWeightsOver(comptime T: type, objective: PlanObjective, discount: T, spans: ?[]const u32, reward_weights: []T, value_weights: []T) Error!void</code></td><td><span class="host">host</span></td><td>The same weights for steps that span several decisions each; null spans give planObjectiveWeights.</td></tr>
 <tr><td><code>planObjectiveWeights</code></td><td><code>planObjectiveWeights(comptime T: type, objective: PlanObjective, discount: T, reward_weights: []T, value_weights: []T) Error!void</code></td><td><span class="host">host</span></td><td>The weights an objective puts on each step's reward and value.</td></tr>
 <tr><td><code>LatentPlanScorer</code></td><td><code>LatentPlanScorer(comptime T: type) type</code></td><td><span class="host">host</span></td><td>Plans scored by imagination: discounted rewards plus the end value, many states at once.</td></tr>
 <tr><td><code>Options</code></td><td><code>Options = struct</code></td><td><span class="host">method</span></td><td>Settings of LatentRollout, WorldModelLoss, TanhMeanGaussian, PolicyDistillationLoss, LatentPlanScorer, Mppi and FlowPolicy.</td></tr>

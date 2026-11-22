@@ -26,7 +26,7 @@ const colors = z.colors;
 
 /// Routes `std.log` to the page's console panel (natively, to standard error). The root module decides where logs
 /// go: for a descriptor the runner declares this, and here the root is this file.
-pub const std_options = z.std_options;
+pub const std_options: std.Options = z.std_options;
 
 /// The engine - GPU, window, input - that `run` starts. At file scope, where the browser's per-frame call reaches it.
 pub var zimr_app: z.App = .{};

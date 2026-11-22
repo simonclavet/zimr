@@ -402,6 +402,7 @@ pub const types = struct {
         VectorShuffle = 79,
         CompositeConstruct = 80,
         CompositeExtract = 81,
+        CompositeInsert = 82,
         CopyObject = 83,
         CopyLogical = 400,
         SampledImage = 86,
@@ -1553,7 +1554,7 @@ fn applyMemberDecoration(s: *State, ops: []const u32) !void {
 
 /// The name prefix of a UNIFORM workgroup array: kompute's `uniform_shared_prefix` (`sharedUniform`), which this must
 /// stay equal to - `src/tests.zig` holds the two to it.
-pub const uniform_workgroup_prefix = "zimr_uniform_";
+pub const uniform_workgroup_prefix: []const u8 = "zimr_uniform_";
 
 fn pass2_decorations(s: *State) !void {
     for (s.inst_off.items) |off| {
@@ -7481,6 +7482,40 @@ fn isEntryFunctionContext(s: *State) bool {
     return s.is_current_entry;
 }
 
+/// The WGSL path of a composite's part, appended to `buf` after the composite's own name: its type, `composite_type`,
+/// walked as the literal `indices` descend it, as `emitAccessChain` walks a pointee. A STRUCT's member is NAMED
+/// (`.field_N` - WGSL indexes no structure, so `p[1]` is refused); a vector's lane, a matrix's column or an array's
+/// element is indexed. A Zig optional passed by value is such a struct - its payload, then its flag. One walk for the
+/// read (OpCompositeExtract) and the write (OpCompositeInsert), so the two cannot name one part two ways.
+fn appendCompositeIndexPath(
+    s: *State,
+    buf: *ArrayList(u8),
+    composite_type: u32,
+    indices: []const u32,
+) !void {
+    var part_type: u32 = composite_type;
+    for (indices) |index| {
+        const part_info: *const IdInfo = lookupType(s, part_type);
+        switch (part_info.kind) {
+            .type_struct => {
+                try bprint(buf, s.arena, ".field_{d}", .{index});
+                part_type = advanceStructMember(s, part_type, index) orelse part_type;
+            },
+            .type_vector, .type_matrix => {
+                try bprint(buf, s.arena, "[{d}]", .{index});
+                part_type = part_info.extra_b;
+            },
+            .type_array => {
+                try bprint(buf, s.arena, "[{d}]", .{index});
+                part_type = part_info.extra_a;
+            },
+            else => {
+                try bprint(buf, s.arena, "[{d}]", .{index});
+            },
+        }
+    }
+}
+
 fn emitCompositeExtract(
     s: *State,
     out: *ArrayList(u8),
@@ -7488,42 +7523,53 @@ fn emitCompositeExtract(
 ) !void {
     const tid: u32 = ops[0];
     const result: u32 = ops[1];
-    const composite: []const u8 = lookupId(s, ops[2]).wgsl_name;
+    const composite: *const IdInfo = lookupId(s, ops[2]);
     const indices: []const u32 = ops[3..];
     const t: *const IdInfo = lookupType(s, tid);
 
     var buf: ArrayList(u8) = .empty;
-    try bstr(&buf, s.arena, composite);
-    // The composite's type walked as the indices descend it, as `emitAccessChain` walks a pointee: a STRUCT's member is
-    // NAMED (`.field_N` - WGSL indexes no structure, so `p[1]` is refused), a vector's lane, a matrix's column or an
-    // array's element is indexed. A Zig optional passed by value is such a struct - its payload, then its flag.
-    var cur_type: u32 = lookupId(s, ops[2]).type_id;
-    for (indices) |index| {
-        const cur_info: *const IdInfo = lookupType(s, cur_type);
-        switch (cur_info.kind) {
-            .type_struct => {
-                try bprint(&buf, s.arena, ".field_{d}", .{index});
-                cur_type = advanceStructMember(s, cur_type, index) orelse cur_type;
-            },
-            .type_vector, .type_matrix => {
-                try bprint(&buf, s.arena, "[{d}]", .{index});
-                cur_type = cur_info.extra_b;
-            },
-            .type_array => {
-                try bprint(&buf, s.arena, "[{d}]", .{index});
-                cur_type = cur_info.extra_a;
-            },
-            else => {
-                try bprint(&buf, s.arena, "[{d}]", .{index});
-            },
-        }
-    }
+    try bstr(&buf, s.arena, composite.wgsl_name);
+    try appendCompositeIndexPath(s, &buf, composite.type_id, indices);
     const expr: []const u8 = try buf.toOwnedSlice(s.arena);
 
     const name: []const u8 = try tempName(s.arena, result);
     setId(s, result, .{ .kind = .value, .type_id = tid, .wgsl_name = name });
     try bindLhs(out, s, result, name, t.wgsl_name);
     try bprint(out, s.arena, "{s};\n", .{expr});
+}
+
+/// OpCompositeInsert: a copy of a composite with one part replaced - `(result type, result, object, composite,
+/// literal indices...)`. WGSL writes a part only through a `var`, so the result is one: declared holding the
+/// composite (or, when hoisted, already a function-scope `var`, assigned it), then the object written at the part's
+/// path. Zig's backend never emits it; the optimizer does, where it turns a local aggregate into values.
+///
+///     %r = OpCompositeInsert %v2float %x %v 1      ->      var _r: vec2<f32> = v;
+///                                                          _r[1] = x;
+fn emitCompositeInsert(
+    s: *State,
+    out: *ArrayList(u8),
+    ops: []const u32,
+) !void {
+    const tid: u32 = ops[0];
+    const result: u32 = ops[1];
+    const object: []const u8 = lookupId(s, ops[2]).wgsl_name;
+    const composite: *const IdInfo = lookupId(s, ops[3]);
+    const indices: []const u32 = ops[4..];
+    const t: *const IdInfo = lookupType(s, tid);
+
+    const name: []const u8 = try tempName(s.arena, result);
+    setId(s, result, .{ .kind = .value, .type_id = tid, .wgsl_name = name });
+    const result_is_hoisted: bool = @as(usize, result) < s.hoisted.len and s.hoisted[result];
+    if (result_is_hoisted) {
+        try bprint(out, s.arena, "  {s} = {s};\n", .{ name, composite.wgsl_name });
+    } else {
+        try bprint(out, s.arena, "  var {s}: {s} = {s};\n", .{ name, t.wgsl_name, composite.wgsl_name });
+    }
+
+    var part: ArrayList(u8) = .empty;
+    try bstr(&part, s.arena, name);
+    try appendCompositeIndexPath(s, &part, tid, indices);
+    try bprint(out, s.arena, "  {s} = {s};\n", .{ part.items, object });
 }
 
 fn emitCompositeConstruct(
@@ -8226,8 +8272,8 @@ fn emitExtInst(
 /// kernel build - fails on it instead of shipping WGSL that computes something else:
 ///
 ///   * an instruction with a result - `(result type, result id)` as its first two operands - is bound to a zero of
-///     its type (`emitZeroPlaceholder`), so later uses still read as WGSL. OpCompositeInsert, OpVectorInsertDynamic
-///     and OpVectorExtractDynamic land here: a vector lane written in place, or read at a run-time index;
+///     its type (`emitZeroPlaceholder`), so later uses still read as WGSL. OpVectorInsertDynamic and
+///     OpVectorExtractDynamic land here: a vector lane written, or read, at a run-time index;
 ///   * one with no result (OpCopyMemory, say) is dropped, and the marker is all that says so.
 ///
 /// `OpNoLine` alone passes silently: it ends a debug line range and does nothing else, and Zig emits it.
@@ -8304,6 +8350,42 @@ test "a composite extract names a struct's member and indexes a vector's lane - 
     // A vector's lane 2 stays an index.
     try emitCompositeExtract(&s, &out, &.{ 4, 11, 6, 2 });
     try expectEqualStrings("  let _10: u32 = p.field_1;\n  let _11: f32 = v[2];\n", out.items);
+}
+
+test "a composite insert copies the composite into a var and writes the one part - a struct's member by name" {
+    var arena_state: ArenaAllocator = .init(testing_allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    // A module header whose id bound covers the ids set by hand below; no instruction is read.
+    const header: [5]u32 = .{ 0x07230203, 0x00010000, 0, 32, 0 };
+    var s: State = try .init(arena, &header);
+    setId(&s, 1, .{ .kind = .type_scalar, .wgsl_name = "u32" });
+    setId(&s, 2, .{ .kind = .type_struct, .wgsl_name = "S2" });
+    setId(&s, 3, .{ .kind = .value, .type_id = 2, .wgsl_name = "p" });
+    setId(&s, 4, .{ .kind = .type_scalar, .wgsl_name = "f32" });
+    setId(&s, 5, .{ .kind = .type_vector, .wgsl_name = "vec2<f32>", .extra_a = 2, .extra_b = 4 });
+    setId(&s, 6, .{ .kind = .value, .type_id = 5, .wgsl_name = "v" });
+    setId(&s, 7, .{ .kind = .value, .type_id = 4, .wgsl_name = "x" });
+    setId(&s, 8, .{ .kind = .value, .type_id = 1, .wgsl_name = "flag" });
+    var out: ArrayList(u8) = .empty;
+    // Lane 1 of a vec2 replaced: the copy, then the lane written - `v` itself is never written.
+    try emitCompositeInsert(&s, &out, &.{ 5, 10, 7, 6, 1 });
+    // Member 1 of a struct replaced: named, as the extract names it.
+    try emitCompositeInsert(&s, &out, &.{ 2, 11, 8, 3, 1 });
+    try expectEqualStrings(
+        "  var _10: vec2<f32> = v;\n  _10[1] = x;\n  var _11: S2 = p;\n  _11.field_1 = flag;\n",
+        out.items,
+    );
+    // Later uses name the result.
+    try expectEqualStrings("_10", lookupId(&s, 10).wgsl_name);
+
+    // A hoisted result is already a function-scope `var`: assigned, not declared again.
+    s.hoisted = try arena.alloc(bool, 32);
+    @memset(s.hoisted, false);
+    s.hoisted[12] = true;
+    out.clearRetainingCapacity();
+    try emitCompositeInsert(&s, &out, &.{ 5, 12, 7, 6, 0 });
+    try expectEqualStrings("  _12 = v;\n  _12[0] = x;\n", out.items);
 }
 
 test "no lowering is never silent: an opcode or GLSL.std.450 instruction without one leaves an // ERROR: marker" {
@@ -8393,6 +8475,7 @@ fn emitOnePerOpcode(
         .Store => try emitStore(s, out, ops, isEntryFunctionContext(s)),
 
         .CompositeExtract => try emitCompositeExtract(s, out, ops),
+        .CompositeInsert => try emitCompositeInsert(s, out, ops),
         .CompositeConstruct => try emitCompositeConstruct(s, out, ops),
         .VectorShuffle => try emitVectorShuffle(s, out, ops),
 
@@ -8730,6 +8813,8 @@ fn opShape(op: types.Op) OpShape {
         // Value ops whose operands interleave literals with ids.
         .CompositeExtract => .{ .has_value_result = true, .custom = .composite_extract },
         .VectorShuffle => .{ .has_value_result = true, .custom = .vector_shuffle },
+        // The object [2] and the composite [3] are values; the indices after them are literals.
+        .CompositeInsert => .{ .has_value_result = true, .value_from = 2, .value_count = 2 },
 
         // No result, but DO reference values in their first operand(s).
         .Store => .{ .value_from = 0, .value_count = 2 }, // pointer, value

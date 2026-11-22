@@ -315,6 +315,7 @@ pub const unloadMesh = @import("draw3d.zig").unloadMesh;
 pub const unloadModel = @import("draw3d.zig").unloadModel;
 pub const getScreenToWorldRay = @import("draw3d.zig").getScreenToWorldRay;
 pub const getRayCollisionSphere = @import("draw3d.zig").getRayCollisionSphere;
+pub const getRayCollisionCapsule = @import("draw3d.zig").getRayCollisionCapsule;
 pub const getRayCollisionBox = @import("draw3d.zig").getRayCollisionBox;
 pub const getRayCollisionTriangle = @import("draw3d.zig").getRayCollisionTriangle;
 pub const getRayCollisionQuad = @import("draw3d.zig").getRayCollisionQuad;
@@ -475,11 +476,11 @@ pub const robot_latent = @import("robot_latent.zig");
 /// Geno's collision shapes, as `tools/geno_fit.py` fits them (generated; the robot model and the
 /// `geno_fit` page both read this one table).
 pub const robot_geno_shapes = @import("robot_geno_shapes.zig");
-/// A robot built from the character its captures were recorded on (rl_track_plan.md, Phase R).
+/// A robot built from the character its captures were recorded on (Phase R of archive/rl_track_plan_v4.md).
 pub const robot_geno = @import("robot_geno.zig");
 pub const robot_lab = @import("robot_lab.zig");
-/// Geno's robot model as `robot_geno.writeModel` makes it - a fixture its tests hold byte-equal to a fresh
-/// build, so pages load the body without re-measuring it.
+/// Geno's robot model as `robot_geno.writeSymmetricModel` makes it - measured, then each body made its partner's mirror
+/// image - a fixture its tests hold byte-equal to a fresh build, so pages load the body without re-measuring it.
 pub const robot_geno_model: []const u8 = @embedFile("tests/fixtures/robot/geno.xml");
 /// MuJoCo's humanoid, as MJCF: hinges with ranges, for what Geno's ball joints cannot carry - joint limits.
 pub const robot_humanoid_model: []const u8 = @embedFile("tests/fixtures/robot/humanoid.xml");
@@ -487,6 +488,9 @@ pub const robot_humanoid_model: []const u8 = @embedFile("tests/fixtures/robot/hu
 /// trunk a box, the legs capsules and cylinders, the feet spheres - and its home pose its first keyframe. Its visual
 /// meshes are not carried: the shapes are what the engines collide and what pages draw.
 pub const robot_go1_model: []const u8 = @embedFile("tests/fixtures/robot/go1/go1.xml");
+/// A three-link arm stated as a `robot.Spec`: the one test robot with sites, and with actuators that carry a state - an
+/// integrator and two filters beside a servo with none - so the simulators' sites and activations have work to check.
+pub const robot_sites_and_activations_arm = @import("tests/fixtures/robot/sites_and_activations_arm.zig");
 /// The networks and the resident data on the GPU: blocks, the feature ring, the reference tables.
 pub const robot_latent_kit = @import("robot_latent_kit.zig");
 pub const kit_mlp = @import("kit_mlp.zig");
@@ -517,7 +521,7 @@ pub const ws = net.ws;
 // "just works" on-page:
 //
 //     const z = @import("zimr");
-//     pub const std_options = z.std_options;
+//     pub const std_options: std.Options = z.std_options;
 //
 // Each line is formatted with its scope/level prefix and handed to the platform's log
 // (`platform.current.log`: the browser's console, or standard error natively and headless).
@@ -546,7 +550,7 @@ fn zimrLogFn(
 }
 
 /// Root-module std options that route std.log to the platform's log (`platform.current.log`).
-/// `pub const std_options = z.std_options;` in your example's main file.
+/// `pub const std_options: std.Options = z.std_options;` in your example's main file.
 pub const std_options: std.Options = .{ .logFn = zimrLogFn };
 pub const utils = @import("utils.zig");
 
@@ -655,6 +659,13 @@ pub const Compute = @import("compute_host.zig").Compute;
 /// A field's buffer on the device, and one copy between two pipelines on one device (`compute_host.zig`).
 pub const DeviceField = @import("compute_host.zig").DeviceField;
 pub const copyFieldBetween = @import("compute_host.zig").copyFieldBetween;
+/// A pipe's time on the GPU (`Compute.enableTimings`, `Compute.readTimings`): how it is measured, what a read
+/// covered, and the span of several pipes' reads on their device's clock.
+pub const TimingOptions = @import("compute_host.zig").TimingOptions;
+/// A program's share of its GPU's time: each submission waited for and followed by a rest (`compute_host.zig`).
+pub const MachineShare = @import("compute_host.zig").MachineShare;
+pub const TimingsRead = @import("compute_host.zig").TimingsRead;
+pub const timingsSpanMicroseconds = @import("compute_host.zig").timingsSpanMicroseconds;
 
 /// The jobs `Registry` for a kompute module - DERIVED, so an example that wants the
 /// `.worker` backend configures nothing. The kernel functions, the header type and the

@@ -200,8 +200,9 @@ pub const ShaderPipeline = struct {
     /// fall back to the `*_path` + tools_dep behavior (the C++ SPIR-V
     /// tools always use that; they're genuinely external).
     spv2wgsl_exe: ?*std.Build.Step.Compile = null,
-    /// The SPIR-V optimizer (`-Dspirv-opt`, tools/spirvopt.zig): when set, every compute kernel's SPIR-V is optimized
-    /// before Vulkan and WGSL take it - for Vulkan by its -O pipeline, for the web by `spirvopt_web_passes`.
+    /// The SPIR-V optimizer (`-Dspirv-opt`, on by default; tools/spirvopt.zig): when set, every compute kernel's
+    /// SPIR-V is optimized before Vulkan and WGSL take it - for Vulkan by its -O pipeline, for the web by
+    /// `spirvopt_web_passes`.
     spirvopt_exe: ?*std.Build.Step.Compile = null,
     /// THE WEB's PASSES: the -O pipeline, in its order, without merge-return and without inlining. Inlined, a helper's
     /// early return becomes a break out of an inlined region, after which WGSL's uniformity analysis takes everything
@@ -949,7 +950,8 @@ pub const ShaderPipeline = struct {
         name: []const u8,
         /// The kernel file, as the build names it: two different files must not share a `name`.
         source_name: []const u8,
-        /// The kernel file's SPIR-V, as the compiler writes it: every entry of the file.
+        /// The kernel file's SPIR-V, every entry of the file, as the native host takes it: through the optimizer's -O
+        /// pipeline (`spirvopt_exe`), or as the compiler writes it in a build that turns the optimizer off.
         spv: LazyPath,
         /// This entry's WGSL, translated from `spv` by spv2wgsl.
         wgsl: LazyPath,

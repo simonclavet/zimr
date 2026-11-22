@@ -393,7 +393,7 @@
 //!     Zig -> C -> JS and its `run_test()` must return 0 (the case asserts its
 //!     own expected values internally) AND the generated JS must contain ZERO
 //!     markers. Plus a DOM scenario over demo/webdemo2.zig.
-//!   * NATIVE-ORACLE DIFFERENTIAL (`tests/differential.sh` + `oracle_main.zig`):
+//!   * NATIVE-ORACLE DIFFERENTIAL (`zig build c2js-diff`: tools/c2js_diff.zig + `oracle_main.zig`):
 //!     for a program exporting `run_test() i32`, the result is computed two ways
 //!     - compiled to a NATIVE binary and run (ground truth: real Zig on real
 //!     hardware), and Zig -> C -> JS run in node - and the two are diffed. The
@@ -10429,7 +10429,7 @@ fn readFileAlloc(io: Io, gpa: Allocator, path: []const u8) ![]u8 {
 }
 
 /// Base64 alphabet used by Source Map v3 VLQ encoding.
-const vlq_b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const vlq_b64: []const u8 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 /// Append the base64-VLQ encoding of a signed integer to `out`.
 fn vlqEncode(

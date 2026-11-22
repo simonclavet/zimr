@@ -71,7 +71,7 @@ const cursors_html = @embedFile("standalone_cursors.html");
 const rtc_html = @embedFile("standalone_rtc.html");
 const ws_html = @embedFile("standalone_ws.html");
 
-const default_port = "7777";
+const default_port: []const u8 = "7777";
 const max_message_bytes: usize = 16 * 1024;
 const read_buffer_bytes: usize = max_message_bytes + 4096;
 const room_cap: usize = 8; // max peers per room - matches net_core's max_peers (the mesh cap)

@@ -15,6 +15,7 @@ const expectEqual = std.testing.expectEqual;
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const zm = @import("zm");
+const host = @import("host.zig");
 /// Which path plays a page's sound and how far it has come, as page audio reports it (`page_audio.OutputStatus`) - the
 /// bridge's file, imported for the type alone: its exports are made only where it is the program's root.
 const AudioOutputStatus = @import("page_audio.zig").OutputStatus;
@@ -1021,7 +1022,11 @@ pub const dom = struct {
 /// `available()` is false, and `jobs.zig` runs the kernel INLINE instead. Nothing
 /// here ever fails; the caller cannot tell the difference.
 pub const jobs = struct {
-    const is_wasm: bool = builtin.target.cpu.arch.isWasm();
+    /// Whether the page's workers are there to ask: a BROWSER build's question, not every wasm's. A job kernel's own
+    /// wasm is wasm too, built with no host (`host.zig`'s `none`) and importing nothing - and its code may reach these
+    /// calls, through the `.worker` arms of a kernel module's CPU twin run inside a job (`compute_host`). There they
+    /// must find no `jobs` import: the pool is unavailable, as on any host.
+    const in_browser: bool = host.is_browser;
 
     /// `poll` returns this while the kernel is still running.
     pub const pending: i32 = -1;
@@ -1043,7 +1048,7 @@ pub const jobs = struct {
     /// Is a real worker pool available? False on the host, and false in a browser
     /// context where Worker construction was refused.
     pub fn available() bool {
-        if (comptime !is_wasm) {
+        if (comptime !in_browser) {
             return false;
         }
         return js_jobs_available() != 0;
@@ -1065,14 +1070,14 @@ pub const jobs = struct {
     /// The worker always sent this; the host used to print it and drop it. So `KernelFailed`
     /// was every failure's only description - on a device with no console to read.
     pub fn errorName(handle: u32, dst: []u8) usize {
-        if (comptime !is_wasm) {
+        if (comptime !in_browser) {
             return 0;
         }
         return js_jobs_error_name(handle, dst.ptr, @intCast(dst.len));
     }
 
     pub fn submit(name: []const u8, header: []const u8, payload: []const u8) u32 {
-        if (comptime !is_wasm) {
+        if (comptime !in_browser) {
             return 0;
         }
         return js_jobs_submit(
@@ -1087,7 +1092,7 @@ pub const jobs = struct {
 
     /// `pending` while it runs, a byte length when done, < -1 on kernel failure.
     pub fn poll(handle: u32) i32 {
-        if (comptime !is_wasm) {
+        if (comptime !in_browser) {
             return pending;
         }
         return js_jobs_poll(handle);
@@ -1095,7 +1100,7 @@ pub const jobs = struct {
 
     /// Copy the finished result into `dst` and retire the handle.
     pub fn take(handle: u32, dst: []u8) usize {
-        if (comptime !is_wasm) {
+        if (comptime !in_browser) {
             return 0;
         }
         return js_jobs_take(handle, dst.ptr, @intCast(dst.len));
@@ -1105,7 +1110,7 @@ pub const jobs = struct {
     /// still in flight when it lands. Without this, abandoning an in-flight job strands
     /// its entire result buffer in the host for the life of the page.
     pub fn cancel(handle: u32) void {
-        if (comptime !is_wasm) {
+        if (comptime !in_browser) {
             return;
         }
         js_jobs_cancel(handle);

@@ -48,6 +48,8 @@ const atan2Rad = zm.atan2Rad;
 const length3 = zm.length3;
 const assertf = zm.assertf;
 const expect = std.testing.expect;
+const expectEqual = std.testing.expectEqual;
+const expectEqualSlices = std.testing.expectEqualSlices;
 const Random = std.Random;
 const testing_allocator = std.testing.allocator;
 const ArrayList = std.ArrayList;
@@ -396,12 +398,25 @@ pub fn observeFrom(
 
 /// The policy's hands on the controls: filtering what it asks for, holding it for a few steps, and
 /// spreading the subset's numbers back over the model's full action.
+///
+/// A POLICY THAT ALSO GIVES EACH LIMB A STIFFNESS (`track.Fleet.Options.limb_stiffness`) has `stiffness_count` more
+/// numbers after its joints', which pass through the filter at a share of their own and go to the end of the full
+/// action, where such a fleet reads them:
+///
+///     the policy's action     subset's joints ...........  | limbs' stiffnesses
+///     filtered, each part     at `beta`                    | at `stiffness_beta`
+///     the full action         every actuated joint ......  | limbs' stiffnesses      (`track.actionWidth`)
 pub const Controller = struct {
     pub const Options = struct {
         /// The filter's stiffness. DReCon's 0.2: a fifth of the new action, four fifths of the old.
         beta: f32 = 0.2,
         /// How many simulation steps one action is held for.
         decimation: u32 = 2,
+        /// The limbs' stiffnesses in the policy's action, after its joints' numbers: the model's limbs for a policy
+        /// that gives them, 0 for an action of the joints alone.
+        stiffness_count: usize = 0,
+        /// The filter's share for the limbs' stiffnesses, as `beta` is the joints'. 1 is no filter.
+        stiffness_beta: f32 = 1.0,
     };
 
     gpa: Allocator,
@@ -409,7 +424,8 @@ pub const Controller = struct {
     subset: Subset,
     options: Options,
     envs: usize,
-    /// Per environment: the filter's state, and the full-model action it expands to.
+    /// Per environment: the filter's state - the subset's numbers, then the limbs' stiffnesses (`actionWidth`) - and
+    /// the full action it expands to: every actuated joint's, then the stiffnesses (`fullWidth`).
     filtered: []f32,
     expanded: []f32,
     held: u32 = 0,
@@ -421,9 +437,11 @@ pub const Controller = struct {
         envs: usize,
         options: Options,
     ) !Controller {
-        const filtered: []f32 = try gpa.alloc(f32, envs * subset.dofs);
+        const action_width: usize = subset.dofs + options.stiffness_count;
+        const full_width: usize = track.actionSize(m) + options.stiffness_count;
+        const filtered: []f32 = try gpa.alloc(f32, envs * action_width);
         errdefer gpa.free(filtered);
-        const expanded: []f32 = try gpa.alloc(f32, envs * track.actionSize(m));
+        const expanded: []f32 = try gpa.alloc(f32, envs * full_width);
         @memset(filtered, 0.0);
         @memset(expanded, 0.0);
         return .{
@@ -447,43 +465,70 @@ pub const Controller = struct {
         return self.held % @max(self.options.decimation, 1) == 0;
     }
 
-    /// Take what the policy asked for (`envs * subset.dofs`, each in [-1, 1]), filter it, and
-    /// return the model's full action for every environment. When the policy is not being asked
-    /// this step, `raw` is ignored and the last filtered action stands.
+    /// The numbers the policy gives an environment: the subset's joints', then the limbs' stiffnesses.
+    pub fn actionWidth(self: Controller) usize {
+        return self.subset.dofs + self.options.stiffness_count;
+    }
+
+    /// The numbers of an environment's full action: every actuated joint's, then the limbs' stiffnesses - what its
+    /// fleet takes (`track.actionWidth`).
+    pub fn fullWidth(self: Controller) usize {
+        return track.actionSize(self.m) + self.options.stiffness_count;
+    }
+
+    /// Take what the policy asked for (`envs * actionWidth()`, each in [-1, 1]), filter it - the joints' numbers at
+    /// `beta`, the limbs' stiffnesses at `stiffness_beta` - and return the full action for every environment. When
+    /// the policy is not being asked this step, `raw` is ignored and the last filtered action stands.
     pub fn apply(self: *Controller, raw: []const f32) []const f32 {
         const dofs: usize = self.subset.dofs;
-        assertf(raw.len == self.envs * dofs, @src(), "actions are {d}, want {d}", .{ raw.len, self.envs * dofs });
+        const action_width: usize = self.actionWidth();
+        const wanted_length: usize = self.envs * action_width;
+        assertf(raw.len == wanted_length, @src(), "actions are {d}, want {d}", .{ raw.len, wanted_length });
         if (self.wantsAction()) {
-            track.filterAction(self.options.beta, raw, self.filtered);
+            for (0..self.envs) |env| {
+                const asked: []const f32 = raw[env * action_width ..][0..action_width];
+                const kept: []f32 = self.filtered[env * action_width ..][0..action_width];
+                track.filterAction(self.options.beta, asked[0..dofs], kept[0..dofs]);
+                track.filterAction(self.options.stiffness_beta, asked[dofs..], kept[dofs..]);
+            }
         }
         self.held +%= 1;
         // Spread the subset over the model's action: everything else stays exactly zero, which is
-        // the reference's own target, untouched.
+        // the reference's own target, untouched. The limbs' stiffnesses follow the joints'.
         @memset(self.expanded, 0.0);
-        const action_size: usize = track.actionSize(self.m);
+        const joint_numbers: usize = track.actionSize(self.m);
+        const full_width: usize = self.fullWidth();
         for (0..self.envs) |env| {
+            const kept: []const f32 = self.filtered[env * action_width ..][0..action_width];
+            const full_action: []f32 = self.expanded[env * full_width ..][0..full_width];
             var at: usize = 0;
             for (self.subset.joints) |joint| {
                 const dof: usize = self.m.joint_first_dof[joint] - track.rootDofs(self.m);
                 const count: usize = dofsOf(self.m, joint);
-                @memcpy(
-                    self.expanded[env * action_size + dof ..][0..count],
-                    self.filtered[env * dofs + at ..][0..count],
-                );
+                @memcpy(full_action[dof..][0..count], kept[at..][0..count]);
                 at += count;
             }
+            @memcpy(full_action[joint_numbers..], kept[dofs..]);
         }
         return self.expanded;
     }
 
     /// Start an environment's filter from rest - at a reset, the last action means nothing.
     pub fn forget(self: *Controller, env: usize) void {
-        @memset(self.filtered[env * self.subset.dofs ..][0..self.subset.dofs], 0.0);
+        const action_width: usize = self.actionWidth();
+        @memset(self.filtered[env * action_width ..][0..action_width], 0.0);
     }
 
-    /// The filter's current output for one environment, which goes into its observation.
+    /// The filter's current output for one environment's joints, which goes into DReCon's observation.
     pub fn lastAction(self: Controller, env: usize) []const f32 {
-        return self.filtered[env * self.subset.dofs ..][0..self.subset.dofs];
+        return self.filtered[env * self.actionWidth() ..][0..self.subset.dofs];
+    }
+
+    /// The whole action the filter holds for one environment - its joints' numbers, then its limbs' stiffnesses:
+    /// the action applied before its next decision, which a policy trained to see it reads.
+    pub fn appliedAction(self: Controller, env: usize) []const f32 {
+        const action_width: usize = self.actionWidth();
+        return self.filtered[env * action_width ..][0..action_width];
     }
 };
 
@@ -725,4 +770,92 @@ test "robot_policy: the filter, and a zero action that changes nothing" {
         track.actionSize(m),
         subset.bodies.len,
     });
+}
+
+test "robot_policy: the limbs' stiffnesses pass through a filter of their own, to the end of the full action" {
+    // Two environments, the subset's joints and three stiffnesses each, the joints filtered at a quarter and the
+    // stiffnesses at a half. From rest, one decision leaves each joint's number at a quarter of what was asked and
+    // each stiffness at a half; the full action holds the joints where the model has them and the stiffnesses after
+    // every joint's number; the held step changes nothing; a second decision moves each part by its own share again;
+    // and forgetting an environment clears both its parts, the other environment's kept.
+    const gpa: Allocator = testing_allocator;
+    var rig: Rig = undefined;
+    try rig.init(gpa);
+    defer rig.deinit();
+    const m: *rbt.Model = rig.model();
+    const subset: Subset = try defaultSubset(gpa, m, rig.imported.names);
+    defer subset.deinit(gpa);
+    const env_count: usize = 2;
+    const stiffness_count: usize = 3;
+    var controller: Controller = try .init(gpa, m, subset, env_count, .{
+        .beta = 0.25,
+        .decimation = 2,
+        .stiffness_count = stiffness_count,
+        .stiffness_beta = 0.5,
+    });
+    defer controller.deinit();
+    const action_width: usize = subset.dofs + stiffness_count;
+    const joint_numbers: usize = track.actionSize(m);
+    const full_width: usize = joint_numbers + stiffness_count;
+    try expectEqual(action_width, controller.actionWidth());
+    try expectEqual(full_width, controller.fullWidth());
+    // What is asked: a joint's number 0.8 in the first environment and -0.4 in the second; a stiffness 1 and -1.
+    const asked: []f32 = try gpa.alloc(f32, env_count * action_width);
+    defer gpa.free(asked);
+    const asked_joint = [env_count]f32{ 0.8, -0.4 };
+    const asked_stiffness = [env_count]f32{ 1.0, -1.0 };
+    for (0..env_count) |env| {
+        const action: []f32 = asked[env * action_width ..][0..action_width];
+        @memset(action[0..subset.dofs], asked_joint[env]);
+        @memset(action[subset.dofs..], asked_stiffness[env]);
+    }
+    const first_full: []const f32 = controller.apply(asked);
+    try expectEqual(env_count * full_width, first_full.len);
+    for (0..env_count) |env| {
+        const applied: []const f32 = controller.appliedAction(env);
+        try expectEqual(action_width, applied.len);
+        for (applied[0..subset.dofs]) |joint_number| {
+            try expectEqual(0.25 * asked_joint[env], joint_number);
+        }
+        for (applied[subset.dofs..]) |stiffness| {
+            try expectEqual(0.5 * asked_stiffness[env], stiffness);
+        }
+        // DReCon's observation reads the joints' part alone.
+        try expectEqualSlices(f32, applied[0..subset.dofs], controller.lastAction(env));
+        // The full action: the stiffnesses after every joint's number, and as many joints' numbers moved as the
+        // subset nudges - the rest exactly zero.
+        const full_action: []const f32 = first_full[env * full_width ..][0..full_width];
+        try expectEqualSlices(f32, applied[subset.dofs..], full_action[joint_numbers..]);
+        var joints_moved: usize = 0;
+        for (full_action[0..joint_numbers]) |joint_number| {
+            const is_moved: bool = joint_number != 0;
+            if (is_moved) {
+                try expectEqual(0.25 * asked_joint[env], joint_number);
+                joints_moved += 1;
+            }
+        }
+        try expectEqual(subset.dofs, joints_moved);
+    }
+    // The decision's second step holds: nothing moves, whatever is asked.
+    const held_before: []const f32 = try gpa.dupe(f32, controller.filtered);
+    defer gpa.free(held_before);
+    @memset(asked, 0.0);
+    _ = controller.apply(asked);
+    try expectEqualSlices(f32, held_before, controller.filtered);
+    // The next decision, asking for nothing: each part falls by its own share - three quarters left of a joint's
+    // number, a half of a stiffness.
+    _ = controller.apply(asked);
+    for (0..env_count) |env| {
+        const applied: []const f32 = controller.appliedAction(env);
+        try expectEqual(0.75 * (0.25 * asked_joint[env]), applied[0]);
+        try expectEqual(0.5 * (0.5 * asked_stiffness[env]), applied[subset.dofs]);
+    }
+    // Forgetting the first environment clears its joints and its stiffnesses, and leaves the second's.
+    const second_before: []const f32 = try gpa.dupe(f32, controller.appliedAction(1));
+    defer gpa.free(second_before);
+    controller.forget(0);
+    for (controller.appliedAction(0)) |number| {
+        try expectEqual(@as(f32, 0), number);
+    }
+    try expectEqualSlices(f32, second_before, controller.appliedAction(1));
 }

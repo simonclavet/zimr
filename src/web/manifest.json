@@ -9,6 +9,38 @@
       "functions": []
     },
     {
+      "name": "audio_keyboard",
+      "module": "audio",
+      "stars": 2,
+      "title": "zimr - keyboard",
+      "description": "a playable keyboard of seventeen keys, middle C to the E above the next C: the computer keyboard's two middle rows as white and black keys, or the pointer, sounded by the mixer's instrument",
+      "functions": []
+    },
+    {
+      "name": "audio_mixer",
+      "module": "audio",
+      "stars": 2,
+      "title": "zimr - the mixer",
+      "description": "the engine's mixer, heard and shown: a held tone, blips at a random pan and pitch, the master volume, and on screen the voices playing, the margin queued and how often the output ran dry",
+      "functions": []
+    },
+    {
+      "name": "audio_scale_star",
+      "module": "audio",
+      "stars": 3,
+      "title": "zimr - the major scale in thirds",
+      "description": "the major scale around a circle in thirds, so every chord of the key is three neighbours; press a note or a chord, or the digits 1 to 7, to hear it in Shepard tones",
+      "functions": []
+    },
+    {
+      "name": "audio_scale_star_hands",
+      "module": "audio",
+      "stars": 4,
+      "title": "zimr - the scale star, two hands",
+      "description": "a scale played with two hands: the left chooses a chord, the right plays its notes, and every view lights the same notes in the same colors, one color per degree of the scale",
+      "functions": []
+    },
+    {
       "name": "audio_basic",
       "module": "audio",
       "stars": 2,
@@ -46,6 +78,14 @@
       "stars": 3,
       "title": "zimr - WebGPU - composer drum",
       "description": "an 8-step kick, snare and hat loop baked into one looping sound by composer.Sequence, with a sweeping playhead",
+      "functions": []
+    },
+    {
+      "name": "magic_isomorphic_keyboard",
+      "module": "audio",
+      "stars": 4,
+      "title": "zimr - magic isomorphic keyboard",
+      "description": "the computer keyboard as an instrument on the Tonnetz: a fifth to the right and thirds on the diagonals, so a scale or a chord has one shape in every key; the left side plays the scale's triads",
       "functions": []
     },
     {
@@ -316,7 +356,15 @@
       "module": "core",
       "stars": 3,
       "title": "zimr - WebGPU - hello world",
-      "description": "Hello, World! in the default font: the smallest app that draws text",
+      "description": "Hello, World! in the default font, a circle at the mouse, and a UI slider for its radius: a first look at zimr",
+      "functions": []
+    },
+    {
+      "name": "hello_world_owned_main",
+      "module": "core",
+      "stars": 2,
+      "title": "zimr - WebGPU - hello world, own main",
+      "description": "hello_world with its own main: the example is the program's root and opens each frame itself, so no launcher can host it",
       "functions": []
     },
     {
@@ -1437,6 +1485,22 @@
       "functions": []
     },
     {
+      "name": "zimrnum_fit",
+      "module": "compute",
+      "stars": 3,
+      "title": "zimr - zimrnum fit",
+      "description": "draw a curve and watch a network learn it live - on the CPU inside a job (a Web Worker, or a thread natively) or on the GPU, the GPU learning kit's own kernels on both, the training handed across at a flip",
+      "functions": []
+    },
+    {
+      "name": "zimrnum_train",
+      "module": "compute",
+      "stars": 2,
+      "title": "zimr - zimrnum train",
+      "description": "the XOR network trained end to end on the GPU and on the CPU in one page, a step per frame each, with only the loss read back",
+      "functions": []
+    },
+    {
       "name": "zimrphysics2d_demo",
       "module": "physics",
       "stars": 2,
@@ -1493,6 +1557,14 @@
       "functions": []
     },
     {
+      "name": "cartpole_duel",
+      "module": "robot",
+      "stars": 4,
+      "title": "zimr - cartpole: PPO on the GPU vs MPC on the CPU",
+      "description": "one cartpole, a planner and three learners: MPC planning on the CPU, beside PPO, SAC or SuperTrack learning to hold the same cartpole with their networks trained on the GPU",
+      "functions": []
+    },
+    {
       "name": "catch",
       "module": "robot",
       "stars": 3,
@@ -1517,11 +1589,83 @@
       "functions": []
     },
     {
+      "name": "dance_track",
+      "module": "robot",
+      "stars": 2,
+      "title": "zimr - dance_track",
+      "description": "motion tracking with no learning: a dance retargeted onto a simulated humanoid as PD targets, and the humanoid falls over - the expected outcome, and the reason the learners exist",
+      "functions": []
+    },
+    {
       "name": "geno_dance",
       "module": "robot",
       "stars": 5,
       "title": "zimr - geno + mocap",
       "description": "BVH and FBX capture driving a skinned character and a MuJoCo robot at once",
+      "functions": []
+    },
+    {
+      "name": "geno_fit",
+      "module": "robot",
+      "stars": 3,
+      "title": "zimr - Geno's body, on the captures",
+      "description": "Geno's skeleton moved by the captures exactly as recorded, wearing the collision shapes fitted to its skinned mesh - the training robot's body, judged by eye",
+      "functions": []
+    },
+    {
+      "name": "geno_lab",
+      "module": "robot",
+      "stars": 3,
+      "title": "zimr - the training lab",
+      "description": "the training lab: a run's policy shown on Geno following the dance, any checkpoint a click on the learning curves away, the character draggable; natively it lists and starts trainer runs, the page has no run list",
+      "functions": []
+    },
+    {
+      "name": "geno_mirror",
+      "module": "robot",
+      "stars": 2,
+      "title": "zimr - Geno's clips, mirrored",
+      "description": "Geno's training clips beside their mirror images on the symmetric robot, frame by frame - the references the trainer embeds, with no physics and no learning",
+      "functions": []
+    },
+    {
+      "name": "geno_ppo",
+      "module": "robot",
+      "stars": 4,
+      "title": "zimr - PPO on Geno, learned on this device",
+      "description": "PPO on Geno, learned on this device: the robot built from Geno's skeleton and mesh learning the corrections that keep it with twenty seconds of the dance",
+      "functions": []
+    },
+    {
+      "name": "geno_track",
+      "module": "robot",
+      "stars": 3,
+      "title": "zimr - Geno, servoing a copied clip",
+      "description": "Geno servoing a copied capture on a real floor, through the very PD law a policy acts through - nothing learns and nothing is fitted",
+      "functions": []
+    },
+    {
+      "name": "geno_train",
+      "module": "robot",
+      "stars": 4,
+      "title": "zimr - SuperTrack on Geno, learned on this device",
+      "description": "SuperTrack on Geno, learned on this device: a policy learning to keep the robot with ten seconds of the dance, where the servo alone falls within a second or so",
+      "functions": []
+    },
+    {
+      "name": "getup_frames",
+      "module": "robot",
+      "stars": 2,
+      "title": "zimr - the get-up reference, frame by frame",
+      "description": "the get-up reference posed on the robot one frame at a time, with each foot's height and tilt - can the robot hold the pose it is asked to track?",
+      "functions": []
+    },
+    {
+      "name": "getup_train",
+      "module": "robot",
+      "stars": 4,
+      "title": "zimr - getting up, learned on this device",
+      "description": "learning to track a motion from scratch on this device: a humanoid, a servo and a small PPO policy, getting up off the floor or dancing",
       "functions": []
     },
     {
@@ -1565,6 +1709,22 @@
       "functions": []
     },
     {
+      "name": "ragdoll_compare",
+      "module": "robot",
+      "stars": 3,
+      "title": "zimr - WebGPU - ragdolls: reduced vs maximal",
+      "description": "MuJoCo's humanoid dropped limp twice from the same squat: reduced coordinates in robot.zig against maximal coordinates in zimrphysics, side by side",
+      "functions": []
+    },
+    {
+      "name": "rl_humanoid",
+      "module": "robot",
+      "stars": 3,
+      "title": "zimr - WebGPU - PPO learning to walk, live",
+      "description": "PPO learning humanoid locomotion live in the browser: the rollouts drawn as they are collected, and a better policy falls later",
+      "functions": []
+    },
+    {
       "name": "robot_3d",
       "module": "robot",
       "stars": 3,
@@ -1605,6 +1765,22 @@
       "functions": []
     },
     {
+      "name": "robotgpu_lab",
+      "module": "robot",
+      "stars": 2,
+      "title": "zimr - robotgpu lab",
+      "description": "the GPU simulator's checks in a page: Geno's and the humanoid's worlds stepped on the GPU and on its CPU twin, each check shown agreeing or not",
+      "functions": []
+    },
+    {
+      "name": "robotgpu_sidebyside",
+      "module": "robot",
+      "stars": 3,
+      "title": "zimr - robotgpu, side by side",
+      "description": "the same robot servoing the same motion on two engines at once, robot.zig on the CPU and robotgpu on the GPU, parting only as rounding grows",
+      "functions": []
+    },
+    {
       "name": "rocket",
       "module": "robot",
       "stars": 4,
@@ -1626,6 +1802,14 @@
       "stars": 4,
       "title": "zimr - WebGPU - preview beats feedback",
       "description": "why preview beats feedback when the target is known ahead",
+      "functions": []
+    },
+    {
+      "name": "track_train",
+      "module": "robot",
+      "stars": 4,
+      "title": "zimr - SuperTrack, learned on this device",
+      "description": "SuperTrack learned on this device: the characters stepped on the CPU, everything else on the GPU, and the training data never comes back",
       "functions": []
     },
     {

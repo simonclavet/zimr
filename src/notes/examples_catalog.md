@@ -425,6 +425,7 @@ The `pipeline_*` series is a progression; each step adds one WebGPU mechanism.
 | sph_fluid_2d | 3 | 934 | **CPU version of `fluid_sort`:** the same viscoelastic fluid, about 2000 particles. | KEEP (flagship) |
 | worker_png | 2 | 445 | A slow PNG encode on a worker, so the frame never freezes. | KEEP (flagship) |
 | zimrnum_field | 2 | 743 | A 64×64 field built from zimrnum tensors, evaluated on CPU and GPU, drawn with their difference. | KEEP (flagship) |
+| zimrnum_fit | 3 | 1599 | Draw a curve and watch a network learn it live, on the CPU inside a job (a Web Worker, or a thread natively) or on the GPU — the GPU learning kit's own kernels on both, the training handed across at a flip. The worker tutorial: the job ships the training's state in and out. | KEEP (flagship) |
 | zimrnum_train | — | 301 | An XOR network trained on GPU and CPU in lockstep, loss curves side by side. | KEEP |
 
 ### Audio

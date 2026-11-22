@@ -272,6 +272,13 @@
 // quatFromNormAxisAngle(axis: Vec, angle_rad: f32) Quat
 // quatFromRollPitchYaw(pitch_rad: f32, yaw_rad: f32, roll_rad: f32) Quat
 // quatFromRollPitchYawV(angles: Vec) Quat
+// normalizeQuat(q: Quat) Quat
+// rotateQuatByAngularVel(q: Quat, w: Vec, dt: f32) Quat
+// twoAxis(q: Quat) [6]f32
+// Pose: pos, rot, compose, numbers, fromNumbers
+// poseSeenFrom(viewer: Pose, seen: Pose) [9]f32
+// integratePose(pose: Pose, local_velocity: Vec, local_angular: Vec, dt: f32) Pose
+// poseSeenFromBackward, expRightJacobianTransposeTimes, integratePoseBackward
 //
 // 6. Color functions
 //
@@ -298,6 +305,10 @@
 // ==============================================================================
 
 // copied from std.math for convenience
+//
+// These stay untyped (comptime_float) on purpose, the one kind of global that does: like std.math's, each serves
+// f32 and f64 code alike (`@as(f64, pi)` in codecs, `2.0 * ln2` in f64 tests) at full precision until it meets a
+// typed operand. Typed `f32` they would silently round every f64 use.
 
 /// Euler's number (e)
 pub const euler = 2.71828182845904523536028747135266249775724709369995;
@@ -2174,6 +2185,62 @@ test "zm mishSlope: 3/5 at zero, and the central difference everywhere" {
     }
 }
 
+/// `silu(x) = x * sigmoid(x)` - the Sigmoid Linear Unit, also called swish: the activation of SuperMimic's world
+/// model. Like Mish, it is smooth, unbounded above, and dips a little below zero before it returns to it: its least
+/// value is -0.2785, at x = -1.2785. Unlike Mish, its slope is 1/2 at zero, not 3/5.
+///
+///     x          -20         -1         0     1         20
+///     silu(x)    -4.1e-8     -0.2689    0     0.7311    19.9999999588
+///
+/// It saturates with `sigmoid`: far above zero sigmoid rounds to 1 and silu is x, far below it rounds to 0 and silu to
+/// a zero, with no overflow either way.
+pub fn silu(x: anytype) @TypeOf(x) {
+    if (comptime @typeInfo(@TypeOf(x)) == .vector) {
+        return perLane(silu, x);
+    }
+    requireFloatLike(@TypeOf(x));
+    return x * sigmoid(x);
+}
+
+/// The slope of `silu`:
+///
+///     d/dx [x s(x)] = s + x s (1 - s) = s (1 + x (1 - s)),    s = sigmoid(x)
+///
+/// where s (1 - s) is the slope of the sigmoid - the product form PyTorch's SiLU backward computes, from one sigmoid.
+/// At x = 0 the slope is exactly 1/2; it rises a little above 1 (1.0998 at x = 2.3994) before it settles on 1, and
+/// it is 0 where SiLU is least.
+pub fn siluSlope(x: anytype) @TypeOf(x) {
+    if (comptime @typeInfo(@TypeOf(x)) == .vector) {
+        return perLane(siluSlope, x);
+    }
+    requireFloatLike(@TypeOf(x));
+    const T = @TypeOf(x);
+    const share: T = sigmoid(x);
+    const rest: T = 1 - share;
+    return share * (1 + x * rest);
+}
+
+test "zm silu: x times its sigmoid, its least value, its slope 1/2 at zero and the central difference everywhere" {
+    try expectEqual(@as(f64, 0), silu(@as(f64, 0)));
+    try expectApproxEqAbs(@as(f64, -0.2689414213699951), silu(@as(f64, -1)), 1e-16);
+    try expectApproxEqAbs(@as(f64, 0.7310585786300049), silu(@as(f64, 1)), 1e-16);
+    // Its least value, where the slope crosses zero: -0.27846 at x = -1.27846.
+    try expectApproxEqAbs(@as(f64, 0), siluSlope(@as(f64, -1.2784645427610738)), 1e-12);
+    try expectApproxEqAbs(@as(f64, -0.27846454276107380), silu(@as(f64, -1.2784645427610738)), 1e-12);
+    try expectApproxEqAbs(@as(f64, 0.5), siluSlope(@as(f64, 0)), 1e-16);
+    const h: f64 = 1e-6;
+    var x: f64 = -25;
+    while (x <= 25) : (x += 0.53) {
+        const difference: f64 = (silu(x + h) - silu(x - h)) / (2 * h);
+        try expectApproxEqAbs(difference, siluSlope(x), 1e-8);
+    }
+    // Saturated, both ways: x itself and slope 1 far above; a zero and slope 0 far below - finite.
+    try expectEqual(@as(f32, 100), silu(@as(f32, 100)));
+    try expectEqual(@as(f32, 1), siluSlope(@as(f32, 100)));
+    try expect(@abs(silu(@as(f32, -100))) < 1e-30);
+    try expect(@abs(siluSlope(@as(f32, -100))) < 1e-30);
+}
+
 pub fn gelu(x: anytype) @TypeOf(x) {
     if (comptime @typeInfo(@TypeOf(x)) == .vector) {
         return perLane(gelu, x);
@@ -3253,6 +3320,61 @@ fn panicfOnCpu(
 /// message); GPU + ship lower to bare `unreachable` (free, UB if it fires).
 /// Its GPU and CPU forms follow `assertf`'s, the GPU's taking the location at compile time.
 pub const panicf = if (is_gpu) panicfOnGpu else panicfOnCpu;
+
+// ---- The gap a check measures ----
+
+/// THE GAP BETWEEN A NUMBER MEASURED AND THE NUMBER IT IS CHECKED AGAINST, as a multiple of `unit` - the size a caller
+/// measures against: an epsilon of the quantity's scale, the magnitude of a sum, or 1 for a plain difference. Two
+/// finite numbers are `|measured - reference| / unit` apart. A NUMBER THAT IS NOT FINITE - a NaN, an infinity - is
+/// within rounding of nothing but itself:
+///
+///     measured    reference   gap
+///     finite      finite      |measured - reference| / unit
+///     NaN         NaN         0           the same on both sides
+///     +inf        +inf        0           the same infinity (-inf and -inf alike)
+///     anything else           infinite    one side finite and the other not, or two different non-finite values
+///
+/// An infinite gap is past every bar. It is decided here, number by number, because a caller keeps its largest gap
+/// with `@max`, and `@max` returns its other operand when one is a NaN: the difference between a NaN and a number is
+/// a NaN, which `@max` would drop - and a kernel that wrote a NaN would be within every bar. Every check that compares
+/// a computation with its reference measures its gaps so - the device against its twin, a kit against zimrnum's graph.
+pub fn gapInUnits(measured: f32, reference: f32, unit: f32) f32 {
+    // A unit that is zero or not finite would turn a real difference into a NaN or into nothing.
+    const unit_measures: bool = unit > 0 and isFinite(unit);
+    assertf(unit_measures, @src(), "gapInUnits: a unit of {d}", .{unit});
+    const measured_is_finite: bool = isFinite(measured);
+    const reference_is_finite: bool = isFinite(reference);
+    // The likely case first: two finite numbers.
+    if (measured_is_finite and reference_is_finite) {
+        return @abs(measured - reference) / unit;
+    }
+    // One finite, the other not.
+    if (measured_is_finite != reference_is_finite) {
+        return inf(f32);
+    }
+    // Neither is finite: they agree when they are the same - two NaNs (a NaN equals nothing, itself included, so it
+    // is asked by name), or two infinities of one sign.
+    const both_are_nan: bool = isNan(measured) and isNan(reference);
+    const same_infinity: bool = measured == reference;
+    if (both_are_nan or same_infinity) {
+        return 0;
+    }
+    return inf(f32);
+}
+
+test "zm gapInUnits: a plain difference between finite numbers, and a number that is not finite far from every other" {
+    try expectEqual(@as(f32, 0.25), gapInUnits(1.5, 1.0, 2.0));
+    try expectEqual(@as(f32, 0), gapInUnits(nan(f32), nan(f32), 1.0));
+    try expectEqual(@as(f32, 0), gapInUnits(inf(f32), inf(f32), 1.0));
+    try expectEqual(inf(f32), gapInUnits(nan(f32), 1.0, 1.0));
+    try expectEqual(inf(f32), gapInUnits(1.0, nan(f32), 1.0));
+    try expectEqual(inf(f32), gapInUnits(inf(f32), -inf(f32), 1.0));
+    // What the rule is for: a largest gap kept with `@max` keeps the NaN's gap, where the bare difference vanishes.
+    const bare: f32 = @max(@as(f32, 0.5), @abs(nan(f32) - 1.0));
+    const measured: f32 = @max(@as(f32, 0.5), gapInUnits(nan(f32), 1.0, 1.0));
+    try expectEqual(@as(f32, 0.5), bare);
+    try expectEqual(inf(f32), measured);
+}
 
 //
 // 1. Initialization functions
@@ -7488,6 +7610,501 @@ test "zm.quaternion.quatFromRollPitchYawV" {
         try expectVecApproxEqAbs(m0[1], m1[1], 0.0001);
         try expectVecApproxEqAbs(m0[2], m1[2], 0.0001);
         try expectVecApproxEqAbs(m0[3], m1[3], 0.0001);
+    }
+}
+
+// ---- Rigid poses ----
+//
+// A pose is a position and a rotation - where a frame's origin is and how its axes are turned, with no scale (a
+// `Transform` carries one). Below: a quaternion kept on the unit sphere, turned by an angular velocity, and read as
+// two axes; one pose placed inside another, one read as seen from another in the nine numbers a network takes, one
+// moved by velocities given in its own frame - and a loss's gradient carried back through the last two. Together they
+// move a character's root through a learned world model's imagination, and carry a policy's gradient after it.
+
+/// Normalize a quaternion, falling back to identity if it has collapsed. Integration and user input both walk
+/// quaternions off the unit sphere, and a zero-norm quaternion has no orientation to recover - identity keeps a
+/// simulation running instead of emitting NaN, where `normalize4` would divide by zero. robot.zig's kinematics and
+/// robotgpu's kernels share it.
+pub fn normalizeQuat(q: Quat) Quat {
+    const n: f32 = @sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+    return if (n > 1.0e-9) q / splat(n) else quat_identity;
+}
+
+/// Rotate `q` by an angular velocity `w`, given in `q`'s own frame, applied for `dt`. Exact for a constant `w`: build
+/// the rotation the velocity describes over the interval - the angle |w| dt about w - and compose it on the right,
+/// where a frame's own increment goes. A velocity too small to have an axis leaves `q` as it is. robot.zig's
+/// integrator (`integrateJointPosition`) and robotgpu's share it.
+pub fn rotateQuatByAngularVel(q: Quat, w: Vec, dt: f32) Quat {
+    const speed: f32 = length3(w);
+    if (speed < 1.0e-12) {
+        return q;
+    }
+    const axis: Vec = w / splat(speed);
+    const delta: Quat = quatFromNormAxisAngle(axis, speed * dt);
+    // The velocity is in the frame's own axes, so the increment applies on the right.
+    return normalizeQuat(qmul(q, delta));
+}
+
+/// The angle between two rotations, taken from the vector part of their difference so that small angles stay accurate
+/// in f32 (`acos` of a w near 1 loses half its digits): the judgement's measure of how far a root is turned from its
+/// reference's (robot.zig's `TrackingError.root_rotation`), and the imagined root's on the device.
+pub fn angleBetween(a: Quat, b: Quat) f32 {
+    var relative: Quat = qmul(a, conjugate(b));
+    if (relative[3] < 0.0) {
+        relative = -relative;
+    }
+    const half_sine: f32 = @min(1.0, length3(vec(relative[0], relative[1], relative[2])));
+    return 2.0 * asinRad(half_sine);
+}
+
+/// A ROTATION AS TWO AXES: the first two columns of its matrix - where it turns the x and the y axis. What a network
+/// sees and predicts instead of a quaternion, being continuous and free of the quaternion's sign.
+pub fn twoAxis(q: Quat) [6]f32 {
+    const x: Vec = rotate(q, vec(1, 0, 0));
+    const y: Vec = rotate(q, vec(0, 1, 0));
+    return .{ x[0], x[1], x[2], y[0], y[1], y[2] };
+}
+
+/// Some unit vector perpendicular to the unit vector `a`: `a` crossed with whichever of x and y it leans on least -
+/// against x while their cosine is under 0.9, so the cross product is at least 0.43 long before it is normalised.
+fn orthogonalTo(a: Vec) Vec {
+    const axis: Vec = if (@abs(a[0]) < 0.9) vec(1, 0, 0) else vec(0, 1, 0);
+    return normalize3(cross(a, axis));
+}
+
+/// The quaternion of the rotation whose matrix has these columns. Shepperd's method: build it from
+/// whichever diagonal term is largest, so the square root is never taken of something near zero.
+fn quatFromColumns(x: Vec, y: Vec, z: Vec) Quat {
+    const trace: f32 = x[0] + y[1] + z[2];
+    var q: Quat = undefined;
+    if (trace > 0.0) {
+        const s: f32 = @sqrt(trace + 1.0) * 2.0;
+        q = .{ (y[2] - z[1]) / s, (z[0] - x[2]) / s, (x[1] - y[0]) / s, 0.25 * s };
+    } else if (x[0] > y[1] and x[0] > z[2]) {
+        const s: f32 = @sqrt(1.0 + x[0] - y[1] - z[2]) * 2.0;
+        q = .{ 0.25 * s, (y[0] + x[1]) / s, (z[0] + x[2]) / s, (y[2] - z[1]) / s };
+    } else if (y[1] > z[2]) {
+        const s: f32 = @sqrt(1.0 + y[1] - x[0] - z[2]) * 2.0;
+        q = .{ (y[0] + x[1]) / s, 0.25 * s, (z[1] + y[2]) / s, (z[0] - x[2]) / s };
+    } else {
+        const s: f32 = @sqrt(1.0 + z[2] - x[0] - y[1]) * 2.0;
+        q = .{ (z[0] + x[2]) / s, (z[1] + y[2]) / s, 0.25 * s, (x[1] - y[0]) / s };
+    }
+    return normalize4(q);
+}
+
+/// Two axes back to a rotation. They needn't be unit or perpendicular - whatever a network hands
+/// over gets orthonormalised: the first axis is taken as it is, the second is straightened against
+/// it, and the third follows from the cross product.
+pub fn fromTwoAxis(axes: [6]f32) Quat {
+    // Total, on purpose. The axes come from a network, and early in training a network happily
+    // outputs two near-zero vectors, or two parallel ones - either of which would divide by zero
+    // here and hand NaN to everything downstream, where it is very hard to trace back. So a
+    // degenerate axis falls back to a fixed one, which is wrong but finite, and training moves on.
+    const first: Vec = vec(axes[0], axes[1], axes[2]);
+    const a: Vec = if (length3(first) > 1.0e-6) normalize3(first) else vec(1, 0, 0);
+    const raw: Vec = vec(axes[3], axes[4], axes[5]);
+    const across: Vec = raw - a * splat(dot3(raw, a));
+    const b: Vec = if (length3(across) > 1.0e-6)
+        normalize3(across)
+    else
+        orthogonalTo(a);
+    const c: Vec = cross(a, b);
+    return quatFromColumns(a, b, c);
+}
+
+/// How many numbers a pose takes where it is written down (`Pose.numbers`): its position's three, then its rotation's
+/// four - the quaternion as zm holds it, its scalar last.
+pub const pose_numbers: usize = 7;
+
+/// A rigid placement in some frame. Named rather than anonymous because a pose is a real concept - bodies, joints,
+/// sites and a character's root all have one, and `compose` is how they relate.
+pub const Pose = struct {
+    pos: Vec = vec_zero,
+    rot: Quat = quat_identity,
+
+    pub const identity: Pose = .{};
+
+    /// Place `local` inside `self`. Rotation composes; translation is this pose's origin plus the child's offset
+    /// rotated into this frame.
+    ///
+    /// The order is the whole content of the function: `qmul(a, b)` applies `b` FIRST, so `parent.compose(local)`
+    /// reads "start at the parent, then go local", which is the direction a tree walk travels. Swapping the operands
+    /// compiles and puts every body in the wrong place in a way that still looks like a robot.
+    pub fn compose(self: Pose, local: Pose) Pose {
+        return .{
+            .pos = self.pos + rotate(self.rot, local.pos),
+            .rot = qmul(self.rot, local.rot),
+        };
+    }
+
+    /// The placement that undoes this one: `pose.compose(pose.inverse())` is the identity. A pose of the world seen
+    /// from inside its own frame.
+    pub fn inverse(self: Pose) Pose {
+        const turned_back: Quat = conjugate(self.rot);
+        return .{
+            .pos = rotate(turned_back, -self.pos),
+            .rot = turned_back,
+        };
+    }
+
+    /// The pose's numbers, in the order a record or a table writes them (`pose_numbers`).
+    pub fn numbers(self: Pose) [pose_numbers]f32 {
+        const position: Vec = self.pos;
+        const rotation: Quat = self.rot;
+        return .{ position[0], position[1], position[2], rotation[0], rotation[1], rotation[2], rotation[3] };
+    }
+
+    /// A pose read back from its numbers (`numbers`).
+    pub fn fromNumbers(written: [pose_numbers]f32) Pose {
+        const pose: Pose = .{
+            .pos = vec(written[0], written[1], written[2]),
+            .rot = .{ written[3], written[4], written[5], written[6] },
+        };
+        return pose;
+    }
+};
+
+/// How many numbers `poseSeenFrom` writes: 3 for the position, 6 for the rotation's two axes.
+pub const pose_seen_numbers: usize = 9;
+
+/// The two axes of no rotation at all (`twoAxis` of the identity): what `poseSeenFrom` takes away, so two poses alike
+/// read as zeros.
+const no_rotation_axes = [6]f32{ 1, 0, 0, 0, 1, 0 };
+
+/// A POSE SEEN FROM ANOTHER, in nine numbers a network reads: where `seen` is, seen from `viewer` - its position less
+/// the viewer's, turned into the viewer's frame, and its rotation relative to the viewer's as two axes (`twoAxis`),
+/// less the two axes of no rotation at all, so a pose exactly where the viewer is reads as nine zeros:
+///
+///     position   R_v^-1 (p_s - p_v)                       in the viewer's frame
+///     rotation   twoAxis(R_v^-1 R_s) - (1 0 0, 0 1 0)     0 when the two turn alike
+///
+/// Metres and unit axes, of the order of normalised features: a network can read them as they are. A character's
+/// root target is one (robot.zig's `root_target_size`): the reference's root, seen from the character's.
+pub fn poseSeenFrom(viewer: Pose, seen: Pose) [pose_seen_numbers]f32 {
+    const to_local: Quat = conjugate(viewer.rot);
+    const position: Vec = rotate(to_local, seen.pos - viewer.pos);
+    const axes: [6]f32 = twoAxis(qmul(to_local, seen.rot));
+    var numbers_seen: [pose_seen_numbers]f32 = undefined;
+    numbers_seen[0] = position[0];
+    numbers_seen[1] = position[1];
+    numbers_seen[2] = position[2];
+    // Element by element, at indices known when compiling: a kernel cannot slice an array of its own.
+    inline for (0..6) |axis_number| {
+        numbers_seen[3 + axis_number] = axes[axis_number] - no_rotation_axes[axis_number];
+    }
+    return numbers_seen;
+}
+
+/// THE POSE `poseSeenFrom` SAW, back from its nine numbers: where the seen pose is in the viewer's own frame - its
+/// position as seen, and its rotation from the two axes seen (the axes of no rotation added back, `fromTwoAxis`). The
+/// viewer is the identity of its own frame, so `poseSeenFrom(.identity, poseFromSeen(numbers))` gives the numbers
+/// back. A planner that knows a character's root only through its root target places the reference's root so.
+pub fn poseFromSeen(numbers_seen: [pose_seen_numbers]f32) Pose {
+    var axes: [6]f32 = undefined;
+    inline for (0..6) |axis_number| {
+        axes[axis_number] = numbers_seen[3 + axis_number] + no_rotation_axes[axis_number];
+    }
+    const pose: Pose = .{
+        .pos = vec(numbers_seen[0], numbers_seen[1], numbers_seen[2]),
+        .rot = fromTwoAxis(axes),
+    };
+    return pose;
+}
+
+/// A POSE MOVED FOR `dt` BY VELOCITIES IN ITS OWN FRAME: the rotation turned by the angular velocity
+/// (`rotateQuatByAngularVel`, the frame's own increment, as a physics engine turns a free joint), then the position
+/// moved by the velocity, turned into the world by the NEW rotation - semi-implicit Euler: the velocities are the
+/// step's end's, as a world model predicts them for the state after the step.
+///
+///     rotation'   R exp(w dt)          w the angular velocity in the pose's frame
+///     position'   p + R' v dt          v the velocity in the pose's frame, R' the turned rotation
+pub fn integratePose(pose: Pose, local_velocity: Vec, local_angular: Vec, dt: f32) Pose {
+    const turned: Quat = rotateQuatByAngularVel(pose.rot, local_angular, dt);
+    const world_velocity: Vec = rotate(turned, local_velocity);
+    const moved: Pose = .{
+        .pos = pose.pos + world_velocity * splat(dt),
+        .rot = turned,
+    };
+    return moved;
+}
+
+/// A LOSS's GRADIENT AT A POSE: with respect to its position, in world axes, and to its rotation - the rotation's as
+/// a small turn in the pose's own frame: the loss changes by `rot . dtheta` when the rotation R becomes R exp(dtheta).
+/// Three numbers for the three ways a rotation can turn, where a quaternion's four are tied by its unit length.
+pub const PoseGradient = struct {
+    pos: Vec = vec_zero,
+    rot: Vec = vec_zero,
+};
+
+/// THE GRADIENT OF `poseSeenFrom` AT ITS VIEWER: the loss's gradient at the nine numbers, `numbers_gradient`, carried
+/// to the viewer's pose. The seen pose is the data the viewer is compared with: its gradient is not asked for. With a
+/// the position seen, x and y the two axes seen (before the identity's are taken away), and g_a, g_x, g_y their parts
+/// of the gradient:
+///
+///     the viewer moved by dp:            a changes by -R_v^-1 dp             g_pos = -R_v g_a
+///     the viewer turned by dtheta:       a, x, y each change by -dtheta x .   g_rot = g_a x a + g_x x x + g_y x y
+///
+/// - the turn's line because turning the viewer turns everything it sees the other way, and g . (u x dtheta) is
+/// (g x u) . dtheta.
+pub fn poseSeenFromBackward(
+    viewer: Pose,
+    seen: Pose,
+    numbers_gradient: [pose_seen_numbers]f32,
+) PoseGradient {
+    const to_local: Quat = conjugate(viewer.rot);
+    const position_seen: Vec = rotate(to_local, seen.pos - viewer.pos);
+    const rotation_seen: Quat = qmul(to_local, seen.rot);
+    const x_seen: Vec = rotate(rotation_seen, vec(1, 0, 0));
+    const y_seen: Vec = rotate(rotation_seen, vec(0, 1, 0));
+    const position_gradient: Vec = vec(numbers_gradient[0], numbers_gradient[1], numbers_gradient[2]);
+    const x_gradient: Vec = vec(numbers_gradient[3], numbers_gradient[4], numbers_gradient[5]);
+    const y_gradient: Vec = vec(numbers_gradient[6], numbers_gradient[7], numbers_gradient[8]);
+    const turn_gradient: Vec = cross(position_gradient, position_seen) +
+        cross(x_gradient, x_seen) + cross(y_gradient, y_seen);
+    const gradient: PoseGradient = .{
+        .pos = -rotate(viewer.rot, position_gradient),
+        .rot = turn_gradient,
+    };
+    return gradient;
+}
+
+/// THE ROTATION EXPONENTIAL's TRANSPOSED RIGHT JACOBIAN, times `v`: J_r(phi)^T v, phi the `rotation_vector`. The right
+/// Jacobian says how the rotation exp(phi) - the angle |phi| about phi - turns, measured in its own frame, when its
+/// rotation vector changes:
+///
+///     exp(phi + dphi) = exp(phi) exp(J_r(phi) dphi)
+///     J_r(phi) = I - a [phi]x + b [phi]x^2        a = (1 - cos t)/t^2,  b = (t - sin t)/t^3,  t = |phi|
+///
+/// [phi]x being antisymmetric and its square symmetric, J_r(phi)^T = I + a [phi]x + b [phi]x^2, so
+///
+///     J_r(phi)^T v = v + a phi x v + b phi x (phi x v)
+///
+/// - what a reverse pass needs: a gradient at the turn, carried back to the rotation vector. Both coefficients are
+/// 0/0 at t = 0 and lose their digits to cancellation near it; below t = 1 their Taylor series stand in, five terms
+/// each, exact there to float precision:
+///
+///     a = 1/2 - t^2/24 + t^4/720 - t^6/40320 + t^8/3628800
+///     b = 1/6 - t^2/120 + t^4/5040 - t^6/362880 + t^8/39916800
+pub fn expRightJacobianTransposeTimes(rotation_vector: Vec, v: Vec) Vec {
+    const angle: f32 = length3(rotation_vector);
+    const angle_squared: f32 = angle * angle;
+    var a: f32 = undefined;
+    var b: f32 = undefined;
+    if (angle < 1.0) {
+        a = 0.5 + angle_squared * (-1.0 / 24.0 + angle_squared * (1.0 / 720.0 +
+            angle_squared * (-1.0 / 40320.0 + angle_squared / 3628800.0)));
+        b = 1.0 / 6.0 + angle_squared * (-1.0 / 120.0 + angle_squared * (1.0 / 5040.0 +
+            angle_squared * (-1.0 / 362880.0 + angle_squared / 39916800.0)));
+    } else {
+        const sine_cosine: [2]f32 = sincosRad(angle);
+        a = (1.0 - sine_cosine[1]) / angle_squared;
+        b = (angle - sine_cosine[0]) / (angle_squared * angle);
+    }
+    const once: Vec = cross(rotation_vector, v);
+    const twice: Vec = cross(rotation_vector, once);
+    return v + once * splat(a) + twice * splat(b);
+}
+
+/// THE GRADIENTS AT A POSE INTEGRATION's THREE INPUTS (`integratePoseBackward`): the pose before it, the velocity and
+/// the angular velocity.
+pub const PoseIntegrationGradients = struct {
+    pose: PoseGradient,
+    local_velocity: Vec,
+    local_angular: Vec,
+};
+
+/// THE GRADIENT OF `integratePose` AT ITS INPUTS, from the loss's gradient at the moved pose, `moved_gradient`. With
+/// R' the turned rotation, v and w the two velocities, E = exp(w dt) the step's turn, and g_p, g_rot the moved pose's
+/// gradient:
+///
+///     the velocity            p' moves by R' dv dt                        g_v   = dt R'^-1 g_p
+///     the turned rotation     p' moves too, by R' (dtheta x v) dt          G     = g_rot + v x g_v
+///     the rotation before     R' = R E: R turned by dtheta is R' by E^-1 dtheta      g_rot before = E G
+///     the angular velocity    exp((w + dw) dt) = E exp(J_r(w dt) dw dt)              g_w   = dt J_r(w dt)^T G
+///     the position before     p' moves as p does                          g_p before = g_p
+///
+/// J_r is the rotation exponential's right Jacobian (`expRightJacobianTransposeTimes`). Every quantity is recomputed
+/// from the inputs, as `integratePose` computes it: the reverse pass needs only what its forward pass was given.
+pub fn integratePoseBackward(
+    pose: Pose,
+    local_velocity: Vec,
+    local_angular: Vec,
+    dt: f32,
+    moved_gradient: PoseGradient,
+) PoseIntegrationGradients {
+    const turned: Quat = rotateQuatByAngularVel(pose.rot, local_angular, dt);
+    // The step's turn E, as `rotateQuatByAngularVel` builds it: the identity turned by the angular velocity.
+    const step_turn: Quat = rotateQuatByAngularVel(quat_identity, local_angular, dt);
+    const step_turn_vector: Vec = local_angular * splat(dt);
+    const velocity_gradient: Vec = rotate(conjugate(turned), moved_gradient.pos) * splat(dt);
+    const turned_gradient: Vec = moved_gradient.rot + cross(local_velocity, velocity_gradient);
+    const angular_gradient: Vec = expRightJacobianTransposeTimes(step_turn_vector, turned_gradient) * splat(dt);
+    const gradients: PoseIntegrationGradients = .{
+        .pose = .{
+            .pos = moved_gradient.pos,
+            .rot = rotate(step_turn, turned_gradient),
+        },
+        .local_velocity = velocity_gradient,
+        .local_angular = angular_gradient,
+    };
+    return gradients;
+}
+
+test "zm.pose.poseSeenFrom" {
+    // Poses alike: nine zeros. The viewer turned a quarter left (facing +y) and a pose a metre ahead of it, turned
+    // alike: a metre ahead, along the viewer's x. A pose turned a further quarter left: its x axis along the viewer's
+    // y, its y along the viewer's -x.
+    const quarter_left: Quat = quatFromAxisAngle(vec(0, 0, 1), 0.5 * pi);
+    const half_turn_left: Quat = quatFromAxisAngle(vec(0, 0, 1), pi);
+    const viewer: Pose = .{ .pos = vec(2, 3, 0.9), .rot = quarter_left };
+    const alike: [pose_seen_numbers]f32 = poseSeenFrom(viewer, viewer);
+    for (alike) |number| {
+        try expectApproxEqAbs(0, number, 1e-6);
+    }
+    const ahead: Pose = .{ .pos = vec(2, 4, 0.9), .rot = quarter_left };
+    const seen_ahead: [pose_seen_numbers]f32 = poseSeenFrom(viewer, ahead);
+    const expected_ahead = [pose_seen_numbers]f32{ 1, 0, 0, 0, 0, 0, 0, 0, 0 };
+    const turned: Pose = .{ .pos = viewer.pos, .rot = half_turn_left };
+    const seen_turned: [pose_seen_numbers]f32 = poseSeenFrom(viewer, turned);
+    const expected_turned = [pose_seen_numbers]f32{ 0, 0, 0, -1, 1, 0, -1, -1, 0 };
+    for (seen_ahead, expected_ahead, seen_turned, expected_turned) |a, a_expected, t, t_expected| {
+        try expectApproxEqAbs(a_expected, a, 1e-5);
+        try expectApproxEqAbs(t_expected, t, 1e-5);
+    }
+}
+
+test "zm.pose.poseFromSeen and the inverse" {
+    // The pose seen, back from its nine numbers, is where the seen pose is in the viewer's frame: the viewer's inverse
+    // composed with it - and seen from the identity, it gives the numbers back. A pose composed with its inverse is
+    // the identity.
+    const viewer: Pose = .{ .pos = vec(2, 3, 0.9), .rot = quatFromAxisAngle(normalize3(vec(0.2, -0.3, 1)), 0.7) };
+    const seen: Pose = .{ .pos = vec(2.5, 1, 1.1), .rot = quatFromAxisAngle(normalize3(vec(-0.4, 0.1, 1)), -2.1) };
+    const numbers_seen: [pose_seen_numbers]f32 = poseSeenFrom(viewer, seen);
+    const back: Pose = poseFromSeen(numbers_seen);
+    const relative: Pose = viewer.inverse().compose(seen);
+    try expectApproxEqAbs(0, length3(back.pos - relative.pos), 1e-5);
+    try expectApproxEqAbs(0, angleBetween(back.rot, relative.rot), 1e-3);
+    const seen_again: [pose_seen_numbers]f32 = poseSeenFrom(.identity, back);
+    for (numbers_seen, seen_again) |number, again| {
+        try expectApproxEqAbs(number, again, 1e-5);
+    }
+    const undone: Pose = viewer.compose(viewer.inverse());
+    try expectApproxEqAbs(0, length3(undone.pos), 1e-6);
+    try expectApproxEqAbs(0, angleBetween(undone.rot, quat_identity), 1e-3);
+}
+
+test "zm.pose.integratePose" {
+    // Forward at 1 m/s along its own x while turning left at 1 rad/s, in steps of 1/240 s for a second: the circle of
+    // radius 1 - the yaw 1 radian, the position (sin 1, 1 - cos 1) - to the semi-implicit step's first order.
+    const step_seconds: f32 = 1.0 / 240.0;
+    var pose: Pose = .identity;
+    var steps_taken: u32 = 0;
+    while (steps_taken < 240) : (steps_taken += 1) {
+        pose = integratePose(pose, vec(1, 0, 0), vec(0, 0, 1), step_seconds);
+    }
+    const expected_position: Vec = vec(@sin(@as(f32, 1)), 1 - @cos(@as(f32, 1)), 0);
+    const facing: Vec = rotate(pose.rot, vec(1, 0, 0));
+    const expected_facing: Vec = vec(@cos(@as(f32, 1)), @sin(@as(f32, 1)), 0);
+    const position_gap: f32 = length3(pose.pos - expected_position);
+    try expectApproxEqAbs(0, position_gap, 0.005);
+    const facing_gap: f32 = length3(facing - expected_facing);
+    try expectApproxEqAbs(0, facing_gap, 1e-4);
+    // Written down and read back, a pose is itself.
+    const read_back: Pose = .fromNumbers(pose.numbers());
+    try expectVecApproxEqAbs(pose.pos, read_back.pos, 0);
+    try expectVecApproxEqAbs(pose.rot, read_back.rot, 0);
+}
+
+test "zm.pose.expRightJacobianTransposeTimes" {
+    // Against the exponential itself: J_r(phi)'s column i is how exp(phi) turns, in its own frame, as phi moves along
+    // axis i - the rotation carrying exp(phi) to exp(phi + h e_i), in exp(phi)'s frame (`subQuat`), over h - and
+    // (J_r^T v)_i is that column's dot with v. Angles near zero, on both sides of the series' end at 1, and past it.
+    const v: Vec = vec(0.4, -1.3, 0.8);
+    const directions = [_]Vec{ vec(0.6, 0.0, 0.8), normalize3(vec(-0.3, 0.9, 0.3)) };
+    const angles = [_]f32{ 1e-4, 0.3, 0.99, 1.01, 2.4 };
+    const nudge: f32 = 1e-2;
+    for (directions) |direction| {
+        for (angles) |angle| {
+            const rotation_vector: Vec = direction * splat(angle);
+            const product: Vec = expRightJacobianTransposeTimes(rotation_vector, v);
+            const turn: Quat = rotateQuatByAngularVel(quat_identity, rotation_vector, 1);
+            // At indices known when compiling: a vector's lane is chosen by one.
+            inline for (0..3) |axis_index| {
+                var unit: Vec = vec_zero;
+                unit[axis_index] = 1;
+                const nudge_vector: Vec = unit * splat(nudge);
+                const ahead: Quat = rotateQuatByAngularVel(quat_identity, rotation_vector + nudge_vector, 1);
+                const back: Quat = rotateQuatByAngularVel(quat_identity, rotation_vector - nudge_vector, 1);
+                const column: Vec = (subQuat(ahead, turn) - subQuat(back, turn)) / splat(2 * nudge);
+                try expectApproxEqAbs(dot3(column, v), product[axis_index], 5e-4);
+            }
+        }
+    }
+}
+
+/// THE BACKWARDS' TEST LOSS: a fixed weighting of the nine numbers of `seen`, seen from `before` moved by the two
+/// velocities - a loss that reads everything `integratePose` and `poseSeenFrom` make.
+fn testPoseLoss(
+    before: Pose,
+    local_velocity: Vec,
+    local_angular: Vec,
+    dt: f32,
+    seen: Pose,
+    weights: [pose_seen_numbers]f32,
+) f32 {
+    const moved: Pose = integratePose(before, local_velocity, local_angular, dt);
+    const numbers_seen: [pose_seen_numbers]f32 = poseSeenFrom(moved, seen);
+    var loss: f32 = 0;
+    for (numbers_seen, weights) |number, weight| {
+        loss += number * weight;
+    }
+    return loss;
+}
+
+test "zm.pose.backward" {
+    // The gradient of `testPoseLoss` by the two backwards, against central differences: each of the velocities'
+    // numbers and the position's nudged each way, and the rotation before turned each way about each of its own
+    // axes - R exp(+-h e_i), what its gradient measures. At two step lengths: the step's turn |w| dt below 1 (the
+    // right Jacobian's series) and above it (its closed form).
+    const before: Pose = .{ .pos = vec(0.3, -1.2, 0.9), .rot = normalizeQuat(quat(0.2, -0.1, 0.4, 0.9)) };
+    const seen: Pose = .{ .pos = vec(1.1, 0.4, 0.8), .rot = normalizeQuat(quat(-0.3, 0.2, 0.1, 0.8)) };
+    const local_velocity: Vec = vec(1.3, -0.4, 0.2);
+    const local_angular: Vec = vec(0.7, 2.1, -1.4);
+    const weights = [pose_seen_numbers]f32{ 0.7, -1.1, 0.4, 0.9, 0.3, -0.6, -0.2, 1.3, 0.5 };
+    const nudge: f32 = 1e-3;
+    const tolerance: f32 = 2e-3;
+    const step_lengths = [2]f32{ 0.1, 0.6 };
+    for (step_lengths) |dt| {
+        const moved: Pose = integratePose(before, local_velocity, local_angular, dt);
+        const moved_gradient: PoseGradient = poseSeenFromBackward(moved, seen, weights);
+        const gradients: PoseIntegrationGradients =
+            integratePoseBackward(before, local_velocity, local_angular, dt, moved_gradient);
+        // At indices known when compiling: a vector's lane is chosen by one.
+        inline for (0..3) |axis_index| {
+            var unit: Vec = vec_zero;
+            unit[axis_index] = 1;
+            const nudge_vector: Vec = unit * splat(nudge);
+            const twice_nudge: f32 = 2 * nudge;
+            const faster: f32 = testPoseLoss(before, local_velocity + nudge_vector, local_angular, dt, seen, weights);
+            const slower: f32 = testPoseLoss(before, local_velocity - nudge_vector, local_angular, dt, seen, weights);
+            try expectApproxEqAbs((faster - slower) / twice_nudge, gradients.local_velocity[axis_index], tolerance);
+            const spun_up: f32 = testPoseLoss(before, local_velocity, local_angular + nudge_vector, dt, seen, weights);
+            const spun_low: f32 = testPoseLoss(before, local_velocity, local_angular - nudge_vector, dt, seen, weights);
+            try expectApproxEqAbs((spun_up - spun_low) / twice_nudge, gradients.local_angular[axis_index], tolerance);
+            const moved_ahead: Pose = .{ .pos = before.pos + nudge_vector, .rot = before.rot };
+            const moved_back: Pose = .{ .pos = before.pos - nudge_vector, .rot = before.rot };
+            const from_ahead: f32 = testPoseLoss(moved_ahead, local_velocity, local_angular, dt, seen, weights);
+            const from_back: f32 = testPoseLoss(moved_back, local_velocity, local_angular, dt, seen, weights);
+            try expectApproxEqAbs((from_ahead - from_back) / twice_nudge, gradients.pose.pos[axis_index], tolerance);
+            // R exp(+-h e_i): the rotation turned about its own axis i, for a time of +-h at unit speed.
+            const turned_ahead: Pose = .{ .pos = before.pos, .rot = rotateQuatByAngularVel(before.rot, unit, nudge) };
+            const turned_back: Pose = .{ .pos = before.pos, .rot = rotateQuatByAngularVel(before.rot, unit, -nudge) };
+            const from_turned_ahead: f32 = testPoseLoss(turned_ahead, local_velocity, local_angular, dt, seen, weights);
+            const from_turned_back: f32 = testPoseLoss(turned_back, local_velocity, local_angular, dt, seen, weights);
+            const turn_slope: f32 = (from_turned_ahead - from_turned_back) / twice_nudge;
+            try expectApproxEqAbs(turn_slope, gradients.pose.rot[axis_index], tolerance);
+        }
     }
 }
 //

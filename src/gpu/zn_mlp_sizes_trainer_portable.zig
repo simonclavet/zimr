@@ -8,8 +8,13 @@
 //! 16 windows a batch, a replay of 128 steps for each character and a search of 12 candidates fit. A run that needs
 //! more is refused at its start, naming the buffer.
 
+/// No CPU twin: the trainer runs its networks on a device - lavapipe, where there is no GPU - and measures a recipe's
+/// layout on a pipe that runs nothing (`geno_trainer --layout`), so its buffers are no part of the program.
+pub const cpu_twin: bool = false;
 /// 2^25 floats, 128 MB - exactly the storage binding WebGPU guarantees.
 pub const acts_len: u32 = 1 << 25;
+/// 2^25 floats, 128 MB: the replay of records (`robot_latent_kit.RecordRing`), the same guaranteed binding.
+pub const ring_len: u32 = 1 << 25;
 /// 2^23 floats, 32 MB.
 pub const dacts_len: u32 = 1 << 23;
 /// 2^22 floats, 16 MB for each parameter buffer - the networks at a third of the reference widths need about 4 million.

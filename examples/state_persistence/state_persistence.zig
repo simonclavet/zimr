@@ -17,7 +17,7 @@ const pointVec = zm.pointVec;
 const Vec3 = zm.Vec3;
 
 // the key the bytes are saved under
-const storage_key = "state_persistence_demo";
+const storage_key: []const u8 = "state_persistence_demo";
 
 // The state we persist - a plain struct the serializer walks field by field.
 // Field numbers are assigned in declaration order, so you could add a field

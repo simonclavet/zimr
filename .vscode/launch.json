@@ -849,6 +849,17 @@
             "smartStep": true
         },
         {
+            "name": "Debug: geno-mirror",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/geno_mirror/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build geno-mirror",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
             "name": "Debug: geno-ppo",
             "type": "chrome",
             "request": "launch",
@@ -1020,6 +1031,17 @@
             "url": "http://localhost:8080/hello_world/",
             "webRoot": "${workspaceFolder}/zig-out/web",
             "preLaunchTask": "zig: build hello-world",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: hello-world-owned-main",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/hello_world_owned_main/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build hello-world-owned-main",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -4468,6 +4490,17 @@
             "preLaunchTask": "zig: build geno-lab (windows)"
         },
         {
+            "name": "Debug: geno-mirror (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/geno_mirror.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build geno-mirror (windows)"
+        },
+        {
             "name": "Debug: geno-ppo (windows)",
             "type": "lldb",
             "request": "launch",
@@ -4642,6 +4675,17 @@
                 "settings set target.use-fast-stepping false"
             ],
             "preLaunchTask": "zig: build hello-world (windows)"
+        },
+        {
+            "name": "Debug: hello-world-owned-main (windows)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/zig-out/windows/hello_world_owned_main.exe",
+            "cwd": "${workspaceFolder}",
+            "initCommands": [
+                "settings set target.use-fast-stepping false"
+            ],
+            "preLaunchTask": "zig: build hello-world-owned-main (windows)"
         },
         {
             "name": "Debug: helmet-sw (windows)",

@@ -18,7 +18,7 @@ const Vec2 = zm.Vec2;
 const Color = zm.Color;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
-const max_bullets = 3000;
+const max_bullets: usize = 3000;
 
 const red: Color = .{ .r = 235, .g = 80, .b = 90, .a = 255 };
 const blue: Color = .{ .r = 80, .g = 150, .b = 255, .a = 255 };

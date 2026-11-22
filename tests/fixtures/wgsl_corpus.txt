@@ -3,7 +3,7 @@
 # <wgsl md5>`, the newest first). `transpiler` is the MD5 of the spv2wgsl source those outputs came from.
 # `zig build corpus-refresh` writes this file; `zig build corpus` (and `zig build tripwires`) holds every shader
 # to it. Commit it with the change that moved it.
-transpiler 600eee49f6b62d270d3081fc34ae875e
+transpiler 36cba91a684f43b2c53aeae60752ee9c
 
 shader examples/bloom_blur_fs
   interface @fragment entry
@@ -56,7 +56,7 @@ shader examples/cube_split_vs
   interface entry out @builtin(position) position: vec4<f32>
   interface entry out @location(0) frag_tex_coord: vec2<f32>
   interface @group(0) @binding(0) var<uniform> u: {array<vec4<f32>, 4>}
-  output ea44c9c9d03ac5ed1326e0f958b28946 e17211f422f9a0e06f058d98a7e60806
+  output 8fea6acba42139f862951cd127b30392 e17211f422f9a0e06f058d98a7e60806
 
 shader examples/instancing_vs
   interface @vertex entry
@@ -66,14 +66,14 @@ shader examples/instancing_vs
   interface entry out @builtin(position) position: vec4<f32>
   interface entry out @location(0) frag_color: vec4<f32>
   interface @group(0) @binding(0) var<uniform> u: {array<vec4<f32>, 4>}
-  output 1b265cf8ec1039be331b75fdd028ddc6 c45e37a407d70beafdb0027554d3300b
+  output f5ade3017a074996cadb4a103ebccae8 c45e37a407d70beafdb0027554d3300b
 
 shader examples/julia_fs
   interface @fragment entry
   interface entry in @location(0) frag_tex_coord: vec2<f32>
   interface entry out @location(0) out_color: vec4<f32>
   interface @group(2) @binding(0) var<uniform> u: {vec2<f32>, f32, f32, vec2<f32>, f32, f32, vec2<f32>, f32, f32}
-  output d7f174f9ca0ad9deae968ce2626da6ba eb112d80d50b6b2461c65116db9d281c
+  output ddacb341404a1c1e1121fd9cffe39a88 eb112d80d50b6b2461c65116db9d281c
 
 shader examples/lightmap_fs
   interface @fragment entry
@@ -95,21 +95,21 @@ shader examples/lightmap_vs
   interface entry out @location(0) frag_uv: vec4<f32>
   interface entry out @location(1) frag_uv2: vec4<f32>
   interface @group(0) @binding(0) var<uniform> u: {array<vec4<f32>, 4>}
-  output 58f1cec69173de6bd4ee236bdfc8aac1 24746a4ebb160d1d047f0d0897c5a044
+  output ab02904e7c0109d0467b91d937ecb641 24746a4ebb160d1d047f0d0897c5a044
 
 shader examples/mandel_julia_fs
   interface @fragment entry
   interface entry in @location(0) frag_tex_coord: vec2<f32>
   interface entry out @location(0) out_color: vec4<f32>
   interface @group(2) @binding(0) var<uniform> u: {vec2<f32>, f32, f32, vec2<f32>, f32, f32, vec2<f32>, f32, f32}
-  output dca8b8d98b47a36aafd095dd88dbdab4 39b2c2cf0aee70e11d86d21888cf7307
+  output 2f1635f958920343e0b77b8455c6ca34 39b2c2cf0aee70e11d86d21888cf7307
 
 shader examples/mandelbrot_fs
   interface @fragment entry
   interface entry in @location(0) frag_tex_coord: vec2<f32>
   interface entry out @location(0) out_color: vec4<f32>
   interface @group(2) @binding(0) var<uniform> u: {vec2<f32>, f32, f32, vec2<f32>, f32, f32}
-  output c464c97f0ea5c4364120658a3fa99c17 865a3976e25223c07d9b9d145e00d69c
+  output 7693ed9cb48e8395a6859d428eef236a 865a3976e25223c07d9b9d145e00d69c
 
 shader examples/pipeline_basic_fs
   interface @fragment entry
@@ -123,7 +123,7 @@ shader examples/pipeline_basic_vs
   interface entry in @location(1) vertex_color: vec3<f32>
   interface entry out @builtin(position) position: vec4<f32>
   interface entry out @location(0) frag_color: vec4<f32>
-  output 7c8c96b22d0e2238417f620c7f01bb28 22aee18330fae7ecbd6b03c19537752d
+  output b4295d5398691948ccfb8ed47666bff2 22aee18330fae7ecbd6b03c19537752d
 
 shader examples/pipeline_msaa_fs
   interface @fragment entry
@@ -135,7 +135,7 @@ shader examples/pipeline_msaa_vs
   interface entry in @location(0) vertex_position: vec2<f32>
   interface entry out @builtin(position) position: vec4<f32>
   interface @group(0) @binding(0) var<uniform> u: {array<vec4<f32>, 4>}
-  output f0c5a64fd35e808d388105c1cac4562e d82952515f1abc2129226dbe3be2527e
+  output a2f1ea808d3666188671f5e26dee57be d82952515f1abc2129226dbe3be2527e
 
 shader examples/pipeline_settings_vs
   interface @vertex entry
@@ -159,7 +159,7 @@ shader examples/pipeline_uniforms_vs
   interface entry out @builtin(position) position: vec4<f32>
   interface entry out @location(0) frag_color: vec4<f32>
   interface @group(0) @binding(0) var<uniform> u: {array<vec4<f32>, 4>}
-  output 2461363453719b0f1ab58caee67de732 676665b088565efad8c3cc67cba3484a
+  output 21e6ac48910fc135abca76cb83af4c91 676665b088565efad8c3cc67cba3484a
 
 shader examples/postprocess_post_fs
   interface @fragment entry
@@ -167,28 +167,28 @@ shader examples/postprocess_post_fs
   interface entry out @location(0) final_color: vec4<f32>
   interface @group(1) @binding(0) var scene: texture_2d<f32>
   interface @group(1) @binding(1) var scene_sampler: sampler
-  output 787e0f4c76236b7b6fe7641061bbffd4 ee94b40f34fb51d525834f1a9f9e65ab
+  output d5840bf1cf913096bb6609c89e7d0082 ee94b40f34fb51d525834f1a9f9e65ab
 
 shader examples/raycube_fs
   interface @fragment entry
   interface entry in @location(0) frag_tex_coord: vec2<f32>
   interface entry out @location(0) out_color: vec4<f32>
   interface @group(2) @binding(0) var<uniform> u: {vec4<f32>, vec4<f32>, vec4<f32>, vec4<f32>, vec2<f32>, f32, f32}
-  output ef6289f016cd38ad472906153d54dc95 88b993297db58beeedd0f91ee7abff86
+  output cd3b89e8369dd36dd8a0d90fc589045f 88b993297db58beeedd0f91ee7abff86
 
 shader examples/rayshadow_fs
   interface @fragment entry
   interface entry in @location(0) frag_tex_coord: vec2<f32>
   interface entry out @location(0) out_color: vec4<f32>
   interface @group(2) @binding(0) var<uniform> u: {vec4<f32>, vec4<f32>, vec4<f32>, vec4<f32>, vec2<f32>, f32, f32}
-  output 7e80026442e674ebfe714d2134fe5ee0 5fbd8d0b82ffd5195daa00eed5b4632f
+  output b1ecea6a700d8e2f4b95ae9c84c890f2 5fbd8d0b82ffd5195daa00eed5b4632f
 
 shader examples/rt_fs
   interface @fragment entry
   interface entry in @location(0) frag_tex_coord: vec2<f32>
   interface entry out @location(0) out_color: vec4<f32>
   interface @group(2) @binding(0) var<uniform> u: {vec4<f32>, vec4<f32>, vec4<f32>, vec4<f32>, vec2<f32>, f32, f32, array<vec4<f32>, 8>, array<vec4<f32>, 8>, array<vec4<f32>, 8>}
-  output 5c41b304314907a9760195dde5296fd1 5016c1b41779d11fd86a6c87045d814b
+  output 80ac3c0a6c6c642093d066322abfb719 8aa6b23fcadaca6afe4c90e817886351
 
 shader examples/shaders_vertex_displacement_fs
   interface @fragment entry
@@ -196,7 +196,7 @@ shader examples/shaders_vertex_displacement_fs
   interface entry in @location(1) frag_world: vec4<f32>
   interface entry in @location(2) frag_view: vec4<f32>
   interface entry out @location(0) final_color: vec4<f32>
-  output 4a24798076d0b840f41d45b5f66c8af4 0a947b8720ee5d2c90ae5086ab52c13d
+  output 843c236845b79d7dd5929b6e61085488 0a947b8720ee5d2c90ae5086ab52c13d
 
 shader examples/shaders_vertex_displacement_vs
   interface @vertex entry
@@ -209,14 +209,14 @@ shader examples/shaders_vertex_displacement_vs
   interface @group(0) @binding(0) var<uniform> u: {array<vec4<f32>, 4>, vec4<f32>, vec4<f32>}
   interface @group(1) @binding(0) var height: texture_2d<f32>
   interface @group(1) @binding(1) var height_sampler: sampler
-  output 4481fc755015f38904cfee74e1fec335 5715896b691e9c3611566cf6f169f493
+  output 523ef3f562e8bd5d515bbf48e8b8027a 5715896b691e9c3611566cf6f169f493
 
 shader examples/trivial_fs
   interface @fragment entry
   interface entry in @location(0) frag_tex_coord: vec2<f32>
   interface entry out @location(0) out_color: vec4<f32>
   interface @group(2) @binding(0) var<uniform> u: {f32, f32, f32, f32}
-  output 15a4b83c8e1e361d31eeb3970df8c435 23eaaab5308bbc5d1def8b973d5c1ce0
+  output fd02c3f1385e696ba63452f803c5e3e6 23eaaab5308bbc5d1def8b973d5c1ce0
 
 shader examples/trivial_vs
   interface @vertex entry
@@ -224,7 +224,7 @@ shader examples/trivial_vs
   interface entry in @location(1) vertex_tex_coord: vec2<f32>
   interface entry out @builtin(position) position: vec4<f32>
   interface entry out @location(0) frag_tex_coord: vec2<f32>
-  output d2bad97d1501e35f3f682bdc434f1a06 c5612a3df6e21431a8e6b2c6e381f7c2
+  output e55360a9b2809672528335d7af9c702e c5612a3df6e21431a8e6b2c6e381f7c2
 
 shader examples/vertex_texture_test_fs
   interface @fragment entry
@@ -241,7 +241,7 @@ shader examples/vertex_texture_test_vs
   interface @group(0) @binding(0) var<uniform> u: {array<vec4<f32>, 4>}
   interface @group(1) @binding(0) var warp: texture_2d<f32>
   interface @group(1) @binding(1) var warp_sampler: sampler
-  output 7e64ea2d5342791bb2caed278e34c68b bebe97dc8d0582541d0f69aae04e6185
+  output f86c0945aabd56d4ee49e552afd74f06 bebe97dc8d0582541d0f69aae04e6185
 
 shader src/shaders/billboard_fs
   interface @fragment entry
@@ -261,7 +261,7 @@ shader src/shaders/billboard_vs
   interface entry out @location(0) o_uv: vec2<f32>
   interface entry out @location(1) o_col: vec4<f32>
   interface @group(0) @binding(0) var<uniform> u: {array<vec4<f32>, 4>}
-  output 8f2bf649e6c5439bb3c175f4a96fefcf e987b70415bd67a87573b23586d5b4ac
+  output 57bb8beb53d6182c4d62500727422cd7 e987b70415bd67a87573b23586d5b4ac
 
 shader src/shaders/cel_fs
   interface @fragment entry
@@ -269,7 +269,7 @@ shader src/shaders/cel_fs
   interface entry in @location(1) frag_world_normal: vec3<f32>
   interface entry out @location(0) final_color: vec4<f32>
   interface @group(2) @binding(0) var<uniform> u: {vec4<f32>, vec4<f32>, vec4<f32>}
-  output af4d259395a39777e68de10861035905 e208e7ba074636dd34fbefae97f75eb9
+  output 308c142730c798d03916f32b9ccdd899 e208e7ba074636dd34fbefae97f75eb9
 
 shader src/shaders/cube3d_fs
   interface @fragment entry
@@ -289,7 +289,7 @@ shader src/shaders/cube3d_instanced_vs
   interface entry out @builtin(position) position: vec4<f32>
   interface entry out @location(0) frag_color: vec4<f32>
   interface @group(0) @binding(0) var<uniform> u: {array<vec4<f32>, 4>}
-  output b7fd5f7bdc7bf7e0d80925e948703b24 a9aa677f53c065ededa5e2e388c79265
+  output 1c6a86419de41fc90414ca6fd2cd878b a9aa677f53c065ededa5e2e388c79265
 
 shader src/shaders/cube3d_vs
   interface @vertex entry
@@ -299,7 +299,7 @@ shader src/shaders/cube3d_vs
   interface entry out @builtin(position) position: vec4<f32>
   interface entry out @location(0) frag_color: vec4<f32>
   interface @group(0) @binding(0) var<uniform> u: {array<vec4<f32>, 4>}
-  output 5913bfbef7a90d9daf00e8c431867cde b20bb2f2bf41be2c2ff53e9cd6d39fd2
+  output 56f37fdd036107e6aad62be1b3d24c1e b20bb2f2bf41be2c2ff53e9cd6d39fd2
 
 shader src/shaders/decal_fs
   interface @fragment entry
@@ -309,7 +309,7 @@ shader src/shaders/decal_fs
   interface @group(1) @binding(0) var<uniform> u: {array<vec4<f32>, 4>, vec4<f32>, vec4<f32>, vec4<f32>}
   interface @group(2) @binding(0) var decal: texture_2d<f32>
   interface @group(2) @binding(1) var decal_sampler: sampler
-  output a814d2764e67974c340e5df9dda1065c da022996a73500344429ff0ec3e3e43d
+  output 4bcf897a2f73792a949496bb5a369e11 da022996a73500344429ff0ec3e3e43d
 
 shader src/shaders/decal_vs
   interface @vertex entry
@@ -319,7 +319,7 @@ shader src/shaders/decal_vs
   interface entry out @location(0) o_world: vec3<f32>
   interface entry out @location(1) o_normal: vec3<f32>
   interface @group(0) @binding(0) var<uniform> u: {array<vec4<f32>, 4>}
-  output ee2a3b4822a9c3e1054866bc57f2eafa 58c1444482a650645dd218ba5693af09
+  output e4a6f25bb2cf5acb26b552a2f5106aa0 58c1444482a650645dd218ba5693af09
 
 shader src/shaders/default_shapes_fs
   interface @fragment entry
@@ -339,7 +339,7 @@ shader src/shaders/default_shapes_vs
   interface entry out @location(0) frag_tex_coord: vec2<f32>
   interface entry out @location(1) frag_color: vec4<f32>
   interface @group(0) @binding(0) var<uniform> u: {array<vec4<f32>, 4>}
-  output 86c7dcd3633f978678963fbf03111e1e e4e7cdaa5d425815f8280b85023d69fb
+  output 35545979d1c907f87043262c108f7c0a e4e7cdaa5d425815f8280b85023d69fb
 
 shader src/shaders/deferred_shading_fs
   interface @fragment entry
@@ -352,7 +352,7 @@ shader src/shaders/deferred_shading_fs
   interface @group(1) @binding(4) var g_albedo_spec: texture_2d<f32>
   interface @group(1) @binding(5) var g_albedo_spec_sampler: sampler
   interface @group(2) @binding(0) var<uniform> u: {vec4<f32>, array<vec4<f32>, 4>, array<vec4<f32>, 4>}
-  output 3da5231056954ac83d4f0fa39b3e7baf ac6b7b0e65e5994b3aefc917c0e00a6a
+  output 89c138850e563afb0639f8f710f6bc96 ac6b7b0e65e5994b3aefc917c0e00a6a
 
 shader src/shaders/deferred_shading_vs
   interface @vertex entry
@@ -373,7 +373,7 @@ shader src/shaders/depth_vs
   interface entry out @builtin(position) position: vec4<f32>
   interface entry out @location(0) frag_gray: vec4<f32>
   interface @group(0) @binding(0) var<uniform> u: {array<vec4<f32>, 4>, vec4<f32>, i32, i32, i32, i32}
-  output 311e9c728167bf2e2ce757723293c924 b17169cf553bb3fc8c95b303dd2b6743
+  output 93c3166458f198aa10ffc579cbdd6527 b17169cf553bb3fc8c95b303dd2b6743
 
 shader src/shaders/depth_write_fs
   interface @fragment entry
@@ -382,7 +382,7 @@ shader src/shaders/depth_write_fs
   interface entry out @builtin(frag_depth) frag_depth: f32
   interface entry out @location(0) final_color: vec4<f32>
   interface @group(2) @binding(0) var<uniform> u: {vec4<f32>, vec4<f32>}
-  output 7097cc5f1eb3a3ebfed3b7d92e150d18 58aebd63ec9945a917be38e3046b97e6
+  output 728f94c87282955be1dd9e3033c3be51 58aebd63ec9945a917be38e3046b97e6
 
 shader src/shaders/effect_ascii_fs
   interface @fragment entry
@@ -391,14 +391,14 @@ shader src/shaders/effect_ascii_fs
   interface @group(1) @binding(0) var texture0: texture_2d<f32>
   interface @group(1) @binding(1) var texture0_sampler: sampler
   interface @group(2) @binding(0) var<uniform> u: {vec4<f32>, vec4<f32>}
-  output 9bdb24d97db1c37c0e46d7bba868e44e 0d0b61580f12aa206551b5dbcc8457c0
+  output d94e26bc35ffeb410dedc92625971119 0d0b61580f12aa206551b5dbcc8457c0
 
 shader src/shaders/effect_cubes_fs
   interface @fragment entry
   interface entry in @location(0) frag_uv: vec2<f32>
   interface entry out @location(0) final_color: vec4<f32>
   interface @group(2) @binding(0) var<uniform> u: {vec4<f32>}
-  output 9cbf25146f824953838525a8c81216d7 7b44654fc27e7dc738d5b712bb4a1ebc
+  output 76cd85774b88390ac8f109f0685f9c1c 7b44654fc27e7dc738d5b712bb4a1ebc
 
 shader src/shaders/effect_grade_fs
   interface @fragment entry
@@ -407,7 +407,7 @@ shader src/shaders/effect_grade_fs
   interface @group(1) @binding(0) var texture0: texture_2d<f32>
   interface @group(1) @binding(1) var texture0_sampler: sampler
   interface @group(2) @binding(0) var<uniform> u: {vec4<f32>}
-  output 070a41248314a087671615961f4421c4 f6f009f016367eeec92b7171324e617a
+  output 481d0c2d72c21e085111e7f136195f56 f6f009f016367eeec92b7171324e617a
 
 shader src/shaders/effect_mask_fs
   interface @fragment entry
@@ -420,7 +420,7 @@ shader src/shaders/effect_mask_fs
   interface @group(1) @binding(4) var tex_mask: texture_2d<f32>
   interface @group(1) @binding(5) var tex_mask_sampler: sampler
   interface @group(2) @binding(0) var<uniform> u: {vec4<f32>}
-  output 62a16431c07fe9fca34c8e468d47d8c3 c7e86763b00e8cb8e2c9ac6cdf6cb28d
+  output c033301bb5943f5df1a91f84546931d8 c7e86763b00e8cb8e2c9ac6cdf6cb28d
 
 shader src/shaders/effect_outline_fs
   interface @fragment entry
@@ -438,14 +438,14 @@ shader src/shaders/effect_palette_fs
   interface @group(1) @binding(0) var texture0: texture_2d<f32>
   interface @group(1) @binding(1) var texture0_sampler: sampler
   interface @group(2) @binding(0) var<uniform> u: {array<vec4<f32>, 8>, vec4<f32>}
-  output d9c918c60dd5bffba666fb5b60817f90 85e403cc699b97e65b2dc1bb9ea0f036
+  output 40579333a2e7cebf80740eb626ee80d9 85e403cc699b97e65b2dc1bb9ea0f036
 
 shader src/shaders/effect_sieve_fs
   interface @fragment entry
   interface entry in @location(0) frag_uv: vec2<f32>
   interface entry out @location(0) final_color: vec4<f32>
   interface @group(2) @binding(0) var<uniform> u: {vec4<f32>}
-  output 760436ff6f21b6cee880b37edfe3d653 70e250ea733593110d3d517c4054fa3c
+  output cecf4b7f86cef021f89254dc08b72088 0478b088b2440c6a3fd1ac9d21b4ba2d
 
 shader src/shaders/effect_spotlight_fs
   interface @fragment entry
@@ -454,7 +454,7 @@ shader src/shaders/effect_spotlight_fs
   interface @group(1) @binding(0) var texture0: texture_2d<f32>
   interface @group(1) @binding(1) var texture0_sampler: sampler
   interface @group(2) @binding(0) var<uniform> u: {array<vec4<f32>, 3>, vec4<f32>}
-  output 72e79c4aa2ac57095383a8a81bd8d3a7 0bc1475d749fc8b83c7b5a50ef59bac0
+  output 30af74a40969339cbb716cb53545e941 0bc1475d749fc8b83c7b5a50ef59bac0
 
 shader src/shaders/effect_tiling_fs
   interface @fragment entry
@@ -479,7 +479,7 @@ shader src/shaders/fluid_discs_fs
   interface entry in @location(0) col: vec4<f32>
   interface entry in @location(1) corner: vec2<f32>
   interface entry out @location(0) final_color: vec4<f32>
-  output a2f0de535cb60347529e9d17702c5033 69233e1228c3af1bbdd5ab263360141f
+  output a7eb4d6913444b4beed73d7cf3ed3f34 69233e1228c3af1bbdd5ab263360141f
 
 shader src/shaders/fluid_discs_vs
   interface @vertex entry
@@ -491,7 +491,7 @@ shader src/shaders/fluid_discs_vs
   interface @group(0) @binding(0) var<uniform> u: {vec2<f32>, vec2<f32>, vec2<f32>, vec2<f32>, vec4<f32>, vec4<f32>, f32, f32, f32, f32}
   interface @group(0) @binding(1) var<storage, read> positions: {array<vec2<f32>>}
   interface @group(0) @binding(2) var<storage, read> density: {array<vec2<f32>>}
-  output c2df36d6742ad8ba295c19bba9124452 152c94d5ec53ecca2133387a5d47be70
+  output 2c8cd99a3dac8defb0a900d6b4686ee9 152c94d5ec53ecca2133387a5d47be70
 
 shader src/shaders/fog_fs
   interface @fragment entry
@@ -499,7 +499,7 @@ shader src/shaders/fog_fs
   interface entry in @location(1) frag_world_normal: vec3<f32>
   interface entry out @location(0) final_color: vec4<f32>
   interface @group(2) @binding(0) var<uniform> u: {vec4<f32>, vec4<f32>, vec4<f32>, vec4<f32>, vec4<f32>}
-  output b2dcb141ba1f21f18e09c8a04c2fd77e 18a36560927f2dc3600cd7c3c4c0cd8f
+  output c05d65715adb033550f6be324ba54419 18a36560927f2dc3600cd7c3c4c0cd8f
 
 shader src/shaders/gbuffer_fs
   interface @fragment entry
@@ -509,7 +509,7 @@ shader src/shaders/gbuffer_fs
   interface entry out @location(1) g_world_normal: vec4<f32>
   interface entry out @location(2) g_albedo_spec: vec4<f32>
   interface @group(2) @binding(0) var<uniform> u: {vec4<f32>}
-  output 35ef01b41dfa71d520fd3e9492277986 bb2ab26ce97f699a9786d49160d035cf
+  output 08b743bd2c02124beeccd25522fe358d bb2ab26ce97f699a9786d49160d035cf
 
 shader src/shaders/gbuffer_vs
   interface @vertex entry
@@ -519,7 +519,7 @@ shader src/shaders/gbuffer_vs
   interface entry out @location(0) frag_world_pos: vec3<f32>
   interface entry out @location(1) frag_world_normal: vec3<f32>
   interface @group(0) @binding(0) var<uniform> u: {array<vec4<f32>, 4>, array<vec4<f32>, 4>, array<vec4<f32>, 4>}
-  output f6276585493f42e1aed8978ebaa8416a 782ab8d1c74520003f4896c5bce0da0f
+  output 3b3bff08779ae38447c1ae0b082c96d2 782ab8d1c74520003f4896c5bce0da0f
 
 shader src/shaders/hybrid_raymarch_fs
   interface @fragment entry
@@ -527,7 +527,7 @@ shader src/shaders/hybrid_raymarch_fs
   interface entry out @builtin(frag_depth) frag_depth: f32
   interface entry out @location(0) final_color: vec4<f32>
   interface @group(2) @binding(0) var<uniform> u: {array<vec4<f32>, 4>, vec4<f32>, vec4<f32>, vec4<f32>, vec4<f32>, vec4<f32>}
-  output 2df2abe813555ffee0d620933b3611be a501053321325b065d601f6f7a0cc087
+  output d852c0610fa6ab2257327e55913b21b7 c2934ad905e61718e4bb98d8fdc762cb
 
 shader src/shaders/lambert_fs
   interface @fragment entry
@@ -537,7 +537,7 @@ shader src/shaders/lambert_fs
   interface @group(1) @binding(0) var texture0: texture_2d<f32>
   interface @group(1) @binding(1) var texture0_sampler: sampler
   interface @group(2) @binding(0) var<uniform> col_diffuse: {vec4<f32>}
-  output 5e0620914f20acd806faf4d0e1b244fe 2226eef66876942791fee442598f2a0d
+  output afd90feee7344d776a6bcdfd65380644 2226eef66876942791fee442598f2a0d
 
 shader src/shaders/lambert_vs
   interface @vertex entry
@@ -549,7 +549,7 @@ shader src/shaders/lambert_vs
   interface entry out @location(1) frag_normal: vec3<f32>
   interface @group(0) @binding(0) var<uniform> mvp: {array<vec4<f32>, 4>}
   interface @group(0) @binding(1) var<uniform> mat_model: {array<vec4<f32>, 4>}
-  output 4bfd3370c426424edfbc8c5a8b8ee6fb 756a9d7fca980e71636d56d2d6ab46c0
+  output 2761f4af7ad05afc1e57b5220f091d09 756a9d7fca980e71636d56d2d6ab46c0
 
 shader src/shaders/lit_shadow_fs
   interface @fragment entry
@@ -559,7 +559,7 @@ shader src/shaders/lit_shadow_fs
   interface @group(1) @binding(0) var shadow_map: texture_2d<f32>
   interface @group(1) @binding(1) var shadow_map_sampler: sampler
   interface @group(2) @binding(0) var<uniform> u: {vec4<f32>, vec4<f32>, vec4<f32>}
-  output 49583a24f04737dfeffa7fbb2e5049b2 b14510541b747bca0514d32caf32a52b
+  output 4eefe9c6908c132b5971de1fc4ef551f b14510541b747bca0514d32caf32a52b
 
 shader src/shaders/lit_shadow_vs
   interface @vertex entry
@@ -569,7 +569,7 @@ shader src/shaders/lit_shadow_vs
   interface entry out @location(0) frag_normal: vec3<f32>
   interface entry out @location(1) frag_light_space_pos: vec4<f32>
   interface @group(0) @binding(0) var<uniform> u: {array<vec4<f32>, 4>, array<vec4<f32>, 4>, array<vec4<f32>, 4>}
-  output 048f42a6e3ca0dd88f87ae6467a8f84f 7c571cbca1643e6c49caf447332cedf8
+  output bb604f6ebc1b152e0f62738f0ebf7c64 7c571cbca1643e6c49caf447332cedf8
 
 shader src/shaders/maze_fs
   interface @fragment entry
@@ -577,7 +577,7 @@ shader src/shaders/maze_fs
   interface entry in @location(1) frag_world_normal: vec3<f32>
   interface entry out @location(0) final_color: vec4<f32>
   interface @group(2) @binding(0) var<uniform> u: {vec4<f32>, vec4<f32>, vec4<f32>, vec4<f32>, vec4<f32>}
-  output 555c8414abf8b3c5ec7b1191dbf5bfbd 4c252781dda7b12c4fe76fd8c90135e0
+  output 0f794333cfa977a384a1c38107835b96 4c252781dda7b12c4fe76fd8c90135e0
 
 shader src/shaders/normalmap_fs
   interface @fragment entry
@@ -593,7 +593,7 @@ shader src/shaders/normalmap_fs
   interface @group(1) @binding(4) var normal: texture_2d<f32>
   interface @group(1) @binding(5) var normal_sampler: sampler
   interface @group(2) @binding(0) var<uniform> u: {vec4<f32>, vec4<f32>, vec4<f32>, vec4<f32>, vec4<f32>, array<vec4<f32>, 2>, array<vec4<f32>, 2>, array<vec4<f32>, 4>, array<vec4<f32>, 4>, array<vec4<f32>, 4>, f32, f32, i32, i32, i32, f32, f32, i32}
-  output e983b813c76d0885ee8cc1242283b681 024d17441f96c6731eb3cac630caa5fc
+  output dda2cedc1dfbb4280e084d64e3d5f30a 4253306336874c8d00d63fd906f4ba7b
 
 shader src/shaders/outline_hull_vs
   interface @vertex entry
@@ -602,7 +602,7 @@ shader src/shaders/outline_hull_vs
   interface entry out @builtin(position) position: vec4<f32>
   interface entry out @location(0) frag_gray: vec4<f32>
   interface @group(0) @binding(0) var<uniform> u: {array<vec4<f32>, 4>, vec4<f32>, vec4<f32>}
-  output 8b66d59ab8e497477425f5140137ba4a b062912f86ff3b323caea9084f09e3b9
+  output 863f766279e07fb9c177c9015639f8cf b062912f86ff3b323caea9084f09e3b9
 
 shader src/shaders/pbr_fs
   interface @fragment entry
@@ -626,7 +626,7 @@ shader src/shaders/pbr_fs
   interface @group(1) @binding(8) var emissive: texture_2d<f32>
   interface @group(1) @binding(9) var emissive_sampler: sampler
   interface @group(2) @binding(0) var<uniform> u: {vec4<f32>, vec4<f32>, vec4<f32>, vec4<f32>, vec4<f32>, array<vec4<f32>, 2>, array<vec4<f32>, 2>, array<vec4<f32>, 4>, array<vec4<f32>, 4>, array<vec4<f32>, 4>, f32, f32, i32, i32, i32, f32, f32, i32}
-  output 4e5f1d45f7174e61dcf5abe78ea76ef7 977b6029463c135262f9866e81077104
+  output 6f0fe00c5f4e347e1f8db89d91249972 977b6029463c135262f9866e81077104
 
 shader src/shaders/pbr_vs
   interface @vertex entry
@@ -647,7 +647,7 @@ shader src/shaders/pbr_vs
   interface @group(0) @binding(2) var<uniform> mat_projection: {array<vec4<f32>, 4>}
   interface @group(0) @binding(3) var<uniform> mat_normal: {array<vec4<f32>, 4>}
   interface @group(0) @binding(4) var<uniform> light_space_matrix: {array<vec4<f32>, 4>}
-  output 93ba76521563e0083ef9ead81aea9dda 13c4a49ad366b4d568157a1ad12e18e2
+  output ba545b646dba815073890b4b104e7861 13c4a49ad366b4d568157a1ad12e18e2
 
 shader src/shaders/points3d_vs
   interface @vertex entry
@@ -656,7 +656,7 @@ shader src/shaders/points3d_vs
   interface entry out @builtin(position) position: vec4<f32>
   interface entry out @location(0) frag_color: vec4<f32>
   interface @group(0) @binding(0) var<uniform> u: {array<vec4<f32>, 4>}
-  output ed5eb7684323875dceba469a897d2608 8d336a3b68c049fd2664bec2c6a79d8b
+  output c25b131f16ac97748d5abfa839cab825 8d336a3b68c049fd2664bec2c6a79d8b
 
 shader src/shaders/points_fs
   interface @fragment entry
@@ -672,7 +672,7 @@ shader src/shaders/points_vs
   interface entry out @location(0) col: vec4<f32>
   interface @group(0) @binding(0) var<uniform> u: {vec2<f32>, vec2<f32>, vec4<f32>, vec4<f32>}
   interface @group(0) @binding(1) var<storage, read> positions: {array<vec2<f32>>}
-  output ba6d9b4b1500b34cf2e1321aef1e0431 f22c66815038f37e0a964627c5a8b05e
+  output ca169f6e30e46257e74772f3b7e99798 f22c66815038f37e0a964627c5a8b05e
 
 shader src/shaders/shapes_filter_fs
   interface @fragment entry
@@ -682,7 +682,7 @@ shader src/shaders/shapes_filter_fs
   interface @group(1) @binding(0) var texture0: texture_2d<f32>
   interface @group(1) @binding(1) var texture0_sampler: sampler
   interface @group(2) @binding(0) var<uniform> u: {vec4<f32>}
-  output d14b9cd9e467c6e7bf90d289cceefc8f e9f72fddbe4daed65dc39657f6ed42bc
+  output 9f39d3d1a490aa1c4a515f935eadb3b3 e9f72fddbe4daed65dc39657f6ed42bc
 
 shader src/shaders/skybox_fs
   interface @fragment entry
@@ -690,7 +690,7 @@ shader src/shaders/skybox_fs
   interface entry in @location(1) sky_bottom: vec4<f32>
   interface entry in @location(2) sky_top: vec4<f32>
   interface entry out @location(0) final_color: vec4<f32>
-  output e88a02b0aa18a445b7d8a21759d915f9 ec17fcd5231500b78a450440195940b6
+  output 55b8f8bd1a96fa7ba82682a8cbd2f553 ec17fcd5231500b78a450440195940b6
 
 shader src/shaders/skybox_vs
   interface @vertex entry
@@ -700,7 +700,7 @@ shader src/shaders/skybox_vs
   interface entry out @location(1) sky_bottom: vec4<f32>
   interface entry out @location(2) sky_top: vec4<f32>
   interface @group(0) @binding(0) var<uniform> u: {array<vec4<f32>, 4>, vec4<f32>, vec4<f32>, vec4<f32>}
-  output fe001fc170e7a54336eda47f9070dd82 6503b727aa9b967d28903b5485bc907e
+  output e912f42a45bc315aaf6953fe74201815 6503b727aa9b967d28903b5485bc907e
 
 shader src/shaders/ssao_blur_fs
   interface @fragment entry
@@ -713,7 +713,7 @@ shader src/shaders/ssao_blur_fs
   interface @group(1) @binding(4) var g_world_normal: texture_2d<f32>
   interface @group(1) @binding(5) var g_world_normal_sampler: sampler
   interface @group(2) @binding(0) var<uniform> u: {vec4<f32>, vec4<f32>}
-  output faf9612ec37ff113f0584ea8d10da042 fa5da6e898b788d72f8b9be4a9b4ff79
+  output 9e15b2723fcc71a7cc95f4c61caec3a7 fa5da6e898b788d72f8b9be4a9b4ff79
 
 shader src/shaders/ssao_fs
   interface @fragment entry
@@ -724,7 +724,7 @@ shader src/shaders/ssao_fs
   interface @group(1) @binding(2) var g_world_normal: texture_2d<f32>
   interface @group(1) @binding(3) var g_world_normal_sampler: sampler
   interface @group(2) @binding(0) var<uniform> u: {array<vec4<f32>, 4>, vec4<f32>, vec4<f32>}
-  output 39a70d9f45eadba63fbbf1578a0730e8 2eda9b6637a7e9a5bd3483e547ae94de
+  output 71a4ee109bf7f56e33ccbd7aa193f1f7 2eda9b6637a7e9a5bd3483e547ae94de
 
 shader src/shaders/terrain_fs
   interface @fragment entry
@@ -732,7 +732,7 @@ shader src/shaders/terrain_fs
   interface entry in @location(1) frag_world_normal: vec3<f32>
   interface entry out @location(0) final_color: vec4<f32>
   interface @group(2) @binding(0) var<uniform> u: {vec4<f32>, vec4<f32>, vec4<f32>, vec4<f32>, vec4<f32>, vec4<f32>}
-  output a86636c9f18847d43987613937de39f4 3e88bda7929407f2bd7f5dcd9ee249bc
+  output 030033cb65d21f0c2a3eb4359b999779 3e88bda7929407f2bd7f5dcd9ee249bc
 
 shader src/shaders/text_sdf_fs
   interface @fragment entry
@@ -742,11 +742,11 @@ shader src/shaders/text_sdf_fs
   interface @group(1) @binding(0) var texture0: texture_2d<f32>
   interface @group(1) @binding(1) var texture0_sampler: sampler
   interface @group(2) @binding(0) var<uniform> u: {vec4<f32>}
-  output 8aa8b4bed7bd7c5a61ddbc0cd912fdcf 12ba6cee318841a49a79e7f771c46154
+  output 59db10fb80e1ea26282384ab33299df7 12ba6cee318841a49a79e7f771c46154
 
 shader tests/fixture_fs
   interface @fragment main
   interface main in @location(0) frag_tex_coord: vec2<f32>
   interface main out @location(0) out_color: vec4<f32>
   interface @group(2) @binding(0) var<uniform> u: {vec4<f32>, vec2<f32>, f32}
-  output 90a3b81f0afeb52c2a89991b28d70421 5bde53d36505d969ddb7992de9e0fae1
+  output 02387cd22778fe76e1f9505bd43a1f6d 5bde53d36505d969ddb7992de9e0fae1

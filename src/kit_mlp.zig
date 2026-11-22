@@ -8,8 +8,9 @@
 //!                              networks in the kit's buffers (EfficientTDMPC's `robot_bmpc_kit` builds its world
 //!                              model of them)
 //!     KitMlp                   an ordinary multilayer perceptron with its own pipe and batch, and a training step:
-//!                              give it layer sizes, get `forward`, `trainStep` (one Adam step on mean-squared
-//!                              error) and `parameters` - one `KitNetwork` and one application of it
+//!                              give it layer sizes, get `forward`, `trainStep` (one step of Adam or SGD on
+//!                              mean-squared error), `trainSteps` (many, in one submission) and `parameters` - one
+//!                              `KitNetwork` and one application of it
 //!
 //! ---- THE KIT'S FIVE BUFFERS ----
 //!
@@ -44,11 +45,12 @@
 //! ---- ONE LAYER ON THE KIT ----
 //!
 //! A layer is one of three shapes (`KitLayerKind`): a NORMED layer (TD-MPC2's `NormedDense`: linear, layer norm,
-//! gain and bias, Mish - or SimNorm at the end of an encoder or a dynamics head), a dense layer with a fused tanh or
-//! relu (a `KitMlp`'s hidden layers), or a PLAIN linear layer (a head). On the kit, each step of a layer is a kernel
-//! of its own wherever it needs a different shape of thread (`zn_mlp`'s head draws it):
+//! gain and bias, Mish - or SiLU in a world model in the normed form, or SimNorm at the end of an encoder or a
+//! dynamics head), a dense layer with a fused tanh or relu (a `KitMlp`'s hidden layers), or a PLAIN linear layer (a
+//! head). On the kit, each step of a layer is a kernel of its own wherever it needs a different shape of thread
+//! (`zn_mlp`'s head draws it):
 //!
-//!     a normed layer      dense_fwd (linear) -> norm_fwd -> mish_fwd, or simnorm_fwd for a layer ending in SimNorm
+//!     a normed layer      dense_fwd (linear) -> norm_fwd -> mish_fwd, silu_fwd, or simnorm_fwd for SimNorm
 //!     a dense layer       dense_fwd, its tanh or relu fused in
 //!     a plain layer       dense_fwd (linear)
 //!
@@ -145,6 +147,47 @@ pub fn copyColumns(
     }
 }
 
+/// WHERE A STATISTIC's CHUNKS' SUMS GO (`runStatistic`): `floats` numbers of the parameters from `at` - room for
+/// floats / 3 chunks of a statistic of three sums, three times as many of one of a single sum.
+pub const StatisticPartials = struct {
+    at: u32,
+    floats: u32,
+};
+
+/// A STATISTIC FOR THE LOG: kernel `kernel` with `inputs`, writing at `inputs.stat_off`. A statistic the kernels sum
+/// in chunks (`M.ChunkedStatistic`) runs in its two passes - one thread per chunk of its terms, the chunks as short as
+/// the least chunk allows and few enough for `partials` to hold their sums (`M.statisticChunkLength`), then one
+/// thread adding them; any other in one thread:
+///
+///     3.2 million terms, room for 6,144 sums of one   ->   chunks of 1,024: 3,125 threads, then one adding 3,125
+///     40,000 terms                                    ->   chunks of 1,024: 40 threads, then one adding 40
+///     500 terms                                       ->   one chunk: one thread, then one adding its one sum
+pub fn runStatistic(
+    comptime M: type,
+    pipe: *compute_host.Compute(M),
+    comptime kernel: []const u8,
+    inputs: M.Params,
+    partials: StatisticPartials,
+) void {
+    if (!@hasField(M.ChunkedStatistic, kernel)) {
+        pipe.params = inputs;
+        pipe.run(kernel, 1);
+        return;
+    }
+    const statistic: M.ChunkedStatistic = @field(M.ChunkedStatistic, kernel);
+    const terms: u32 = M.statisticTerms(statistic, inputs.rows, inputs.count, inputs.lat_steps);
+    const most_chunks: u32 = partials.floats / statistic.sumCount();
+    assertf(most_chunks > 0, @src(), "runStatistic: room for no chunk's sums of {s}", .{kernel});
+    const chunk_length: u32 = M.statisticChunkLength(terms, most_chunks);
+    const chunk_count: u32 = M.statisticChunks(terms, chunk_length);
+    var chunked: M.Params = inputs;
+    chunked.stat_chunk = chunk_length;
+    chunked.stat_partials_off = partials.at;
+    pipe.params = chunked;
+    pipe.run(kernel ++ "_partials", @max(chunk_count, 1));
+    pipe.run(kernel, 1);
+}
+
 /// The offsets of everything in the kit's buffers, handed out in order - a counter per buffer, nothing more. Every
 /// region a network or a rollout needs is RESERVED here first; only then are the buffers made, sized from the totals,
 /// and filled. So every offset is known before a single float is allocated, and no two regions can overlap:
@@ -155,10 +198,12 @@ pub fn copyColumns(
 ///
 /// A params offset is a grads offset too (this file's head): the two buffers are laid out alike.
 pub const KitLayout = struct {
-    /// Floats reserved so far in each buffer - and so, at the end, the size each buffer must have.
+    /// Floats reserved so far in each buffer - and so, at the end, the size each buffer must have. The ring's is the
+    /// replay of records' own buffer, in a kernel module that has one (`zn_mlp.Buffers.ring`).
     params_floats: u32 = 0,
     acts_floats: u32 = 0,
     dacts_floats: u32 = 0,
+    ring_floats: u32 = 0,
 
     /// `float_count` floats of params (and of grads, at the same offset): where they begin.
     pub fn reserveParams(layout: *KitLayout, float_count: u32) u32 {
@@ -181,6 +226,19 @@ pub const KitLayout = struct {
         return region_start;
     }
 
+    /// `float_count` floats of the replay's ring buffer: where they begin.
+    pub fn reserveRing(layout: *KitLayout, float_count: u32) u32 {
+        const region_start: u32 = layout.ring_floats;
+        layout.ring_floats += float_count;
+        return region_start;
+    }
+
+    /// The floats the ring buffer of kernel module `M` holds - 0 for a module without one, so that nothing may be
+    /// reserved in it.
+    fn ringCapacity(comptime M: type) u32 {
+        return if (@hasDecl(M, "ring_len")) M.ring_len else 0;
+    }
+
     /// That every region this layout reserved lies inside the kit's own buffers (`M`, the kernel module): acts holds
     /// `M.acts_len` floats, dacts `M.dacts_len` (or `M.config.max` in a module that does not size it on its own),
     /// params
@@ -192,7 +250,7 @@ pub const KitLayout = struct {
     pub fn checkFitsKit(
         layout: KitLayout,
         comptime M: type,
-    ) error{ KitActivationsTooSmall, KitGradientsTooSmall, KitParametersTooSmall }!void {
+    ) error{ KitActivationsTooSmall, KitGradientsTooSmall, KitParametersTooSmall, KitRingTooSmall }!void {
         const dacts_capacity: u32 = if (@hasDecl(M, "dacts_len")) M.dacts_len else M.config.max;
         if (layout.acts_floats > M.acts_len) {
             return error.KitActivationsTooSmall;
@@ -203,24 +261,31 @@ pub const KitLayout = struct {
         if (layout.params_floats > M.config.max) {
             return error.KitParametersTooSmall;
         }
+        if (layout.ring_floats > ringCapacity(M)) {
+            return error.KitRingTooSmall;
+        }
     }
 
     pub fn requireFitsKit(layout: KitLayout, comptime M: type) void {
         const acts_capacity: u32 = M.acts_len;
         const dacts_capacity: u32 = if (@hasDecl(M, "dacts_len")) M.dacts_len else M.config.max;
         const other_capacity: u32 = M.config.max;
+        const ring_capacity: u32 = ringCapacity(M);
         const acts_fit: bool = layout.acts_floats <= acts_capacity;
         const dacts_fit: bool = layout.dacts_floats <= dacts_capacity;
         const params_fit: bool = layout.params_floats <= other_capacity;
-        const message: []const u8 = "the layout needs {d} acts, {d} dacts and {d} params; " ++
-            "the kit holds {d} acts, {d} dacts and {d} of each of the others";
-        assertf(acts_fit and dacts_fit and params_fit, @src(), message, .{
+        const ring_fits: bool = layout.ring_floats <= ring_capacity;
+        const message: []const u8 = "the layout needs {d} acts, {d} dacts, {d} params and {d} of the ring; " ++
+            "the kit holds {d} acts, {d} dacts, {d} of each of the parameters' buffers and {d} of the ring";
+        assertf(acts_fit and dacts_fit and params_fit and ring_fits, @src(), message, .{
             layout.acts_floats,
             layout.dacts_floats,
             layout.params_floats,
+            layout.ring_floats,
             acts_capacity,
             dacts_capacity,
             other_capacity,
+            ring_capacity,
         });
     }
 
@@ -248,6 +313,9 @@ pub const KitLayerKind = enum {
     dense_relu,
     /// A `NormedDense` ending in Mish: every hidden layer of every EfficientTDMPC network.
     normed_mish,
+    /// A `NormedDense` ending in SiLU: every hidden layer of a world model in the normed form (`robot_latent_kit`'s
+    /// `WorldForm.normed_silu`).
+    normed_silu,
     /// A `NormedDense` ending in SimNorm: the last layer of the encoder and of each dynamics head, whose output is a
     /// latent state.
     normed_simnorm,
@@ -259,7 +327,7 @@ pub const KitLayerKind = enum {
     /// activation, with regions of their own.
     pub fn isNormed(kind: KitLayerKind) bool {
         return switch (kind) {
-            .normed_mish, .normed_simnorm => true,
+            .normed_mish, .normed_silu, .normed_simnorm => true,
             .dense_tanh, .dense_relu, .plain => false,
         };
     }
@@ -270,7 +338,7 @@ pub const KitLayerKind = enum {
         return switch (kind) {
             .dense_tanh => @backingInt(M.Act.tanh),
             .dense_relu => @backingInt(M.Act.relu),
-            .normed_mish, .normed_simnorm, .plain => @backingInt(M.Act.linear),
+            .normed_mish, .normed_silu, .normed_simnorm, .plain => @backingInt(M.Act.linear),
         };
     }
 };
@@ -323,7 +391,7 @@ pub const KitLayer = struct {
 ///       | norm_fwd        writes n and inv too          ^ norm_bwd               reads n, inv
 ///       v                                               |                        (norm_params_bwd: the gain's
 ///     scaled_values       s = n x gain + norm bias    scaled_values_gradient     ds   and the norm bias's)
-///       | mish_fwd, or simnorm_fwd                      ^ mish_bwd (reads s), or simnorm_bwd (reads y)
+///       | mish_fwd, silu_fwd, or simnorm_fwd            ^ mish_bwd or silu_bwd (reads s), or simnorm_bwd (reads y)
 ///       v                                               |
 ///     outputs             y                           outputs_gradient           dy  - arriving from above
 ///
@@ -373,18 +441,24 @@ pub const DropoutGenerator = enum {
     layer,
 };
 
-/// What a backward does with the parameters' gradients it computes: write them over what is in grads, or add them
-/// to it. A network applied once overwrites. A network applied at several steps of a window - a dynamics head - must
-/// end with the SUM of every step's gradient, since every step used the same weights: its first backward overwrites,
-/// and every later one adds.
+/// What a backward does with the parameters' gradients: write them over what is in grads, add them to it, or not
+/// compute them at all. A network applied once overwrites. A network applied at several steps of a window - a
+/// dynamics head - must end with the SUM of every step's gradient, since every step used the same weights: its first
+/// backward overwrites, and every later one adds. A network held FIXED - a world model a policy learns through -
+/// passes the gradient on to its inputs and computes none for its own parameters (`none`): grads keep what they held,
+/// and the parameters' kernels, a layer's largest backward work, are not run.
 pub const ParameterGradients = enum {
     overwrite,
     add,
+    none,
 
-    /// The kit's `accumulate` flag for this choice.
+    /// The kit's `accumulate` flag for this choice - asked only where the gradients are computed: a network held fixed
+    /// runs no kernel that reads it.
     fn accumulateFlag(parameter_gradients: ParameterGradients) u32 {
+        const computed: bool = parameter_gradients != .none;
+        assertf(computed, @src(), "accumulateFlag: a network held fixed computes no gradients to accumulate", .{});
         return switch (parameter_gradients) {
-            .overwrite => 0,
+            .overwrite, .none => 0,
             .add => 1,
         };
     }
@@ -404,7 +478,7 @@ pub fn KitNetwork(comptime M: type) type {
         /// A pipe of the kit: the device, or the CPU twin (`compute_host.Compute.initCpu`).
         pub const Pipe = compute_host.Compute(M);
 
-        layers: []KitLayer,
+        layers: []const KitLayer,
 
         /// `mlp` placed on the kit: every layer's parameters reserved in `layout`, in order - the hidden layers, then
         /// the last. Memory: the layer list in `arena`.
@@ -463,6 +537,7 @@ pub fn KitNetwork(comptime M: type) type {
         fn normedLayer(layout: *KitLayout, normed: zn.NormedDense(f32)) KitLayer {
             const kind: KitLayerKind = switch (normed.activation) {
                 .mish => .normed_mish,
+                .silu => .normed_silu,
                 .sim_norm => .normed_simnorm,
                 else => normed_kind: {
                     const activation_name: []const u8 = @tagName(normed.activation);
@@ -472,7 +547,7 @@ pub fn KitNetwork(comptime M: type) type {
                     break :normed_kind .normed_mish;
                 },
             };
-            // A Mish layer's group is never read; the kit's own default stands in for it.
+            // A Mish or SiLU layer's group is never read; the kit's own default stands in for it.
             const simnorm_group: u32 = switch (normed.activation) {
                 .sim_norm => |group| @intCast(group),
                 else => 8,
@@ -544,7 +619,7 @@ pub fn KitNetwork(comptime M: type) type {
         ///                                                              `dense_fwd`'s order)
         ///     dense_tanh  tanh(p);   dense_relu  max(0, p)
         ///     normed_*    the layer norm of p (zimrmath's row statistics, as `norm_fwd`), times the gain, plus the
-        ///                 norm bias; then Mish, or SimNorm's softmax over each group
+        ///                 norm bias; then Mish, SiLU, or SimNorm's softmax over each group
         ///     plain       p itself
         ///
         /// `layer_scratch` holds two of the widest layer's outputs (`widestOutput`), the layers' values passed back
@@ -591,7 +666,7 @@ pub fn KitNetwork(comptime M: type) type {
                 value.* = switch (layer.kind) {
                     .dense_tanh => zm.tanh(accumulated),
                     .dense_relu => @max(accumulated, 0),
-                    .normed_mish, .normed_simnorm, .plain => accumulated,
+                    .normed_mish, .normed_silu, .normed_simnorm, .plain => accumulated,
                 };
             }
             if (!layer.kind.isNormed()) {
@@ -614,6 +689,9 @@ pub fn KitNetwork(comptime M: type) type {
             switch (layer.kind) {
                 .normed_mish => for (layer_output) |*value| {
                     value.* = zm.mish(value.*);
+                },
+                .normed_silu => for (layer_output) |*value| {
+                    value.* = zm.silu(value.*);
                 },
                 .normed_simnorm => {
                     const group: usize = layer.simnorm_group;
@@ -731,7 +809,7 @@ pub fn KitNetwork(comptime M: type) type {
 
         /// One layer's regions for `row_count` rows. A plain layer reserves only its linear outputs - which are its
         /// outputs - and the gradients its dense backward needs; a forward-only application no gradients at all.
-        fn reserveLayerRegions(
+        pub fn reserveLayerRegions(
             layout: *KitLayout,
             layer: KitLayer,
             row_count: u32,
@@ -762,9 +840,13 @@ pub fn KitNetwork(comptime M: type) type {
         pub const Application = struct {
             network: Self,
             row_count: u32,
-            layer_regions: []LayerRegions,
+            layer_regions: []const LayerRegions,
             dropout: Dropout = .off,
             use: ApplicationUse = .forward_and_backward,
+            /// THE FIRST LAYER's INPUT AFFINE (zn_mlp's `inputAffine`, `in_affine_off`): where in the parameters the
+            /// network's inputs' shifts and scales are - its inputs' normaliser - the first layer reading its inputs
+            /// through them in the forward and the backward alike. 0: none.
+            inputs_affine: u32 = 0,
 
             /// Whether this application drops out at `layer`.
             fn dropsAt(app: Application, layer: KitLayer) bool {
@@ -863,7 +945,9 @@ pub fn KitNetwork(comptime M: type) type {
             ) void {
                 var layer_inputs_offset: u32 = inputs_offset;
                 var layer_inputs_row_stride: u32 = inputs_row_stride;
-                for (app.network.layers, app.layer_regions) |layer, regions| {
+                for (app.network.layers, app.layer_regions, 0..) |layer, regions, layer_index| {
+                    // The network's inputs' affine is the first layer's alone: every later one reads its own outputs.
+                    const layer_inputs_affine: u32 = if (layer_index == 0) app.inputs_affine else 0;
                     linearForward(
                         pipe,
                         layer,
@@ -871,6 +955,7 @@ pub fn KitNetwork(comptime M: type) type {
                         forward_row_count,
                         layer_inputs_offset,
                         layer_inputs_row_stride,
+                        layer_inputs_affine,
                     );
                     // Dropout on the linear outputs, before the norm - where the CPU graph's `NormedDense` drops.
                     if (app.dropsAt(layer)) {
@@ -892,8 +977,9 @@ pub fn KitNetwork(comptime M: type) type {
                 }
             }
 
-            /// A layer's linear part: p = b + x W, one thread per output value (`dense_fwd`) - through the layer's
-            /// fused tanh or relu for a dense layer with one.
+            /// A layer's linear part: p = b + x W, in register blocks (`dense_fwd_tiled`: the untiled kernel's sums in
+            /// its order) - through the layer's fused tanh or relu for a dense layer with one, its inputs read through
+            /// `layer_inputs_affine` (0: as they are).
             fn linearForward(
                 pipe: *Pipe,
                 layer: KitLayer,
@@ -901,6 +987,7 @@ pub fn KitNetwork(comptime M: type) type {
                 row_count: u32,
                 layer_inputs_offset: u32,
                 layer_inputs_row_stride: u32,
+                layer_inputs_affine: u32,
             ) void {
                 pipe.params = .{
                     .rows = row_count,
@@ -911,13 +998,14 @@ pub fn KitNetwork(comptime M: type) type {
                     .y_off = regions.linear_outputs,
                     .w_off = layer.weights_offset,
                     .stride = layer_inputs_row_stride,
+                    .in_affine_off = layer_inputs_affine,
                 };
-                const output_count: u32 = row_count * layer.output_width;
-                pipe.run("dense_fwd", output_count);
+                const invocations: u32 = M.denseTiledInvocations(row_count, layer.output_width);
+                pipe.run("dense_fwd_tiled", invocations);
             }
 
             /// A normed layer's norm - its normalised rows, inverse spreads and scaled values, one thread per row
-            /// (`norm_fwd`) - then its activation: Mish one thread per value, SimNorm one per group.
+            /// (`norm_fwd`) - then its activation: Mish or SiLU one thread per value, SimNorm one per group.
             fn normAndActivationForward(
                 pipe: *Pipe,
                 layer: KitLayer,
@@ -946,6 +1034,7 @@ pub fn KitNetwork(comptime M: type) type {
                 const group_count: u32 = row_count * (layer.output_width / layer.simnorm_group);
                 switch (layer.kind) {
                     .normed_mish => pipe.run("mish_fwd", value_count),
+                    .normed_silu => pipe.run("silu_fwd", value_count),
                     .normed_simnorm => pipe.run("simnorm_fwd", group_count),
                     .dense_tanh, .dense_relu, .plain => {},
                 }
@@ -972,7 +1061,6 @@ pub fn KitNetwork(comptime M: type) type {
                 const has_backward: bool = app.use == .forward_and_backward;
                 const no_backward_message: []const u8 = "a backward through a forward-only application";
                 assertf(has_backward, @src(), no_backward_message, .{});
-                const accumulate_flag: u32 = parameter_gradients.accumulateFlag();
                 // The gradient arriving at the layer being worked on: the network's output gradient at first, then
                 // each layer's input gradient for the layer below it.
                 var arriving_gradient_offset: u32 = outputs_gradient_offset;
@@ -989,17 +1077,18 @@ pub fn KitNetwork(comptime M: type) type {
                     else
                         app.layer_regions[layer_index - 1].outputs;
                     const layer_inputs_row_stride: u32 = if (is_first_layer) inputs_row_stride else 0;
+                    const layer_inputs_affine: u32 = if (is_first_layer) app.inputs_affine else 0;
                     // The gradient at the linear part's outputs: through the activation and the norm for a normed
                     // layer; the arriving gradient scaled by its fused activation's slope, in place, for a dense layer
                     // with one; the arriving gradient itself for a plain one, whose outputs ARE its linear outputs.
                     const linear_outputs_gradient_offset: u32 = switch (layer.kind) {
-                        .normed_mish, .normed_simnorm => normAndActivationBackward(
+                        .normed_mish, .normed_silu, .normed_simnorm => normAndActivationBackward(
                             pipe,
                             layer,
                             regions,
                             backward_row_count,
                             arriving_gradient_offset,
-                            accumulate_flag,
+                            parameter_gradients,
                         ),
                         .dense_tanh, .dense_relu => fusedActivationBackward(
                             pipe,
@@ -1027,8 +1116,9 @@ pub fn KitNetwork(comptime M: type) type {
                         backward_row_count,
                         layer_inputs_offset,
                         layer_inputs_row_stride,
+                        layer_inputs_affine,
                         linear_outputs_gradient_offset,
-                        accumulate_flag,
+                        parameter_gradients,
                     );
                     arriving_gradient_offset = regions.inputs_gradient;
                 }
@@ -1057,8 +1147,8 @@ pub fn KitNetwork(comptime M: type) type {
             }
 
             /// A layer's linear part, backward: the gradients of W and b (`dense_bwd_w`, one thread per parameter,
-            /// each summing over the rows) and the gradient at the layer's inputs (`dense_bwd_x`, one thread per
-            /// input value, packed).
+            /// each summing over the rows) unless the network is held fixed (`ParameterGradients.none`), and the
+            /// gradient at the layer's inputs (`dense_bwd_x`, one thread per input value, packed).
             fn linearBackward(
                 pipe: *Pipe,
                 layer: KitLayer,
@@ -1066,21 +1156,26 @@ pub fn KitNetwork(comptime M: type) type {
                 backward_row_count: u32,
                 layer_inputs_offset: u32,
                 layer_inputs_row_stride: u32,
+                layer_inputs_affine: u32,
                 linear_outputs_gradient_offset: u32,
-                accumulate_flag: u32,
+                parameter_gradients: ParameterGradients,
             ) void {
-                pipe.params = .{
-                    .rows = backward_row_count,
-                    .in_dim = layer.input_width,
-                    .out_dim = layer.output_width,
-                    .x_off = layer_inputs_offset,
-                    .dy_off = linear_outputs_gradient_offset,
-                    .w_off = layer.weights_offset,
-                    .stride = layer_inputs_row_stride,
-                    .accumulate = accumulate_flag,
-                };
-                const weight_and_bias_count: u32 = layer.input_width * layer.output_width + layer.output_width;
-                pipe.run("dense_bwd_w", weight_and_bias_count);
+                if (parameter_gradients != .none) {
+                    pipe.params = .{
+                        .rows = backward_row_count,
+                        .in_dim = layer.input_width,
+                        .out_dim = layer.output_width,
+                        .x_off = layer_inputs_offset,
+                        .dy_off = linear_outputs_gradient_offset,
+                        .w_off = layer.weights_offset,
+                        .stride = layer_inputs_row_stride,
+                        .accumulate = parameter_gradients.accumulateFlag(),
+                        .in_affine_off = layer_inputs_affine,
+                    };
+                    // The weights' rows and the bias's as one more, in register blocks (`dense_bwd_w_tiled`).
+                    const weight_invocations: u32 = M.denseTiledInvocations(layer.input_width + 1, layer.output_width);
+                    pipe.run("dense_bwd_w_tiled", weight_invocations);
+                }
                 pipe.params = .{
                     .rows = backward_row_count,
                     .in_dim = layer.input_width,
@@ -1088,21 +1183,23 @@ pub fn KitNetwork(comptime M: type) type {
                     .dy_off = linear_outputs_gradient_offset,
                     .w_off = layer.weights_offset,
                     .dx_off = regions.inputs_gradient,
+                    .in_affine_off = layer_inputs_affine,
                 };
-                const input_value_count: u32 = backward_row_count * layer.input_width;
-                pipe.run("dense_bwd_x", input_value_count);
+                const input_invocations: u32 = M.denseTiledInvocations(backward_row_count, layer.input_width);
+                pipe.run("dense_bwd_x_tiled", input_invocations);
             }
 
             /// A normed layer's activation and norm, backward, from the gradient at its outputs: the gradient at the
-            /// scaled values (Mish's from the stored s, SimNorm's from the stored outputs), the gain's and norm bias's
-            /// gradients, and the gradient at the linear outputs - whose offset it returns.
+            /// scaled values (Mish's and SiLU's from the stored s, SimNorm's from the stored outputs), the gain's and
+            /// norm bias's gradients unless the network is held fixed (`ParameterGradients.none`), and the gradient
+            /// at the linear outputs - whose offset it returns.
             fn normAndActivationBackward(
                 pipe: *Pipe,
                 layer: KitLayer,
                 regions: LayerRegions,
                 backward_row_count: u32,
                 arriving_gradient_offset: u32,
-                accumulate_flag: u32,
+                parameter_gradients: ParameterGradients,
             ) u32 {
                 pipe.params = .{
                     .rows = backward_row_count,
@@ -1117,21 +1214,24 @@ pub fn KitNetwork(comptime M: type) type {
                 const group_count: u32 = backward_row_count * (layer.output_width / layer.simnorm_group);
                 switch (layer.kind) {
                     .normed_mish => pipe.run("mish_bwd", value_count),
+                    .normed_silu => pipe.run("silu_bwd", value_count),
                     .normed_simnorm => pipe.run("simnorm_bwd", group_count),
                     .dense_tanh, .dense_relu, .plain => {},
                 }
                 // The gain's and the norm bias's gradients first: they read ds, which `norm_bwd` is allowed to
                 // overwrite in place.
-                pipe.params = .{
-                    .rows = backward_row_count,
-                    .out_dim = layer.output_width,
-                    .dy_off = regions.scaled_values_gradient,
-                    .z_off = regions.normalised_rows,
-                    .w_off = layer.gainsOffset(),
-                    .accumulate = accumulate_flag,
-                };
-                const gain_and_norm_bias_count: u32 = 2 * layer.output_width;
-                pipe.run("norm_params_bwd", gain_and_norm_bias_count);
+                if (parameter_gradients != .none) {
+                    pipe.params = .{
+                        .rows = backward_row_count,
+                        .out_dim = layer.output_width,
+                        .dy_off = regions.scaled_values_gradient,
+                        .z_off = regions.normalised_rows,
+                        .w_off = layer.gainsOffset(),
+                        .accumulate = parameter_gradients.accumulateFlag(),
+                    };
+                    const gain_and_norm_bias_count: u32 = 2 * layer.output_width;
+                    pipe.run("norm_params_bwd", gain_and_norm_bias_count);
+                }
                 pipe.params = .{
                     .rows = backward_row_count,
                     .out_dim = layer.output_width,
@@ -1147,6 +1247,13 @@ pub fn KitNetwork(comptime M: type) type {
         };
     };
 }
+
+/// HOW A `KitMlp` STEPS ITS WEIGHTS: Adam - the default, with `Spec`'s `beta1`, `beta2` and `epsilon` - or SGD with
+/// momentum (`zn_mlp.sgd`), its velocity kept where Adam keeps its first moment. A momentum of 0 is plain SGD.
+pub const MlpOptimizer = union(enum) {
+    adam,
+    sgd: struct { momentum: f32 = 0 },
+};
 
 /// What a network is: its shape, how it is trained, and how many examples at a time.
 pub const Spec = struct {
@@ -1167,11 +1274,24 @@ pub const Spec = struct {
     /// against 0.2 mean reward at the start of training, and the gap never closes). It matters
     /// more here than for them, because our open-loop servo is stronger than theirs.
     output_scale: f32 = 1.0,
+    /// How each step moves the weights (`MlpOptimizer`).
+    optimizer: MlpOptimizer = .adam,
     rate: f32 = 1.0e-3,
     beta1: f32 = 0.9,
     beta2: f32 = 0.999,
     epsilon: f32 = 1.0e-8,
     seed: u64 = 1,
+};
+
+/// A NETWORK's TRAINING STATE, on the host: the weights, the two moment buffers - Adam's two moments, or SGD's velocity
+/// in the first - each laid out like the weights, and the steps taken, which Adam's bias corrections read. Everything a
+/// `KitMlp` carries from one step to the next, so what moves its training to another pipe, another machine or a job,
+/// and back (`KitMlp.requestState`, `KitMlp.putState`). The slices are the caller's, each as long as the parameters.
+pub const TrainingState = struct {
+    weights: []f32,
+    first_moments: []f32,
+    second_moments: []f32,
+    step_count: u32,
 };
 
 // ============================================================================================================
@@ -1180,11 +1300,13 @@ pub const Spec = struct {
 
 /// An ordinary multilayer perceptron on the kit, with its own pipe and batch (this file's head): one `KitNetwork` of
 /// plain dense layers and one application of it, the batch's inputs and targets beside it, and a training step of
-/// mean-squared error and Adam. Generic over the kit's kernel module, as `KitNetwork` is.
+/// mean-squared error and Adam or SGD (`MlpOptimizer`) - one at a time, or many in one submission (`trainSteps`).
+/// Generic over the kit's kernel module, as `KitNetwork` is.
 pub fn KitMlp(comptime M: type) type {
     return struct {
         const Self = @This();
         const Network = KitNetwork(M);
+        const Pipe = Network.Pipe;
 
         gpa: Allocator,
         arena: ArenaAllocator,
@@ -1203,6 +1325,51 @@ pub fn KitMlp(comptime M: type) type {
         /// A host-side mirror of the weights, as of the last `syncParameters`.
         cpu_params: []f32,
         adam_step: u32 = 0,
+
+        /// WHERE A NETWORK OF A SPEC LIVES in the kit's buffers: the parameters from offset 0; in acts the batch's
+        /// inputs first, then the application's regions, then the targets; in dacts the application's gradients, then
+        /// the outputs' gradient. One placement, for `init` and for `fits`.
+        const Placement = struct {
+            network: Network,
+            application: Network.Application,
+            inputs_offset: u32,
+            targets_offset: u32,
+            outputs_gradient_offset: u32,
+        };
+
+        fn place(owned: Allocator, layout: *KitLayout, spec: Spec) !Placement {
+            const network: Network = try .initDense(
+                owned,
+                layout,
+                spec.inputs,
+                spec.hidden,
+                spec.outputs,
+                spec.act,
+            );
+            const inputs_offset: u32 = layout.reserveActs(spec.rows * spec.inputs);
+            const application: Network.Application = try network.application(owned, layout, spec.rows);
+            const targets_offset: u32 = layout.reserveActs(spec.rows * spec.outputs);
+            const outputs_gradient_offset: u32 = layout.reserveDacts(spec.rows * spec.outputs);
+            const placement: Placement = .{
+                .network = network,
+                .application = application,
+                .inputs_offset = inputs_offset,
+                .targets_offset = targets_offset,
+                .outputs_gradient_offset = outputs_gradient_offset,
+            };
+            return placement;
+        }
+
+        /// WHETHER A NETWORK OF `spec` FITS the kit's buffers - what `init` asserts, asked first, and answered with the
+        /// buffer that is too small (`KitLayout.checkFitsKit`): a page offering a network's shape on a slider refuses
+        /// the shapes that do not fit, and a job refuses them by name instead of trapping. Memory: a scratch arena.
+        pub fn fits(gpa: Allocator, spec: Spec) !void {
+            var scratch: ArenaAllocator = .init(gpa);
+            defer scratch.deinit();
+            var layout: KitLayout = .{};
+            _ = try place(scratch.allocator(), &layout, spec);
+            try layout.checkFitsKit(M);
+        }
 
         pub fn init(gpa: Allocator, pipe: *compute_host.Compute(M), spec: Spec) !*Self {
             assertf(spec.inputs > 0 and spec.outputs > 0 and spec.rows > 0, @src(), "empty network", .{});
@@ -1227,14 +1394,13 @@ pub fn KitMlp(comptime M: type) type {
             // The hidden sizes are copied: a `Spec` is kept for the network's life, and a caller that built its layer
             // sizes in a scratch buffer would otherwise leave a dangling slice behind.
             self.spec.hidden = try owned.dupe(u32, spec.hidden);
-            // The layout: the parameters from offset 0; in acts the batch's inputs first, then the application's
-            // regions, then the targets; in dacts the application's gradients, then the outputs' gradient.
             const layout: *KitLayout = &self.layout;
-            self.network = try Network.initDense(owned, layout, spec.inputs, self.spec.hidden, spec.outputs, spec.act);
-            self.inputs_offset = layout.reserveActs(spec.rows * spec.inputs);
-            self.application = try self.network.application(owned, layout, spec.rows);
-            self.targets_offset = layout.reserveActs(spec.rows * spec.outputs);
-            self.outputs_gradient_offset = layout.reserveDacts(spec.rows * spec.outputs);
+            const placement: Placement = try place(owned, layout, self.spec);
+            self.network = placement.network;
+            self.inputs_offset = placement.inputs_offset;
+            self.application = placement.application;
+            self.targets_offset = placement.targets_offset;
+            self.outputs_gradient_offset = placement.outputs_gradient_offset;
             self.param_count = layout.params_floats;
             // Every region has to fit the kit's buffers, and the parameters are what surprises you: a
             // 361 -> 512 -> 512 -> 108 network is half a million weights, twice what the kit holds. Better a message
@@ -1349,26 +1515,38 @@ pub fn KitMlp(comptime M: type) type {
             @memcpy(out, acts[outputs_offset..][0..out.len]);
         }
 
-        /// One step: forward, mean-squared error against `targets`, backward, Adam. Returns the loss BEFORE the step,
-        /// which is what a training curve wants.
-        pub fn trainStep(self: *Self, inputs: []const f32, targets: []const f32) !f32 {
+        /// THE BATCH, uploaded once: `rows` rows of inputs and of targets, which every step reads until the next call.
+        /// Called before a recording begins - an upload made inside one lands before ALL of it (`compute_host`'s
+        /// recording) - and again only when the batch changes.
+        pub fn setBatch(self: *Self, inputs: []const f32, targets: []const f32) void {
             const rows: u32 = self.spec.rows;
             const shapes_fit: bool = inputs.len == rows * self.spec.inputs and targets.len == rows * self.spec.outputs;
-            assertf(shapes_fit, @src(), "a step wants {d} in and {d} targets, got {d} and {d}", .{
+            assertf(shapes_fit, @src(), "a batch is {d} inputs and {d} targets, got {d} and {d}", .{
                 rows * self.spec.inputs,
                 rows * self.spec.outputs,
                 inputs.len,
                 targets.len,
             });
-            self.adam_step += 1;
-            // Only the loss comes back - ONE number. The readback copies the first `element_count` elements of every
-            // buffer, so asking for the weights here would copy a prefix of all seven of them on every step, to learn
-            // a single float. Ask for the weights with `requestParameters` when you actually want them.
-            self.pipe.element_count = @max(self.pipe.element_count, 1);
             self.pipe.uploadAt(.acts, self.inputs_offset, inputs);
             self.pipe.uploadAt(.acts, self.targets_offset, targets);
-            const outputs_offset: u32 = self.application.outputsOffset();
+        }
+
+        /// `count` TRAINING STEPS on the batch `setBatch` placed, recorded as ONE submission - each the forward, the
+        /// loss and its gradient, the backward and the optimiser's step - with nothing read back: many steps for the
+        /// price of one submission. The loss before the last step is left at loss[0].
+        pub fn trainSteps(self: *Self, count: u32) void {
             self.pipe.beginRecording();
+            for (0..count) |_| {
+                self.recordStep();
+            }
+            self.pipe.submitRecording();
+        }
+
+        /// One training step, into the open recording (`trainSteps`).
+        fn recordStep(self: *Self) void {
+            const rows: u32 = self.spec.rows;
+            self.adam_step += 1;
+            const outputs_offset: u32 = self.application.outputsOffset();
             self.application.forward(self.pipe, self.inputs_offset, 0);
             // The loss, and the gradient it starts.
             self.pipe.params = .{
@@ -1388,27 +1566,55 @@ pub fn KitMlp(comptime M: type) type {
             const output_value_count: u32 = rows * self.spec.outputs;
             self.pipe.run("mse_bwd", output_value_count);
             self.application.backward(self.pipe, rows, self.inputs_offset, 0, self.outputs_gradient_offset, .overwrite);
-            // Adam over every parameter at once: they are one contiguous block from offset 0. Its bias corrections as
-            // zimrnum's Adam forms them (`zn.adamCorrectionMultipliers`): the host works out 1 / (1 - beta^t), since a
-            // kernel has no `pow`.
-            const corrections: zn.AdamCorrections(f32) = zn.adamCorrectionMultipliers(
-                f32,
-                self.spec.beta1,
-                self.spec.beta2,
-                self.adam_step,
-            );
-            self.pipe.params = .{
-                .count = self.param_count,
-                .w_off = 0,
-                .rate = self.spec.rate,
-                .beta1 = self.spec.beta1,
-                .beta2 = self.spec.beta2,
-                .epsilon = self.spec.epsilon,
-                .correction1 = corrections.first,
-                .correction2 = corrections.second,
-            };
-            self.pipe.run("adam", self.param_count);
-            self.pipe.submitRecording();
+            self.recordOptimizerStep();
+        }
+
+        /// The optimiser's step over every parameter at once: they are one contiguous block from offset 0.
+        fn recordOptimizerStep(self: *Self) void {
+            switch (self.spec.optimizer) {
+                .adam => {
+                    // Adam's bias corrections as zimrnum's Adam forms them (`zn.adamCorrectionMultipliers`): the host
+                    // works out 1 / (1 - beta^t), since a kernel has no `pow`.
+                    const corrections: zn.AdamCorrections(f32) = zn.adamCorrectionMultipliers(
+                        f32,
+                        self.spec.beta1,
+                        self.spec.beta2,
+                        self.adam_step,
+                    );
+                    self.pipe.params = .{
+                        .count = self.param_count,
+                        .w_off = 0,
+                        .rate = self.spec.rate,
+                        .beta1 = self.spec.beta1,
+                        .beta2 = self.spec.beta2,
+                        .epsilon = self.spec.epsilon,
+                        .correction1 = corrections.first,
+                        .correction2 = corrections.second,
+                    };
+                    self.pipe.run("adam", self.param_count);
+                },
+                .sgd => |sgd_settings| {
+                    // The velocity lives in Adam's first moment and the momentum rides in `beta1` (`zn_mlp.sgd`).
+                    self.pipe.params = .{
+                        .count = self.param_count,
+                        .w_off = 0,
+                        .rate = self.spec.rate,
+                        .beta1 = sgd_settings.momentum,
+                    };
+                    self.pipe.run("sgd", self.param_count);
+                },
+            }
+        }
+
+        /// One step on `inputs` and `targets`: `setBatch`, then `trainSteps(1)`. Returns the loss BEFORE the step,
+        /// which is what a training curve wants.
+        pub fn trainStep(self: *Self, inputs: []const f32, targets: []const f32) !f32 {
+            self.setBatch(inputs, targets);
+            // Only the loss comes back - ONE number. The readback copies the first `element_count` elements of every
+            // buffer, so asking for the weights here would copy a prefix of all seven of them on every step, to learn
+            // a single float. Ask for the weights with `requestParameters` when you actually want them.
+            self.pipe.element_count = @max(self.pipe.element_count, 1);
+            self.trainSteps(1);
             const loss: []const f32 = self.pipe.readLatest(.loss) orelse return error.NoReadback;
             if (loss.len < 1) {
                 return error.NoReadback;
@@ -1417,12 +1623,295 @@ pub fn KitMlp(comptime M: type) type {
             _ = self.syncParameters();
             return loss[0];
         }
+
+        /// ASK FOR THE CURVE: the last forward's outputs, `rows` x `outputs`, as every step submitted so far left
+        /// them - a range of the activations (`compute_host`'s `requestRange`), collected a frame later on a device and
+        /// at once on the twin. A step's forward comes first, so they are the outputs of the weights BEFORE its update.
+        pub fn requestOutputs(self: *Self, gpa: Allocator) Allocator.Error!Pipe.RangeRequest(.acts) {
+            const outputs_offset: u32 = self.application.outputsOffset();
+            const output_count: u32 = self.spec.rows * self.spec.outputs;
+            return self.pipe.requestRange(gpa, .acts, outputs_offset, output_count);
+        }
+
+        /// THE TRAINING's STATE ON ITS WAY BACK (`requestState`): a range request for each buffer, and the step count,
+        /// which the host holds already. Each buffer lands in the caller's state as it arrives.
+        pub const StateRequest = struct {
+            weights: Pipe.RangeRequest(.params),
+            first_moments: Pipe.RangeRequest(.adam_m),
+            second_moments: Pipe.RangeRequest(.adam_v),
+            step_count: u32,
+            has_weights: bool = false,
+            has_first_moments: bool = false,
+            has_second_moments: bool = false,
+
+            /// The state into `out` once every buffer has landed - true - or false at once, the rest on its way.
+            pub fn collect(request: *StateRequest, out: *TrainingState) bool {
+                if (!request.has_weights) {
+                    request.has_weights = request.weights.collect(out.weights);
+                }
+                if (!request.has_first_moments) {
+                    request.has_first_moments = request.first_moments.collect(out.first_moments);
+                }
+                if (!request.has_second_moments) {
+                    request.has_second_moments = request.second_moments.collect(out.second_moments);
+                }
+                const has_every_buffer: bool = request.has_weights and request.has_first_moments and
+                    request.has_second_moments;
+                if (has_every_buffer) {
+                    out.step_count = request.step_count;
+                }
+                return has_every_buffer;
+            }
+
+            /// The request given up: every buffer not landed yet, released.
+            pub fn discard(request: *StateRequest) void {
+                if (!request.has_weights) {
+                    request.weights.discard();
+                }
+                if (!request.has_first_moments) {
+                    request.first_moments.discard();
+                }
+                if (!request.has_second_moments) {
+                    request.second_moments.discard();
+                }
+            }
+        };
+
+        /// ASK FOR THE TRAINING's STATE (`TrainingState`) as every step submitted so far left it. Not inside a
+        /// recording. It lands at once on the twin, a frame later on a device (`StateRequest.collect`).
+        pub fn requestState(self: *Self, gpa: Allocator) Allocator.Error!StateRequest {
+            var weights: Pipe.RangeRequest(.params) = try self.pipe.requestRange(gpa, .params, 0, self.param_count);
+            errdefer weights.discard();
+            var first_moments: Pipe.RangeRequest(.adam_m) = try self.pipe.requestRange(
+                gpa,
+                .adam_m,
+                0,
+                self.param_count,
+            );
+            errdefer first_moments.discard();
+            const second_moments: Pipe.RangeRequest(.adam_v) = try self.pipe.requestRange(
+                gpa,
+                .adam_v,
+                0,
+                self.param_count,
+            );
+            const request: StateRequest = .{
+                .weights = weights,
+                .first_moments = first_moments,
+                .second_moments = second_moments,
+                .step_count = self.adam_step,
+            };
+            return request;
+        }
+
+        /// PUT A TRAINING's STATE IN PLACE - the weights, both moment buffers and the step count, from this network or
+        /// another of the same shape, on any machine (`requestState`) - so that the next step goes on from it.
+        pub fn putState(self: *Self, state: TrainingState) void {
+            const lengths_fit: bool = state.weights.len == self.param_count and
+                state.first_moments.len == self.param_count and state.second_moments.len == self.param_count;
+            assertf(lengths_fit, @src(), "a state of {d}, {d} and {d} numbers for {d} parameters", .{
+                state.weights.len,
+                state.first_moments.len,
+                state.second_moments.len,
+                self.param_count,
+            });
+            self.setParameters(state.weights);
+            self.pipe.upload(.adam_m, state.first_moments);
+            self.pipe.upload(.adam_v, state.second_moments);
+            self.adam_step = state.step_count;
+        }
     };
 }
 
 // ============================================================================================================
 // ONE CLIPPED ADAM STEP
 // ============================================================================================================
+
+/// MUON's SETTINGS - `torch.optim.Muon`'s defaults, with SuperMimic's rate adjustment (`adjust_lr_fn=
+/// "match_rms_adamw"`): the step's length is the rate times 0.2 sqrt(the matrix's longer side), which gives an update
+/// of about Adam's root-mean-square size, so one learning rate serves Muon's matrices and Adam's other weights.
+pub const MuonSettings = struct {
+    momentum: f32 = 0.95,
+    /// The Newton-Schulz quintic's coefficients (a, b, c) and its rounds.
+    coefficients: [3]f32 = .{ 3.4445, -4.7750, 2.0315 },
+    rounds: u32 = 5,
+    /// The Frobenius length's floor before the division.
+    epsilon: f32 = 1e-7,
+    /// Decoupled weight decay: the weights times (1 - rate x decay) before each step. 0, none: the reproductions'
+    /// MuonAdam decays nothing - BlinkMimic's sets it to 0, and XMimic's step has no decay at all - where
+    /// torch.optim.Muon's default, which SuperMimic's official optimiser keeps, is 0.1. Muon's steps have a fixed size
+    /// whatever the gradient's, so without a decay the weights' length grows with the number of steps, and a decay
+    /// holds it where the pull toward zero balances the steps (Liu et al. 2025, whose RMS matching is used here too);
+    /// over the 3,500 iterations those reproductions train, the growth does not matter.
+    weight_decay: f32 = 0,
+};
+
+/// MUON ON ONE SQUARE MATRIX (`zn_mlp`'s Muon kernels; `ClippedAdam.muon`), its weights `side` x `side` from params
+/// `matrix_start`. Its momentum buffer is Adam's first-moment buffer over the matrix, so the state file saves it; its
+/// working matrices live in acts. One step, from the clipped gradient:
+///
+///     momentum      buffer <- buffer + (1 - m)(g - buffer);  X = g + m (buffer - g)        (Nesterov)
+///     normalise     X <- X / max(|X|_F, epsilon)
+///     orthogonalise 5 x:  G = X X^T;  U = b G + c G G;  X <- a X + U X
+///     step          w <- w (1 - rate x decay) - rate x 0.2 sqrt(side) x X
+///
+/// The iteration runs in f32, where torch's runs in bfloat16 for speed: the same arithmetic at a higher precision, so
+/// nearer the exact iteration the coefficients were chosen for. A square matrix needs no transpose (torch transposes a
+/// taller-than-wide one to iterate on the smaller Gram matrix).
+pub const Muon = struct {
+    matrix_start: u32,
+    side: u32,
+    settings: MuonSettings,
+    chunk_floats: u32,
+    /// acts: the iterate X, the next one, the Gram matrix G, the polynomial U, the length's partial sums, its inverse.
+    iterate_at: u32,
+    next_at: u32,
+    gram_at: u32,
+    polynomial_at: u32,
+    partials_at: u32,
+    inverse_length_at: u32,
+
+    /// MUON ON ANOTHER MATRIX OF `first`'s SIDE, from params `matrix_start`, sharing `first`'s working matrices: a
+    /// network's Muon matrices take their steps one after another (`ClippedAdam.step`), so one set of working matrices
+    /// serves them all - at 1,024 wide, four million floats each.
+    pub fn reserveSharing(first: Muon, matrix_start: u32) Muon {
+        var muon: Muon = first;
+        muon.matrix_start = matrix_start;
+        return muon;
+    }
+
+    pub fn reserve(
+        layout: *KitLayout,
+        matrix_start: u32,
+        side: u32,
+        settings: MuonSettings,
+    ) Muon {
+        const chunk_floats: u32 = 1024;
+        const count: u32 = side * side;
+        const chunk_count: u32 = (count + chunk_floats - 1) / chunk_floats;
+        const muon: Muon = .{
+            .matrix_start = matrix_start,
+            .side = side,
+            .settings = settings,
+            .chunk_floats = chunk_floats,
+            .iterate_at = layout.reserveActs(count),
+            .next_at = layout.reserveActs(count),
+            .gram_at = layout.reserveActs(count),
+            .polynomial_at = layout.reserveActs(count),
+            .partials_at = layout.reserveActs(chunk_count),
+            .inverse_length_at = layout.reserveActs(1),
+        };
+        return muon;
+    }
+
+    /// One step at `learning_rate`, the gradient scaled by the clip factor at acts `clip_factor_offset`.
+    pub fn step(
+        muon: Muon,
+        comptime M: type,
+        pipe: *compute_host.Compute(M),
+        learning_rate: f32,
+        clip_factor_offset: u32,
+    ) void {
+        const side: u32 = muon.side;
+        const count: u32 = side * side;
+        const settings: MuonSettings = muon.settings;
+        // The Nesterov momentum, into the iterate.
+        pipe.params = .{
+            .count = count,
+            .w_off = muon.matrix_start,
+            .x_off = clip_factor_offset,
+            .y_off = muon.iterate_at,
+            .muon_momentum = settings.momentum,
+        };
+        pipe.run("muon_momentum", count);
+        // Normalised to unit Frobenius length.
+        const chunk_count: u32 = (count + muon.chunk_floats - 1) / muon.chunk_floats;
+        pipe.params = .{
+            .count = count,
+            .stride = muon.chunk_floats,
+            .x_off = muon.iterate_at,
+            .y_off = muon.partials_at,
+        };
+        pipe.run("muon_square_partials", chunk_count);
+        pipe.params = .{
+            .rows = chunk_count,
+            .x_off = muon.partials_at,
+            .z_off = muon.inverse_length_at,
+            .epsilon = settings.epsilon,
+        };
+        pipe.run("muon_inverse_length", 1);
+        pipe.params = .{
+            .count = count,
+            .x_off = muon.iterate_at,
+            .y_off = muon.iterate_at,
+            .z_off = muon.inverse_length_at,
+        };
+        pipe.run("muon_scale", count);
+        // The Newton-Schulz rounds, the iterate and the next swapping places.
+        const a: f32 = settings.coefficients[0];
+        const b: f32 = settings.coefficients[1];
+        const c: f32 = settings.coefficients[2];
+        const invocations: u32 = M.denseTiledInvocations(side, side);
+        var iterate_at: u32 = muon.iterate_at;
+        var next_at: u32 = muon.next_at;
+        var newton_round: u32 = 0;
+        while (newton_round < settings.rounds) : (newton_round += 1) {
+            // G = X X^T
+            pipe.params = .{
+                .rows = side,
+                .in_dim = side,
+                .out_dim = side,
+                .x_off = iterate_at,
+                .v_off = iterate_at,
+                .y_off = muon.gram_at,
+                .muon_b_transposed = 1,
+            };
+            pipe.run("muon_matmul_tiled", invocations);
+            // U = c G G + b G
+            pipe.params = .{
+                .rows = side,
+                .in_dim = side,
+                .out_dim = side,
+                .x_off = muon.gram_at,
+                .v_off = muon.gram_at,
+                .u_off = muon.gram_at,
+                .y_off = muon.polynomial_at,
+                .muon_alpha = c,
+                .muon_beta = b,
+            };
+            pipe.run("muon_matmul_tiled", invocations);
+            // X' = U X + a X
+            pipe.params = .{
+                .rows = side,
+                .in_dim = side,
+                .out_dim = side,
+                .x_off = muon.polynomial_at,
+                .v_off = iterate_at,
+                .u_off = iterate_at,
+                .y_off = next_at,
+                .muon_beta = a,
+            };
+            pipe.run("muon_matmul_tiled", invocations);
+            const previous_at: u32 = iterate_at;
+            iterate_at = next_at;
+            next_at = previous_at;
+        }
+        // The step: decay, then the orthogonalised update at the adjusted rate.
+        const longer_side: f32 = float(side);
+        const adjusted_rate: f32 = learning_rate * 0.2 * @sqrt(longer_side);
+        pipe.params = .{
+            .count = count,
+            .w_off = muon.matrix_start,
+            .x_off = iterate_at,
+            .muon_decay = learning_rate * settings.weight_decay,
+            .muon_step = adjusted_rate,
+        };
+        pipe.run("muon_apply", count);
+    }
+};
+
+/// The most Muon matrices one `ClippedAdam` range holds: a network's hidden-to-hidden matrices.
+pub const max_muon_matrices: usize = 4;
 
 /// ONE CLIPPED ADAM STEP over a contiguous range of parameters - the optimiser step of every network on the kit that
 /// learns alone (SuperTrack's critic, a flow actor), on the gradients its backward left in the gradient buffer:
@@ -1456,6 +1945,12 @@ pub const ClippedAdam = struct {
     /// A partial sum of squares per chunk of the range, then the norm and the factor.
     partials_offset: u32,
     norm_offset: u32,
+    /// MUON on square matrices inside the range (`Muon`, `addMuon`), in the order they lie: their gradients join the
+    /// global length and its clip like every other, and each matrix then takes Muon's step instead of Adam's - every
+    /// hidden-to-hidden matrix of a network, as SuperMimic's MuonAdam picks them (every linear layer's but the first's
+    /// and the last's). None: Adam over the whole range.
+    muon_matrices: [max_muon_matrices]Muon = undefined,
+    muon_count: u32 = 0,
 
     /// The clip's regions for the `params_count` parameters from `params_start`, reserved in `layout`.
     pub fn reserve(layout: *KitLayout, params_start: u32, params_count: u32) ClippedAdam {
@@ -1469,6 +1964,48 @@ pub const ClippedAdam = struct {
             .norm_offset = layout.reserveActs(2),
         };
         return adam;
+    }
+
+    /// `muon` as the range's next Muon matrix: after the last one added, and inside the range.
+    pub fn addMuon(adam: *ClippedAdam, muon: Muon) void {
+        const has_room: bool = adam.muon_count < max_muon_matrices;
+        assertf(has_room, @src(), "a range holds at most {d} Muon matrices", .{max_muon_matrices});
+        const matrix_end: u32 = muon.matrix_start + muon.side * muon.side;
+        const params_end: u32 = adam.params_start + adam.params_count;
+        const inside: bool = muon.matrix_start >= adam.params_start and matrix_end <= params_end;
+        assertf(inside, @src(), "a Muon matrix [{d}, {d}) outside its range [{d}, {d})", .{
+            muon.matrix_start,
+            matrix_end,
+            adam.params_start,
+            params_end,
+        });
+        if (adam.muon_count > 0) {
+            const previous: Muon = adam.muon_matrices[adam.muon_count - 1];
+            const previous_end: u32 = previous.matrix_start + previous.side * previous.side;
+            assertf(muon.matrix_start >= previous_end, @src(), "Muon matrices out of order: {d} before {d}", .{
+                muon.matrix_start,
+                previous_end,
+            });
+        }
+        adam.muon_matrices[adam.muon_count] = muon;
+        adam.muon_count += 1;
+    }
+
+    /// Adam's step over `stretch_count` parameters from `stretch_start`, by `adam_params` otherwise.
+    fn adamStretch(
+        comptime M: type,
+        pipe: *compute_host.Compute(M),
+        adam_params: M.Params,
+        stretch_start: u32,
+        stretch_count: u32,
+    ) void {
+        if (stretch_count == 0) {
+            return;
+        }
+        pipe.params = adam_params;
+        pipe.params.w_off = stretch_start;
+        pipe.params.count = stretch_count;
+        pipe.run("adam_clipped", stretch_count);
     }
 
     /// The step (this type's head), the `update_count`-th from 1.
@@ -1502,7 +2039,7 @@ pub const ClippedAdam = struct {
         );
         // The factor sits right after the norm.
         const clip_factor_offset: u32 = adam.norm_offset + 1;
-        pipe.params = .{
+        const adam_params: M.Params = .{
             .count = adam.params_count,
             .w_off = adam.params_start,
             .x_off = clip_factor_offset,
@@ -1514,7 +2051,19 @@ pub const ClippedAdam = struct {
             .correction2 = corrections.second,
             .gradient_element_clip = settings.element_clip,
         };
-        pipe.run("adam_clipped", adam.params_count);
+        // Adam on every stretch around the Muon matrices - the whole range when there are none - then Muon on each.
+        const muons: []const Muon = adam.muon_matrices[0..adam.muon_count];
+        var stretch_start: u32 = adam.params_start;
+        for (muons) |muon| {
+            const stretch_count: u32 = muon.matrix_start - stretch_start;
+            adamStretch(M, pipe, adam_params, stretch_start, stretch_count);
+            stretch_start = muon.matrix_start + muon.side * muon.side;
+        }
+        const params_end: u32 = adam.params_start + adam.params_count;
+        adamStretch(M, pipe, adam_params, stretch_start, params_end - stretch_start);
+        for (muons) |muon| {
+            muon.step(M, pipe, settings.learning_rate, clip_factor_offset);
+        }
     }
 };
 

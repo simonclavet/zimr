@@ -43,11 +43,11 @@ const readInt = std.mem.readInt;
 const writeInt = std.mem.writeInt;
 
 /// Friends-only scale. One connection per peer; this caps the mesh size.
-pub const max_peers = 8;
+pub const max_peers: usize = 8;
 
-const sdp_cap = 16384; // SDP offers/answers run a few KB; ICE candidates are tiny
-const cq_cap = max_peers * 2 + 8; // control events queued between poll() calls
-const reconnect_cooldown = 30; // poll-calls between reconnect attempts (~0.5s @ 60fps)
+const sdp_cap: usize = 16384; // SDP offers/answers run a few KB; ICE candidates are tiny
+const cq_cap: usize = max_peers * 2 + 8; // control events queued between poll() calls
+const reconnect_cooldown: u32 = 30; // poll-calls between reconnect attempts (~0.5s @ 60fps)
 
 pub const ChannelRef = struct { peer: u32, channel: u8 };
 

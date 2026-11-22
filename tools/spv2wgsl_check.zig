@@ -57,10 +57,11 @@ const sliceAsBytes = std.mem.sliceAsBytes;
 const splitScalar = std.mem.splitScalar;
 const sortSlice = std.mem.sort;
 const expectEqual = std.testing.expectEqual;
+const expectEqualStrings = std.testing.expectEqualStrings;
 const spv2wgsl = @import("spv2wgsl");
 
-const cache_dir = ".zig-cache/o";
-const tint_dir = "tests/fixtures/external/tint";
+const cache_dir: []const u8 = ".zig-cache/o";
+const tint_dir: []const u8 = "tests/fixtures/external/tint";
 
 // ============================================================================
 // Result types
@@ -231,7 +232,7 @@ fn checkWgslStructural(wgsl: []const u8) ?[]const u8 {
     // After emitTypeStruct's dedup this never happens; if it does, fail the
     // gate at build time rather than on the device.
     if (spv2wgsl.wgsl_check.duplicateStructBody(wgsl) != null) {
-        return "duplicate struct body (spv2wgsl struct-dedup regression — see emitTypeStruct)";
+        return "duplicate struct body (spv2wgsl struct-dedup regression - see emitTypeStruct)";
     }
 
     return null;
@@ -367,6 +368,23 @@ fn scanKnownBugs(arena: Allocator, wgsl: []const u8) ![]Diag {
 // Other lexical scans
 // ============================================================================
 
+/// Whether `line`, a statement with the space around it trimmed, is a `return`: the keyword, then nothing that could
+/// continue a name - the line's end, a `;`, a space, a parenthesis. A name that only begins with those letters is a
+/// variable: `returned = 1u;` and `return_length = 0u;` are assignments, and what follows them runs.
+fn isReturnStatement(line: []const u8) bool {
+    const keyword: []const u8 = "return";
+    if (!startsWith(u8, line, keyword)) {
+        return false;
+    }
+    const keyword_ends_the_line: bool = line.len == keyword.len;
+    if (keyword_ends_the_line) {
+        return true;
+    }
+    const next_character: u8 = line[keyword.len];
+    const continues_a_name: bool = std.ascii.isAlphanumeric(next_character) or next_character == '_';
+    return !continues_a_name;
+}
+
 /// UNREACHABLE CODE, as Tint warns of it: a statement after a `return`, `break` or `continue` in the same block, or
 /// after a `switch` with a `default` whose every arm ends in one. A stack of blocks, each knowing how its last
 /// statement ended control; `if`, loops and other blocks are taken never to (conservative: no false alarm).
@@ -436,7 +454,7 @@ fn scanUnreachable(arena: Allocator, wgsl: []const u8) ![]Diag {
             try blocks.append(arena, .{ .kind = kind });
             continue;
         }
-        current.ending = if (startsWith(u8, line, "return"))
+        current.ending = if (isReturnStatement(line))
             .returned
         else if (eql(u8, line, "break;"))
             .broke
@@ -446,6 +464,29 @@ fn scanUnreachable(arena: Allocator, wgsl: []const u8) ![]Diag {
             .none;
     }
     return out.toOwnedSlice(arena);
+}
+
+test "scanUnreachable: a variable whose name begins with `return` is not a return statement" {
+    var arena_state: ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    // Assignments to variables named `returned` and `return_length`, each followed by a statement that runs; then a
+    // real `return;`, followed by the one statement that cannot.
+    const wgsl: []const u8 =
+        \\fn f() {
+        \\  var returned: u32;
+        \\  var return_length: u32;
+        \\  returned = 1u;
+        \\  let after_returned: u32 = 2u;
+        \\  return_length = 3u;
+        \\  let after_return_length: u32 = 4u;
+        \\  return;
+        \\  let after_the_return: u32 = 5u;
+        \\}
+    ;
+    const found: []Diag = try scanUnreachable(arena, wgsl);
+    try expectEqual(@as(usize, 1), found.len);
+    try expectEqualStrings("let after_the_return: u32 = 5u;", found[0].text);
 }
 
 test "scanUnreachable: a statement after a switch whose every arm returns is caught" {
@@ -984,7 +1025,7 @@ pub fn main(init: std.process.Init) !void {
     var stdout_buf: [4096]u8 = undefined;
     var stdout_w: Io.File.Writer = Io.File.stdout().writer(io, &stdout_buf);
 
-    try stdout_w.interface.print("\nspv2wgsl_check — {d} shader(s)\n\n", .{targets.items.len});
+    try stdout_w.interface.print("\nspv2wgsl_check - {d} shader(s)\n\n", .{targets.items.len});
     try stdout_w.interface.print(
         "  status         spv         wgsl  lines  diags                       name\n",
         .{},

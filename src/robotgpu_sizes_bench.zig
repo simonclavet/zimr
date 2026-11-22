@@ -4,15 +4,18 @@
 //! fits lavapipe's 128 MB binding, the constraint rows' exactly, so the same build is checked on the build machine
 //! at small world counts before it is run elsewhere at large ones.
 
+/// The CPU twin kept: the device test checks the device against it.
+pub const cpu_twin: bool = true;
+
 /// Real-valued model constants: bodies, joints, dofs, geoms, and the clips of a tracking task (the test's own length).
 pub const model_f: u32 = 1 << 18;
 /// Topology and index tables.
 pub const model_u: u32 = 1 << 18;
 /// Per-world model parameters, for domain randomisation: 1,024 x 1,024.
 pub const batch_f: u32 = 1 << 20;
-/// Per-world state and everything derived from it: 1,024 x 11,152 floats (Geno on a tracking task, measured).
+/// Per-world state and everything derived from it: 1,024 x 11,852 floats (Geno on a tracking task, measured).
 pub const world_f: u32 = 1 << 24;
-/// Per-world integers - counts, row kinds and sources, each row's Jacobian's dofs, overflow bits: 1,024 x 6,580.
+/// Per-world integers - counts, row kinds and sources, each row's Jacobian's dofs, overflow bits: 1,024 x 6,592.
 pub const world_u: u32 = 1 << 23;
 /// Each world's constraint rows (`robotgpu.ConstraintRowsLayout`), 1,024 x 21,756 floats: 128 MB, lavapipe's largest
 /// binding.

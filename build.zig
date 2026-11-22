@@ -101,6 +101,12 @@ const AutoHashMapUnmanaged = std.AutoHashMapUnmanaged;
 
 const StringHashMap = std.StringHashMap;
 
+const StringArrayHashMapUnmanaged = std.StringArrayHashMapUnmanaged;
+
+const EnumArray = std.EnumArray;
+
+const Allocator = std.mem.Allocator;
+
 const indexOf = std.mem.indexOf;
 
 const indexOfScalar = std.mem.indexOfScalar;
@@ -425,8 +431,554 @@ fn addToolHostOptions(b: *std.Build, codecs_mod: *Module) void {
     codecs_mod.addOptions("build_options", options);
 }
 
+/// WHERE A CHECK SITS ON THE LADDER (src/notes/test_build_everything_plan.md, section 3). Each tier is one step, named
+/// by `stepName`: `tripwires` holds `lint-check`, and `gate` holds `tripwires` and the tests.
+const CheckTier = enum {
+    style,
+    invariants,
+    quick_tests,
+    gate,
+    everything,
+
+    /// The tier's own step.
+    fn stepName(tier: CheckTier) []const u8 {
+        return switch (tier) {
+            .style => "lint-check",
+            .invariants => "tripwires",
+            .quick_tests => "test",
+            .gate => "gate",
+            .everything => "test-everything",
+        };
+    }
+
+    /// Whether `name` is a tier's own step's name.
+    fn isStepName(name: []const u8) bool {
+        for (std.enums.values(CheckTier)) |tier| {
+            const names_match: bool = eql(u8, tier.stepName(), name);
+            if (names_match) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// THE LADDER: the tiers whose steps this tier's step holds - two branches that meet at `gate`. `test` holds no
+    /// style tier: tests are never gated on style.
+    fn holds(tier: CheckTier) []const CheckTier {
+        return switch (tier) {
+            .style => &.{},
+            .invariants => &.{.style},
+            .quick_tests => &.{},
+            .gate => &.{ .invariants, .quick_tests },
+            .everything => &.{.gate},
+        };
+    }
+};
+
+/// What a step needs from the machine beyond Zig: required, proven by a probe, and left out only when `-Dskip` names it
+/// (the plan's section 4f; the probes come in its stage S5).
+const Need = enum {
+    nothing,
+    vulkan_device,
+    vulkan_headers,
+};
+
+/// Where a check sits, and what it needs.
+const CheckPlace = struct {
+    tier: CheckTier,
+    need: Need = .nothing,
+};
+
+/// WHAT A TOP-LEVEL STEP IS FOR - the one fact `StepRegistry` keeps about each (the plan's section 4a).
+const StepKind = union(enum) {
+    /// Asserts something; its tier's step runs it.
+    check: CheckPlace,
+    /// A narrower way into checks the ladder runs: one test root, one example's run.
+    part,
+    /// An output in zig-out, and what making it needs.
+    build: Need,
+    /// One app's own step, `zig build <app>`: it builds the app for `-Dplatform`, and fails, naming the reason, on a
+    /// platform the app lacks - `build-everything` leaves it to `all-examples`, which builds each app the platform has.
+    app,
+    /// Rewrites tracked files: no tier's step may reach one.
+    writes,
+    /// Runs something for a person - an app, a server, a bench, a tool taking arguments: no tier's step may reach one.
+    runs,
+};
+
+/// Every step `root` depends on, at any depth, `root` included.
+fn stepsReachedFrom(gpa: Allocator, root: *Step) AutoHashMapUnmanaged(*Step, void) {
+    var reached: AutoHashMapUnmanaged(*Step, void) = .empty;
+    var pending: ArrayList(*Step) = .empty;
+    defer pending.deinit(gpa);
+    pending.append(gpa, root) catch @panic("oom");
+    while (pending.pop()) |reached_step| {
+        const entry: @TypeOf(reached).GetOrPutResult = reached.getOrPut(gpa, reached_step) catch @panic("oom");
+        if (entry.found_existing) {
+            continue;
+        }
+        pending.appendSlice(gpa, reached_step.dependencies.items) catch @panic("oom");
+    }
+    return reached;
+}
+
+/// `dependant.dependOn(dependency)`, unless it depends on it already.
+fn dependOnce(dependant: *Step, dependency: *Step) void {
+    const depends_already: bool = indexOfScalar(*Step, dependant.dependencies.items, dependency) != null;
+    if (!depends_already) {
+        dependant.dependOn(dependency);
+    }
+}
+
+/// " (needs <need>)", or nothing for a step that needs nothing beyond Zig.
+fn needNote(b: *std.Build, need: Need) []const u8 {
+    const needs_nothing: bool = need == .nothing;
+    return if (needs_nothing) "" else b.fmt(" (needs {s})", .{@tagName(need)});
+}
+
+/// Appends `heading`, then `items` comma-separated in lines of at most 120 columns, indented by four.
+fn appendListing(
+    gpa: Allocator,
+    text: *ArrayList(u8),
+    heading: []const u8,
+    items: []const []const u8,
+) void {
+    text.appendSlice(gpa, heading) catch @panic("oom");
+    var line_length: usize = 0;
+    for (items, 0..) |item, index| {
+        const separator: []const u8 = if (index + 1 == items.len) "" else ",";
+        const starts_a_line: bool = line_length == 0 or line_length + 1 + item.len + separator.len > 120;
+        const before_item: []const u8 = if (starts_a_line) "\n    " else " ";
+        line_length = if (starts_a_line) 4 else line_length + 1;
+        text.appendSlice(gpa, before_item) catch @panic("oom");
+        text.appendSlice(gpa, item) catch @panic("oom");
+        text.appendSlice(gpa, separator) catch @panic("oom");
+        line_length += item.len + separator.len;
+    }
+    const has_items: bool = items.len > 0;
+    text.appendSlice(gpa, if (has_items) "\n\n" else "\n    (none)\n\n") catch @panic("oom");
+}
+
+/// EVERY TOP-LEVEL STEP OF ZIMR'S OWN BUILD, AND ITS KIND. Owned by `build()` and handed to the helpers that make
+/// steps (a module global is refused: `module-var`). A step is made with `step`, a tier's own with `tierStep`, and one
+/// made elsewhere - Zig's `install` and `uninstall` - gets its kind from `declare`. `finish`, last in `build()`,
+/// holds every top-level step to that and writes `help-checks`' text.
+const StepRegistry = struct {
+    b: *std.Build,
+    /// Each top-level step's kind, by the step's name. A tier's own step is in `tier_steps` instead.
+    kinds: StringArrayHashMapUnmanaged(StepKind) = .empty,
+    /// Each tier's own step, once `tierStep` has made it.
+    tier_steps: EnumArray(CheckTier, ?*Step) = .initFill(null),
+    /// The run that prints `help-checks`' text, once `addHelpChecks` has made it; `finish` hands it the text.
+    help_checks_run: ?*Run = null,
+    /// What `build-everything` holds beside the `build` steps (`addOutput`): `tools`, which compiles every tool.
+    outputs: ArrayList(*Step) = .empty,
+    /// What runs in a step's place inside `test-everything` (`standIn`): a fast root's slow run for its quick one.
+    stand_ins: AutoHashMapUnmanaged(*Step, *Step) = .empty,
+    /// The steps `holdInPlace` opened: `test-everything` holds each one's members in their place, so it runs it.
+    opened: AutoHashMapUnmanaged(*Step, void) = .empty,
+
+    fn init(b: *std.Build) StepRegistry {
+        var registry: StepRegistry = .{ .b = b };
+        registry.declare("install", .{ .build = .nothing });
+        registry.declare("uninstall", .writes);
+        return registry;
+    }
+
+    /// `b.step`, with the step's kind recorded under its name.
+    fn step(
+        registry: *StepRegistry,
+        name: []const u8,
+        description: []const u8,
+        kind: StepKind,
+    ) *Step {
+        const made: *Step = registry.b.step(name, description);
+        registry.declare(name, kind);
+        return made;
+    }
+
+    // One maker per kind, so a call site reads as what the step is for: `steps.runs("serve", ...)`.
+
+    /// A check, at its tier.
+    fn check(
+        registry: *StepRegistry,
+        name: []const u8,
+        description: []const u8,
+        place: CheckPlace,
+    ) *Step {
+        return registry.step(name, description, .{ .check = place });
+    }
+
+    /// A narrower way into checks the ladder runs.
+    fn part(registry: *StepRegistry, name: []const u8, description: []const u8) *Step {
+        return registry.step(name, description, .part);
+    }
+
+    /// An output in zig-out that needs nothing beyond Zig (one that needs more is made with `step`).
+    fn build(registry: *StepRegistry, name: []const u8, description: []const u8) *Step {
+        return registry.step(name, description, .{ .build = .nothing });
+    }
+
+    /// One app's own step, `zig build <app>`.
+    fn app(registry: *StepRegistry, name: []const u8, description: []const u8) *Step {
+        return registry.step(name, description, .app);
+    }
+
+    /// A step that rewrites tracked files.
+    fn writes(registry: *StepRegistry, name: []const u8, description: []const u8) *Step {
+        return registry.step(name, description, .writes);
+    }
+
+    /// A step that runs something for a person.
+    fn runs(registry: *StepRegistry, name: []const u8, description: []const u8) *Step {
+        return registry.step(name, description, .runs);
+    }
+
+    /// The kind of a top-level step made elsewhere.
+    fn declare(registry: *StepRegistry, name: []const u8, kind: StepKind) void {
+        registry.kinds.put(registry.b.allocator, name, kind) catch @panic("oom");
+    }
+
+    /// A step of another kind that `build-everything` holds too: `tools`, a check, compiles every tool.
+    fn addOutput(registry: *StepRegistry, output: *Step) void {
+        registry.outputs.append(registry.b.allocator, output) catch @panic("oom");
+    }
+
+    /// Inside `test-everything`, `stand_in` runs in `left_out`'s place: a fast root's run with its slow tests on, for
+    /// the quick run - whose every test it runs too (S3, the plan's 4e). Everywhere else, `left_out` runs as made.
+    fn standIn(registry: *StepRegistry, left_out: *Step, stand_in: *Step) void {
+        registry.stand_ins.put(registry.b.allocator, left_out, stand_in) catch @panic("oom");
+    }
+
+    /// `tier`'s own step, under the tier's name. Made once: `b.step` refuses a second step of one name.
+    fn tierStep(registry: *StepRegistry, tier: CheckTier, description: []const u8) *Step {
+        const made: *Step = registry.b.step(tier.stepName(), description);
+        registry.tier_steps.set(tier, made);
+        return made;
+    }
+
+    /// Whether `graph_step`, or what stands in for it (`standIn`), is in `reach`.
+    fn isReached(
+        registry: *const StepRegistry,
+        reach: *const AutoHashMapUnmanaged(*Step, void),
+        graph_step: *Step,
+    ) bool {
+        const stand_in: ?*Step = registry.stand_ins.get(graph_step);
+        const stand_in_reached: bool = stand_in != null and reach.contains(stand_in.?);
+        return reach.contains(graph_step) or stand_in_reached;
+    }
+
+    /// Whether a tier's step runs `top_level`: the step itself is in the tier's reach, or every step it depends on is -
+    /// each counted as reached when what stands in for it is (`isReached`).
+    fn isRunBy(
+        registry: *const StepRegistry,
+        tier_reach: *const AutoHashMapUnmanaged(*Step, void),
+        top_level: *Step,
+    ) bool {
+        if (registry.isReached(tier_reach, top_level)) {
+            return true;
+        }
+        const has_dependencies: bool = top_level.dependencies.items.len > 0;
+        if (!has_dependencies) {
+            return false;
+        }
+        for (top_level.dependencies.items) |dependency| {
+            if (!registry.isReached(tier_reach, dependency)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// Whether `graph_step` is, or reaches, a step something stands in for (`standIn`) - memoized in `leads`, since
+    /// `holdInPlace` asks it of every step it opens.
+    fn leadsToStandIn(
+        registry: *StepRegistry,
+        graph_step: *Step,
+        leads: *AutoHashMapUnmanaged(*Step, bool),
+    ) bool {
+        if (leads.get(graph_step)) |known| {
+            return known;
+        }
+        var leads_there: bool = registry.stand_ins.contains(graph_step);
+        for (graph_step.dependencies.items) |dependency| {
+            const dependency_leads_there: bool = registry.leadsToStandIn(dependency, leads);
+            leads_there = leads_there or dependency_leads_there;
+        }
+        leads.put(registry.b.allocator, graph_step, leads_there) catch @panic("oom");
+        return leads_there;
+    }
+
+    /// Holds `held` in `everything_step` as the plan's 4e places a lower tier inside `test-everything`: whole, unless
+    /// it leads to a step something stands in for (`standIn`) - then that stand-in in its place, or each step `held`
+    /// depends on, placed the same way. So no quick run a slow one stands in for runs there; all else runs as made.
+    fn holdInPlace(
+        registry: *StepRegistry,
+        everything_step: *Step,
+        held: *Step,
+        leads: *AutoHashMapUnmanaged(*Step, bool),
+    ) void {
+        const stand_in: ?*Step = registry.stand_ins.get(held);
+        const leads_to_a_stand_in: bool = registry.leadsToStandIn(held, leads);
+        if (stand_in) |runs_in_its_place| {
+            dependOnce(everything_step, runs_in_its_place);
+        } else if (leads_to_a_stand_in) {
+            registry.opened.put(registry.b.allocator, held, {}) catch @panic("oom");
+            for (held.dependencies.items) |dependency| {
+                registry.holdInPlace(everything_step, dependency, leads);
+            }
+        } else {
+            dependOnce(everything_step, held);
+        }
+    }
+
+    /// Every step `tier_step` runs: its reach, and - for `test-everything` - the steps `holdInPlace` opened, whose
+    /// members it holds in their place (`tier-a-check`, a part that depends on `test` itself, is inside by them).
+    fn tierReach(
+        registry: *const StepRegistry,
+        tier: CheckTier,
+        tier_step: *Step,
+    ) AutoHashMapUnmanaged(*Step, void) {
+        const gpa: Allocator = registry.b.allocator;
+        var reach: AutoHashMapUnmanaged(*Step, void) = stepsReachedFrom(gpa, tier_step);
+        if (tier == .everything) {
+            var opened_steps: AutoHashMapUnmanaged(*Step, void).KeyIterator = registry.opened.keyIterator();
+            while (opened_steps.next()) |opened_step| {
+                reach.put(gpa, opened_step.*, {}) catch @panic("oom");
+            }
+        }
+        return reach;
+    }
+
+    /// THE LADDER MADE (the plan's section 4e): each tier's step holds the tier steps its tier holds
+    /// (`CheckTier.holds`), then every check of its own tier that it does not run already - one tier at a time, lowest
+    /// first, so a tier's reach includes the checks just placed under it, and `gate` is whole before `test-everything`
+    /// holds it. `test-everything` holds `gate` through `holdInPlace`, so the slow runs stand in for the quick ones
+    /// there (S3). What was wired by hand stays; this adds what is missing.
+    fn composeTiers(registry: *StepRegistry) void {
+        const b: *std.Build = registry.b;
+        var leads: AutoHashMapUnmanaged(*Step, bool) = .empty;
+        defer leads.deinit(b.allocator);
+        for (std.enums.values(CheckTier)) |tier| {
+            if (registry.tier_steps.get(tier)) |tier_step| {
+                for (tier.holds()) |held_tier| {
+                    if (registry.tier_steps.get(held_tier)) |held_step| {
+                        if (tier == .everything) {
+                            registry.holdInPlace(tier_step, held_step, &leads);
+                        } else {
+                            dependOnce(tier_step, held_step);
+                        }
+                    }
+                }
+                var reach: AutoHashMapUnmanaged(*Step, void) = registry.tierReach(tier, tier_step);
+                defer reach.deinit(b.allocator);
+                for (registry.kinds.keys(), registry.kinds.values()) |name, kind| {
+                    const is_check_here: bool = kind == .check and kind.check.tier == tier;
+                    // A check that needs more than Zig - a Vulkan device, the Vulkan headers - waits for its probe (the
+                    // plan's S5) before its tier holds it.
+                    const needs_nothing: bool = is_check_here and kind.check.need == .nothing;
+                    const check_step: *Step = &b.top_level_steps.get(name).?.step;
+                    if (needs_nothing and !registry.isRunBy(&reach, check_step)) {
+                        tier_step.dependOn(check_step);
+                    }
+                }
+            }
+        }
+    }
+
+    /// LAST IN `build()`, once every step exists: makes the ladder (`composeTiers`), then holds each top-level step to
+    /// the rules of the plan's section 4d. Rule 1, every step has a kind; rule 4, a tier's step is made only by
+    /// `tierStep`; rule 3, no tier's step reaches a step that writes the tree or runs something for a person - checked
+    /// on the ladder as made. A broken rule fails every build, naming the step and the rule - `zig build -l` still
+    /// lists the steps. Rule 2 - every part inside `test-everything` - is reported in `help-checks` until the stages
+    /// that place the last parts make it hold (the headless runs come in with the gallery shots, S4-S5).
+    /// One failing step per broken rule, its message ONE line: zbuild shows a root error's first line and drops the
+    /// indented lines under it (`classify` takes them for source snippets) - a message of several lines lost its rules.
+    fn finish(registry: *StepRegistry) void {
+        const b: *std.Build = registry.b;
+        // The ladder's top, made here, last: nothing is wired to it by hand - `composeTiers` gives it `gate`, the slow
+        // runs in place of the quick ones, and every `everything` check.
+        const everything_step: *Step = registry.tierStep(
+            .everything,
+            "Everything there is to test: the gate with its slow tests, every long check, all build-everything makes",
+        );
+        // `build-everything`: every `build` step that needs nothing beyond Zig - `all-examples` among them, every
+        // example for `-Dplatform` (D5), which brings `lint-check` too (ARTIFACTS REQUIRE A CLEAN TREE) - and what
+        // `addOutput` adds. `test-everything` holds it - that everything builds is a check too (D7).
+        const build_everything: *Step = registry.step(
+            "build-everything",
+            "Everything there is to build for -Dplatform: every example, every tool, doc and trainer",
+            .{ .build = .nothing },
+        );
+        for (registry.kinds.keys(), registry.kinds.values()) |name, kind| {
+            const is_plain_output: bool = kind == .build and kind.build == .nothing;
+            const built_step: *Step = &b.top_level_steps.get(name).?.step;
+            if (is_plain_output and built_step != build_everything) {
+                build_everything.dependOn(built_step);
+            }
+        }
+        for (registry.outputs.items) |output| {
+            build_everything.dependOn(output);
+        }
+        everything_step.dependOn(build_everything);
+        registry.composeTiers();
+        var broken: ArrayList([]const u8) = .empty;
+        for (b.top_level_steps.keys()) |name| {
+            const has_kind: bool = registry.kinds.contains(name);
+            const is_tier_name: bool = CheckTier.isStepName(name);
+            if (!has_kind and !is_tier_name) {
+                broken.append(b.allocator, b.fmt(
+                    "`{s}` has no kind: make it with `steps.check`, `steps.runs` or another maker of its kind",
+                    .{name},
+                )) catch @panic("oom");
+            }
+            if (has_kind and is_tier_name) {
+                broken.append(b.allocator, b.fmt(
+                    "`{s}` is a tier's step made by hand: only `tierStep` makes it",
+                    .{name},
+                )) catch @panic("oom");
+            }
+        }
+        for (std.enums.values(CheckTier)) |tier| {
+            if (registry.tier_steps.get(tier)) |tier_step| {
+                var reached: AutoHashMapUnmanaged(*Step, void) = stepsReachedFrom(b.allocator, tier_step);
+                defer reached.deinit(b.allocator);
+                for (registry.kinds.keys(), registry.kinds.values()) |name, kind| {
+                    const writes_or_runs: bool = kind == .writes or kind == .runs;
+                    const top_level: *Step = &b.top_level_steps.get(name).?.step;
+                    if (writes_or_runs and reached.contains(top_level)) {
+                        const what_it_does: []const u8 = if (kind == .writes)
+                            "writes the tree"
+                        else
+                            "runs something for a person";
+                        broken.append(b.allocator, b.fmt(
+                            "`{s}` reaches `{s}`, a step that {s}: no tier's step may",
+                            .{ tier.stepName(), name, what_it_does },
+                        )) catch @panic("oom");
+                    }
+                }
+            }
+        }
+        for (broken.items) |broken_rule| {
+            const message: []const u8 = b.fmt(
+                "build.zig breaks a rule of src/notes/test_build_everything_plan.md, section 4d: {s}",
+                .{broken_rule},
+            );
+            const rule_failure: *Step = &b.addFail(message).step;
+            for (b.top_level_steps.values()) |top_level| {
+                top_level.step.dependOn(rule_failure);
+            }
+        }
+        registry.writeHelpChecks();
+    }
+
+    /// `zig build help-checks`, the map. Made before `gateEveryTool` walks the graph, so that `tools` compiles its
+    /// printer, `tools/build_note.zig`; `finish` writes its text once every step exists.
+    fn addHelpChecks(registry: *StepRegistry) void {
+        const b: *std.Build = registry.b;
+        const note_exe: *Compile = b.addExecutable(.{
+            .name = "build_note",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("tools/build_note.zig"),
+                .target = b.graph.host,
+                .optimize = .Debug,
+            }),
+        });
+        const note_run: *Run = b.addRunArtifact(note_exe);
+        note_run.has_side_effects = true;
+        const help_step: *Step = registry.runs(
+            "help-checks",
+            "Print each tier's step and what it holds, then every top-level step by kind",
+        );
+        help_step.dependOn(&note_run.step);
+        registry.help_checks_run = note_run;
+    }
+
+    /// `help-checks`' text: each tier's step and what it depends on directly, the checks of each tier - one its tier's
+    /// step does not run yet marked so - then the other kinds. Handed to the run `addHelpChecks` made.
+    fn writeHelpChecks(registry: *StepRegistry) void {
+        const b: *std.Build = registry.b;
+        const gpa: Allocator = b.allocator;
+        var text: ArrayList(u8) = .empty;
+        const title: []const u8 = "Every top-level step of zimr's build, by kind " ++
+            "(src/notes/test_build_everything_plan.md)\n\n";
+        text.appendSlice(gpa, title) catch @panic("oom");
+        for (std.enums.values(CheckTier)) |tier| {
+            var labels: ArrayList([]const u8) = .empty;
+            defer labels.deinit(gpa);
+            var reach: AutoHashMapUnmanaged(*Step, void) = .empty;
+            defer reach.deinit(gpa);
+            const tier_step: ?*Step = registry.tier_steps.get(tier);
+            if (tier_step) |made| {
+                reach = registry.tierReach(tier, made);
+                for (made.dependencies.items) |dependency| {
+                    labels.append(gpa, dependency.name) catch @panic("oom");
+                }
+                const heading: []const u8 = b.fmt("`{s}` ({s}) depends on:", .{ tier.stepName(), @tagName(tier) });
+                appendListing(gpa, &text, heading, labels.items);
+                labels.clearRetainingCapacity();
+            }
+            for (registry.kinds.keys(), registry.kinds.values()) |name, kind| {
+                const is_check_here: bool = kind == .check and kind.check.tier == tier;
+                if (is_check_here) {
+                    const top_level: *Step = &b.top_level_steps.get(name).?.step;
+                    const is_run: bool = tier_step != null and registry.isRunBy(&reach, top_level);
+                    const run_note: []const u8 = if (is_run)
+                        ""
+                    else
+                        b.fmt(" (not run by `{s}` yet)", .{tier.stepName()});
+                    labels.append(gpa, b.fmt("{s}{s}{s}", .{ name, needNote(b, kind.check.need), run_note })) catch
+                        @panic("oom");
+                }
+            }
+            appendListing(gpa, &text, b.fmt("checks at {s}:", .{@tagName(tier)}), labels.items);
+        }
+        var parts: ArrayList([]const u8) = .empty;
+        var outputs: ArrayList([]const u8) = .empty;
+        var apps: ArrayList([]const u8) = .empty;
+        var writers: ArrayList([]const u8) = .empty;
+        var runners: ArrayList([]const u8) = .empty;
+        for (registry.kinds.keys(), registry.kinds.values()) |name, kind| {
+            switch (kind) {
+                .check => {},
+                .part => parts.append(gpa, name) catch @panic("oom"),
+                .build => |need| outputs.append(gpa, b.fmt("{s}{s}", .{ name, needNote(b, need) })) catch @panic("oom"),
+                .app => apps.append(gpa, name) catch @panic("oom"),
+                .writes => writers.append(gpa, name) catch @panic("oom"),
+                .runs => runners.append(gpa, name) catch @panic("oom"),
+            }
+        }
+        appendListing(gpa, &text, "parts - narrower ways into the checks:", parts.items);
+        // Rule 2, reported until it can hold: the parts whose steps `test-everything` does not run.
+        if (registry.tier_steps.get(.everything)) |everything_step| {
+            var everything_reach: AutoHashMapUnmanaged(*Step, void) = registry.tierReach(.everything, everything_step);
+            defer everything_reach.deinit(gpa);
+            var outside: ArrayList([]const u8) = .empty;
+            for (registry.kinds.keys(), registry.kinds.values()) |name, kind| {
+                const top_level: *Step = &b.top_level_steps.get(name).?.step;
+                const is_outside: bool = kind == .part and !registry.isRunBy(&everything_reach, top_level);
+                if (is_outside) {
+                    outside.append(gpa, name) catch @panic("oom");
+                }
+            }
+            const heading: []const u8 = b.fmt(
+                "parts not inside `test-everything` yet ({d}) - rule 2, enforced once this is empty:",
+                .{outside.items.len},
+            );
+            appendListing(gpa, &text, heading, outside.items);
+        }
+        appendListing(gpa, &text, "builds - outputs in zig-out:", outputs.items);
+        appendListing(gpa, &text, "apps - each for `-Dplatform`; `all-examples` builds every app it has:", apps.items);
+        appendListing(gpa, &text, "writes - rewrite tracked files; no tier's step may reach one:", writers.items);
+        appendListing(gpa, &text, "runs - run something for a person; no tier's step may reach one:", runners.items);
+        const note_files: *Step.WriteFile = b.addWriteFiles();
+        registry.help_checks_run.?.addFileArg(note_files.add("help-checks.txt", text.items));
+    }
+};
+
 fn buildTools(
     b: *std.Build,
+    steps: *StepRegistry,
     host_target: ResolvedTarget,
     zimrmath_mod: *Module,
     cli_mod: *Module,
@@ -553,7 +1105,7 @@ fn buildTools(
     mesh_bake_run.setCwd(b.path("."));
     mesh_bake_run.has_side_effects = true;
     mesh_bake_run.addPassthruArgs();
-    b.step("mesh-bake", "Bake a decimated proxy of a .glb or .obj into a .zig const").dependOn(&mesh_bake_run.step);
+    steps.runs("mesh-bake", "Bake a decimated proxy of a .glb or .obj into a .zig const").dependOn(&mesh_bake_run.step);
     mesh_bake_exe.root_module.addImport("codecs", mesh_bake_codecs_mod);
     // zm too: mesh_bake seeds its bounding box from `floatMax`, and std.math is banned
     // everywhere - a host-only tool is no exception, because the point is that ONE math module
@@ -595,13 +1147,16 @@ fn buildTools(
     lafan_db_exe.root_module.addImport("zm", zimrmath_mod);
     // bvh_trim has been the way assets are cut since it was written; give it a step so the
     // command in an asset's README is the command you actually run.
-    const bvh_trim_step: *Step = b.step("bvh-trim", "cut a frame range out of a BVH file");
+    const bvh_trim_step: *Step = steps.runs("bvh-trim", "cut a frame range out of a BVH file");
     const bvh_trim_run: *Run = b.addRunArtifact(bvh_trim_exe);
     bvh_trim_run.setCwd(b.path("."));
     bvh_trim_run.has_side_effects = true;
     bvh_trim_run.addPassthruArgs();
     bvh_trim_step.dependOn(&bvh_trim_run.step);
-    const lafan_db_step: *Step = b.step("lafan-db", "convert LAFAN1 locomotion from Holden's database.bin into BVH");
+    const lafan_db_step: *Step = steps.runs(
+        "lafan-db",
+        "convert LAFAN1 locomotion from Holden's database.bin into BVH",
+    );
     const lafan_db_run: *Run = b.addRunArtifact(lafan_db_exe);
     lafan_db_run.setCwd(b.path("."));
     lafan_db_run.has_side_effects = true;
@@ -612,12 +1167,32 @@ fn buildTools(
     // command-line parser, vendored), so each is a step instead - `zig build <name> -- <args>`, from the repository
     // root, the arguments forwarded as they are. Debug: they run for a moment, and Debug keeps every safety check
     // while compiling in a second instead of ~25 (a tool's optimise mode follows its RUN time - see claude.md).
-    const HandTool = struct { name: []const u8, step: []const u8, what: []const u8 };
+    const HandTool = struct { name: []const u8, step: []const u8, what: []const u8, kind: StepKind };
     const hand_tools = [_]HandTool{
-        .{ .name = "decl_deps", .step = "decl-deps", .what = "The file-scope dependency graph of a Zig file" },
-        .{ .name = "rename_local", .step = "rename-local", .what = "Scoped rename of a function-local variable" },
-        .{ .name = "rename_pub_fn", .step = "rename-pub-fn", .what = "Rename a top-level function in its file" },
-        .{ .name = "zm_namedimports", .step = "zm-namedimports", .what = "Migrate zm.X bodies to named imports" },
+        .{
+            .name = "decl_deps",
+            .step = "decl-deps",
+            .what = "The file-scope dependency graph of a Zig file",
+            .kind = .runs,
+        },
+        .{
+            .name = "rename_local",
+            .step = "rename-local",
+            .what = "Scoped rename of a function-local variable",
+            .kind = .writes,
+        },
+        .{
+            .name = "rename_pub_fn",
+            .step = "rename-pub-fn",
+            .what = "Rename a top-level function in its file",
+            .kind = .writes,
+        },
+        .{
+            .name = "zm_namedimports",
+            .step = "zm-namedimports",
+            .what = "Migrate zm.X bodies to named imports",
+            .kind = .writes,
+        },
     };
     // zbuild: `zig build`, and when it fails, the output ENDS with only the roots. INSTALLED like `measure`, not a
     // step - it runs `zig build` itself, which a step inside `zig build` should not:
@@ -633,7 +1208,7 @@ fn buildTools(
     const zbuild_install: *Step.InstallArtifact = b.addInstallArtifact(zbuild_exe, .{
         .dest_dir = .{ .override = .{ .custom = "../tools/zig-out/bin" } },
     });
-    const zbuild_step: *Step = b.step(
+    const zbuild_step: *Step = steps.build(
         "zbuild",
         "Install zbuild into tools/zig-out/bin: `zig build`, ending with only what failed",
     );
@@ -674,7 +1249,7 @@ fn buildTools(
         run.setCwd(b.path("."));
         run.has_side_effects = true;
         run.addPassthruArgs();
-        b.step(server.step, server.what).dependOn(&run.step);
+        steps.runs(server.step, server.what).dependOn(&run.step);
     }
     for (hand_tools) |tool| {
         const exe: *Compile = b.addExecutable(.{
@@ -690,7 +1265,7 @@ fn buildTools(
         run.setCwd(b.path("."));
         run.has_side_effects = true;
         run.addPassthruArgs();
-        const step: *Step = b.step(tool.step, tool.what);
+        const step: *Step = steps.step(tool.step, tool.what, tool.kind);
         step.dependOn(&run.step);
     }
 
@@ -821,6 +1396,7 @@ fn buildTools(
 /// here instead of interleaved with the wgpu build.
 fn buildNativeExamples(
     b: *std.Build,
+    steps: *StepRegistry,
     native_target: ResolvedTarget,
     zimrmath_mod: *Module,
     shader_interface_mod: *Module,
@@ -843,7 +1419,7 @@ fn buildNativeExamples(
     // targeted for the in-browser engine; the demo runs on host).
     //
     // Run on any host:  `zig build sw-mandelbrot`
-    const sw_mandelbrot_step: *Step = b.step(
+    const sw_mandelbrot_step: *Step = steps.runs(
         "sw-mandelbrot",
         "Build and run the Mandelbrot SW-renderer demo (writes mandelbrot.png)",
     );
@@ -895,7 +1471,7 @@ fn buildNativeExamples(
     //
     // Run on any host:  `zig build comptime-mandelbrot-ascii`  (the clean
     // name `comptime-mandelbrot` goes to the wgpu example, which draws it)
-    const comptime_mandelbrot_step: *Step = b.step(
+    const comptime_mandelbrot_step: *Step = steps.runs(
         "comptime-mandelbrot-ascii",
         "Build and run the compile-time Mandelbrot demo (no runtime math)",
     );
@@ -926,7 +1502,7 @@ fn buildNativeExamples(
     // ---- native targets while staying valid on SPIR-V.
     //
     // Run on any host:  `zig build sw-engine-shader`
-    const sw_engine_shader_step: *Step = b.step(
+    const sw_engine_shader_step: *Step = steps.runs(
         "sw-engine-shader",
         "Render through engine shaders on CPU; writes sw_engine_shader.png",
     );
@@ -999,7 +1575,7 @@ fn buildNativeExamples(
     // ---- output.  Each cell is independent - trivially parallelizable.
     //
     // Run on any host:  `zig build julia-gallery`
-    const julia_gallery_step: *Step = b.step(
+    const julia_gallery_step: *Step = steps.runs(
         "julia-gallery-png",
         "Build and run the Julia gallery (writes julia_gallery.png)",
     );
@@ -1041,7 +1617,7 @@ fn buildNativeExamples(
     // ---- single-pixel-per-output workflows.
     //
     // Run on any host:  `zig build sw-julia`
-    const sw_julia_step: *Step = b.step(
+    const sw_julia_step: *Step = steps.runs(
         "sw-julia",
         "Build and run the Julia SW-renderer demo (writes julia.png)",
     );
@@ -1086,7 +1662,7 @@ fn buildNativeExamples(
     // ---- specific kernel.  No zimr dependency.
     //
     // Run on any host:  `zig build comptime-julia`
-    const comptime_julia_step: *Step = b.step(
+    const comptime_julia_step: *Step = steps.runs(
         "comptime-julia-png",
         "Build and run the compile-time Julia set demo",
     );
@@ -1109,6 +1685,12 @@ fn buildNativeExamples(
     }
 }
 
+/// Tools `zig build tools` leaves out, though they live in tools/: the trainer, whose ReleaseSafe builds through LLVM
+/// take minutes and come again on every change to the robot family or the learning kit. Its own steps build those
+/// (`geno-trainer`, `geno-trainer-windows`), and so does `build-everything`; the gate compiles the trainer once, in
+/// Debug, for `geno-trainer-layout` - so it cannot rot unseen either.
+const tools_left_out_of_gate = [_][]const u8{"tools/geno_trainer.zig"};
+
 /// `zig build tools`: COMPILE every tool the build knows - every executable rooted in `tools/` - without running
 /// any. A tool nothing compiles rots unseen: `physics_audit` stopped compiling
 /// the day `World.addBody` went, and nobody knew. Found by walking the build graph from every top-level step rather
@@ -1117,9 +1699,16 @@ fn buildNativeExamples(
 /// (`addAnonymousImport` of a run's output): the build records that edge while it runs, after this walk. Such a
 /// tool gets a step of its own (mesh_bake has one). Nor are the three robot tools in `src/` (st_bench, robot_bench,
 /// clip_bake): optimised builds of the robot family's code, which `test-fast` compiles already - gated, every robot
-/// change would recompile them for minutes. `gate` depends on it; `tripwires`, run every turn, does not.
-fn gateEveryTool(b: *std.Build, gate_step: *Step) void {
-    const tools_step: *Step = b.step("tools", "Compile every tool the build knows, run none - so none rots unseen");
+/// change would recompile them for minutes - nor, for the same cost, the trainer in tools/ (`tools_left_out_of_gate`).
+/// `gate` depends on it; `tripwires`, run every turn, does not.
+fn gateEveryTool(b: *std.Build, steps: *StepRegistry, gate_step: *Step) void {
+    const tools_step: *Step = steps.check(
+        "tools",
+        "Compile every tool the build knows, run none - so none rots unseen",
+        .{ .tier = .gate },
+    );
+    // Every tool compiled is a build too: `build-everything` holds it.
+    steps.addOutput(tools_step);
     var visited: AutoHashMapUnmanaged(*Step, void) = .empty;
     var pending: ArrayList(*Step) = .empty;
     for (b.top_level_steps.values()) |top| {
@@ -1142,7 +1731,12 @@ fn gateEveryTool(b: *std.Build, gate_step: *Step) void {
             else => continue,
         };
         const in_tools: bool = startsWith(u8, path, "tools/");
-        if (in_tools) {
+        const left_out: bool = for (tools_left_out_of_gate) |left_out_path| {
+            if (eql(u8, path, left_out_path)) {
+                break true;
+            }
+        } else false;
+        if (in_tools and !left_out) {
             tools_step.dependOn(&compile.step);
         }
     }
@@ -1829,6 +2423,108 @@ fn addEngineOptionsAndRobot(
     return robot_modules;
 }
 
+/// THE MODULES A JOB's KERNELS ARE COMPILED WITH, for one target: the engine with no host (`build_opts_kernel`), zm,
+/// zimrnum, kompute and the GPU learning kit's kernel module. The kernel wasm's graph (`buildJobKernels`), and the
+/// build's machine's for an example's job checks (`test-zimrnum-fit`) - so that a job is checked as a worker runs it.
+const JobKernelModules = struct {
+    target: ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    engine: *Module,
+    kompute: *Module,
+    zm: *Module,
+    zimrnum: *Module,
+    kit_kernel: *Module,
+
+    fn create(
+        b: *std.Build,
+        target: ResolvedTarget,
+        optimize: std.builtin.OptimizeMode,
+        /// The engine's own `build_options`: the web's, with no host (`build_opts_kernel` in `build`).
+        build_opts_kernel: *Options,
+        build_opts_zm: *Options,
+    ) JobKernelModules {
+        const zm_mod: *Module = b.createModule(.{
+            .root_source_file = b.path("src/zimrmath.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        zm_mod.addOptions("build_options", build_opts_zm);
+
+        const iface_mod: *Module = b.createModule(.{
+            .root_source_file = b.path("src/shader_interface.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        iface_mod.addImport("zm", zm_mod);
+
+        const engine_mod: *Module = b.createModule(.{
+            .root_source_file = b.path("src/zimr.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        engine_mod.addImport("zm", zm_mod);
+        engine_mod.addImport("shader_interface", iface_mod);
+        _ = addEngineOptionsAndRobot(b, engine_mod, build_opts_kernel, zm_mod);
+
+        // zimrnum, which the engine's `kit_mlp` imports: a job may train a network on the GPU learning kit's CPU
+        // twin (`examples/zimrnum_fit`).
+        const zimrnum_mod: *Module = b.createModule(.{
+            .root_source_file = b.path("src/zimrnum.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        zimrnum_mod.addImport("zm", zm_mod);
+        engine_mod.addImport("zn", zimrnum_mod);
+
+        // A kompute MODULE can be a job kernel - `komputeRegistry(M)` derives the whole worker
+        // backend from one - so the kernel wasm's graph has to carry `kompute` too.
+        const kompute_mod: *Module = b.createModule(.{
+            .root_source_file = b.path("src/kompute.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        kompute_mod.addImport("zm", zm_mod);
+
+        // The GPU learning kit's kernel module, for a job that runs it on its CPU twin, with the two modules it
+        // imports.
+        const kit_kernel_mod: *Module = b.createModule(.{
+            .root_source_file = b.path("src/gpu/zn_mlp.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        kit_kernel_mod.addImport("kompute", kompute_mod);
+        kit_kernel_mod.addImport("zm", zm_mod);
+
+        const modules: JobKernelModules = .{
+            .target = target,
+            .optimize = optimize,
+            .engine = engine_mod,
+            .kompute = kompute_mod,
+            .zm = zm_mod,
+            .zimrnum = zimrnum_mod,
+            .kit_kernel = kit_kernel_mod,
+        };
+        return modules;
+    }
+
+    /// A `kernels.zig` - or a file of checks importing one - as a module of this graph. Every such module shares the
+    /// SAME engine, kompute and zm modules: a second `kompute` module would put src/kompute.zig in two modules at
+    /// once, which Zig rejects ("file exists in modules 'kompute' and 'kompute0'").
+    fn kernelsModule(modules: JobKernelModules, b: *std.Build, source: LazyPath) *Module {
+        const kernels_module: *Module = b.createModule(.{
+            .root_source_file = source,
+            .target = modules.target,
+            .optimize = modules.optimize,
+        });
+        kernels_module.addImport("zimr", modules.engine);
+        kernels_module.addImport("kompute", modules.kompute);
+        kernels_module.addImport("zm", modules.zm);
+        kernels_module.addImport("zn", modules.zimrnum);
+        kernels_module.addImport("zn_mlp", modules.kit_kernel);
+        return kernels_module;
+    }
+};
+
 fn buildJobKernels(
     b: *std.Build,
     name: []const u8,
@@ -1843,76 +2539,19 @@ fn buildJobKernels(
     /// nobody renumbers anything.
     deps: []const []const u8,
     optimize: std.builtin.OptimizeMode,
-    build_opts_wgpu: *Options,
+    /// The kernel wasm's own `build_options`: the web's, with no host (`build_opts_kernel` in `build`).
+    build_opts_kernel: *Options,
     build_opts_zm: *Options,
 ) LazyPath {
     const target: ResolvedTarget = b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
         .os_tag = .freestanding,
     });
-
-    const zm_mod: *Module = b.createModule(.{
-        .root_source_file = b.path("src/zimrmath.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    zm_mod.addOptions("build_options", build_opts_zm);
-
-    const iface_mod: *Module = b.createModule(.{
-        .root_source_file = b.path("src/shader_interface.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    iface_mod.addImport("zm", zm_mod);
-
-    const engine_mod: *Module = b.createModule(.{
-        .root_source_file = b.path("src/zimr.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    engine_mod.addImport("zm", zm_mod);
-    engine_mod.addImport("shader_interface", iface_mod);
-    _ = addEngineOptionsAndRobot(b, engine_mod, build_opts_wgpu, zm_mod);
-
-    // A kompute MODULE can be a job kernel - `komputeRegistry(M)` derives the whole worker
-    // backend from one - so the kernel wasm's graph has to carry `kompute` too.
-    const kompute_mod: *Module = b.createModule(.{
-        .root_source_file = b.path("src/kompute.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    kompute_mod.addImport("zm", zm_mod);
-
-    // One module per example's kernels.zig. They all share the SAME engine/kompute/zm module
-    // instances - creating a second `kompute` module would put src/kompute.zig in two modules
-    // at once, which Zig rejects ("file exists in modules 'kompute' and 'kompute0'").
-    const makeKernelsMod = struct {
-        fn f(
-            bb: *std.Build,
-            src: LazyPath,
-            t: ResolvedTarget,
-            o: std.builtin.OptimizeMode,
-            em: *Module,
-            km: *Module,
-            zmm: *Module,
-        ) *Module {
-            const m: *Module = bb.createModule(.{
-                .root_source_file = src,
-                .target = t,
-                .optimize = o,
-            });
-            m.addImport("zimr", em);
-            m.addImport("kompute", km);
-            m.addImport("zm", zmm);
-            return m;
-        }
-    }.f;
-
-    const kernels_mod: *Module = makeKernelsMod(b, kernels_src, target, optimize, engine_mod, kompute_mod, zm_mod);
+    const modules: JobKernelModules = .create(b, target, optimize, build_opts_kernel, build_opts_zm);
+    const kernels_mod: *Module = modules.kernelsModule(b, kernels_src);
     for (deps) |dep| {
         const dep_src: LazyPath = b.path(b.fmt("examples/{s}/kernels.zig", .{dep}));
-        const dm: *Module = makeKernelsMod(b, dep_src, target, optimize, engine_mod, kompute_mod, zm_mod);
-        kernels_mod.addImport(b.fmt("k_{s}", .{dep}), dm);
+        kernels_mod.addImport(b.fmt("k_{s}", .{dep}), modules.kernelsModule(b, dep_src));
     }
 
     const wf: *std.Build.Step.WriteFile = b.addWriteFiles();
@@ -2251,11 +2890,6 @@ const VulkanHostTestInputs = struct {
     /// Whether the test runs its long checks at full size (`-Dlong-checks`): by default each is sized for llvmpipe, a
     /// GPU emulated on the CPU, so the whole test stays within a few minutes.
     long_checks: bool,
-    /// Whether the run is limited to some checks (`-Dtest-filter`): then no report of the device's coverage, which a
-    /// part of the checks cannot give.
-    filtered: bool,
-    /// The checks to run (`-Dtest-filter`): Zig's test runner runs only the tests whose names contain one; none, all.
-    filters: []const []const u8,
     /// How the test is optimized (`-Dhost-test-optimize`): Debug unless said - `addVulkanHostTest` says why, and when
     /// not.
     optimize: std.builtin.OptimizeMode,
@@ -2434,26 +3068,37 @@ fn addVulkanHostTest(
     // The test's own options: whether its long checks run at full size.
     const test_options: *Options = b.addOptions();
     test_options.addOption(bool, "long_checks", inputs.long_checks);
-    test_options.addOption(bool, "filtered", inputs.filtered);
     test_mod.addOptions("vk_host_test_options", test_options);
     // Geno's get-up clip, embedded: the tracking check then runs wherever the test does - a machine that is handed the
     // executable alone has no examples folder beside it.
     test_mod.addAnonymousImport("geno_getup_zclip", .{ .root_source_file = b.path("examples/geno_ppo/getup.zclip") });
-    // The checks are the file's `test` blocks, run by Zig's test runner: one alone with `-Dtest-filter`, each one's
-    // time recorded by the build, and each one's leaks found by the testing allocator.
-    return b.addTest(.{ .name = "vk_host_test", .root_module = test_mod, .filters = inputs.filters });
+    // The checks are the file's `test` blocks, run by zimr's test runner: some alone with `--filter=TEXT`, chosen when
+    // the binary runs - one compiled test serves every filter (`-Dtest-filter` passes it) - each one's time recorded
+    // by the build, and each one's leaks found by the testing allocator.
+    return b.addTest(.{
+        .name = "vk_host_test",
+        .root_module = test_mod,
+        .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .server },
+    });
 }
 
-/// The headless trainer (`tools/geno_trainer.zig`) built for `target`: the engine on the native host, `zn_mlp`'s
-/// kernels as their SPIR-V and their CPU module, the baked clips, and the command-line reader. ReleaseSafe: it runs
-/// for hours, and must fail loudly rather than train on a memory error (the reason, at `optimize`). Built for the build
-/// machine it trains on that machine's Vulkan driver; built for Windows, on a Windows machine's GPU.
+/// The trainer a night runs on: ReleaseSafe, not ReleaseFast - a run lasts hours, and a memory error - an index past
+/// an array's end - must stop it with a message where it happens, rather than let it carry on with corrupted memory,
+/// perhaps to its end without a sign. The safety checks cost the CPU's physics some speed and the GPU's work nothing.
+const night_trainer_optimize: std.builtin.OptimizeMode = .ReleaseSafe;
+
+/// The headless trainer (`tools/geno_trainer.zig`) built for `target`, in `optimize`: the engine on the native host,
+/// `zn_mlp`'s kernels and robotgpu's simulator each as their SPIR-V and their CPU module (and the simulator's host),
+/// the baked clips, and the command-line reader. A trainer that trains is `night_trainer_optimize`; Debug is for
+/// `geno-trainer-layout`'s, which only measures. Built for the build machine it trains on that machine's Vulkan
+/// driver; built for Windows, on a Windows machine's GPU.
 fn addGenoTrainer(
     b: *std.Build,
     target: ResolvedTarget,
     inputs: VulkanHostTestInputs,
     cli_mod: *Module,
     trainer_portable: bool,
+    optimize: std.builtin.OptimizeMode,
 ) *Compile {
     const native_options: *Options = b.addOptions();
     native_options.addOption(bool, "assert_log", inputs.assert_log);
@@ -2462,10 +3107,6 @@ fn addGenoTrainer(
     native_options.addOption([]const u8, "host", "native");
     const numerics: NumericsModules = addNumericsModules(b, null, null, inputs.zimrmath_mod);
     const links_libc: bool = target.result.os.tag != .windows;
-    // ReleaseSafe, not ReleaseFast: a run lasts hours, and a memory error - an index past an array's end - must stop
-    // it with a message where it happens, rather than let it carry on with corrupted memory, perhaps to its end
-    // without a sign. The safety checks cost the CPU's physics some speed and the GPU's work nothing.
-    const optimize: std.builtin.OptimizeMode = .ReleaseSafe;
     const engine_mod: *Module = b.createModule(.{
         .root_source_file = b.path("src/zimr.zig"),
         .target = target,
@@ -2476,7 +3117,7 @@ fn addGenoTrainer(
     engine_mod.addImport("zm", inputs.zimrmath_mod);
     engine_mod.addImport("zn", numerics.zimrnum);
     engine_mod.addImport("zrl", numerics.zimrrl);
-    _ = addEngineOptionsAndRobot(b, engine_mod, native_options, inputs.zimrmath_mod);
+    const engine_robot: RobotModules = addEngineOptionsAndRobot(b, engine_mod, native_options, inputs.zimrmath_mod);
     const trainer_mod: *Module = b.createModule(.{
         .root_source_file = b.path("tools/geno_trainer.zig"),
         .target = target,
@@ -2497,6 +3138,14 @@ fn addGenoTrainer(
     trainer_mod.addAnonymousImport("geno_walk_zclip", .{ .root_source_file = walk_clip });
     const run_clip: LazyPath = b.path("examples/geno_ppo/run.zclip");
     trainer_mod.addAnonymousImport("geno_run_zclip", .{ .root_source_file = run_clip });
+    // Their mirror images, baked beside them: a run's mirrored variants (`robot_lab.ClipVariants`).
+    const mirrored_names = [_][]const u8{ "dance", "getup", "walk", "run" };
+    for (mirrored_names) |clip_name| {
+        const mirrored_clip: LazyPath = b.path(b.fmt("examples/geno_ppo/{s}_mirrored.zclip", .{clip_name}));
+        trainer_mod.addAnonymousImport(b.fmt("geno_{s}_mirrored_zclip", .{clip_name}), .{
+            .root_source_file = mirrored_clip,
+        });
+    }
     // The kernels at a NIGHT'S SIZES: `zn_mlp.zig` copied beside the trainer's sizes file under the name it imports
     // (`src/gpu/zn_mlp_sizes.zig` holds the pages'), so this build's declared buffers, SPIR-V and CPU module all
     // agree - and every other build of the kernels keeps the pages' sizes, unchanged.
@@ -2522,6 +3171,43 @@ fn addGenoTrainer(
     kernel_mod.addImport("kompute", numerics.kompute);
     kernel_mod.addImport("zm", inputs.zimrmath_mod);
     trainer_mod.addImport("zn_mlp", kernel_mod);
+    // THE KERNELS' CPU TWIN FOR THE CHECK AT A RUN's START (`checkKernelsAtStart`): the kernel module at the pages'
+    // sizes, which keep their twin (`src/gpu/zn_mlp_sizes.zig`, a few megabytes of static buffers) - compiled for the
+    // host alone, with no SPIR-V: the check's device side is the trainer's own pipe, the kernels it trains with.
+    const twin_kernel_mod: *Module = b.createModule(.{ .root_source_file = b.path("src/gpu/zn_mlp.zig") });
+    twin_kernel_mod.addImport("kompute", numerics.kompute);
+    twin_kernel_mod.addImport("zm", inputs.zimrmath_mod);
+    trainer_mod.addImport("zn_mlp_twin", twin_kernel_mod);
+    // THE SIMULATOR ON THE DEVICE (robotgpu), for a run whose characters live there: its kernels as SPIR-V, its CPU
+    // module, and its host (`Sim`) over that very module, as the Vulkan host test wires them - at the trainer's own
+    // arena lengths, a desktop GPU's or the portable ones every device binds, chosen with the networks' sizes above.
+    const simulator_sizes: []const u8 = if (trainer_portable)
+        "src/robotgpu_sizes_portable.zig"
+    else
+        "src/robotgpu_sizes.zig";
+    const simulator_sizes_file: LazyPath = b.path(simulator_sizes);
+    const simulator_source: LazyPath = b.path("src/robotgpu.zig");
+    const simulator_kernel_modules: ShaderPipeline.KernelModules = .{
+        .robot = true,
+        .robotgpu_sizes = simulator_sizes_file,
+    };
+    const simulator_spirv: LazyPath =
+        inputs.shader_pipeline.addNativeComputeOutput(simulator_source, simulator_kernel_modules);
+    trainer_mod.addAnonymousImport("robotgpu_spv", .{ .root_source_file = simulator_spirv });
+    const simulator_sizes_mod: *Module = b.createModule(.{ .root_source_file = simulator_sizes_file });
+    const simulator_mod: *Module = b.createModule(.{ .root_source_file = simulator_source });
+    simulator_mod.addImport("kompute", numerics.kompute);
+    simulator_mod.addImport("zm", inputs.zimrmath_mod);
+    // The engine's own robot module: one file, one module, shared by the engine, the simulator and its host.
+    simulator_mod.addImport("robot", engine_robot.robot);
+    simulator_mod.addImport("robotgpu_sizes", simulator_sizes_mod);
+    trainer_mod.addImport("robotgpu", simulator_mod);
+    const simulator_host_mod: *Module = b.createModule(.{ .root_source_file = b.path("src/robotgpu_host.zig") });
+    simulator_host_mod.addImport("zimr", engine_mod);
+    simulator_host_mod.addImport("zm", inputs.zimrmath_mod);
+    simulator_host_mod.addImport("robot", engine_robot.robot);
+    simulator_host_mod.addImport("robotgpu", simulator_mod);
+    trainer_mod.addImport("robotgpu_host", simulator_host_mod);
     return b.addExecutable(.{ .name = "geno_trainer", .root_module = trainer_mod });
 }
 
@@ -2820,16 +3506,91 @@ fn checkLauncherRoster(b: *std.Build, build_names: []const []const u8) void {
     }
 }
 
+/// The gallery's catalog, `src/web/manifest.json`, is written by hand, and both galleries - the web page and
+/// `zimr_gallery` - show only what it names: an app added to the build and not to the catalog is built and never
+/// shown, and a card for an app the build does not make is a dead link. The catalog must name every app of `apps`,
+/// and nothing else but `also_cataloged` (apps built outside the table, the launcher). Read at configure time, so a
+/// catalog out of step stops the build with every name it lacks or has too many of.
+fn checkGalleryCatalog(
+    b: *std.Build,
+    apps: []const App,
+    also_cataloged: []const []const u8,
+) void {
+    const io: Io = b.graph.io;
+    const root: Io.Dir = b.root.root_dir.handle;
+    const catalog_path: []const u8 = "src/web/manifest.json";
+    const catalog: []const u8 = root.readFileAlloc(io, catalog_path, b.allocator, .limited(1 << 22)) catch |err| {
+        std.debug.panic("checkGalleryCatalog: cannot read {s}: {s}", .{ catalog_path, @errorName(err) });
+    };
+    var cataloged_names: ArrayList([]const u8) = .empty;
+    var cursor: usize = 0;
+    // A string value cannot hold this text: a quote inside one is escaped, `\"`.
+    const name_prefix: []const u8 = "\"name\": \"";
+    while (indexOfPos(u8, catalog, cursor, name_prefix)) |found| {
+        const name_start: usize = found + name_prefix.len;
+        const name_end: usize = indexOfScalarPos(u8, catalog, name_start, '"') orelse break;
+        cataloged_names.append(b.allocator, catalog[name_start..name_end]) catch @panic("oom");
+        cursor = name_end;
+    }
+    var uncataloged_apps: ArrayList([]const u8) = .empty;
+    for (apps) |app| {
+        const is_cataloged: bool = for (cataloged_names.items) |cataloged_name| {
+            if (eql(u8, cataloged_name, app.name)) {
+                break true;
+            }
+        } else false;
+        if (!is_cataloged) {
+            uncataloged_apps.append(b.allocator, app.name) catch @panic("oom");
+        }
+    }
+    var cards_without_app: ArrayList([]const u8) = .empty;
+    for (cataloged_names.items) |cataloged_name| {
+        const is_in_table: bool = for (apps) |app| {
+            if (eql(u8, app.name, cataloged_name)) {
+                break true;
+            }
+        } else false;
+        const is_built_elsewhere: bool = for (also_cataloged) |other_name| {
+            if (eql(u8, other_name, cataloged_name)) {
+                break true;
+            }
+        } else false;
+        if (!is_in_table and !is_built_elsewhere) {
+            cards_without_app.append(b.allocator, cataloged_name) catch @panic("oom");
+        }
+    }
+    const catalog_is_in_step: bool = uncataloged_apps.items.len == 0 and cards_without_app.items.len == 0;
+    if (!catalog_is_in_step) {
+        const uncataloged_list: []const u8 = std.mem.join(b.allocator, " ", uncataloged_apps.items) catch @panic("oom");
+        const dead_card_list: []const u8 = std.mem.join(b.allocator, " ", cards_without_app.items) catch @panic("oom");
+        std.debug.panic(
+            "{s}, the gallery's catalog, is out of step with the app table (`wgpu_apps` in build.zig)\n" ++
+                "  apps with no entry (add one each: name, module, stars, title, description, functions): {s}\n" ++
+                "  entries naming no app: {s}",
+            .{ catalog_path, uncataloged_list, dead_card_list },
+        );
+    }
+}
+
+/// An example's headless program as `addHeadlessRunOf` made it: the program, its install in zig-out/headless/bin/, and
+/// the run its `<name>-headless` step makes.
+const HeadlessRun = struct {
+    exe: *Compile,
+    install: *Step.InstallArtifact,
+    run: *Run,
+};
+
 /// `addHeadlessRun` for an app module already built - the launcher's, with every flagship imported - named `name`.
-/// Returns the program, for more runs of it.
+/// Returns the program, for more runs of it, with its install and its run, for the checks that stand in for that run.
 fn addHeadlessRunOf(
     b: *std.Build,
+    steps: *StepRegistry,
     ctx: AppContext,
     app_mod: *Module,
     name: []const u8,
     own_frame: bool,
     script_path: ?[]const u8,
-) *Compile {
+) HeadlessRun {
     const exe: *Compile = nativeAppExe(ctx, app_mod, name, own_frame);
     const install: *Step.InstallArtifact = b.addInstallArtifact(exe, .{
         .dest_dir = .{ .override = .{ .custom = "headless/bin" } },
@@ -2844,13 +3605,13 @@ fn addHeadlessRunOf(
         run.setEnvironmentVariable("ZIMR_SCRIPT", path);
     }
     const dash_name: []const u8 = std.mem.replaceOwned(u8, b.allocator, name, "_", "-") catch @panic("oom");
-    const step: *Step = b.step(
+    const step: *Step = steps.part(
         b.fmt("{s}-headless", .{dash_name}),
         b.fmt("Run {s} headless (-Dscript)", .{name}),
     );
     step.dependOn(&install.step);
     step.dependOn(&run.step);
-    return exe;
+    return .{ .exe = exe, .install = install, .run = run };
 }
 
 /// The step `<name>-headless` (dashes for underscores): `app` built for the build's own machine with the headless host,
@@ -2858,11 +3619,12 @@ fn addHeadlessRunOf(
 /// script, or a second of frames without one; frames it captures without a path go to zig-out/headless/<name>/.
 fn addHeadlessRun(
     b: *std.Build,
+    steps: *StepRegistry,
     ctx: AppContext,
     app: App,
     script_path: ?[]const u8,
-) *Compile {
-    return addHeadlessRunOf(b, ctx, ctx.buildAppModule(app), app.name, app.own_frame, script_path);
+) HeadlessRun {
+    return addHeadlessRunOf(b, steps, ctx, ctx.buildAppModule(app), app.name, app.own_frame, script_path);
 }
 
 /// How wide a gallery screenshot is saved (`gallery-shots`), its height in proportion: a thumbnail the native
@@ -3073,8 +3835,8 @@ pub const AppContext = struct {
     shader_cache: *StringHashMap(ShaderDep),
     /// Needed to build an example's job-kernel wasm: it is a DIFFERENT target
     /// (wasm32-freestanding, not wasi), so it needs its own module instances - and those
-    /// need their own `build_options`.
-    build_opts_wgpu: *Options,
+    /// need their own `build_options`: the web's, with no host (`build_opts_kernel` in `build`).
+    build_opts_kernel: *Options,
     build_opts_zm: *Options,
     /// Whether each shader is embedded as the compiler's SPIR-V rather than as WGSL - for the native (Vulkan) host.
     /// The import keeps the shader's WGSL name either way, so app code reads the same import on both hosts.
@@ -3368,6 +4130,18 @@ const zn_mlp_entries: [zn_mlp_kernel_names.kernels.len][]const u8 = entries: {
 /// the one file both read.
 fn configureGenoLab(ctx: AppContext, mod: *Module) void {
     mod.addAnonymousImport("geno_dance_zclip", .{ .root_source_file = ctx.b.path("examples/geno_ppo/dance.zclip") });
+}
+
+/// geno_mirror: Geno's clips and their mirror images. Embeds the minute's four baked clips and their mirrored twins,
+/// from where the trainer embeds them (`examples/geno_ppo/`).
+fn configureGenoMirror(ctx: AppContext, mod: *Module) void {
+    const clip_names = [_][]const u8{ "dance", "getup", "walk", "run" };
+    for (clip_names) |clip_name| {
+        const original: LazyPath = ctx.b.path(ctx.b.fmt("examples/geno_ppo/{s}.zclip", .{clip_name}));
+        const mirrored: LazyPath = ctx.b.path(ctx.b.fmt("examples/geno_ppo/{s}_mirrored.zclip", .{clip_name}));
+        mod.addAnonymousImport(ctx.b.fmt("geno_{s}_zclip", .{clip_name}), .{ .root_source_file = original });
+        mod.addAnonymousImport(ctx.b.fmt("geno_{s}_mirrored_zclip", .{clip_name}), .{ .root_source_file = mirrored });
+    }
 }
 
 /// geno_dance: the skinned-character viewer. Embeds the engine WGSL so its shadow and
@@ -3963,7 +4737,7 @@ pub const Project = struct {
                 app_dir.path(b, "kernels.zig"),
                 &.{},
                 ctx.optimize,
-                ctx.build_opts_wgpu,
+                ctx.build_opts_kernel,
                 ctx.build_opts_zm,
             )
         else
@@ -4218,7 +4992,7 @@ fn robotTestsMembers(b: *std.Build) []const []const u8 {
 /// its members also has a test compile of its own (its `test-<stem>` step), and checking those as well would analyse
 /// the family's closure once per member, on every save. Nothing here lints, links or runs: `tripwires` and `test`
 /// do that.
-fn addCompileCheck(b: *std.Build, focus: []const u8) void {
+fn addCompileCheck(b: *std.Build, steps: *StepRegistry, focus: []const u8) void {
     const examples_focus: []const u8 = if (focus.len == 0) "launcher" else focus;
     const robot_tests_members: []const []const u8 = robotTestsMembers(b);
     const Original = struct {
@@ -4275,7 +5049,7 @@ fn addCompileCheck(b: *std.Build, focus: []const u8) void {
         originals.append(b.allocator, .{ .compile = compile, .root_path = root_path }) catch @panic("OOM");
     }
 
-    const check_step: *Step = b.step(
+    const check_step: *Step = steps.part(
         "check",
         "Compile-only, no binaries: every test, every tool and the -Dfocus examples (ZLS runs it on save)",
     );
@@ -4412,6 +5186,69 @@ const HostTestWiring = struct {
     build_opts: *Options,
 };
 
+/// The geno_lab recipes in the repository, embedded into `mod` for robot_lab's tests that the trainer takes each one as
+/// written. ONE list, for every module that compiles those tests - the fast tier's and `src/tests.zig`'s (the second
+/// had none, and `zig build test` failed on `@embedFile("night1_00_check_control")`):
+/// * the first run's (`examples/geno_lab/recipes/first_run.zon`) as `first_run_recipe`;
+/// * the first night's (`recipes/night1/`), each as `night1_<its name>`;
+/// * the three hours' (`recipes/three_hours/`), each as `three_hours_<its name>`;
+/// * the foundation's (`recipes/foundation/`), each as `foundation_<its name>`.
+fn addGenoRecipeEmbeds(b: *std.Build, mod: *Module) void {
+    mod.addAnonymousImport("first_run_recipe", .{
+        .root_source_file = b.path("examples/geno_lab/recipes/first_run.zon"),
+    });
+    const night_recipe_names = [_][]const u8{
+        "00_check_control",
+        "01_control",
+        "02_control_seed2",
+        "03_plain_supertrack",
+        "04_no_teacher",
+        "05_no_flow",
+        "06_no_model_planner",
+        "07_no_skip_head",
+        "08_no_critic",
+        "09_no_recovery",
+        "10_no_root_target",
+    };
+    for (night_recipe_names) |recipe_name| {
+        const recipe_path: []const u8 = b.fmt("examples/geno_lab/recipes/night1/{s}.zon", .{recipe_name});
+        mod.addAnonymousImport(b.fmt("night1_{s}", .{recipe_name}), .{
+            .root_source_file = b.path(recipe_path),
+        });
+    }
+    const three_hours_recipe_names = [_][]const u8{
+        "01_control",
+        "02_plain_supertrack",
+        "03_control_seed2",
+        "04_phase_two_by_gate",
+        "05_no_teacher",
+        "06_no_flow",
+        "07_no_model_planner",
+        "08_no_skip_head",
+        "09_no_critic",
+        "10_no_root_target",
+        "11_no_recovery",
+        "12_dispatch_times",
+    };
+    for (three_hours_recipe_names) |recipe_name| {
+        const recipe_path: []const u8 = b.fmt("examples/geno_lab/recipes/three_hours/{s}.zon", .{recipe_name});
+        mod.addAnonymousImport(b.fmt("three_hours_{s}", .{recipe_name}), .{
+            .root_source_file = b.path(recipe_path),
+        });
+    }
+    const foundation_recipe_names = [_][]const u8{
+        "01_first_check",
+        "02_first_check_seed2",
+        "03_three_hours_run2",
+    };
+    for (foundation_recipe_names) |recipe_name| {
+        const recipe_path: []const u8 = b.fmt("examples/geno_lab/recipes/foundation/{s}.zon", .{recipe_name});
+        mod.addAnonymousImport(b.fmt("foundation_{s}", .{recipe_name}), .{
+            .root_source_file = b.path(recipe_path),
+        });
+    }
+}
+
 /// Every import `src/tests.zig`'s module needs, for `target`. ONE definition, used by the host
 /// tests (native) and `test-windows` (cross-compiled, compile-only): `test-windows` had drifted to a
 /// single import (`shader_interface`) and stopped compiling at the first `@import("zm")`.
@@ -4487,6 +5324,8 @@ fn wireHostTestImports(
         .root_source_file = b.path("tests/fixtures/atomics/atomic_buildgrid.spv"),
     });
     _ = addEngineOptionsAndRobot(b, test_mod, wiring.build_opts, wiring.zimrmath_mod);
+    // `tests.zig` reaches robot_lab.zig through `zimr.zig`, so its recipe tests compile here too.
+    addGenoRecipeEmbeds(b, test_mod);
 }
 
 /// `zig build vorbis-reference`: the engine's Vorbis decoder against stb_vorbis, decoding the same file, compared frame
@@ -4495,6 +5334,7 @@ fn wireHostTestImports(
 /// engine's codecs come in as a module of their own, with the math and zimrnum they import.
 fn addVorbisReferenceStep(
     b: *std.Build,
+    steps: *StepRegistry,
     native_target: std.Build.ResolvedTarget,
     zimrmath_mod: *std.Build.Module,
     zimrnum_mod: *std.Build.Module,
@@ -4519,8 +5359,151 @@ fn addVorbisReferenceStep(
     });
     const reference_test: *std.Build.Step.Compile = b.addTest(.{ .root_module = reference_mod });
     const reference_run: *std.Build.Step.Run = b.addRunArtifact(reference_test);
-    const step: *std.Build.Step = b.step("vorbis-reference", "The Vorbis decoder against stb_vorbis, frame by frame");
+    const step: *std.Build.Step = steps.check(
+        "vorbis-reference",
+        "The Vorbis decoder against stb_vorbis, frame by frame",
+        .{ .tier = .gate },
+    );
     step.dependOn(&reference_run.step);
+}
+
+/// What a fast test root's binary is built from, beside its root and the build options (`addFastTestCompile`).
+const FastTestWiring = struct {
+    target: ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    /// `-Dtest-llvm`: LLVM as the backend even in Debug.
+    use_llvm: bool,
+    zimrmath_mod: *Module,
+    shader_interface_mod: *Module,
+    kompute_mod: *Module,
+    zimrnum_mod: *Module,
+    zimrrl_mod: *Module,
+};
+
+/// One fast root's test binary, built against `options`: its module, and the named modules beside it that read the
+/// options too, so the whole binary sees one set of them.
+fn addFastTestCompile(
+    b: *std.Build,
+    root: []const u8,
+    options: *Options,
+    wiring: FastTestWiring,
+) *Compile {
+    // * The module ROOT is the file itself, so a test under `src/tests/` reaching a
+    // sibling with `@import("../x.zig")` would escape the module path. Those tests
+    // import through `src/` instead - see `ragdoll_bvh_test.zig`.
+    const fast_mod: *Module = b.createModule(.{
+        .root_source_file = b.path(root),
+        .target = wiring.target,
+        .optimize = wiring.optimize,
+    });
+    // One module for the options, shared: two modules rooted at the same options file are a compile error.
+    const fast_options_mod: *Module = options.createModule();
+    fast_mod.addImport("zm", wiring.zimrmath_mod);
+    fast_mod.addImport("build_options", fast_options_mod);
+    fast_mod.addImport("shader_interface", wiring.shader_interface_mod);
+    // Named imports for tests that need siblings, so nothing reaches across the
+    // module root with a relative path.
+    const codecs_mod: *Module = b.createModule(.{
+        .root_source_file = b.path("src/codecs.zig"),
+        .target = wiring.target,
+        .optimize = wiring.optimize,
+    });
+    codecs_mod.addImport("zm", wiring.zimrmath_mod);
+    codecs_mod.addImport("build_options", fast_options_mod);
+    const fast_robot: RobotModules = addRobotModules(b, wiring.zimrmath_mod, fast_options_mod);
+    fast_mod.addImport("codecs", codecs_mod);
+    fast_mod.addImport("robot", fast_robot.robot);
+    fast_mod.addImport("profiler", fast_robot.profiler);
+    // `zimrnum` authors its GPU kernels through the kompute DSL, so it needs the same
+    // one shared kompute module every compute example uses.
+    fast_mod.addImport("kompute", wiring.kompute_mod);
+    // robotgpu's arena lengths for tests and lavapipe (`robotgpu_sizes_test.zig`, under the module's name).
+    const robotgpu_test_sizes_mod: *Module = b.createModule(.{
+        .root_source_file = b.path("src/robotgpu_sizes_test.zig"),
+    });
+    fast_mod.addImport("robotgpu_sizes", robotgpu_test_sizes_mod);
+    // The geno_lab recipes robot_lab's tests read (`addGenoRecipeEmbeds`).
+    addGenoRecipeEmbeds(b, fast_mod);
+    // The MJCF importer as a MODULE of its own (robot_mjcf.zig and the files it reaches by path), for a root
+    // that needs a robot from MJCF text without running the importer's own tests - robotgpu's. A root that
+    // imports robot_mjcf.zig by path (the robot family) never names this module, so the two never meet.
+    const robot_import_mod: *Module = b.createModule(.{
+        .root_source_file = b.path("src/robot_mjcf.zig"),
+    });
+    robot_import_mod.addImport("zm", wiring.zimrmath_mod);
+    robot_import_mod.addImport("robot", fast_robot.robot);
+    robot_import_mod.addImport("zn", wiring.zimrnum_mod);
+    robot_import_mod.addImport("build_options", fast_options_mod);
+    fast_mod.addImport("robot_import", robot_import_mod);
+    // `src/gpu/zn_conformance.zig` holds the CPU reference the GPU sweep is judged
+    // against, so it imports zimrnum itself. Offered to every fast root for the same
+    // reason `codecs` and `robot` are: cheaper than a second list to keep in step.
+    fast_mod.addImport("zn", wiring.zimrnum_mod);
+    fast_mod.addImport("zrl", wiring.zimrrl_mod);
+    const fast_test: *Compile = b.addTest(.{
+        .root_module = fast_mod,
+        // std's runner, plus `--shard=K/N` and `--timing` (see the file's header).
+        .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .server },
+    });
+    // `-Dtest-llvm`: LLVM as the backend even in Debug. Zig's own x86-64 backend, Debug's default, compiles in
+    // seconds but on Nov 17 laid an 8-byte pointer constant over the start of a string in `.data.rel.ro`, so
+    // the CPU twin's buffers were addressed through a pointer with a string in its upper half - 53 crashes of
+    // the latent kit's tests that are the toolchain's, not ours. LLVM in Debug runs them.
+    if (wiring.use_llvm) {
+        fast_test.use_llvm = true;
+    }
+    return fast_test;
+}
+
+/// What every run of a fast root's binary is given (`addFastTestRun`).
+const FastRunWiring = struct {
+    /// The processes the binary's tests are split across, each running every `shards`th test (`src/test_runner.zig`).
+    shards: u32,
+    /// `-Dtest-timing`: each process lists its tests of a second or more.
+    timing: bool,
+    /// `-Dtest-filter`: chosen when the binary runs, so one compiled binary serves every filter.
+    filter: ?[]const u8,
+    /// `-Dtrain-chunk`: every run happens, for what it writes to `train/`.
+    train_chunk: bool,
+    /// The name prefixes of the tests other roots' binaries run (`tests_run_elsewhere`), left out of this one.
+    skip_prefixes: []const []const u8,
+    /// Whether the binary runs its slow tests too (`-Dslow-tests`, or a slow twin of S3): its runs' names say so.
+    slow: bool,
+};
+
+/// Shard `shard` of the fast root `stem`'s binary, `fast_test`, run as `wiring` says.
+fn addFastTestRun(
+    b: *std.Build,
+    fast_test: *Compile,
+    stem: []const u8,
+    shard: usize,
+    wiring: FastRunWiring,
+) *Run {
+    const fast_run: *Run = b.addRunArtifact(fast_test);
+    const is_sharded: bool = wiring.shards > 1;
+    if (is_sharded) {
+        fast_run.addArg(b.fmt("--shard={d}/{d}", .{ shard, wiring.shards }));
+    }
+    // Named for its root, its shard and its slow tests, so a failure says which binary it was.
+    const shard_label: []const u8 = if (is_sharded) b.fmt(" {d}/{d}", .{ shard, wiring.shards }) else "";
+    const slow_label: []const u8 = if (wiring.slow) " (slow tests)" else "";
+    fast_run.setName(b.fmt("run test {s}{s}{s}", .{ stem, shard_label, slow_label }));
+    if (wiring.timing) {
+        fast_run.addArg("--timing");
+    }
+    if (wiring.filter) |filter| {
+        fast_run.addArg(b.fmt("--filter={s}", .{filter}));
+    }
+    for (wiring.skip_prefixes) |prefix| {
+        fast_run.addArg(b.fmt("--skip-prefix={s}", .{prefix}));
+    }
+    // A training chunk exists for what it writes to `train/`, which the build cache cannot see:
+    // the same binary with the same arguments would otherwise be a cached, skipped run - no
+    // output and no learning. With `-Dtrain-chunk`, every run happens.
+    if (wiring.train_chunk) {
+        fast_run.has_side_effects = true;
+    }
+    return fast_run;
 }
 
 pub fn build(b: *std.Build) void {
@@ -4532,6 +5515,8 @@ pub fn build(b: *std.Build) void {
     // path - the message tells the user what to do.
     checkDiskSpace(b);
     suggestZbuild(b, "tools/zig-out/bin/zbuild");
+    // Every top-level step and its kind: what `test-everything` and `build-everything` are made from.
+    var steps: StepRegistry = .init(b);
 
     // ---- Wasm target (the real one)
     // `simd128` is enabled so the rasterizer kernels' `@Vector(4, f32)`
@@ -4821,6 +5806,17 @@ pub fn build(b: *std.Build) void {
         "Run the resumable training chunks (robot_ppo_track), one chunk per invocation",
     ) orelse false;
     build_opts.addOption(bool, "train_chunk", train_chunk);
+    // The fast tier's slow twins (`test-everything`, S3 of src/notes/test_build_everything_plan.md): `build_opts` field
+    // for field, in the same order, the slow tests on - so a field added above is added here too. Under `-Dslow-tests`
+    // the quick builds are slow already, and no twin is made.
+    const slow_build_opts: *Options = b.addOptions();
+    slow_build_opts.addOption(bool, "assert_log", assert_log);
+    slow_build_opts.addOption(bool, "profile_enabled", profile_enabled);
+    slow_build_opts.addOption(bool, "ui_backend_wgpu", false);
+    slow_build_opts.addOption(bool, "slow_tests", true);
+    slow_build_opts.addOption(bool, "test_report", test_report);
+    slow_build_opts.addOption(bool, "parked_tests", parked_tests);
+    slow_build_opts.addOption(bool, "train_chunk", train_chunk);
     // `-Dtest-shards=N`: run the robot family's test binary as N processes, each with every Nth test
     // (`src/test_runner.zig`). The robot family is ONE binary of ~760 tests, and Zig runs a binary's
     // tests one after another, so `zig build test` waited on a single core for all of them while the
@@ -4845,6 +5841,16 @@ pub fn build(b: *std.Build) void {
     build_opts_wgpu.addOption(bool, "profile_enabled", profile_enabled);
     build_opts_wgpu.addOption(bool, "ui_backend_wgpu", true);
     _ = addEngineOptionsAndRobot(b, zimr_mod, build_opts_wgpu, zimrmath_mod);
+
+    // Options for a job kernel's wasm: the WebGPU modules' with no host at all. A kernel wasm imports nothing (c2js
+    // asserts it), so every GPU call it can reach must be the no-host kind, which returns at once (`host.zig`) - and a
+    // job that trains on a kernel module's CPU twin reaches `compute_host`'s GPU arms. Without the option a wasm build
+    // is a browser's, and those arms would import the browser's GPU.
+    const build_opts_kernel: *Options = b.addOptions();
+    build_opts_kernel.addOption(bool, "assert_log", assert_log);
+    build_opts_kernel.addOption(bool, "profile_enabled", profile_enabled);
+    build_opts_kernel.addOption(bool, "ui_backend_wgpu", true);
+    build_opts_kernel.addOption([]const u8, "host", "none");
 
     // ---- The zimr module for the native Windows host: the same source as the
     // web module, built for x86_64-windows-gnu with `host = "native"`, so `wgpu.zig` routes every GPU call to the
@@ -4984,7 +5990,7 @@ pub fn build(b: *std.Build) void {
 
     // Smoke install step - parallel to `b.getInstallStep()` but for the
     // ReleaseSafe smoke build.  Wired up in the example loop below.
-    const smoke_install_step: *Step = b.step(
+    const smoke_install_step: *Step = steps.build(
         "smoke-install-safe",
         "Install smoke-mode wasm + assets to zig-out/smoke/web/",
     );
@@ -4994,7 +6000,7 @@ pub fn build(b: *std.Build) void {
     // addWgpuSmoke).  `smoke-test` runs webtests/wgpu_smoke.ts over that
     // dir.  This is the live successor to the GL `smoke-install` above -
     // the GL example smoke was retired with the WebGL backend.
-    const wgpu_smoke_install: *Step = b.step(
+    const wgpu_smoke_install: *Step = steps.part(
         "smoke-install",
         "Install live wgpu example wasms to zig-out/wgpu-smoke/web/ (focus-gated)",
     );
@@ -5042,8 +6048,8 @@ pub fn build(b: *std.Build) void {
     // shader-free half (zimrnum, zimrmath, the robot family) - each binary once, in parallel. What
     // it leaves out is the long end: `-Dslow-tests` adds the tests that simulate for seconds or
     // learn for minutes, and `test-all-examples` builds every wasm instead of the tier-A eight.
-    const test_step: *Step = b.step(
-        "test",
+    const test_step: *Step = steps.tierStep(
+        .quick_tests,
         "Every quick test: engine + shader-free suites + tier-A examples (-Dslow-tests for the long ones)",
     );
 
@@ -5065,7 +6071,7 @@ pub fn build(b: *std.Build) void {
     // * This step exists because the physics/robotics half of the engine has NOTHING to do with
     // the render half, and paying the render half's build cost to test a Jacobian is the reason
     // the suite stopped being run at all.
-    const test_fast_step: *Step = b.step(
+    const test_fast_step: *Step = steps.part(
         "test-fast",
         "Unit tests for the shader-free modules: zimrnum, zimrmath, robot, physics, codecs",
     );
@@ -5137,7 +6143,7 @@ pub fn build(b: *std.Build) void {
     const measure_install: *Step.InstallArtifact = b.addInstallArtifact(measure_exe, .{
         .dest_dir = .{ .override = .{ .custom = "../tools/zig-out/bin" } },
     });
-    const measure_step: *Step = b.step(
+    const measure_step: *Step = steps.build(
         "measure",
         "Build the timing harness into tools/zig-out/bin (then: measure <label> <command...>)",
     );
@@ -5147,7 +6153,7 @@ pub fn build(b: *std.Build) void {
     // artifacts; an external consumer can `dep.artifact("c2js")` etc.). Grouped
     // into buildTools, which returns the set; destructured back to the local
     // names the rest of build() already uses.
-    const tools: Tools = buildTools(b, host_target, zimrmath_mod, cli_mod);
+    const tools: Tools = buildTools(b, &steps, host_target, zimrmath_mod, cli_mod);
     const spv2wgsl_tool_exe: *Compile = tools.spv2wgsl;
     const spv2wgsl_check_exe: *Compile = tools.spv2wgsl_check;
     const zimrlint_exe: *Compile = tools.lint;
@@ -5186,7 +6192,7 @@ pub fn build(b: *std.Build) void {
     native_plot_png_exe.root_module.addImport("zimr", zimr_native_mod);
     native_plot_png_exe.root_module.addImport("zm", zimrmath_mod);
     const native_plot_png_run: *Run = b.addRunArtifact(native_plot_png_exe);
-    const native_plot_png_step: *Step = b.step(
+    const native_plot_png_step: *Step = steps.runs(
         "native-plot-png",
         "Render a publication-quality plot to plot.png (native, pure Zig)",
     );
@@ -5212,7 +6218,7 @@ pub fn build(b: *std.Build) void {
     robot_bench_exe.root_module.addImport("zm", zimrmath_mod);
     _ = addEngineOptionsAndRobot(b, robot_bench_exe.root_module, build_opts_wgpu, zimrmath_mod);
     const robot_bench_run: *Run = b.addRunArtifact(robot_bench_exe);
-    const robot_bench_step: *Step = b.step(
+    const robot_bench_step: *Step = steps.runs(
         "robot-bench",
         "Measure robot.zig step cost on four models (native, ReleaseFast)",
     );
@@ -5234,7 +6240,7 @@ pub fn build(b: *std.Build) void {
     _ = addEngineOptionsAndRobot(b, clip_bake_exe.root_module, build_opts_wgpu, zimrmath_mod);
     const clip_bake_run: *Run = b.addRunArtifact(clip_bake_exe);
     clip_bake_run.has_side_effects = true;
-    const clip_bake_step: *Step = b.step("clip-bake", "Bake the tracking clips into the pages' compact binaries");
+    const clip_bake_step: *Step = steps.writes("clip-bake", "Bake the tracking clips into the pages' compact binaries");
     clip_bake_step.dependOn(&clip_bake_run.step);
 
     // st-bench (plan B1): SuperTrack's learning curve on Geno's 10-second dance, deterministic, on the CPU - the rig
@@ -5244,7 +6250,7 @@ pub fn build(b: *std.Build) void {
     // configuration first. The rows are bitwise identical between them, which is what makes the Fast one checkable
     // (`st_bench --compare=safe.csv,fast.csv`). INSTALLED like `measure`, since a step cannot forward arguments:
     //     zig build st-bench        then        tools/zig-out/bin/st_bench --minutes=10 --out=/tmp/curve.csv
-    const st_bench_step: *Step = b.step(
+    const st_bench_step: *Step = steps.build(
         "st-bench",
         "Build SuperTrack's learning-curve bench (st_bench, st_bench_safe) into tools/zig-out/bin",
     );
@@ -5303,9 +6309,14 @@ pub fn build(b: *std.Build) void {
     smsw_verify_exe.root_module.addImport("zm", zimrmath_mod);
     smsw_verify_exe.root_module.addAnonymousImport("bunny_proxy", .{ .root_source_file = smsw_proxy_zig });
     const smsw_verify_run: *Run = b.addRunArtifact(smsw_verify_exe);
-    const smsw_verify_step: *Step = b.step(
+    // The four `*-verify` checks run from the build root and write their pictures into zig-out/verify, never the
+    // working directory; each prints only when it fails.
+    smsw_verify_run.setCwd(b.path("."));
+    smsw_verify_run.setEnvironmentVariable("ZIMR_CAPTURE_DIR", "zig-out/verify");
+    const smsw_verify_step: *Step = steps.check(
         "shadowmap-sw-verify",
-        "Bake the shadowmap_sw comptime corner (budget gate), diff vs runtime, dump PNGs",
+        "Bake the shadowmap_sw comptime corner (budget gate), diff vs runtime; pictures in zig-out/verify",
+        .{ .tier = .everything },
     );
     smsw_verify_step.dependOn(&smsw_verify_run.step);
 
@@ -5330,9 +6341,12 @@ pub fn build(b: *std.Build) void {
     cel_verify_exe.root_module.addImport("zm", zimrmath_mod);
     cel_verify_exe.root_module.addAnonymousImport("bunny_proxy", .{ .root_source_file = cel_proxy_zig });
     const cel_verify_run: *Run = b.addRunArtifact(cel_verify_exe);
-    const cel_verify_step: *Step = b.step(
+    cel_verify_run.setCwd(b.path("."));
+    cel_verify_run.setEnvironmentVariable("ZIMR_CAPTURE_DIR", "zig-out/verify");
+    const cel_verify_step: *Step = steps.check(
         "cel-shading-verify",
-        "Render the cel example's look natively via the shared shaderMains, dump cel_verify.png",
+        "Render the cel example's look natively via the shared shaderMains; zig-out/verify/cel_verify.png",
+        .{ .tier = .everything },
     );
     cel_verify_step.dependOn(&cel_verify_run.step);
 
@@ -5351,9 +6365,12 @@ pub fn build(b: *std.Build) void {
     fx_verify_exe.root_module.addImport("zimr", zimr_native_mod);
     fx_verify_exe.root_module.addImport("zm", zimrmath_mod);
     const fx_verify_run: *Run = b.addRunArtifact(fx_verify_exe);
-    const fx_verify_step: *Step = b.step(
+    fx_verify_run.setCwd(b.path("."));
+    fx_verify_run.setEnvironmentVariable("ZIMR_CAPTURE_DIR", "zig-out/verify");
+    const fx_verify_step: *Step = steps.check(
         "shader-effects-verify",
-        "Run the 2D effect shaderMains natively over a test pattern, dump effects_verify.png",
+        "Run the 2D effect shaderMains natively over a test pattern; zig-out/verify/effects_verify.png",
+        .{ .tier = .everything },
     );
     fx_verify_step.dependOn(&fx_verify_run.step);
 
@@ -5370,9 +6387,12 @@ pub fn build(b: *std.Build) void {
     hy_verify_exe.root_module.addImport("zimr", zimr_native_mod);
     hy_verify_exe.root_module.addImport("zm", zimrmath_mod);
     const hy_verify_run: *Run = b.addRunArtifact(hy_verify_exe);
-    const hy_verify_step: *Step = b.step(
+    hy_verify_run.setCwd(b.path("."));
+    hy_verify_run.setEnvironmentVariable("ZIMR_CAPTURE_DIR", "zig-out/verify");
+    const hy_verify_step: *Step = steps.check(
         "hybrid-render-verify",
-        "Render the hybrid example's raymarched scene natively, dump hybrid_verify.png",
+        "Render the hybrid example's raymarched scene natively; zig-out/verify/hybrid_verify.png",
+        .{ .tier = .everything },
     );
     hy_verify_step.dependOn(&hy_verify_run.step);
 
@@ -5394,7 +6414,7 @@ pub fn build(b: *std.Build) void {
     dag_png_exe.root_module.addImport("zimr", zimr_native_mod);
     dag_png_exe.root_module.addImport("zm", zimrmath_mod);
     const dag_png_run: *Run = b.addRunArtifact(dag_png_exe);
-    const dag_png_step: *Step = b.step(
+    const dag_png_step: *Step = steps.writes(
         "dag-png",
         "Render the src dependency graph to src/notes/dag.png (native, zimr-drawn)",
     );
@@ -5408,10 +6428,14 @@ pub fn build(b: *std.Build) void {
     );
     // Pure-Zig shader tools as real artifact edges (no sub-build, no C++).
     shader_pipeline.spv2wgsl_exe = spv2wgsl_tool_exe;
-    // `-Dspirv-opt`: every compute kernel's SPIR-V through tools/spirvopt.zig's -O pipeline (a port of SPIRV-Tools'
-    // optimizer) before WGSL and Vulkan take it - off by default, so the two can be compared.
-    const spirv_opt_help: []const u8 = "Optimize every compute kernel's SPIR-V with tools/spirvopt.zig";
-    const spirv_opt: bool = b.option(bool, "spirv-opt", spirv_opt_help) orelse false;
+    // `-Dspirv-opt`: every compute kernel's SPIR-V through tools/spirvopt.zig (a port of SPIRV-Tools' optimizer)
+    // before WGSL and Vulkan take it - Vulkan its -O pipeline, the web its passes that keep functions as calls. On by
+    // default: Zig's SPIR-V backend opens a branch on a constant around every unrolled iteration and keeps local
+    // arrays in memory, which the optimizer folds into straight values - about half the size of a heavily unrolled
+    // module, which the drivers compile faster and, for some kernels, into faster code. `-Dspirv-opt=false` gives the
+    // backend's SPIR-V as it comes, to compare.
+    const spirv_opt_help: []const u8 = "Optimize every compute kernel's SPIR-V with tools/spirvopt.zig (default on)";
+    const spirv_opt: bool = b.option(bool, "spirv-opt", spirv_opt_help) orelse true;
     if (spirv_opt) {
         const spirvopt_module: *Module = b.createModule(.{
             .root_source_file = b.path("tools/spirvopt.zig"),
@@ -5592,7 +6616,11 @@ pub fn build(b: *std.Build) void {
         native_input_mod.addImport("zm", zimrmath_mod);
         native_input_mod.addImport("shader_interface", shader_interface_mod);
         const native_input_tests: *Step.Compile = b.addTest(.{ .root_module = native_input_mod });
-        const native_input_step: *Step = b.step("native-input-test", "Run the native input translation's tests");
+        const native_input_step: *Step = steps.check(
+            "native-input-test",
+            "Run the native input translation's tests",
+            .{ .tier = .quick_tests },
+        );
         native_input_step.dependOn(&b.addRunArtifact(native_input_tests).step);
     }
 
@@ -5609,7 +6637,11 @@ pub fn build(b: *std.Build) void {
         // src/host.zig reads the host's kind from `build_options`: a host test runs on no platform (`none`).
         addToolHostOptions(b, platform_mod);
         const platform_tests: *Step.Compile = b.addTest(.{ .root_module = platform_mod });
-        const platform_step: *Step = b.step("platform-contract-test", "Run the platform contract's tests");
+        const platform_step: *Step = steps.check(
+            "platform-contract-test",
+            "Run the platform contract's tests",
+            .{ .tier = .quick_tests },
+        );
         platform_step.dependOn(&b.addRunArtifact(platform_tests).step);
     }
 
@@ -5629,7 +6661,11 @@ pub fn build(b: *std.Build) void {
         });
         gen_mod.addImport("codecs", gen_codecs_mod);
         const gen_tests: *Step.Compile = b.addTest(.{ .root_module = gen_mod });
-        const gen_test_step: *Step = b.step("vk-gen-test", "Run the Vulkan binding generator's tests");
+        const gen_test_step: *Step = steps.check(
+            "vk-gen-test",
+            "Run the Vulkan binding generator's tests",
+            .{ .tier = .quick_tests },
+        );
         gen_test_step.dependOn(&b.addRunArtifact(gen_tests).step);
 
         // ---- vk-gen: rewrites src/vk.zig's generated part from the registry; the build itself never needs it.
@@ -5638,7 +6674,7 @@ pub fn build(b: *std.Build) void {
             "vulkan-registry",
             "The Vulkan registry, vk.xml (Vulkan-Headers' registry/vk.xml), for vk-gen",
         );
-        const vk_gen_step: *Step = b.step(
+        const vk_gen_step: *Step = steps.writes(
             "vk-gen",
             "Regenerate src/vk.zig from the Vulkan registry (needs -Dvulkan-registry=<path to vk.xml>)",
         );
@@ -5676,9 +6712,10 @@ pub fn build(b: *std.Build) void {
         for (engine_spirv.items) |shader| {
             probe_run.addPrefixedFileArg(b.fmt("{s}=", .{shader.name}), shader.spirv);
         }
-        const probe_step: *Step = b.step(
+        const probe_step: *Step = steps.check(
             "vk-shader-probe",
             "Create every engine shader as a Vulkan module under the validation layer (needs a Vulkan driver)",
+            .{ .tier = .everything, .need = .vulkan_device },
         );
         probe_step.dependOn(&probe_run.step);
     }
@@ -5734,8 +6771,6 @@ pub fn build(b: *std.Build) void {
             .assert_log = assert_log,
             .profile_enabled = profile_enabled,
             .long_checks = b.option(bool, "long-checks", "vk-host-test: run its long checks at full size") orelse false,
-            .filtered = test_filter != null,
-            .filters = if (test_filter) |filter| b.dupeStrings(&.{filter}) else &.{},
             .optimize = b.option(
                 std.builtin.OptimizeMode,
                 "host-test-optimize",
@@ -5749,6 +6784,9 @@ pub fn build(b: *std.Build) void {
         };
         const host_test_exe: *Compile = addVulkanHostTest(b, b.graph.host, host_test_inputs);
         const host_test_run: *Step.Run = b.addRunArtifact(host_test_exe);
+        if (test_filter) |filter| {
+            host_test_run.addArg(b.fmt("--filter={s}", .{filter}));
+        }
         const native_os_mod: *Module = b.createModule(.{
             .root_source_file = b.path("src/native_os.zig"),
             .target = b.graph.host,
@@ -5758,9 +6796,10 @@ pub fn build(b: *std.Build) void {
         // `native_os` reaches `host.zig`, which reads the build's choice of host from `build_options`.
         native_os_mod.addImport("build_options", build_opts.createModule());
         const native_os_tests: *Step.Compile = b.addTest(.{ .root_module = native_os_mod });
-        const host_test_step: *Step = b.step(
+        const host_test_step: *Step = steps.check(
             "vk-host-test",
             "Run the Vulkan host's checks headless under the validation layer (-Dtest-filter runs some)",
+            .{ .tier = .everything, .need = .vulkan_device },
         );
         host_test_step.dependOn(&host_test_run.step);
         host_test_step.dependOn(&b.addRunArtifact(native_os_tests).step);
@@ -5774,7 +6813,7 @@ pub fn build(b: *std.Build) void {
         );
         const windows_host_test_check: *Step.Run = addNativeWgslCheck(b, native_wgsl_check_exe, windows_host_test_exe);
         windows_host_test_install.step.dependOn(&windows_host_test_check.step);
-        const windows_host_test_step: *Step = b.step(
+        const windows_host_test_step: *Step = steps.build(
             "vk-host-test-windows",
             "Build zig-out/windows/vk_host_test.exe, the Vulkan host test, to run on a Windows machine's GPU",
         );
@@ -5784,7 +6823,7 @@ pub fn build(b: *std.Build) void {
         // web build compiles from the same source (its plan, D19), so a kernel that cannot become WGSL fails here, the
         // day it is written, not when the web build is assembled. `--strict` refuses what spv2wgsl cannot translate;
         // the WGSL lands in zig-out/robotgpu_wgsl/ to read, and the browser is its full validator.
-        const robotgpu_wgsl_step: *Step = b.step(
+        const robotgpu_wgsl_step: *Step = steps.build(
             "robotgpu-wgsl",
             "Translate robotgpu's kernels to WGSL (zig-out/robotgpu_wgsl/), as its web build will",
         );
@@ -5808,32 +6847,61 @@ pub fn build(b: *std.Build) void {
 
         // ---- geno-trainer: Geno trained by PPO or SuperTrack, headless, in a run folder (`tools/geno_trainer.zig`):
         // installed beside the headless programs for the build machine, and beside the Windows programs for Windows.
-        //     zig build geno-trainer        then        zig-out/headless/bin/geno_trainer --run=../geno_runs/night1
+        //     zig build geno-trainer        then        zig-out/headless/bin/geno_trainer --run=../geno_runs/first_run
         // A run's folder lives outside the repository; the night's recipes are `examples/geno_lab/recipes/<name>.zon`.
-        // `-Dtrainer-portable=true`: buffers every device binds (`zn_mlp_sizes_trainer_portable.zig`), for smaller
-        // runs on any device - declared once, for both builds.
+        // `-Dtrainer-portable=true`: buffers every device binds (`zn_mlp_sizes_trainer_portable.zig` for the networks,
+        // `robotgpu_sizes_portable.zig` for the simulator), for smaller runs on any device - declared once, for both
+        // builds.
         const trainer_portable: bool = b.option(
             bool,
             "trainer-portable",
             "build the headless trainer with buffers every device binds (128 MB); smaller runs only",
         ) orelse false;
-        const trainer_exe: *Compile = addGenoTrainer(b, b.graph.host, host_test_inputs, cli_mod, trainer_portable);
+        const trainer_exe: *Compile = addGenoTrainer(
+            b,
+            b.graph.host,
+            host_test_inputs,
+            cli_mod,
+            trainer_portable,
+            night_trainer_optimize,
+        );
         const trainer_install: *InstallArtifact = b.addInstallArtifact(trainer_exe, .{
             .dest_dir = .{ .override = .{ .custom = "headless/bin" } },
         });
-        const trainer_step: *Step = b.step(
+        const trainer_step: *Step = steps.build(
             "geno-trainer",
             "Build zig-out/headless/bin/geno_trainer, the headless trainer of a run folder",
         );
         trainer_step.dependOn(&trainer_install.step);
+        // `geno-trainer-layout`: whether the first night's recipe fits this build's kernel buffers, measured on the
+        // CPU without a device (`geno_trainer --layout`): the recipe copied as a run folder's `run.zon`, the learner
+        // built as the run would build it, and the step failing when a buffer refuses it - before a night starts. On a
+        // trainer of its own, in Debug: the buffers it measures are the build's constants, the same in every mode, and
+        // Zig's own backend compiles Debug in seconds where the night's ReleaseSafe trainer takes LLVM minutes - which
+        // the gate, holding this check, would pay on every change to the robot family or the kit.
+        const layout_folder: *Step.WriteFile = b.addWriteFiles();
+        _ = layout_folder.addCopyFile(b.path("examples/geno_lab/recipes/first_run.zon"), "run.zon");
+        const layout_trainer_exe: *Compile =
+            addGenoTrainer(b, b.graph.host, host_test_inputs, cli_mod, trainer_portable, .Debug);
+        const layout_run: *Step.Run = b.addRunArtifact(layout_trainer_exe);
+        layout_run.addPrefixedDirectoryArg("--run=", layout_folder.getDirectory());
+        layout_run.addArg("--layout");
+        // The trainer's own lines shown - the numbers, or the buffer it refuses - and any exit but 0 a failure.
+        layout_run.stdio = .inherit;
+        const layout_step: *Step = steps.check(
+            "geno-trainer-layout",
+            "Check that the first night's recipe fits the headless trainer's kernel buffers, on the CPU",
+            .{ .tier = .gate },
+        );
+        layout_step.dependOn(&layout_run.step);
         const windows_trainer_exe: *Compile =
-            addGenoTrainer(b, windows_target, host_test_inputs, cli_mod, trainer_portable);
+            addGenoTrainer(b, windows_target, host_test_inputs, cli_mod, trainer_portable, night_trainer_optimize);
         const windows_trainer_install: *InstallArtifact = installWindowsProgram(
             b,
             windows_trainer_exe,
             pdb_void_workaround_exe,
         );
-        const windows_trainer_step: *Step = b.step(
+        const windows_trainer_step: *Step = steps.build(
             "geno-trainer-windows",
             "Build zig-out/windows/geno_trainer.exe, the headless trainer, for a Windows machine's GPU",
         );
@@ -5842,7 +6910,7 @@ pub fn build(b: *std.Build) void {
         // The Linux trainer, made only for a Linux build, whose lab installs it beside itself in zig-out/linux/.
         if (platform == .linux) {
             const linux_trainer_exe: *Compile =
-                addGenoTrainer(b, linux_target, host_test_inputs, cli_mod, trainer_portable);
+                addGenoTrainer(b, linux_target, host_test_inputs, cli_mod, trainer_portable, night_trainer_optimize);
             geno_trainer_linux_install = &installLinuxProgram(b, linux_trainer_exe).step;
         }
     }
@@ -5920,7 +6988,7 @@ pub fn build(b: *std.Build) void {
         .ogg_mod = shared_ogg_mod,
         .wav_mod = shared_wav_mod,
         .shader_cache = &shader_cache,
-        .build_opts_wgpu = build_opts_wgpu,
+        .build_opts_kernel = build_opts_kernel,
         .build_opts_zm = build_opts_zm,
         .bridge_import_check = bridge_import_check_exe,
     };
@@ -6063,13 +7131,18 @@ pub fn build(b: *std.Build) void {
     // WebGL runtime bundle are gone - the wgpu examples each carry
     // their own page, and standalones bake src/bridge.zig.)
     const docfmt_exe: *Compile = tools.docfmt;
-    const readme_step: *Step = b.step("readme", "Generate zig-out/web/readme.html (shared style + highlighting)");
-    const doc_pages_step: *Step = b.step("doc-pages", "Generate every styled doc page into zig-out/web");
+    const readme_step: *Step = steps.build("readme", "Generate zig-out/web/readme.html (shared style + highlighting)");
+    const doc_pages_step: *Step = steps.build("doc-pages", "Generate every styled doc page into zig-out/web");
     // The gate is fed the SAME list the loop below installs, one addFileArg per
     // page, so a page cannot be published without being checked.
     const doc_gate_run: *Run = b.addRunArtifact(tools.doc_gate);
-    doc_gate_run.step.name = "doc-gate (one stylesheet, no script, no network, no id twice, every page reached)";
-    const doc_gate_step: *Step = b.step("doc-gate", "Check every published page against the shared doc style");
+    doc_gate_run.step.name = "doc-gate (one stylesheet, no script, no network, no id twice, every page reached, " ++
+        "every <pre> closed)";
+    const doc_gate_step: *Step = steps.check(
+        "doc-gate",
+        "Check every published page against the shared doc style",
+        .{ .tier = .invariants },
+    );
     doc_gate_step.dependOn(&doc_gate_run.step);
 
     // Non-HTML static content: copied verbatim.
@@ -6107,7 +7180,7 @@ pub fn build(b: *std.Build) void {
     // The API cheatsheet is the one page GENERATED rather than written: tools/cheatsheet.zig reads the public API
     // from src/ on every build, so the page cannot fall behind the code it describes - the committed copy it
     // replaced had, by 70 KB. `zig build cheatsheet` builds just this page.
-    const cheatsheet_step: *Step = b.step("cheatsheet", "Generate the API cheatsheet page into zig-out/web");
+    const cheatsheet_step: *Step = steps.build("cheatsheet", "Generate the API cheatsheet page into zig-out/web");
     const cheatsheet_run: *Run = b.addRunArtifact(cheatsheet_exe);
     cheatsheet_run.addArg("src");
     const cheatsheet_html: LazyPath = cheatsheet_run.addOutputFileArg("cheatsheet.html");
@@ -6142,6 +7215,11 @@ pub fn build(b: *std.Build) void {
         .{ .source = b.path("src/notes/tutorials/robot-mocap-tutorial.html"), .name = "robot-mocap-tutorial.html" },
         // Graphics backends: how one engine reaches WebGPU, Vulkan and Metal.
         .{ .source = b.path("src/notes/tutorials/backends-tutorial.html"), .name = "backends-tutorial.html" },
+        // Native bootstrap: every step a Windows program takes from its first instruction to the app's update().
+        .{
+            .source = b.path("src/notes/tutorials/native-bootstrap-tutorial.html"),
+            .name = "native-bootstrap-tutorial.html",
+        },
         // Sound: samples, the mixer, its two sides, each platform's output, latency, instruments.
         .{ .source = b.path("src/notes/tutorials/sound_tutorial.html"), .name = "sound_tutorial.html" },
         // goban: a Go board's points, the disjoint-set forest that keeps its groups, and the rules on top of it.
@@ -6328,7 +7406,7 @@ pub fn build(b: *std.Build) void {
         "index.html",
     );
 
-    const wgpu_bringup_step: *Step = b.step(
+    const wgpu_bringup_step: *Step = steps.build(
         "wgpu-bringup",
         "Build the WebGPU demo to zig-out/wgpu/ (Phase 1 of the wgpu migration)",
     );
@@ -6351,7 +7429,10 @@ pub fn build(b: *std.Build) void {
         to_html.addArgs(&.{ "--html", "--title", "zimr bridge phase-1" });
         const hello_html: LazyPath = to_html.captureStdOut(.{});
         const inst: *std.Build.Step.InstallFile = b.addInstallFile(hello_html, "bridge-hello/bridge_hello.html");
-        const step: *std.Build.Step = b.step("bridge-hello", "ZIG_BRIDGE Phase 1: the Zig bridge monolith as a page");
+        const step: *std.Build.Step = steps.build(
+            "bridge-hello",
+            "ZIG_BRIDGE Phase 1: the Zig bridge monolith as a page",
+        );
         step.dependOn(&inst.step);
     }
 
@@ -6383,7 +7464,10 @@ pub fn build(b: *std.Build) void {
         to_html.setStdIn(.{ .lazy_path = bridge_c });
         const page: LazyPath = to_html.captureStdOut(.{});
         const inst: *std.Build.Step.InstallFile = b.addInstallFile(page, "bridge-slice/bridge_slice.html");
-        const step: *std.Build.Step = b.step("bridge-slice", "ZIG_BRIDGE Phase 2: app-owned page, two live canvases");
+        const step: *std.Build.Step = steps.build(
+            "bridge-slice",
+            "ZIG_BRIDGE Phase 2: app-owned page, two live canvases",
+        );
         step.dependOn(&inst.step);
     }
 
@@ -6417,14 +7501,14 @@ pub fn build(b: *std.Build) void {
         const inst: *std.Build.Step.InstallFile =
             b.addInstallFile(page, "bridge-classic-probe/bridge_classic_probe.html");
         const step: *std.Build.Step =
-            b.step("bridge-classic-probe", "ZIG_BRIDGE Phase 3a: classic zimr contract probe");
+            steps.build("bridge-classic-probe", "ZIG_BRIDGE Phase 3a: classic zimr contract probe");
         step.dependOn(&inst.step);
     }
 
     // ---- wgpu-standalone: the 2D demo as a single self-contained HTML ----
     // Same one-call helper as the cube - a second consumer proving the
     // standalone generalizes across wgpu demos (any future demo is one call).
-    const bringup_standalone_step: *Step = b.step(
+    const bringup_standalone_step: *Step = steps.build(
         "standalone",
         "Build the 2D wgpu demo as a single self-contained HTML (no Python)",
     );
@@ -6867,6 +7951,8 @@ pub fn build(b: *std.Build) void {
         .{ .name = "net_rtc_smoke", .title = "zimr - p2p webrtc" },
         .{ .name = "net_cursors", .title = "zimr - shared cursors" },
         .{ .name = "hello_world", .title = "zimr - WebGPU - hello world" },
+        // hello_world with its own `main`: the example is the program's root, so no launcher can host it.
+        .{ .name = "hello_world_owned_main", .title = "zimr - WebGPU - hello world, own main", .own_frame = true },
         .{ .name = "life", .title = "zimr - WebGPU - life" },
         .{ .name = "colors_palette", .title = "zimr - WebGPU - colors" },
         .{ .name = "easings_ball", .title = "zimr - WebGPU - easings" },
@@ -7077,6 +8163,13 @@ pub fn build(b: *std.Build) void {
             .title = "zimr - the get-up reference, frame by frame",
         },
         .{
+            // Geno's four clips and their mirror images, side by side on the symmetric robot - the references
+            // the trainer embeds, posed frame by frame, and how far each mirrored body is from its partner's.
+            .name = "geno_mirror",
+            .title = "zimr - Geno's clips, mirrored",
+            .configure = configureGenoMirror,
+        },
+        .{
             // SuperTrack on the device: the characters stepped on the CPU, the ring, the world model
             // and the policy all resident on the GPU. Its kernels are the kit's - the three dense
             // stages with their backward pairs, the loss, Adam, and the latent model's own five.
@@ -7171,6 +8264,32 @@ pub fn build(b: *std.Build) void {
                         "bwd_h",
                         "bwd_w1",
                         "step",
+                    },
+                },
+            },
+        },
+        .{
+            // Draw a function and watch an MLP learn it, on the GPU learning kit's own kernels on both machines: the
+            // GPU, and the CPU through their twin, in a job - a Web Worker, or a thread natively
+            // (src/notes/zimrnum_fit_plan.md). Today the CPU half (S2): the job and the page; the GPU comes at S3.
+            .name = "zimrnum_fit",
+            .title = "zimr - zimrnum fit",
+            .job_kernels = true,
+            .compute_kernels = &.{
+                .{
+                    .basename = "zn_mlp",
+                    .source_path = "src/gpu/zn_mlp.zig",
+                    // The kernels the page's GPU machine runs (the plan's S3): the dense path, the loss and both
+                    // optimisers - the page's `gpu_kernel_names`, which embeds each one's translation.
+                    .entries = &.{
+                        "dense_fwd_tiled",
+                        "act_bwd",
+                        "dense_bwd_w_tiled",
+                        "dense_bwd_x_tiled",
+                        "mse_bwd",
+                        "mse_value",
+                        "adam",
+                        "sgd",
                     },
                 },
             },
@@ -7405,10 +8524,11 @@ pub fn build(b: *std.Build) void {
             }},
         },
     };
+    checkGalleryCatalog(b, &wgpu_apps, &.{"launcher"});
     // `zig build example-sources`: every example's web/<name>/source.json - what the
     // gallery's code pane shows - without compiling a single wasm. Each example's own
     // step (and so `all-examples`, `serve` and `dist`) installs its file as well.
-    const example_sources_step: *Step = b.step(
+    const example_sources_step: *Step = steps.build(
         "example-sources",
         "Install every example's highlighted source (web/<name>/source.json) for the gallery's code pane",
     );
@@ -7445,7 +8565,7 @@ pub fn build(b: *std.Build) void {
                 b.path(b.fmt("examples/{s}/kernels.zig", .{wgpu_app.name})),
                 wgpu_app.kernel_deps,
                 wasm_optimize,
-                build_opts_wgpu,
+                build_opts_kernel,
                 build_opts_zm,
             )
         else
@@ -7492,16 +8612,31 @@ pub fn build(b: *std.Build) void {
     // shrunk twice (`addGalleryShot`): into zig-out/gallery_shots/, where the native gallery looks, from beside its own
     // executable, at ../gallery_shots/, and smaller into zig-out/web/shots/, which the web gallery's list loads.
     // `-Dshots=a,b,c` takes only those examples; the step builds every example's headless program otherwise.
-    const gallery_shots_step: *Step = b.step(
+    const gallery_shots_step: *Step = steps.step(
         "gallery-shots",
         "Save a thumbnail of every example for the native and web galleries (-Dshots=a,b,c for only those)",
+        .{ .build = .vulkan_device },
     );
     const shot_names_option: ?[]const u8 = b.option([]const u8, "shots", "gallery-shots: only these examples");
+    // `headless-test` (D4): every example run headless on Vulkan once, as its gallery shot, whatever `-Dshots` says -
+    // an unclean run (a leak, a validation message) exits 1, so the shot is the check. Inside `test-everything` each
+    // shot stands in for its example's own `<app>-headless` run, the same program (S4).
+    const headless_test_step: *Step = steps.check(
+        "headless-test",
+        "Run every example headless on Vulkan, as its gallery shot: each must run clean (validation layer on)",
+        .{ .tier = .everything, .need = .vulkan_device },
+    );
     for (wgpu_apps) |wgpu_app| {
         if (nativePendingReason(wgpu_app.name) != null) {
             continue;
         }
-        const headless_exe: *Compile = addHeadlessRun(b, headless_app_ctx, wgpu_app, script_path);
+        const headless: HeadlessRun = addHeadlessRun(b, &steps, headless_app_ctx, wgpu_app, script_path);
+        const shot: *Run = addGalleryShot(b, headless.exe, wgpu_app.name);
+        // Installed first, as `<app>-headless` installs it, so the shot does all that step does.
+        shot.step.dependOn(&headless.install.step);
+        headless_test_step.dependOn(&shot.step);
+        steps.standIn(&headless.run.step, &shot.step);
+        // `-Dshots` narrows `gallery-shots` alone.
         const is_shot: bool = if (shot_names_option) |shot_names| listed: {
             var listed_names = std.mem.tokenizeScalar(u8, shot_names, ',');
             while (listed_names.next()) |listed_name| {
@@ -7512,7 +8647,7 @@ pub fn build(b: *std.Build) void {
             break :listed false;
         } else true;
         if (is_shot) {
-            gallery_shots_step.dependOn(&addGalleryShot(b, headless_exe, wgpu_app.name).step);
+            gallery_shots_step.dependOn(&shot.step);
         }
     }
 
@@ -7555,9 +8690,10 @@ pub fn build(b: *std.Build) void {
         run_sound_check.addArg("zig-out/headless/audio_scale_star_check.wav");
         run_sound_check.addArg("examples/audio_scale_star/check.expect");
         run_sound_check.step.dependOn(&run_scale_star.step);
-        const scale_star_check_step: *Step = b.step(
+        const scale_star_check_step: *Step = steps.check(
             "audio-scale-star-check",
             "Run the scale star headless with its script and check the sound it saved (tools/sound_capture_check.zig)",
+            .{ .tier = .everything, .need = .vulkan_device },
         );
         scale_star_check_step.dependOn(&run_sound_check.step);
 
@@ -7586,9 +8722,10 @@ pub fn build(b: *std.Build) void {
         run_keyboard_sound_check.addArg("zig-out/headless/magic_isomorphic_keyboard_check.wav");
         run_keyboard_sound_check.addArg("examples/magic_isomorphic_keyboard/check.expect");
         run_keyboard_sound_check.step.dependOn(&run_keyboard.step);
-        const keyboard_check_step: *Step = b.step(
+        const keyboard_check_step: *Step = steps.check(
             "magic-isomorphic-keyboard-check",
             "Run the magic isomorphic keyboard headless with its script and check the sound it saved",
+            .{ .tier = .everything, .need = .vulkan_device },
         );
         keyboard_check_step.dependOn(&run_keyboard_sound_check.step);
     }
@@ -7637,7 +8774,18 @@ pub fn build(b: *std.Build) void {
         gallery_headless_mod.addAnonymousImport("examples_manifest", .{
             .root_source_file = b.path("src/web/manifest.json"),
         });
-        _ = addHeadlessRunOf(b, headless_app_ctx, gallery_headless_mod, "zimr_gallery", false, script_path);
+        const gallery_headless: HeadlessRun = addHeadlessRunOf(
+            b,
+            &steps,
+            headless_app_ctx,
+            gallery_headless_mod,
+            "zimr_gallery",
+            false,
+            script_path,
+        );
+        // The gallery has no shot of its own: `headless-test` runs its `zimr-gallery-headless` as it is.
+        headless_test_step.dependOn(&gallery_headless.install.step);
+        headless_test_step.dependOn(&gallery_headless.run.step);
         // Linux: every example and the gallery, each a program in zig-out/linux/, through the Linux context.
         if (platform == .linux) {
             for (wgpu_apps) |wgpu_app| {
@@ -7690,6 +8838,7 @@ pub fn build(b: *std.Build) void {
         "sph_fluid_2d",
         "fluid_sort",
         "zimrnum_field",
+        "zimrnum_fit",
         "four_ways",
         "worker_png",
         "mandel_julia",
@@ -7739,9 +8888,10 @@ pub fn build(b: *std.Build) void {
     // fails here the day it is written. Linux's program is read too (`tools/elf_needs.zig`): it must start on glibc
     // `linux_glibc_floor` and link no library but glibc's own, every other one being opened at run time. The web's
     // page joins it below, once every web build is registered.
-    const platforms_check_step: *Step = b.step(
+    const platforms_check_step: *Step = steps.check(
         "platforms-check",
         "Compile the launcher for the web, Windows, Linux, macOS and Android",
+        .{ .tier = .gate },
     );
     {
         platforms_check_step.dependOn(&windows_builds.get("launcher").?.step);
@@ -7805,8 +8955,9 @@ pub fn build(b: *std.Build) void {
             const flagship_mod: *Module = headless_app_ctx.buildAppModule(appNamed(&wgpu_apps, flagship_name));
             launcher_headless_mod.addImport("ex_" ++ flagship_name, flagship_mod);
         }
-        const launcher_exe: *Compile = addHeadlessRunOf(
+        const launcher_headless: HeadlessRun = addHeadlessRunOf(
             b,
+            &steps,
             headless_app_ctx,
             launcher_headless_mod,
             "launcher",
@@ -7824,22 +8975,27 @@ pub fn build(b: *std.Build) void {
                 ".{ .key_up = .page_down }\n.{ .advance = 40 }\n.capture\n";
             sweep_script.appendSlice(b.allocator, next_flagship) catch @panic("OOM");
         }
-        const sweep: *Run = b.addRunArtifact(launcher_exe);
+        const sweep: *Run = b.addRunArtifact(launcher_headless.exe);
         sweep.has_side_effects = true;
         sweep.setCwd(b.path("."));
         sweep.setStdIn(.{ .bytes = sweep_script.items });
         sweep.setEnvironmentVariable("ZIMR_SCRIPT", "-");
         sweep.setEnvironmentVariable("ZIMR_CAPTURE_DIR", "zig-out/headless/launcher");
-        const flagships_check: *Step = b.step(
+        // Installed first, as `launcher-headless` installs it; inside `test-everything` the sweep stands in for that
+        // step's run - the same program (S4).
+        sweep.step.dependOn(&launcher_headless.install.step);
+        steps.standIn(&launcher_headless.run.step, &sweep.step);
+        const flagships_check: *Step = steps.check(
             "flagships-check",
             "Run every flagship headless in the launcher, capturing each; fails on a leak or a validation message",
+            .{ .tier = .everything, .need = .vulkan_device },
         );
         flagships_check.dependOn(&sweep.step);
     }
     // ---- kernels-wgsl: every compute kernel entry's WGSL, installed as zig-out/kernels-wgsl/<file>__<entry>.wgsl -
     // so a change to kompute or spv2wgsl is checked against the previous build by comparing two directories.
     {
-        const kernels_wgsl_step: *Step = b.step(
+        const kernels_wgsl_step: *Step = steps.build(
             "kernels-wgsl",
             "Install every compute kernel entry's WGSL into zig-out/kernels-wgsl, one file per entry",
         );
@@ -7895,9 +9051,9 @@ pub fn build(b: *std.Build) void {
             b,
             "launcher",
             b.path("examples/launcher/kernels.zig"),
-            &.{ "worker_png", "four_ways", "goban" },
+            &.{ "worker_png", "four_ways", "goban", "zimrnum_fit" },
             wasm_optimize,
-            build_opts_wgpu,
+            build_opts_kernel,
             build_opts_zm,
         );
 
@@ -7967,7 +9123,7 @@ pub fn build(b: *std.Build) void {
                 return std.mem.order(u8, left, right) == .lt;
             }
         }.lessThan);
-        const all_examples_step: *Step = b.step(
+        const all_examples_step: *Step = steps.build(
             "all-examples",
             "Build every example for -Dplatform: the web's pages, each program and the native gallery, or each APK",
         );
@@ -7993,7 +9149,7 @@ pub fn build(b: *std.Build) void {
                 &linux_builds,
                 &android_builds,
             );
-            const app_step: *Step = b.step(dash_name, b.fmt(
+            const app_step: *Step = steps.app(dash_name, b.fmt(
                 "Build {s} for -Dplatform (web, windows, linux or android)",
                 .{name},
             ));
@@ -8021,7 +9177,7 @@ pub fn build(b: *std.Build) void {
             }
             artifact_step_names.append(b.allocator, dash_name) catch @panic("oom");
             // `run-<app>` builds it as `<app>` does - lint gate included - then runs it.
-            const run_step: *Step = b.step(
+            const run_step: *Step = steps.runs(
                 b.fmt("run-{s}", .{dash_name}),
                 b.fmt("Build {s} for -Dplatform and run it: the program, its page in a browser, or on the phone", .{
                     name,
@@ -8050,7 +9206,7 @@ pub fn build(b: *std.Build) void {
         // `zig build run`: the gallery, for the platform - natively the program that starts each example, so every
         // example is built first; on the web the gallery page, beside every example's page, as `serve` builds them. On
         // a phone, where one app is one page, the launcher: the flagship examples in one app.
-        const run_gallery_step: *Step = b.step(
+        const run_gallery_step: *Step = steps.runs(
             "run",
             "Build every example for -Dplatform and run the gallery: the native program, the web page in a browser, " ++
                 "or the launcher on the phone",
@@ -8087,9 +9243,10 @@ pub fn build(b: *std.Build) void {
     // function signature mismatches between Zig externs and the JS
     // bridge - the kind of bug that would otherwise only surface in
     // the browser, with a confusing "missing import" error.
-    const wgpu_smoke_step: *Step = b.step(
+    const wgpu_smoke_step: *Step = steps.check(
         "smoke",
         "Smoke-test the WebGPU demo wasm in Node (no real GPU needed)",
+        .{ .tier = .invariants },
     );
     // ---- JS test runner: Node (not Bun) -----------------------------------
     // The wasm-execution test harnesses need a JS runtime only for
@@ -8133,7 +9290,7 @@ pub fn build(b: *std.Build) void {
     zimrnum_ref_exe.root_module.addImport("cli", cli_mod);
     const zimrnum_ref_run: *Run = b.addRunArtifact(zimrnum_ref_exe);
     zimrnum_ref_run.has_side_effects = true; // rewrites the tutorial
-    const zimrnum_ref_step: *Step = b.step(
+    const zimrnum_ref_step: *Step = steps.writes(
         "zimrnum-ref",
         "Regenerate the zimrnum tutorial's reference table from src/zimrnum.zig",
     );
@@ -8156,7 +9313,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const zimrnum_hello_run: *Run = b.addRunArtifact(zimrnum_hello_exe);
-    const zimrnum_hello_step: *Step = b.step(
+    const zimrnum_hello_step: *Step = steps.runs(
         "zimrnum-hello",
         "Run the tutorial's opening program (section 2.1)",
     );
@@ -8191,7 +9348,7 @@ pub fn build(b: *std.Build) void {
     });
     urdf_import_exe.root_module.addImport("cli", cli_mod);
     urdf_import_exe.root_module.addImport("urdf", urdf_module);
-    const urdf_import_step: *Step = b.step(
+    const urdf_import_step: *Step = steps.writes(
         "urdf-import",
         "regenerate the checked-in Zig models from their URDF sources",
     );
@@ -8233,9 +9390,12 @@ pub fn build(b: *std.Build) void {
     urdf_fmt.step.dependOn(&urdf_import_example.step);
     urdf_import_step.dependOn(&urdf_fmt.step);
 
-    const doc_sync_step: *Step = b.step("doc-sync", "check tutorial code against its source");
+    const doc_sync_step: *Step = steps.check("doc-sync", "check tutorial code against its source", .{ .tier = .gate });
     const doc_sync_run: *Run = b.addRunArtifact(doc_sync_exe);
     doc_sync_run.setCwd(b.path("."));
+    // Always run: the pages and the sources it reads are files the build cannot see, so a cached pass would outlive
+    // an edit to either (the gate ran a copy of its own that always ran, until `doc-sync` became its check).
+    doc_sync_run.has_side_effects = true;
     doc_sync_step.dependOn(&doc_sync_run.step);
     // doc-folds: a tutorial's code blocks are GENERATED from the source - each block names its
     // declaration (data-src / data-decl) and tools/doc_folds.zig fills it in, plus a reference
@@ -8260,7 +9420,7 @@ pub fn build(b: *std.Build) void {
         "src/notes/tutorials/sound_tutorial.html",
         "src/notes/tutorials/goban_tutorial.html",
     };
-    const doc_folds_step: *Step = b.step(
+    const doc_folds_step: *Step = steps.writes(
         "doc-folds",
         "regenerate the tutorials' code blocks and reference from the source",
     );
@@ -8279,14 +9439,18 @@ pub fn build(b: *std.Build) void {
         }),
     });
     doc_folds_tests.root_module.addImport("cli", cli_mod);
-    const doc_folds_test_step: *Step = b.step("doc-folds-test", "the documentation tool's own checks");
+    const doc_folds_test_step: *Step = steps.part("doc-folds-test", "the documentation tool's own checks");
     doc_folds_test_step.dependOn(&b.addRunArtifact(doc_folds_tests).step);
 
     // c2js CANARY: the marker gate catches C that c2js KNOWS it cannot model;
     // this catches C it models WRONGLY. The battery is transpiled the normal way
     // and compared against the same computation folded by Zig's comptime
     // evaluator, which never passes through c2js. See webtests/c2js_canary.zig.
-    const canary_step: *Step = b.step("c2js-canary", "differential-test c2js integer lowering");
+    const canary_step: *Step = steps.check(
+        "c2js-canary",
+        "differential-test c2js integer lowering",
+        .{ .tier = .gate },
+    );
     const canary_to_c: *Run = b.addSystemCommand(&.{
         b.graph.zig_exe,       "build-obj",
         "-ofmt=c",             "-target",
@@ -8305,9 +9469,10 @@ pub fn build(b: *std.Build) void {
     // (`src/audio_worklet_test_module.zig`): the program as the pages embed it, the module built for the browser's
     // instance shape - freestanding, no entry point, its entry points exported. See
     // `tools/c2js_cases/audio_worklet_test.cjs`.
-    const audio_worklet_test_step: *Step = b.step(
+    const audio_worklet_test_step: *Step = steps.check(
         "audio-worklet-test",
         "run the audio worklet's program in Node: commands from a real mixer, blocks against a local renderer",
+        .{ .tier = .gate },
     );
     const audio_test_target: ResolvedTarget = b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
@@ -8349,9 +9514,10 @@ pub fn build(b: *std.Build) void {
     // stricter than the specification - `process` kept only on exactly `true`, a processor's error fired as
     // `processorerror` - with the page's sound output (`page_audio.zig`, transpiled on its own), the worklet's program
     // and the test module as the app. See `tools/c2js_cases/audio_page_test.cjs`.
-    const audio_page_test_step: *Step = b.step(
+    const audio_page_test_step: *Step = steps.check(
         "audio-page-test",
         "run the page's sound path in Node against a Chrome-strict stand-in: a held note must sound to the end",
+        .{ .tier = .gate },
     );
     const audio_page_test_run: *Run = b.addSystemCommand(&.{ "node", "tools/c2js_cases/audio_page_test.cjs" });
     audio_page_test_run.addFileArg(buildPageAudioJs(b, c2js_exe));
@@ -8379,9 +9545,10 @@ pub fn build(b: *std.Build) void {
     const wgsl_corpus_tests_run: *Run = b.addRunArtifact(wgsl_corpus_tests);
     const wgsl_corpus_cmd: *Run = addWgslCorpusRun(b, wgsl_corpus_exe, wgsl_corpus, .check);
     wgsl_corpus_cmd.step.dependOn(&wgsl_corpus_tests_run.step);
-    const corpus_step: *Step = b.step(
+    const corpus_step: *Step = steps.check(
         "corpus",
         "Hold every graphics shader's WGSL to tests/fixtures/wgsl_corpus.txt",
+        .{ .tier = .invariants },
     );
     corpus_step.dependOn(&wgsl_corpus_cmd.step);
 
@@ -8397,41 +9564,36 @@ pub fn build(b: *std.Build) void {
     // subset - which is exactly why these case files are NOT linted
     // (they live under intake/, outside the lint walk roots, and many
     // deliberately use non-house-style constructs to exercise lowerings).
-    // The .zig differential script is Node-based on the JS side already;
-    // wiring it as a build step (vs the manual /tmp clone used during the
-    // bridge arc) gives c2js an automated regression gate. A pure-Zig
-    // driver replacing the shell is Phase 5 follow-on work.
-    const c2js_diff_step: *Step = b.step(
+    // The driver is tools/c2js_diff.zig (Nov 22; it replaced differential.sh, which needed a POSIX shell and whose
+    // oracle wrote with a Linux system call, so the gate could not run on Windows).
+    const c2js_diff_step: *Step = steps.check(
         "c2js-diff",
         "Differential-test c2js: 100 cases vs native oracle (transpiler regression gate)",
+        .{ .tier = .gate },
     );
-    // sh -c so the shell expands cases/*.zig into the per-file args the
-    // script's `for src in "$@"` loop expects (addSystemCommand does no
-    // glob expansion). $ZIG and the c2js path are passed in; c2js is the
-    // directly-built artifact, installed to a stable bin path the script
-    // can reference (the old tools/ sub-build path is gone).
-    const c2js_diff_install: *InstallArtifact = b.addInstallArtifact(c2js_exe, .{});
-    // Default install prefix is `zig-out`; the script runs from the build
-    // root, so the installed binary is at this stable relative path.
-    const c2js_diff_bin: []const u8 = "zig-out/bin/c2js";
-    const c2js_diff_cmd: *Run = b.addSystemCommand(&.{
-        "sh", "-c",
-        b.fmt(
-            "exec sh tools/c2js_cases/differential.sh " ++
-                "\"$ZIG\" \"{s}\" " ++
-                "tools/c2js_cases/oracle_main.zig " ++
-                ".zig-cache/c2js-diff tools/c2js_cases/cases/*.zig",
-            .{c2js_diff_bin},
-        ),
+    const c2js_diff_exe: *Compile = b.addExecutable(.{
+        .name = "c2js_diff",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/c2js_diff.zig"),
+            .target = b.graph.host,
+            .optimize = .debug,
+        }),
     });
-    c2js_diff_cmd.setEnvironmentVariable("ZIG", b.graph.zig_exe);
-    // KNOWN_FAIL: empty - all four cases that failed on the current Zig's C-backend
-    // output (packed_bitcast, packed_struct_wide, arrays_of_structs,
-    // odd_width_aggregate) have been fixed in c2js and now pass. The gate is a clean
-    // regression gate: ANY failure is a real regression. If a future Zig C-backend
-    // change breaks a case, add its name here (XFAIL, non-fatal) while c2js catches up.
-    c2js_diff_cmd.setEnvironmentVariable("KNOWN_FAIL", "");
-    c2js_diff_cmd.step.dependOn(&c2js_diff_install.step);
+    c2js_diff_exe.root_module.addImport("cli", cli_mod);
+    // The driver lists the cases itself, so no shell has to expand a glob. Every path but the scratch directory is
+    // absolute; that one is the build root's, and setCwd puts the run there.
+    const c2js_diff_cmd: *Run = b.addRunArtifact(c2js_diff_exe);
+    c2js_diff_cmd.setCwd(b.path("."));
+    c2js_diff_cmd.addArg(b.graph.zig_exe);
+    c2js_diff_cmd.addArtifactArg(c2js_exe);
+    c2js_diff_cmd.addDirectoryArg(b.path("tools/c2js_cases"));
+    c2js_diff_cmd.addArg(".zig-cache/c2js-diff");
+    // It checks rather than produces, and reads cases a new file can join: it runs every time.
+    c2js_diff_cmd.has_side_effects = true;
+    // No --known-fail: all four cases that failed on the current Zig's C-backend output (packed_bitcast,
+    // packed_struct_wide, arrays_of_structs, odd_width_aggregate) have been fixed in c2js and now pass. The gate is a
+    // clean regression gate: ANY failure is a real regression. If a future Zig C-backend change breaks a case, add
+    // `c2js_diff_cmd.addArgs(&.{ "--known-fail", "<name>" });` (XFAIL, non-fatal) while c2js catches up.
     c2js_diff_step.dependOn(&c2js_diff_cmd.step);
     // The converter's own unit tests (its literal decoding, say), built from the same module as the converter.
     const c2js_unit_tests: *Compile = b.addTest(.{ .root_module = c2js_exe.root_module });
@@ -8443,7 +9605,7 @@ pub fn build(b: *std.Build) void {
     // the change that moved it.
     const wgsl_corpus_refresh_cmd: *Run = addWgslCorpusRun(b, wgsl_corpus_exe, wgsl_corpus, .refresh);
     wgsl_corpus_refresh_cmd.step.dependOn(&wgsl_corpus_tests_run.step);
-    const corpus_refresh_step: *Step = b.step(
+    const corpus_refresh_step: *Step = steps.writes(
         "corpus-refresh",
         "Pin every graphics shader's interface and WGSL in tests/fixtures/wgsl_corpus.txt",
     );
@@ -8493,7 +9655,7 @@ pub fn build(b: *std.Build) void {
         }
         const bmpc_cartpole_run: *Run = b.addRunArtifact(bmpc_cartpole_test);
         bmpc_cartpole_run.has_side_effects = true;
-        const bmpc_cartpole_step: *Step = b.step("bmpc-cartpole", "BMPC learns to balance a cartpole (on demand)");
+        const bmpc_cartpole_step: *Step = steps.runs("bmpc-cartpole", "BMPC learns to balance a cartpole (on demand)");
         bmpc_cartpole_step.dependOn(&bmpc_cartpole_run.step);
     }
 
@@ -8511,9 +9673,10 @@ pub fn build(b: *std.Build) void {
             music_theory_test.filters = b.allocator.dupe([]const u8, &.{f}) catch @panic("OOM");
         }
         const music_theory_test_run: *Run = b.addRunArtifact(music_theory_test);
-        const music_theory_test_step: *Step = b.step(
+        const music_theory_test_step: *Step = steps.check(
             "test-music-theory",
             "The shared music theory's tests: spelling, chords, progressions, chord names",
+            .{ .tier = .quick_tests },
         );
         music_theory_test_step.dependOn(&music_theory_test_run.step);
 
@@ -8532,11 +9695,32 @@ pub fn build(b: *std.Build) void {
             keyboard_test.filters = b.allocator.dupe([]const u8, &.{f}) catch @panic("OOM");
         }
         const keyboard_test_run: *Run = b.addRunArtifact(keyboard_test);
-        const keyboard_test_step: *Step = b.step(
+        const keyboard_test_step: *Step = steps.check(
             "test-magic-isomorphic-keyboard",
             "The magic isomorphic keyboard's tests: the drawn layout, the photo, the tonic on F, the triangles",
+            .{ .tier = .quick_tests },
         );
         keyboard_test_step.dependOn(&keyboard_test_run.step);
+    }
+
+    // test-zimrnum-fit: zimrnum_fit's job against the GPU learning kit on its CPU twin, bit for bit
+    // (`examples/zimrnum_fit/kernels_tests.zig`), for the build's machine and from the modules the kernel wasm is built
+    // from (`JobKernelModules`): the engine with no host, so the job is checked as a worker runs it. Debug, as
+    // `test-goban` is: the checks' network is small, so the compile is most of the wait.
+    {
+        const fit_modules: JobKernelModules = .create(b, native_target, .Debug, build_opts_kernel, build_opts_zm);
+        const fit_test_mod: *Module = fit_modules.kernelsModule(b, b.path("examples/zimrnum_fit/kernels_tests.zig"));
+        const fit_test: *Compile = b.addTest(.{ .root_module = fit_test_mod });
+        if (test_filter) |f| {
+            fit_test.filters = b.allocator.dupe([]const u8, &.{f}) catch @panic("OOM");
+        }
+        const fit_test_run: *Run = b.addRunArtifact(fit_test);
+        const fit_test_step: *Step = steps.check(
+            "test-zimrnum-fit",
+            "zimrnum_fit's job against the GPU learning kit on its CPU twin, bit for bit",
+            .{ .tier = .quick_tests },
+        );
+        fit_test_step.dependOn(&fit_test_run.step);
     }
 
     // test-goban: the tests at the end of `examples/goban/goban.zig`, built from the example's own file for the build's
@@ -8560,7 +9744,11 @@ pub fn build(b: *std.Build) void {
             goban_test.filters = b.allocator.dupe([]const u8, &.{f}) catch @panic("OOM");
         }
         const goban_test_run: *Run = b.addRunArtifact(goban_test);
-        const goban_test_step: *Step = b.step("test-goban", "The goban example's rules, forest and diagrams");
+        const goban_test_step: *Step = steps.check(
+            "test-goban",
+            "The goban example's rules, forest and diagrams",
+            .{ .tier = .quick_tests },
+        );
         goban_test_step.dependOn(&goban_test_run.step);
     }
 
@@ -8583,7 +9771,7 @@ pub fn build(b: *std.Build) void {
         const goban_arena_run: *Run = b.addRunArtifact(goban_arena);
         goban_arena_run.has_side_effects = true;
         const goban_arena_description: []const u8 = "Two settings of goban's computer play a match (on demand)";
-        const goban_arena_step: *Step = b.step("goban-arena", goban_arena_description);
+        const goban_arena_step: *Step = steps.runs("goban-arena", goban_arena_description);
         goban_arena_step.dependOn(&goban_arena_run.step);
     }
 
@@ -8601,7 +9789,10 @@ pub fn build(b: *std.Build) void {
         const goban_play_run: *Run = b.addRunArtifact(goban_play_exe);
         // What follows `--` goes to the program, and the run is never cached: each call is a new move.
         goban_play_run.addPassthruArgs();
-        const goban_play_step: *Step = b.step("goban-play", "A game against goban's computer from the command line");
+        const goban_play_step: *Step = steps.runs(
+            "goban-play",
+            "A game against goban's computer from the command line",
+        );
         goban_play_step.dependOn(&goban_play_run.step);
     }
 
@@ -8621,7 +9812,7 @@ pub fn build(b: *std.Build) void {
         const goban_convert_run: *Run = b.addRunArtifact(goban_convert_exe);
         goban_convert_run.addPassthruArgs();
         const goban_convert_description: []const u8 = "goban's kill problems from published SGF problems";
-        const goban_convert_step: *Step = b.step("goban-problems-convert", goban_convert_description);
+        const goban_convert_step: *Step = steps.runs("goban-problems-convert", goban_convert_description);
         goban_convert_step.dependOn(&goban_convert_run.step);
     }
 
@@ -8639,7 +9830,7 @@ pub fn build(b: *std.Build) void {
     // Zig destination" arc of the project.
     //
     //   zig build wgpu-diff
-    const transpiler_diff_step: *Step = b.step(
+    const transpiler_diff_step: *Step = steps.part(
         "corpus-diff",
         "Run the spv2wgsl corpus test (pure Zig; no JS deps)",
     );
@@ -8735,7 +9926,11 @@ pub fn build(b: *std.Build) void {
     // DOGFOODED (Phase 5b): same Zig logic + runner.mjs as wgpu-smoke, in
     // directory mode over the wgpu gallery. Reuses the smoke_logic_js
     // LazyPath transpiled above (c2js output of webtests/wgpu_smoke.zig).
-    const smoke_step: *Step = b.step("smoke-test", "Run wgpu wasm smoke tests (Zig logic via c2js + Node)");
+    const smoke_step: *Step = steps.check(
+        "smoke-test",
+        "Run wgpu wasm smoke tests (Zig logic via c2js + Node)",
+        .{ .tier = .everything },
+    );
     const smoke_cmd: *Run = b.addSystemCommand(&.{ "node", "webtests/runner.mjs" });
     smoke_cmd.addFileArg(smoke_logic_js);
     smoke_cmd.addArg("--web-dir=zig-out/wgpu-smoke/web");
@@ -8779,7 +9974,7 @@ pub fn build(b: *std.Build) void {
     verify_imports_run.addFileArg(b.path("src/bridge.zig"));
     verify_imports_run.addArg("zig-out/wgpu-smoke/web");
     verify_imports_run.step.dependOn(wgpu_smoke_install);
-    const verify_imports_step: *Step = b.step(
+    const verify_imports_step: *Step = steps.part(
         "verify-imports",
         "Assert every installed example wasm's host imports are provided by src/bridge.zig",
     );
@@ -8813,12 +10008,25 @@ pub fn build(b: *std.Build) void {
     // src/*.zig fails the audit.  Ported from scripts/check_dag.py to
     // tools/dag_check.zig (t-now): tokenizer-based @import scan (no regex
     // false edges), Tarjan SCC, NO whitelist (the old ui<->zimr allowance
-    // went stale), plus an auto-computed DAG layering print.
+    // went stale). A pass prints nothing - it runs in `tripwires` - and `dag-report` prints the counts, the out-degree
+    // hubs and the DAG layering (a bottom-up reading order) for a person.
     const dag_check: *Run = b.addRunArtifact(tools.dag);
     dag_check.addArg("src");
     dag_check.step.name = "dag-check (src import graph is acyclic)";
-    const dag_check_step: *Step = b.step("dag-check", "Verify src/*.zig import graph is a DAG");
+    const dag_check_step: *Step = steps.check(
+        "dag-check",
+        "Verify src/*.zig import graph is a DAG",
+        .{ .tier = .invariants },
+    );
     dag_check_step.dependOn(&dag_check.step);
+    const dag_report: *Run = b.addRunArtifact(tools.dag);
+    dag_report.addArgs(&.{ "src", "--report" });
+    dag_report.has_side_effects = true;
+    const dag_report_step: *Step = steps.runs(
+        "dag-report",
+        "Print the src import graph's counts, out-degree hubs and DAG levels (a bottom-up reading order)",
+    );
+    dag_report_step.dependOn(&dag_report.step);
 
     // editor-configs: write the VS Code and Zed debug/build configs for every app with a web build, and a Zed native
     // debug scenario for every app with a Windows program. The names come from the registries (`web_builds`,
@@ -8839,7 +10047,10 @@ pub fn build(b: *std.Build) void {
     editor_configs_run.addArgs(editor_config_apps.items);
     editor_configs_run.setCwd(b.path("."));
     editor_configs_run.step.name = "editor-configs (.vscode/.zed configs for every web and Windows app)";
-    const editor_configs_step: *Step = b.step("editor-configs", "Regenerate the VS Code and Zed debug+task configs");
+    const editor_configs_step: *Step = steps.writes(
+        "editor-configs",
+        "Regenerate the VS Code and Zed debug+task configs",
+    );
     editor_configs_step.dependOn(&editor_configs_run.step);
     const editor_configs_check: *Run = b.addRunArtifact(tools.editor_configs);
     editor_configs_check.addArg("--check");
@@ -8853,7 +10064,7 @@ pub fn build(b: *std.Build) void {
     // of scripts/gen_files_md.py).
     const gen_files_md_run: *Run = b.addRunArtifact(tools.gen_files_md);
     gen_files_md_run.step.name = "files-md (regenerate src/notes/files.md atlas)";
-    const gen_files_md_step: *Step = b.step("files-md", "Regenerate src/notes/files.md atlas");
+    const gen_files_md_step: *Step = steps.writes("files-md", "Regenerate src/notes/files.md atlas");
     gen_files_md_step.dependOn(&gen_files_md_run.step);
 
     // files-html: render that atlas as src/notes/files.html, which the docfmt
@@ -8863,10 +10074,10 @@ pub fn build(b: *std.Build) void {
     files_html_run.step.name = "files-html (render src/notes/files.html from the atlas)";
     files_html_run.has_side_effects = true;
     files_html_run.step.dependOn(&gen_files_md_run.step);
-    const files_html_step: *Step = b.step("files-html", "Regenerate src/notes/files.html from files.md");
+    const files_html_step: *Step = steps.writes("files-html", "Regenerate src/notes/files.html from files.md");
     files_html_step.dependOn(&files_html_run.step);
 
-    const tier_a_check_step: *Step = b.step(
+    const tier_a_check_step: *Step = steps.part(
         "tier-a-check",
         "The combined per-turn audit: test + smoke + wgpu-smoke, all focused on tier-a.",
     );
@@ -8902,8 +10113,8 @@ pub fn build(b: *std.Build) void {
     //   - `tools-test`, and `lint-check` (every rule, the layout included).
     // `gate` runs all of it and much more. `check` is the other half (`addCompileCheck`): every test, every tool and
     // the focused examples compiled with no binaries and nothing run - the step ZLS's build-on-save runs.
-    const tripwires_step: *Step = b.step(
-        "tripwires",
+    const tripwires_step: *Step = steps.tierStep(
+        .invariants,
         "Cheap invariants, not a compile: shader corpus and bindings, SPIR-V probes, smoke, docs, configs, lint",
     );
     tripwires_step.dependOn(&wgsl_corpus_cmd.step);
@@ -8942,7 +10153,11 @@ pub fn build(b: *std.Build) void {
     zm_gpu_probe.addPrefixedFileArg("-Mzm=", b.path("src/zimrmath.zig"));
     _ = zm_gpu_probe.addPrefixedOutputFileArg("-femit-bin=", "zm_gpu_probe.spv");
     zm_gpu_probe.step.name = "zm-gpu (zimrmath compiles for SPIR-V, on vectors)";
-    const zm_gpu_step: *Step = b.step("zm-gpu", "Compile zimrmath for SPIR-V through a probe shader");
+    const zm_gpu_step: *Step = steps.check(
+        "zm-gpu",
+        "Compile zimrmath for SPIR-V through a probe shader",
+        .{ .tier = .invariants },
+    );
     zm_gpu_step.dependOn(&zm_gpu_probe.step);
     tripwires_step.dependOn(&zm_gpu_probe.step);
 
@@ -8987,9 +10202,10 @@ pub fn build(b: *std.Build) void {
         "-femit-bin=.zig-cache/zn_rl_gpu_probe.spv",
     });
     zn_rl_gpu_probe.step.name = "zn-rl-gpu (zimrrl's RL arithmetic compiles for SPIR-V)";
-    const zn_rl_gpu_step: *Step = b.step(
+    const zn_rl_gpu_step: *Step = steps.check(
         "zn-rl-gpu",
         "Compile zimrnum's RL scalar arithmetic for SPIR-V through a probe shader",
+        .{ .tier = .invariants },
     );
     zn_rl_gpu_step.dependOn(&zn_rl_gpu_probe.step);
     tripwires_step.dependOn(&zn_rl_gpu_probe.step);
@@ -9030,7 +10246,7 @@ pub fn build(b: *std.Build) void {
     //                               VS Code's background task runs this, so the
     //                               first F5 of a session doesn't pay for every
     //                               example.
-    const serve: *Step = b.step(
+    const serve: *Step = steps.runs(
         "serve",
         "Build all examples, then serve zig-out/web/ on localhost:8080 (pure-Zig server)",
     );
@@ -9038,7 +10254,7 @@ pub fn build(b: *std.Build) void {
     serve_cmd.step.dependOn(web_examples_step);
     serve.dependOn(&serve_cmd.step);
 
-    const serve_only: *Step = b.step(
+    const serve_only: *Step = steps.runs(
         "serve-only",
         "Start the dev server without rebuilding examples (static + runtime only)",
     );
@@ -9051,9 +10267,10 @@ pub fn build(b: *std.Build) void {
     // tools/serve.zig's header) and example_source (no highlighted span crosses a
     // newline). In `tripwires`: both compile in seconds and run in well under one.
     // And docfmt: its stylesheet's CSS escapes (a doubled backslash once printed "\25b8" in every fold's title).
-    const tools_test_step: *Step = b.step(
+    const tools_test_step: *Step = steps.check(
         "tools-test",
         "Test the dev server, example_source, docfmt, the doc gate and android_apk",
+        .{ .tier = .invariants },
     );
     for ([_][]const u8{ "tools/serve.zig", "tools/example_source.zig", "tools/docfmt.zig" }) |tool_root| {
         const tool_test: *Compile = b.addTest(.{
@@ -9075,6 +10292,10 @@ pub fn build(b: *std.Build) void {
     });
     doc_gate_test.root_module.addImport("cli", cli_mod);
     tools_test_step.dependOn(&b.addRunArtifact(doc_gate_test).step);
+    // spv2wgsl_check's own tests - its scans of the WGSL spv2wgsl writes (unreachable code, bindings) - on the very
+    // module its executable is built from: one source, one set of imports, one mode for the tool and its test.
+    const spv2wgsl_check_test: *Compile = b.addTest(.{ .root_module = spv2wgsl_check_exe.root_module });
+    tools_test_step.dependOn(&b.addRunArtifact(spv2wgsl_check_test).step);
     // android_apk's choices that need no SDK: which build-tools and platform are newest, an app ID's shape, the
     // label's escaping in the manifest.
     const android_apk_test: *Compile = b.addTest(.{
@@ -9126,7 +10347,11 @@ pub fn build(b: *std.Build) void {
     // `zig build lint-test`: the linter's own tests - every rule's fires/clean pairs, the fix loop, and through its
     // import `line_diff.zig`'s - with zbuild's (which lines are findings) and doc_folds'. In `gate`, not `tripwires`:
     // zimrlint is the biggest tool, and its test build is the slow one.
-    const lint_test_step: *Step = b.step("lint-test", "Test zimrlint (with line_diff), zbuild and doc_folds");
+    const lint_test_step: *Step = steps.check(
+        "lint-test",
+        "Test zimrlint (with line_diff), zbuild and doc_folds",
+        .{ .tier = .gate },
+    );
     for ([_][]const u8{ "tools/zimrlint.zig", "tools/zbuild.zig", "tools/doc_folds.zig" }) |tool_root| {
         const tool_test: *Compile = b.addTest(.{
             .root_module = b.createModule(.{
@@ -9168,9 +10393,10 @@ pub fn build(b: *std.Build) void {
     });
     external_cmd.setCwd(b.path("webtests/external_project"));
     external_cmd.has_side_effects = true;
-    const external_check: *Step = b.step(
+    const external_check: *Step = steps.check(
         "external-check",
         "Build webtests/external_project/, a project depending on zimr via `Project`",
+        .{ .tier = .gate },
     );
     external_check.dependOn(&external_cmd.step);
 
@@ -9194,9 +10420,10 @@ pub fn build(b: *std.Build) void {
     });
     template_cmd.setCwd(b.path("template"));
     template_cmd.has_side_effects = true;
-    const template_check: *Step = b.step(
+    const template_check: *Step = steps.check(
         "template-check",
         "Build template/, the starter project, against this checkout",
+        .{ .tier = .gate },
     );
     template_check.dependOn(&template_cmd.step);
 
@@ -9371,6 +10598,14 @@ pub fn build(b: *std.Build) void {
         // `-Dfast-root=<file>`: that one file of the list alone - its tests checked without building every other root.
         const fast_root_description: []const u8 = "test-fast: run only this file of the fast list (its path as listed)";
         const fast_root_only: ?[]const u8 = b.option([]const u8, "fast-root", fast_root_description);
+        // `-Dtest-optimize=Debug`: the fast tier compiled by Zig's own x86-64 backend in seconds instead of LLVM's
+        // minutes - kept for finding what Debug finds that ReleaseSafe hides (a dangling slice reads as the value it
+        // last held when optimised). ReleaseSafe stays the default.
+        const fast_optimize_description: []const u8 = "The fast tier's optimisation (default ReleaseSafe)";
+        const fast_tests_optimize: std.builtin.OptimizeMode =
+            b.option(std.builtin.OptimizeMode, "test-optimize", fast_optimize_description) orelse .ReleaseSafe;
+        const fast_llvm_description: []const u8 = "The fast tier compiled by LLVM in any mode";
+        const fast_tests_llvm: bool = b.option(bool, "test-llvm", fast_llvm_description) orelse false;
         // A file NOT on the list would select nothing, and the step would report success for a run that tested
         // nothing. It fails instead, naming the file and where the list is.
         if (fast_root_only) |only_root| {
@@ -9388,76 +10623,47 @@ pub fn build(b: *std.Build) void {
                 test_fast_step.dependOn(&b.addFail(unlisted_message).step);
             }
         }
+        // -- THE TESTS ONE ROOT RUNS FOR THE OTHERS --
+        //
+        // A test binary holds the tests of every file its root reaches by path, so a root of this list that others
+        // import by path has its tests compiled into theirs as well, and run there again. Each entry names such a
+        // root and the prefix its tests' names begin with; every other root's run is given `--skip-prefix` with it
+        // (`src/test_runner.zig`). Measured Nov 22: the robot family reaches `codecs.zig` by path and ran 131 of
+        // its tests - 27 s of every robot run - all of which `test-codecs` runs among its 187.
+        const RunElsewhere = struct {
+            root: []const u8,
+            name_prefix: []const u8,
+        };
+        const tests_run_elsewhere = [_]RunElsewhere{
+            .{ .root = "src/codecs.zig", .name_prefix = "codecs." },
+        };
+        // Tests run ReleaseSafe: optimised, with every bounds and overflow check still armed,
+        // which is what a test is for. A TRAINING chunk is different - it is the same code,
+        // already proven by those tests, run for hours - so under `-Dtrain-chunk` it builds
+        // ReleaseFast. Zig's ReleaseFast does not relax floating point, so the numbers are
+        // the same; only the checks are gone.
+        const fast_optimize: std.builtin.OptimizeMode = if (train_chunk) .ReleaseFast else fast_tests_optimize;
+        // What every fast root's binary is built from, beside its root and the options (`addFastTestCompile`).
+        const fast_wiring: FastTestWiring = .{
+            .target = native_target,
+            .optimize = fast_optimize,
+            .use_llvm = fast_tests_llvm,
+            .zimrmath_mod = zimrmath_mod,
+            .shader_interface_mod = shader_interface_mod,
+            .kompute_mod = kompute_mod,
+            .zimrnum_mod = zimrnum_mod,
+            .zimrrl_mod = zimrrl_mod,
+        };
         for (fast_test_roots) |root| {
             if (fast_root_only) |only_root| {
                 if (!eql(u8, root, only_root)) {
                     continue;
                 }
             }
-            // * The module ROOT is the file itself, so a test under `src/tests/` reaching a
-            // sibling with `@import("../x.zig")` would escape the module path. Those tests
-            // import through `src/` instead - see `ragdoll_bvh_test.zig`.
-            // Tests run ReleaseSafe: optimised, with every bounds and overflow check still armed,
-            // which is what a test is for. A TRAINING chunk is different - it is the same code,
-            // already proven by those tests, run for hours - so under `-Dtrain-chunk` it builds
-            // ReleaseFast. Zig's ReleaseFast does not relax floating point, so the numbers are
-            // the same; only the checks are gone.
-            const fast_optimize: std.builtin.OptimizeMode = if (train_chunk) .ReleaseFast else .ReleaseSafe;
-            const fast_mod: *Module = b.createModule(.{
-                .root_source_file = b.path(root),
-                .target = native_target,
-                .optimize = fast_optimize,
-            });
-            // One module for the options, shared: two modules rooted at the same options file are a compile error.
-            const fast_options_mod: *Module = build_opts.createModule();
-            fast_mod.addImport("zm", zimrmath_mod);
-            fast_mod.addImport("build_options", fast_options_mod);
-            fast_mod.addImport("shader_interface", shader_interface_mod);
-            // Named imports for tests that need siblings, so nothing reaches across the
-            // module root with a relative path.
-            const codecs_mod: *Module = b.createModule(.{
-                .root_source_file = b.path("src/codecs.zig"),
-                .target = native_target,
-                .optimize = fast_optimize,
-            });
-            codecs_mod.addImport("zm", zimrmath_mod);
-            codecs_mod.addImport("build_options", fast_options_mod);
-            const fast_robot: RobotModules = addRobotModules(b, zimrmath_mod, fast_options_mod);
-            fast_mod.addImport("codecs", codecs_mod);
-            fast_mod.addImport("robot", fast_robot.robot);
-            fast_mod.addImport("profiler", fast_robot.profiler);
-            // `zimrnum` authors its GPU kernels through the kompute DSL, so it needs the same
-            // one shared kompute module every compute example uses.
-            fast_mod.addImport("kompute", kompute_mod);
-            // robotgpu's arena lengths for tests and lavapipe (`robotgpu_sizes_test.zig`, under the module's name).
-            const robotgpu_test_sizes_mod: *Module = b.createModule(.{
-                .root_source_file = b.path("src/robotgpu_sizes_test.zig"),
-            });
-            fast_mod.addImport("robotgpu_sizes", robotgpu_test_sizes_mod);
-            // The MJCF importer as a MODULE of its own (robot_mjcf.zig and the files it reaches by path), for a root
-            // that needs a robot from MJCF text without running the importer's own tests - robotgpu's. A root that
-            // imports robot_mjcf.zig by path (the robot family) never names this module, so the two never meet.
-            const robot_import_mod: *Module = b.createModule(.{
-                .root_source_file = b.path("src/robot_mjcf.zig"),
-            });
-            robot_import_mod.addImport("zm", zimrmath_mod);
-            robot_import_mod.addImport("robot", fast_robot.robot);
-            robot_import_mod.addImport("zn", zimrnum_mod);
-            robot_import_mod.addImport("build_options", fast_options_mod);
-            fast_mod.addImport("robot_import", robot_import_mod);
-            // `src/gpu/zn_conformance.zig` holds the CPU reference the GPU sweep is judged
-            // against, so it imports zimrnum itself. Offered to every fast root for the same
-            // reason `codecs` and `robot` are: cheaper than a second list to keep in step.
-            fast_mod.addImport("zn", zimrnum_mod);
-            fast_mod.addImport("zrl", zimrrl_mod);
-            const ft: *Compile = b.addTest(.{
-                .root_module = fast_mod,
-                // std's runner, plus `--shard=K/N` and `--timing` (see the file's header).
-                .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .server },
-            });
-            if (test_filter) |f| {
-                ft.filters = b.allocator.dupe([]const u8, &.{f}) catch @panic("OOM");
-            }
+            const ft: *Compile = addFastTestCompile(b, root, build_opts, fast_wiring);
+            // `-Dtest-filter` is NOT a compile filter here: the runner chooses the tests when the binary runs
+            // (`--filter=`, below), so one compiled binary serves every filter - a new filter on unchanged sources
+            // costs the run alone, where a compile filter cost the whole compile again (minutes for a robot root).
             // A root `src/robot_tests.zig` imports is compiled and run THERE, once, as part of
             // the union - adding it here as well would compile its closure a second time.
             var aggregated_elsewhere: bool = false;
@@ -9478,27 +10684,44 @@ pub fn build(b: *std.Build) void {
             // stays one process: it is one long job writing to `train/`, not a suite to split.
             const robot_family: bool = aggregated_elsewhere or eql(u8, root, "src/robot_tests.zig");
             const shards: u32 = if (train_chunk or !robot_family) 1 else @max(1, test_shards);
+            // The tests of a root of this list that other roots reach by path run in that root's own binary
+            // (`tests_run_elsewhere`), so every other binary leaves them out.
+            var skip_prefixes: ArrayList([]const u8) = .empty;
+            for (tests_run_elsewhere) |elsewhere| {
+                if (!eql(u8, root, elsewhere.root)) {
+                    skip_prefixes.append(b.allocator, elsewhere.name_prefix) catch @panic("OOM");
+                }
+            }
+            const run_wiring: FastRunWiring = .{
+                .shards = shards,
+                .timing = test_timing,
+                .filter = test_filter,
+                .train_chunk = train_chunk,
+                .skip_prefixes = skip_prefixes.items,
+                .slow = slow_tests,
+            };
+            // A member of the union runs there - unless `-Dfast-root` selected it alone, when the union is
+            // filtered out and this run is the only one: without it, `test-fast` reported success for a
+            // run that tested nothing (found Nov 3, a robot_mjcf.zig test that never ran).
+            const runs_in_test_fast: bool = !aggregated_elsewhere or fast_root_only != null;
+            // Its slow twin (S3): the same root built again with the slow tests on, whose runs stand in for these
+            // inside `test-everything` - unless `-Dslow-tests` made this build slow already.
+            const has_slow_twin: bool = runs_in_test_fast and !slow_tests;
+            const slow_ft: ?*Compile = if (has_slow_twin)
+                addFastTestCompile(b, root, slow_build_opts, fast_wiring)
+            else
+                null;
+            var slow_run_wiring: FastRunWiring = run_wiring;
+            slow_run_wiring.slow = true;
             var fast_runs: ArrayList(*Run) = .empty;
             for (0..shards) |shard| {
-                const fast_run: *Run = b.addRunArtifact(ft);
-                if (shards > 1) {
-                    fast_run.addArg(b.fmt("--shard={d}/{d}", .{ shard, shards }));
-                    fast_run.setName(b.fmt("run test {s} {d}/{d}", .{ stem, shard, shards }));
-                }
-                if (test_timing) {
-                    fast_run.addArg("--timing");
-                }
-                // A training chunk exists for what it writes to `train/`, which the build cache cannot see:
-                // the same binary with the same arguments would otherwise be a cached, skipped run - no
-                // output and no learning. With `-Dtrain-chunk`, every run happens.
-                if (train_chunk) {
-                    fast_run.has_side_effects = true;
-                }
-                // A member of the union runs there - unless `-Dfast-root` selected it alone, when the union is
-                // filtered out and this run is the only one: without it, `test-fast` reported success for a
-                // run that tested nothing (found Nov 3, a robot_mjcf.zig test that never ran).
-                if (!aggregated_elsewhere or fast_root_only != null) {
+                const fast_run: *Run = addFastTestRun(b, ft, stem, shard, run_wiring);
+                if (runs_in_test_fast) {
                     test_fast_step.dependOn(&fast_run.step);
+                }
+                if (slow_ft) |slow_test| {
+                    const slow_run: *Run = addFastTestRun(b, slow_test, stem, shard, slow_run_wiring);
+                    steps.standIn(&fast_run.step, &slow_run.step);
                 }
                 fast_runs.append(b.allocator, fast_run) catch @panic("OOM");
             }
@@ -9515,13 +10738,13 @@ pub fn build(b: *std.Build) void {
             // has happened more than once this arc.
             const one_name: []const u8 = b.fmt("test-{s}", .{stem});
             const one_desc: []const u8 = b.fmt("Tests for {s} ALONE - the fast iteration loop", .{root});
-            const one_step: *Step = b.step(one_name, one_desc);
+            const one_step: *Step = steps.part(one_name, one_desc);
             for (fast_runs.items) |fast_run| {
                 one_step.dependOn(&fast_run.step);
             }
         }
 
-        addVorbisReferenceStep(b, native_target, zimrmath_mod, zimrnum_mod);
+        addVorbisReferenceStep(b, &steps, native_target, zimrmath_mod, zimrnum_mod);
 
         const t: *Compile = b.addTest(.{ .root_module = test_mod });
         if (test_filter) |f| {
@@ -9555,7 +10778,7 @@ pub fn build(b: *std.Build) void {
 
     // Native/host examples: software renderer, PNG output - zimr without
     // the web/GPU/c2js stack. Grouped in their own function (leaf steps).
-    buildNativeExamples(b, native_target, zimrmath_mod, shader_interface_mod, build_opts, engine_shaders);
+    buildNativeExamples(b, &steps, native_target, zimrmath_mod, shader_interface_mod, build_opts, engine_shaders);
 
     // `src/zimrmath.zig` is the hard fork of zig-gamedev's zmath (see
     // notes/zmath-adoption-plan.md). It carries zmath's own ~70 `test`
@@ -9591,9 +10814,10 @@ pub fn build(b: *std.Build) void {
     // gate that prevents that compile error.
     // Run on any host:  `zig build test-windows`
     // CI smoke for any code that calls a platform API conditionally.
-    const test_windows_step: *Step = b.step(
+    const test_windows_step: *Step = steps.check(
         "test-windows",
         "Cross-compile host tests targeting Windows (compile-only)",
+        .{ .tier = .everything },
     );
     for ([_][]const u8{ "x86_64-windows-msvc", "x86_64-windows-gnu" }) |triple| {
         const win_target: ResolvedTarget = b.resolveTargetQuery(std.Target.Query.parse(.{
@@ -9623,9 +10847,10 @@ pub fn build(b: *std.Build) void {
     // `unsigned long`, 4 bytes on Windows and 8 on Linux: every comparison is comptime, so the compile IS the check.
     // Development-only - it needs the headers' include directory: `-Dvulkan-headers=<dir>`, or `VULKAN_SDK` (its
     // `Include`). Nothing else in the build ever needs the headers.
-    const vk_abi_check_step: *Step = b.step(
+    const vk_abi_check_step: *Step = steps.check(
         "vk-abi-check",
         "Compare src/vk.zig with the Vulkan headers (needs -Dvulkan-headers=<include dir> or VULKAN_SDK)",
+        .{ .tier = .everything, .need = .vulkan_headers },
     );
     const vulkan_headers_option: ?[]const u8 = b.option(
         []const u8,
@@ -9702,9 +10927,10 @@ pub fn build(b: *std.Build) void {
     // translate-c and `tools/win32_abi_check.zig` compiled against both, for x86_64-windows-gnu - every comparison
     // is comptime. It needs nothing outside the toolchain. The clang intrinsic headers windows.h pulls in are skipped
     // (their include guards defined): translate-c cannot read them, and no declaration checked here involves them.
-    const win32_abi_check_step: *Step = b.step(
+    const win32_abi_check_step: *Step = steps.check(
         "win32-abi-check",
         "Compare src/win32.zig with the Windows headers Zig ships (compile-only)",
+        .{ .tier = .gate },
     );
     {
         const abi_target: ResolvedTarget = b.resolveTargetQuery(std.Target.Query.parse(.{
@@ -9749,7 +10975,7 @@ pub fn build(b: *std.Build) void {
     // ---- vk-hello-windows: stage S1 of the Vulkan port (vulkan_port_plan_v2.md section 6) - a Win32 window
     // cleared through Vulkan, with no engine. Cross-compiled here, run on Windows: `zig-out/windows/vk_hello.exe`.
     // Debug, so a panic prints a stack trace from the .pdb installed beside it.
-    const vk_hello_step: *Step = b.step(
+    const vk_hello_step: *Step = steps.build(
         "vk-hello-windows",
         "Build zig-out/windows/vk_hello.exe: a window that clears through Vulkan",
     );
@@ -9815,7 +11041,7 @@ pub fn build(b: *std.Build) void {
         .install_subdir = "docs",
     });
 
-    const docs_step: *Step = b.step("docs", "Generate API docs in zig-out/web/docs/ (local only, not in dist)");
+    const docs_step: *Step = steps.build("docs", "Generate API docs in zig-out/web/docs/ (local only, not in dist)");
     docs_step.dependOn(&install_docs.step);
 
     // ---- `zig build dist` -- mirror zig-out/web/ into prebuilt/.
@@ -9824,7 +11050,7 @@ pub fn build(b: *std.Build) void {
     // https://simonclavet.github.io/zimr/.  Pair with `-Dmode=release` for
     // ReleaseSmall wasm.  The API docs (`zig build docs`) are deliberately
     // left out - see the docs block above.
-    const dist_step: *Step = b.step("dist", "Refresh prebuilt/ from zig-out/web/ for distribution");
+    const dist_step: *Step = steps.writes("dist", "Refresh prebuilt/ from zig-out/web/ for distribution");
     // A pure-Zig recursive copy in the buildaux CLI (the old custom makeFn
     // Step is gone in 0.17).  Avoids the cross-shell quoting/exit-code mess
     // of xcopy/cp wrappers and works the same on Windows, Linux and macOS.
@@ -9851,7 +11077,7 @@ pub fn build(b: *std.Build) void {
     // A debug build must never ship, and a step cannot change `-Dmode` (it is
     // fixed at configure time), so without a release mode the step fails before
     // compiling anything.  Only reachable by name - it pushes to a remote.
-    const publish_step: *Step = b.step(
+    const publish_step: *Step = steps.writes(
         "publish",
         "Build dist, then force-push prebuilt/ to the `pages` branch (needs -Dmode=release)",
     );
@@ -10175,11 +11401,12 @@ pub fn build(b: *std.Build) void {
     lint_run.addPassthruArgs();
     lint_fix.addPassthruArgs();
     lint_fix.addArg("--fix");
-    const lint_step: *Step = b.step("lint", "Run AST-based style linter on Zig sources");
+    const lint_step: *Step = steps.part("lint", "Run AST-based style linter on Zig sources");
     lint_step.dependOn(&lint_run.step);
-    const lint_coverage_step: *Step = b.step(
+    const lint_coverage_step: *Step = steps.check(
         "lint-coverage",
         "Fail if the linter's walk misses any tracked node of the linted sources",
+        .{ .tier = .gate },
     );
     lint_coverage_step.dependOn(&lint_coverage.step);
 
@@ -10209,10 +11436,16 @@ pub fn build(b: *std.Build) void {
         template_fmt_fix.addFileArg(file);
         fmt_fix.addFileArg(file);
     }
-    const fmt_step: *Step = b.step("fmt", "Lay out the linted files and template/ as zig fmt does, each diff printed");
+    const fmt_step: *Step = steps.writes(
+        "fmt",
+        "Lay out the linted files and template/ as zig fmt does, each diff printed",
+    );
     fmt_step.dependOn(&fmt_fix.step);
 
-    const lint_check_step: *Step = b.step("lint-check", "Style gate: every lint rule, the layout (zig-fmt) included");
+    const lint_check_step: *Step = steps.tierStep(
+        .style,
+        "Style gate: every lint rule, the layout (zig-fmt) included",
+    );
     lint_check_step.dependOn(&lint_run.step);
     lint_check_step.dependOn(&template_fmt_check.step);
 
@@ -10228,9 +11461,9 @@ pub fn build(b: *std.Build) void {
     // skipped**, and the one time it was skipped the reference table had drifted.
     //
     // `test-fast` now includes both numerics modules, so this step is their home too.
-    const gate_step: *Step = b.step(
-        "gate",
-        "The full per-turn gate: lint + fmt + tripwires + fast tests + consumer builds. Run this before shipping.",
+    const gate_step: *Step = steps.tierStep(
+        .gate,
+        "The gate, run before shipping: tripwires (lint, layout, invariants), every quick test, consumer builds",
     );
     gate_step.dependOn(lint_check_step);
     gate_step.dependOn(lint_coverage_step);
@@ -10253,31 +11486,19 @@ pub fn build(b: *std.Build) void {
     // aggregate step ran is how zimr_template drifted.
     gate_step.dependOn(external_check);
     gate_step.dependOn(template_check);
-    // The tutorials can't drift from the code. First their code blocks are checked against the source - regenerated
-    // only by `zig build lint-fix` or `zig build doc-folds`, which print each page's diff - then every quoted line is
-    // checked to exist in the source (doc-sync).
-    const gate_doc_folds: *Run = b.addRunArtifact(doc_folds_exe);
-    gate_doc_folds.setCwd(b.path("."));
-    gate_doc_folds.has_side_effects = true;
-    gate_doc_folds.addArg("--check");
-    gate_doc_folds.addArgs(&doc_folds_pages);
-    // `tripwires` too, which runs every turn: a fold once sat stale for days while only `gate` looked. Always run,
-    // since the sources the folds quote are files the build cannot see.
+    // The tutorials can't drift from the code. `tripwires`, which runs every turn, checks their code blocks against the
+    // source - regenerated only by `zig build lint-fix` or `zig build doc-folds`, which print each page's diff; a fold
+    // once sat stale for days while only `gate` looked - and `gate` holds `doc-sync`, a gate check, which checks every
+    // quoted line is in the source. Each runs once: the gate's own copies of both went on Nov 22. Always run, since
+    // the sources the folds quote are files the build cannot see.
     const check_doc_folds: *Run = b.addRunArtifact(doc_folds_exe);
     check_doc_folds.setCwd(b.path("."));
     check_doc_folds.has_side_effects = true;
     check_doc_folds.addArg("--check");
     check_doc_folds.addArgs(&doc_folds_pages);
     tripwires_step.dependOn(&check_doc_folds.step);
-    const gate_doc_sync: *Run = b.addRunArtifact(doc_sync_exe);
-    gate_doc_sync.setCwd(b.path("."));
-    gate_doc_sync.has_side_effects = true;
-    gate_doc_sync.step.dependOn(&gate_doc_folds.step);
-    gate_step.dependOn(&gate_doc_sync.step);
-    // NOT the smokes: `smoke-test` needs `-Dfocus=<example>` and there is no "all" value, so
-    // they stay one command per example - `zig build smoke-test -Dfocus=zimrnum_field`. The
-    // full audit including them is `tier-a-check`; this step is the fast one that should run
-    // before every ship.
+    // The smokes - every example's page in Node, `smoke-test` without `-Dfocus` - belong to `test-everything`
+    // (test_build_everything_plan.md, D4), not to this gate.
 
     // The graph walk: every top-level step's transitive dependencies, once each, to collect what no step names
     // directly - the wasm installs `all-examples` and `test` build, and the pages beside them. No compile waits on
@@ -10338,7 +11559,7 @@ pub fn build(b: *std.Build) void {
     // every example wasm. Plain `zig build test` only build-checks the tier-A
     // subset (see the tier-A wiring in the graph walk above), so the common
     // edit/test loop stays fast; this step is the exhaustive pre-merge check.
-    const test_web_examples_step: *Step = b.step(
+    const test_web_examples_step: *Step = steps.part(
         "test-all-examples",
         "Host unit tests + build every example wasm (exhaustive)",
     );
@@ -10374,7 +11595,7 @@ pub fn build(b: *std.Build) void {
     fix_doc_folds.addArg("--fix");
     fix_doc_folds.addArgs(&doc_folds_pages);
     fix_doc_folds.step.dependOn(&lint_fix.step);
-    const lint_fix_step: *Step = b.step(
+    const lint_fix_step: *Step = steps.writes(
         "lint-fix",
         "Rewrite sources: lint autofixes, zig fmt layout, tutorial code blocks - every change printed as a diff",
     );
@@ -10382,11 +11603,15 @@ pub fn build(b: *std.Build) void {
     lint_fix_step.dependOn(&template_fmt_fix.step);
     lint_fix_step.dependOn(&fix_doc_folds.step);
 
+    // `help-checks` before the walk below, so that `tools` compiles its printer; `finish` writes its text.
+    steps.addHelpChecks();
     // LAST, once every step exists: `zig build tools` compiles every tool, and `gate` includes it.
-    gateEveryTool(b, gate_step);
+    gateEveryTool(b, &steps, gate_step);
     // And after that walk, so `tools` never picks up a compile-only twin: `zig build check`, what ZLS runs on save.
-    addCompileCheck(b, smoke_focus);
+    addCompileCheck(b, &steps, smoke_focus);
     // `check` also translates robotgpu's kernels to WGSL (`robotgpu-wgsl`, made with the host tests above), so a kernel
     // the web build could not use fails the check the day it is written.
     b.top_level_steps.get("check").?.step.dependOn(&b.top_level_steps.get("robotgpu-wgsl").?.step);
+    // LAST OF ALL, once every step exists: each held to its kind and the ladder's rules (`StepRegistry.finish`).
+    steps.finish();
 }

@@ -25,11 +25,11 @@ const Color = zm.Color;
 const float = zm.float;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
-const grid_w = 20;
-const grid_h = 20;
-const max_len = grid_w * grid_h;
-const base_tps = 6.0; // ticks per second at the start
-const tps_per_food = 0.35; // speed added per dot eaten
+const grid_w: i32 = 20;
+const grid_h: i32 = 20;
+const max_len: usize = grid_w * grid_h;
+const base_tps: f32 = 6.0; // ticks per second at the start
+const tps_per_food: f32 = 0.35; // speed added per dot eaten
 
 const bg_col: Color = .{ .r = 16, .g = 19, .b = 27, .a = 255 };
 const board_col: Color = .{ .r = 24, .g = 29, .b = 40, .a = 255 };

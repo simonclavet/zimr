@@ -8,7 +8,7 @@
 //!
 //! Each frame collects a slice of environment steps; once 2,048 are in, each frame runs ONE epoch
 //! of the update, so the page stays responsive. Physics and learning both run on the CPU (wasm)
-//! here; the GPU learners live in `robot_track_resident` (see rl_track_plan.md). The panel's
+//! here; the GPU learners live in `robot_track_resident` (see robotgpu_plan.md). The panel's
 //! samples/s is the number that plan's arithmetic wants from a real device.
 //!
 //! Standard wgpu example contract: a `pub const app: z.AppSpec(State)`.

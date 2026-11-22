@@ -268,6 +268,10 @@ pub const Readback = enum { mirror, ranges };
 pub const Config = struct {
     max: u32,
     workgroup: u32 = 64,
+    /// The most invocations one dispatch may have, where it is not `max` (0): a module whose kernels range over a
+    /// buffer longer than its `max`-long ones says how far - zimrnum's kit, whose kernels over a batch's windows range
+    /// over its activations (`compute_host`'s `run` refuses a dispatch past it).
+    dispatch_max: u32 = 0,
     /// A LARGE DISPATCH: more than 65,535 workgroups at once, which no single dimension of a grid may hold. The host
     /// spreads them over rows (`compute_host.dispatchGrid`) and the kernel recovers its index from the grid's width
     /// (`linearInvocationId`). Off, a module's index is its x alone, and a dispatch past one row is refused.
@@ -352,7 +356,7 @@ pub inline fn workgroupBarrier() void {
 /// The name prefix of a UNIFORM workgroup array (`sharedUniform`). spv2wgsl writes every load of a workgroup variable
 /// so named as WGSL's `workgroupUniformLoad`, and keeps the name over any other the variable picks up; its own copy of
 /// the prefix (`uniform_workgroup_prefix`) must stay equal to this one.
-pub const uniform_shared_prefix = "zimr_uniform_";
+pub const uniform_shared_prefix: []const u8 = "zimr_uniform_";
 
 /// Declare a UNIFORM workgroup-shared array `[n]T` named `name` - at module level, as `shared` - one whose values every
 /// invocation of the workgroup reads together, at the same point, to decide something they must all decide alike:

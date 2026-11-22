@@ -94,11 +94,13 @@ fn countDiff(a: []const [4]u8, b: []const [4]u8) u32 {
     return n;
 }
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     const gpa: Allocator = std.heap.page_allocator;
-    var io_threaded: Io.Threaded = .init(gpa, .{});
-    defer io_threaded.deinit();
-    const io: Io = io_threaded.io();
+    const io: Io = init.io;
+    // The picture goes where the build says (`ZIMR_CAPTURE_DIR`, zig-out/verify) - by hand, the working directory.
+    const capture_path: []const u8 = init.environ_map.get("ZIMR_CAPTURE_DIR") orelse ".";
+    const capture_dir: Io.Dir = try Io.Dir.cwd().createDirPathOpen(io, capture_path, .{});
+    defer capture_dir.close(io);
 
     const pattern: [src_w * src_h][4]u8 = buildPattern();
     // NOTE: every externs module declares its OWN structurally-identical
@@ -199,12 +201,6 @@ pub fn main() !void {
             pal_bad += 1;
         }
     }
-    std.debug.print(
-        "effects_verify: grade diff {d} px, wave diff {d} px, outline ink {d} px, " ++
-            "palette off-table {d} px, spot center ok {}, spot dark ok {}\n",
-        .{ grade_diff, wave_diff, ink_px, pal_bad, spot_center_ok, spot_dark_ok },
-    );
-
     // ---- contact sheet: source | grade | waves | outline | palette ----
     const sheet_w: usize = src_w * panels;
     const sheet: []([4]u8) = try gpa.alloc([4]u8, sheet_w * src_h);
@@ -221,13 +217,17 @@ pub fn main() !void {
     }
     const png: []u8 = try z.codecs.png.encode(gpa, sliceAsBytes(sheet), sheet_w, src_h);
     defer gpa.free(png);
-    try Io.Dir.cwd().writeFile(io, .{ .sub_path = "effects_verify.png", .data = png });
-    std.debug.print("  wrote effects_verify.png\n", .{});
+    try capture_dir.writeFile(io, .{ .sub_path = "effects_verify.png", .data = png });
 
-    if (grade_diff == 0 or wave_diff == 0 or ink_px == 0 or pal_bad > 50 or
-        !spot_center_ok or !spot_dark_ok)
-    {
+    // Silent when every effect works (a passing check prints nothing); the counts, and the sheet's place, when not.
+    const effects_work: bool = grade_diff > 0 and wave_diff > 0 and ink_px > 0 and pal_bad <= 50 and
+        spot_center_ok and spot_dark_ok;
+    if (!effects_work) {
+        std.debug.print(
+            "effects_verify: grade diff {d} px, wave diff {d} px, outline ink {d} px, " ++
+                "palette off-table {d} px, spot center ok {}, spot dark ok {} - see {s}/effects_verify.png\n",
+            .{ grade_diff, wave_diff, ink_px, pal_bad, spot_center_ok, spot_dark_ok, capture_path },
+        );
         return error.EffectsLookWrong;
     }
-    std.debug.print("  OK\n", .{});
 }

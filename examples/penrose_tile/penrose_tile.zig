@@ -17,14 +17,14 @@ const Vec2 = zm.Vec2;
 const Color = zm.Color;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
-const str_max = 16384;
-const max_generations = 4;
-const theta = 36.0;
-const axiom = "[X]++[X]++[X]++[X]++[X]";
-const rule_w = "YF++ZF4-XF[-YF4-WF]++";
-const rule_x = "+YF--ZF[3-WF--XF]+";
-const rule_y = "-WF++XF[+++YF++ZF]-";
-const rule_z = "--YF++++WF[+ZF++++XF]--XF";
+const str_max: usize = 16384;
+const max_generations: i32 = 4;
+const theta: f32 = 36.0;
+const axiom: []const u8 = "[X]++[X]++[X]++[X]++[X]";
+const rule_w: []const u8 = "YF++ZF4-XF[-YF4-WF]++";
+const rule_x: []const u8 = "+YF--ZF[3-WF--XF]+";
+const rule_y: []const u8 = "-WF++XF[+++YF++ZF]-";
+const rule_z: []const u8 = "--YF++++WF[+ZF++++XF]--XF";
 
 const line_col: Color = .{ .r = 120, .g = 205, .b = 235, .a = 70 };
 

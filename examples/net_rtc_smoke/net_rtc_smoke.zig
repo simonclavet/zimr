@@ -31,9 +31,9 @@ const parseInt = std.fmt.parseInt;
 const eql = std.mem.eql;
 const startsWith = std.mem.startsWith;
 
-const default_room = "zimr-rtc-demo";
-const max_log = 14;
-const sdp_cap = 16384; // SDP offers/answers run a few KB; ICE is tiny
+const default_room: []const u8 = "zimr-rtc-demo";
+const max_log: usize = 14;
+const sdp_cap: usize = 16384; // SDP offers/answers run a few KB; ICE is tiny
 
 const State = struct {
     gpa: Allocator,

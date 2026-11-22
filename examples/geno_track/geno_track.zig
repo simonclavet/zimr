@@ -1,6 +1,6 @@
 //! Geno, servoing a copied clip: the robot built from the character its captures were recorded on
-//! (rl_track_plan.md, Phase R), standing on a real floor and pulled through a capture by the tracking
-//! task's own servo.
+//! (Phase R of src/notes/archive/rl_track_plan_v4.md), standing on a real floor and pulled through a
+//! capture by the tracking task's own servo.
 //!
 //! Nothing here learns, and nothing is fitted. The clip is the capture COPIED onto the robot - every
 //! joint turned exactly as recorded (`robot_geno.copyClip`). The physics is the engine's, with contacts

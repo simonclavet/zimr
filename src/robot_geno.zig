@@ -66,6 +66,8 @@ const Io = std.Io;
 const Random = std.Random;
 const testing_allocator = std.testing.allocator;
 const eql = std.mem.eql;
+const startsWith = std.mem.startsWith;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const indexOf = std.mem.indexOf;
 const indexOfScalar = std.mem.indexOfScalar;
 const copyForwards = std.mem.copyForwards;
@@ -83,13 +85,19 @@ const conjugate = zm.conjugate;
 const dot3 = zm.dot3;
 const normalize3 = zm.normalize3;
 const dot4 = zm.dot4;
+const normalize4 = zm.normalize4;
 const atan2Rad = zm.atan2Rad;
 const int = zm.int;
 const float = zm.float;
+const floatMax = zm.floatMax;
 const float64 = zm.float64;
 const quatFromAxisAngle = zm.quatFromAxisAngle;
 const radFromDeg = zm.radFromDeg;
 const degFromRad = zm.degFromRad;
+const quatFromTo = zm.quatFromTo;
+const cross = zm.cross;
+const quatToEulerXYZ = zm.quatToEulerXYZ;
+const quatToEulerZXY = zm.quatToEulerZXY;
 const asinRad = zm.asinRad;
 const clamp = zm.clamp;
 const pi = zm.pi;
@@ -1506,6 +1514,8 @@ pub fn physicsOptions() rbt.Options {
 
 const robot_mjcf = @import("robot_mjcf.zig");
 
+const mjcf = @import("mjcf.zig");
+
 /// THE CAPTURE-POINT REFLEX (S2c), shared by `ServoRun` and the page: lean the body back through the ankles'
 /// targets when its capture point drifts ahead of the feet. Treat the body as an inverted pendulum on its
 /// feet: its capture point, `com + velocity / omega` with `omega = sqrt(g / height)`, is where the centre of
@@ -1596,157 +1606,264 @@ pub fn carrierOf(bone: []const u8) []const u8 {
     return if (std.mem.eql(u8, bone, "Neck")) "Neck1" else bone;
 }
 
-/// Writes the body tree, one body at a time, depth first.
-const ModelWriter = struct {
+/// One collision shape of Geno's model in its body's frame, as the model file states it.
+const ShapeRecord = union(enum) {
+    /// A fitted capsule whose two ends met: a sphere at their middle (the pelvis).
+    sphere: Sphere,
+    /// A capsule, from one end of its segment to the other.
+    capsule: Capsule,
+    /// A box: its centre, its turn and its half sizes.
+    box: Box,
+
+    const Sphere = struct { centre: Vec, radius: f32 };
+    const Capsule = struct { from: Vec, to: Vec, radius: f32 };
+    const Box = struct { centre: Vec, facing: Quat, half: Vec };
+};
+
+/// ONE BODY OF GENO's MODEL, as the model file states it: where the body sits and how it is turned in its parent's
+/// frame (the root, in the world turned z-up), its joint's limit, its mass with its centre and inertia in its own
+/// frame, and its collision shape. `modelRecords` makes them from the measurements; `writeRecords` writes them.
+const BodyRecord = struct {
+    /// The body's name: its capture joint's.
+    name: []const u8,
+    /// How deep in the tree the body hangs: the root at 0.
+    depth: usize,
+    /// The record of the body it hangs from; none for the root.
+    parent: ?usize,
+    place: Vec,
+    facing: Quat,
+    /// The ball joint's largest turn, in degrees; none at the root, whose joint is free.
+    range_degrees: ?f32,
+    mass: f32,
+    centre: Vec,
+    inertia: [3][3]f32,
+    /// The body's collision shape; the clavicles and `Neck` carry none.
+    shape: ?ShapeRecord,
+};
+
+/// The body above a record's own, in both of its numberings: its bone in the bind pose, and its record.
+const RecordAbove = struct { bone: usize, record: usize };
+
+const RecordError = ModelError || error{ BodyWithTwoShapes, NoRoot };
+
+/// One body's record, and then its children's, depth first - the order the file nests them in.
+fn appendBodyRecords(
     gpa: Allocator,
-    text: *ArrayList(u8),
+    records: *ArrayList(BodyRecord),
     rest: Posed,
     mesh: Mesh,
     masses: BodyVolume,
     ranges: []const Range,
+    bone: usize,
+    above: ?RecordAbove,
+    depth: usize,
+) RecordError!void {
+    const name: []const u8 = rest.bones[bone].name;
+    const here: Vec = rest.positions[bone];
+    const turn: Quat = rest.rotations[bone];
 
-    fn body(
-        self: ModelWriter,
-        bone: usize,
-        parent: ?usize,
-        depth: usize,
-    ) ModelError!void {
-        const name: []const u8 = self.rest.bones[bone].name;
-        const here: Vec = self.rest.positions[bone];
-        const turn: Quat = self.rest.rotations[bone];
+    // Where the body sits, and how it is turned, in its parent body's frame - both straight from the bind pose. The
+    // root alone is placed in the world, and only it meets the z-up turn.
+    var place: Vec = undefined;
+    var facing: Quat = undefined;
+    if (above) |up| {
+        const back: Quat = conjugate(rest.rotations[up.bone]);
+        place = rotate(back, here - rest.positions[up.bone]);
+        facing = qmul(back, turn);
+    } else {
+        place = rotate(y_up_to_z_up, here);
+        facing = qmul(y_up_to_z_up, turn);
+    }
 
-        // Where the body sits, and how it is turned, in its parent body's frame - both straight from the
-        // bind pose. The root alone is placed in the world, and only it meets the z-up turn.
-        var place: Vec = undefined;
-        var facing: Quat = undefined;
-        if (parent) |up| {
-            const back: Quat = conjugate(self.rest.rotations[up]);
-            place = rotate(back, here - self.rest.positions[up]);
-            facing = qmul(back, turn);
-        } else {
-            place = rotate(y_up_to_z_up, here);
-            facing = qmul(y_up_to_z_up, turn);
-        }
-        try self.indent(depth);
-        // MJCF writes a quaternion scalar-first: w x y z.
-        try self.text.print(self.gpa, "<body name=\"{s}\" pos=\"{d:.6} {d:.6} {d:.6}\" " ++
-            "quat=\"{d:.7} {d:.7} {d:.7} {d:.7}\">\n", .{
-            name, place[0], place[1], place[2], facing[3], facing[0], facing[1], facing[2],
-        });
+    // The joint: free at the root, a ball everywhere else, limited by the library's largest turn.
+    var range_degrees: ?f32 = null;
+    if (above != null) {
+        const range: Range = for (ranges) |candidate| {
+            if (std.mem.eql(u8, candidate.name, name)) {
+                break candidate;
+            }
+        } else return error.BodyWithoutRange;
+        range_degrees = @min(range.total_max + range_margin_deg, 180.0);
+    }
 
-        // The joint: free at the root, a ball everywhere else, limited by the library's largest turn.
-        try self.indent(depth + 1);
-        if (parent == null) {
-            try self.text.appendSlice(self.gpa, "<freejoint/>\n");
-        } else {
-            const range: Range = for (self.ranges) |r| {
-                if (std.mem.eql(u8, r.name, name)) {
-                    break r;
+    // The body's own mass (R5, cut at the joints: R5b), its centre and inertia moved into its frame.
+    const share: Share = masses.shares[mesh.joint(name) orelse return error.BodyNotInMesh];
+    const centre: Vec = rotate(conjugate(turn), share.centre() - here);
+    const world: [3][3]f32 = share.inertia();
+    // The body's axes, seen from the world; the tensor in the body's frame is I_ij = a_i . I a_j.
+    var axes: [3][3]f32 = undefined;
+    inline for (0..3) |i| {
+        var unit: Vec = vec(0, 0, 0);
+        unit[i] = 1.0;
+        const a: Vec = rotate(turn, unit);
+        axes[i] = .{ a[0], a[1], a[2] };
+    }
+    var local: [3][3]f32 = undefined;
+    for (0..3) |i| {
+        for (0..3) |j| {
+            var sum: f32 = 0.0;
+            for (0..3) |r| {
+                for (0..3) |c| {
+                    sum += axes[i][r] * world[r][c] * axes[j][c];
                 }
-            } else return error.BodyWithoutRange;
-            try self.text.print(self.gpa, "<joint name=\"{s}\" type=\"ball\" range=\"0 {d:.2}\" " ++
-                "armature=\"{d}\" damping=\"{d}\"/>\n", .{
-                name,
-                @min(range.total_max + range_margin_deg, 180.0),
-                joint_armature,
-                joint_damping,
+            }
+            local[i][j] = sum;
+        }
+    }
+
+    // The body's collision shape (R4), carried into its frame - at most one: each fitted shape has one carrier.
+    var shape: ?ShapeRecord = null;
+    for (shapes.geoms) |geom| {
+        if (!std.mem.eql(u8, carrierOf(geom.bone), name)) {
+            continue;
+        }
+        if (shape != null) {
+            return error.BodyWithTwoShapes;
+        }
+        const back: Quat = conjugate(turn);
+        switch (geom.shape) {
+            .capsule => {
+                const a: Vec = rotate(back, vec(geom.a[0], geom.a[1], geom.a[2]) - here);
+                const b: Vec = rotate(back, vec(geom.b[0], geom.b[1], geom.b[2]) - here);
+                // A capsule whose ends meet IS a sphere - the pelvis is one: its section is no wider than it is
+                // deep, so the fit left it no length. MJCF's `fromto` needs a direction to point the capsule
+                // along, and a zero-length segment has none; a sphere needs none.
+                if (length3(b - a) < 1.0e-4) {
+                    shape = .{ .sphere = .{ .centre = (a + b) * splat(0.5), .radius = geom.radius } };
+                } else {
+                    shape = .{ .capsule = .{ .from = a, .to = b, .radius = geom.radius } };
+                }
+            },
+            .box => {
+                const r: [4]f32 = geom.rotation;
+                shape = .{ .box = .{
+                    .centre = rotate(back, vec(geom.a[0], geom.a[1], geom.a[2]) - here),
+                    .facing = qmul(back, .{ r[0], r[1], r[2], r[3] }),
+                    .half = vec(geom.half[0], geom.half[1], geom.half[2]),
+                } };
+            },
+        }
+    }
+
+    try records.append(gpa, .{
+        .name = name,
+        .depth = depth,
+        .parent = if (above) |up| up.record else null,
+        .place = place,
+        .facing = facing,
+        .range_degrees = range_degrees,
+        .mass = share.mass(),
+        .centre = centre,
+        .inertia = local,
+        .shape = shape,
+    });
+    const own: RecordAbove = .{ .bone = bone, .record = records.items.len - 1 };
+
+    // The bodies hanging off this one: every body whose nearest body above is this.
+    for (rest.bones, 0..) |other, k| {
+        if (k != bone and isBody(other.name) and other.parent >= 0) {
+            if (bodyAbove(rest, @intCast(other.parent))) |body_above| {
+                if (body_above == bone) {
+                    try appendBodyRecords(gpa, records, rest, mesh, masses, ranges, k, own, depth + 1);
+                }
+            }
+        }
+    }
+}
+
+/// EVERY BODY OF GENO's MODEL as the file states it (`BodyRecord`), in the order the file nests them: depth first
+/// from the root. Each body's frame is its bone's in the bind pose; its mass and shape are carried into that frame
+/// from the bind pose's world, where they were measured. The caller owns the records.
+pub fn modelRecords(
+    gpa: Allocator,
+    rest: Posed,
+    mesh: Mesh,
+    masses: BodyVolume,
+    ranges: []const Range,
+) RecordError![]BodyRecord {
+    var records: ArrayList(BodyRecord) = .empty;
+    errdefer records.deinit(gpa);
+    const root: usize = rest.find(body_names[0]) orelse return error.NoRoot;
+    try appendBodyRecords(gpa, &records, rest, mesh, masses, ranges, root, null, 0);
+    return records.toOwnedSlice(gpa);
+}
+
+/// Two spaces a level, the root's body two levels in (inside `<mujoco>` and `<worldbody>`).
+fn indentRecord(
+    gpa: Allocator,
+    text: *ArrayList(u8),
+    depth: usize,
+) error{OutOfMemory}!void {
+    try text.appendNTimes(gpa, ' ', 2 * (depth + 2));
+}
+
+/// One body's opening tag, joint, inertial and shape.
+fn writeBodyRecord(
+    gpa: Allocator,
+    text: *ArrayList(u8),
+    record: BodyRecord,
+) error{OutOfMemory}!void {
+    const place: Vec = record.place;
+    const facing: Quat = record.facing;
+    try indentRecord(gpa, text, record.depth);
+    // MJCF writes a quaternion scalar-first: w x y z.
+    try text.print(gpa, "<body name=\"{s}\" pos=\"{d:.6} {d:.6} {d:.6}\" " ++
+        "quat=\"{d:.7} {d:.7} {d:.7} {d:.7}\">\n", .{
+        record.name, place[0], place[1], place[2], facing[3], facing[0], facing[1], facing[2],
+    });
+    try indentRecord(gpa, text, record.depth + 1);
+    if (record.range_degrees) |range_degrees| {
+        try text.print(gpa, "<joint name=\"{s}\" type=\"ball\" range=\"0 {d:.2}\" " ++
+            "armature=\"{d}\" damping=\"{d}\"/>\n", .{
+            record.name,
+            range_degrees,
+            joint_armature,
+            joint_damping,
+        });
+    } else {
+        try text.appendSlice(gpa, "<freejoint/>\n");
+    }
+    const centre: Vec = record.centre;
+    const local: [3][3]f32 = record.inertia;
+    try indentRecord(gpa, text, record.depth + 1);
+    // MJCF's full inertia order: Ixx Iyy Izz Ixy Ixz Iyz.
+    try text.print(gpa, "<inertial pos=\"{d:.6} {d:.6} {d:.6}\" mass=\"{d:.5}\" " ++
+        "fullinertia=\"{e:.6} {e:.6} {e:.6} {e:.6} {e:.6} {e:.6}\"/>\n", .{
+        centre[0],   centre[1],   centre[2],   record.mass,
+        local[0][0], local[1][1], local[2][2], local[0][1],
+        local[0][2], local[1][2],
+    });
+    // Massless: the body already weighs what its flesh weighs (R5), and a shape - sized to meet the floor where the
+    // skin does - must not add a second guess at it.
+    const shape: ShapeRecord = record.shape orelse return;
+    try indentRecord(gpa, text, record.depth + 1);
+    switch (shape) {
+        .sphere => |sphere| {
+            try text.print(gpa, "<geom name=\"{s}\" type=\"sphere\" " ++
+                "pos=\"{d:.6} {d:.6} {d:.6}\" size=\"{d:.6}\" mass=\"0\"/>\n", .{
+                record.name, sphere.centre[0], sphere.centre[1], sphere.centre[2], sphere.radius,
             });
-        }
-
-        // The body's own mass (R5, cut at the joints: R5b), its centre and inertia moved into its frame.
-        const share: Share = self.masses.shares[self.mesh.joint(name) orelse return error.BodyNotInMesh];
-        const centre: Vec = rotate(conjugate(turn), share.centre() - here);
-        const world: [3][3]f32 = share.inertia();
-        // The body's axes, seen from the world; the tensor in the body's frame is I_ij = a_i . I a_j.
-        var axes: [3][3]f32 = undefined;
-        inline for (0..3) |i| {
-            var unit: Vec = vec(0, 0, 0);
-            unit[i] = 1.0;
-            const a: Vec = rotate(turn, unit);
-            axes[i] = .{ a[0], a[1], a[2] };
-        }
-        var local: [3][3]f32 = undefined;
-        for (0..3) |i| {
-            for (0..3) |j| {
-                var sum: f32 = 0.0;
-                for (0..3) |r| {
-                    for (0..3) |c| {
-                        sum += axes[i][r] * world[r][c] * axes[j][c];
-                    }
-                }
-                local[i][j] = sum;
-            }
-        }
-        try self.indent(depth + 1);
-        // MJCF's full inertia order: Ixx Iyy Izz Ixy Ixz Iyz.
-        try self.text.print(self.gpa, "<inertial pos=\"{d:.6} {d:.6} {d:.6}\" mass=\"{d:.5}\" " ++
-            "fullinertia=\"{e:.6} {e:.6} {e:.6} {e:.6} {e:.6} {e:.6}\"/>\n", .{
-            centre[0],   centre[1],   centre[2],   share.mass(),
-            local[0][0], local[1][1], local[2][2], local[0][1],
-            local[0][2], local[1][2],
-        });
-
-        // The body's collision shape (R4), carried into its frame. Massless: the body already weighs
-        // what its flesh weighs (R5), and a shape - sized to meet the floor where the skin does - must not
-        // add a second guess at it.
-        for (shapes.geoms) |geom| {
-            if (!std.mem.eql(u8, carrierOf(geom.bone), name)) {
-                continue;
-            }
-            const back: Quat = conjugate(turn);
-            try self.indent(depth + 1);
-            switch (geom.shape) {
-                .capsule => {
-                    const a: Vec = rotate(back, vec(geom.a[0], geom.a[1], geom.a[2]) - here);
-                    const b: Vec = rotate(back, vec(geom.b[0], geom.b[1], geom.b[2]) - here);
-                    // A capsule whose ends meet IS a sphere - the pelvis is one: its section is no wider
-                    // than it is deep, so the fit left it no length. MJCF's `fromto` needs a direction to
-                    // point the capsule along, and a zero-length segment has none; a sphere needs none.
-                    if (length3(b - a) < 1.0e-4) {
-                        const middle: Vec = (a + b) * splat(0.5);
-                        try self.text.print(self.gpa, "<geom name=\"{s}\" type=\"sphere\" " ++
-                            "pos=\"{d:.6} {d:.6} {d:.6}\" size=\"{d:.6}\" mass=\"0\"/>\n", .{
-                            name, middle[0], middle[1], middle[2], geom.radius,
-                        });
-                        continue;
-                    }
-                    try self.text.print(self.gpa, "<geom name=\"{s}\" type=\"capsule\" " ++
-                        "fromto=\"{d:.6} {d:.6} {d:.6} {d:.6} {d:.6} {d:.6}\" size=\"{d:.6}\" mass=\"0\"/>\n", .{
-                        name, a[0], a[1], a[2], b[0], b[1], b[2], geom.radius,
-                    });
-                },
-                .box => {
-                    const box_centre: Vec = rotate(back, vec(geom.a[0], geom.a[1], geom.a[2]) - here);
-                    const r: [4]f32 = geom.rotation;
-                    const facing_box: Quat = qmul(back, .{ r[0], r[1], r[2], r[3] });
-                    try self.text.print(self.gpa, "<geom name=\"{s}\" type=\"box\" pos=\"{d:.6} {d:.6} {d:.6}\" " ++
-                        "quat=\"{d:.7} {d:.7} {d:.7} {d:.7}\" size=\"{d:.6} {d:.6} {d:.6}\" mass=\"0\"/>\n", .{
-                        name,          box_centre[0], box_centre[1], box_centre[2],
-                        facing_box[3], facing_box[0], facing_box[1], facing_box[2],
-                        geom.half[0],  geom.half[1],  geom.half[2],
-                    });
-                },
-            }
-        }
-
-        // The bodies hanging off this one: every body whose nearest body above is this.
-        for (self.rest.bones, 0..) |other, k| {
-            if (k != bone and isBody(other.name) and other.parent >= 0) {
-                if (bodyAbove(self.rest, @intCast(other.parent))) |above| {
-                    if (above == bone) {
-                        try self.body(k, bone, depth + 1);
-                    }
-                }
-            }
-        }
-        try self.indent(depth);
-        try self.text.appendSlice(self.gpa, "</body>\n");
+        },
+        .capsule => |capsule| {
+            const a: Vec = capsule.from;
+            const b: Vec = capsule.to;
+            try text.print(gpa, "<geom name=\"{s}\" type=\"capsule\" " ++
+                "fromto=\"{d:.6} {d:.6} {d:.6} {d:.6} {d:.6} {d:.6}\" size=\"{d:.6}\" mass=\"0\"/>\n", .{
+                record.name, a[0], a[1], a[2], b[0], b[1], b[2], capsule.radius,
+            });
+        },
+        .box => |box| {
+            const at: Vec = box.centre;
+            const turned: Quat = box.facing;
+            try text.print(gpa, "<geom name=\"{s}\" type=\"box\" pos=\"{d:.6} {d:.6} {d:.6}\" " ++
+                "quat=\"{d:.7} {d:.7} {d:.7} {d:.7}\" size=\"{d:.6} {d:.6} {d:.6}\" mass=\"0\"/>\n", .{
+                record.name, at[0],       at[1],       at[2],
+                turned[3],   turned[0],   turned[1],   turned[2],
+                box.half[0], box.half[1], box.half[2],
+            });
+        },
     }
-
-    fn indent(self: ModelWriter, depth: usize) ModelError!void {
-        try self.text.appendNTimes(self.gpa, ' ', 2 * depth);
-    }
-};
+}
 
 /// The closest distance between two segments (Ericson, Real-Time Collision Detection, 5.1.9). A sphere is
 /// a segment of no length.
@@ -1850,6 +1967,36 @@ fn writeExclusions(gpa: Allocator, text: *ArrayList(u8)) !void {
     }
 }
 
+/// The model's MJCF from its records (`modelRecords`): the floor, the bodies nested as the records' depths say, and the
+/// contact exclusions. The caller owns the text.
+fn writeRecords(gpa: Allocator, records: []const BodyRecord) error{OutOfMemory}![]u8 {
+    var text: ArrayList(u8) = .empty;
+    errdefer text.deinit(gpa);
+    try text.appendSlice(gpa, "<mujoco model=\"geno\">\n  <compiler angle=\"degree\"/>\n  <worldbody>\n");
+    // The floor: the z = 0 plane of the engine's z-up world, where Geno's y = 0 lands.
+    try text.appendSlice(gpa, "    <geom name=\"floor\" type=\"plane\" size=\"20 20 0.1\"/>\n");
+    for (records, 0..) |record, index| {
+        try writeBodyRecord(gpa, &text, record);
+        // The next record is a child of this one, or it climbs back up: close this body and each body above it
+        // that the next one is not inside - down to the next one's depth, or to the root's after the last.
+        const next_depth: usize = if (index + 1 < records.len) records[index + 1].depth else 0;
+        const next_is_child: bool = index + 1 < records.len and next_depth == record.depth + 1;
+        if (next_is_child) {
+            continue;
+        }
+        var closing: usize = record.depth + 1;
+        while (closing > next_depth) {
+            closing -= 1;
+            try indentRecord(gpa, &text, closing);
+            try text.appendSlice(gpa, "</body>\n");
+        }
+    }
+    try text.appendSlice(gpa, "  </worldbody>\n  <contact>\n");
+    try writeExclusions(gpa, &text);
+    try text.appendSlice(gpa, "  </contact>\n</mujoco>\n");
+    return text.toOwnedSlice(gpa);
+}
+
 /// R6b: write the robot as MJCF - the kinematic tree, its mass, its collision shapes and the floor.
 /// The actuators and the standing guard follow.
 ///
@@ -1877,25 +2024,9 @@ pub fn writeModel(
     masses: BodyVolume,
     ranges: []const Range,
 ) ![]u8 {
-    var text: ArrayList(u8) = .empty;
-    errdefer text.deinit(gpa);
-    try text.appendSlice(gpa, "<mujoco model=\"geno\">\n  <compiler angle=\"degree\"/>\n  <worldbody>\n");
-    // The floor: the z = 0 plane of the engine's z-up world, where Geno's y = 0 lands.
-    try text.appendSlice(gpa, "    <geom name=\"floor\" type=\"plane\" size=\"20 20 0.1\"/>\n");
-    const root: usize = rest.find(body_names[0]) orelse return error.NoRoot;
-    const writer: ModelWriter = .{
-        .gpa = gpa,
-        .text = &text,
-        .rest = rest,
-        .mesh = mesh,
-        .masses = masses,
-        .ranges = ranges,
-    };
-    try writer.body(root, null, 2);
-    try text.appendSlice(gpa, "  </worldbody>\n  <contact>\n");
-    try writeExclusions(gpa, &text);
-    try text.appendSlice(gpa, "  </contact>\n</mujoco>\n");
-    return text.toOwnedSlice(gpa);
+    const records: []BodyRecord = try modelRecords(gpa, rest, mesh, masses, ranges);
+    defer gpa.free(records);
+    return writeRecords(gpa, records);
 }
 
 // -------- R7: retargeting, which is now a copy --------
@@ -2075,8 +2206,9 @@ pub const Copier = struct {
 // -------- R8a: the training task's inputs, for Geno --------
 
 /// Where Geno's model lives as a file, so the task and the pages load it instead of re-measuring the body
-/// (sampling its volume takes seconds). A test holds it equal to a fresh `writeModel`, and rewrites it when
-/// the model has changed - so a new model is always a diff someone sees, never a silent drift.
+/// (sampling its volume takes seconds): the symmetric model (`writeSymmetricModel`). A test holds it equal to a
+/// fresh one, and rewrites it when the model has changed - so a new model is always a diff someone sees, never a
+/// silent drift.
 pub const model_fixture_path: []const u8 = "src/tests/fixtures/robot/geno.xml";
 
 /// A whole capture as the task's clip: every frame copied onto the robot (`Copier`), in the engine's own
@@ -2084,8 +2216,9 @@ pub const model_fixture_path: []const u8 = "src/tests/fixtures/robot/geno.xml";
 ///
 /// Each frame's residual is how far the farthest body sits from the RECORDED capture, and which body that
 /// is. On a copy that is never a fitting error - rotations are exact, and so are positions for rigid bones
-/// (R7) - it is the capture's own stretch: the thighs and upper arms change length by up to 3 mm, and a
-/// rigid robot cannot follow a bone that does. The caller owns the clip.
+/// (R7) - it is the capture's own stretch, the thighs and upper arms changing length by up to 3 mm where a
+/// rigid robot cannot follow, and the symmetric model's bones, each pair evened (`symmetrizeRecords`): 7.3 mm
+/// at most, at a hand. The caller owns the clip.
 pub fn copyClip(
     gpa: Allocator,
     imported: *const robot_mjcf.Imported,
@@ -2165,6 +2298,670 @@ pub fn copyClip(
         .residual = residual,
         .residual_body = residual_body,
     };
+}
+
+// -------- Mirrored captures --------
+//
+// A capture mirrored left for right is a second motion of the same body: what the performer would have done turned
+// the other way. It is made where the motion is still the capture's - before the copy - so that it is a capture like
+// any other, and the copy, the cut and the grounding take it as they take every clip (`copyMirroredClip`).
+//
+// THE REFLECTION. Across a vertical plane - the capture's x = 0, its y being up: a place (x, y, z) goes to (-x, y, z),
+// and a turn R to M R M, with M that reflection. On a quaternion (x, y, z, w) that is (x, -y, -z, w): the turn's axis
+// reflected as an axis is - its two components in the plane of reflection change sign - and its angle kept. Any
+// vertical plane gives the same motion up to a turn about the vertical, which the tracking's features do not see.
+//
+// THE PARTNERS. Each joint takes its partner's motion - the `Left...` joint the `Right...` joint's, and the other way;
+// a joint on the midline its own. Mirrored, joint j's world turn is its partner p's reflected, W'j = M Wp M, and its
+// world place its partner's reflected, P'j = M Pp.
+//
+// THE CORRECTIONS. A body whose two sides were mirror images would need nothing more. A captured skeleton is not one:
+// Geno's left forearm is 4% longer than its right, and its hands lie up to 4.9 degrees off each other's mirror
+// image. With W'j = M Wp M alone, a bone b of j - in j's own frame - would point along M Wp M b, where its partner's
+// points, once mirrored, along M Wp bp: apart by the angle between b and M bp. So each joint takes one fixed turn Cj
+// in its own frame, the shortest arc that takes its rest bone onto its partner's rest bone mirrored, Cj b = M bp (as
+// directions):
+//
+//     W'j = M Wp M Cj       then      W'j b = M Wp M (M bp) = M Wp bp
+//
+// and the mirrored bone points exactly where its partner's pointed, mirrored. Its LENGTH stays its own: a mirrored
+// left forearm is still the left forearm, 4% longer.
+//
+// IN LOCAL TERMS. Every joint's turn and place are read and written relative to its parent (`captureFrame`), and the
+// world's reflection telescopes down the chain into one rule per joint, with p its partner and c the correction of
+// its parent's (none at the root):
+//
+//     L'j = Cparent^-1  (M Lp M)  Cj          l'j = Cparent^-1  (M lp)
+//
+// - a check: W'j = W'parent L'j = (M Wpp M Cparent) Cparent^-1 (M Lp M) Cj = M Wpp Lp M Cj = M Wp M Cj, the parent's
+// partner pp being the partner's parent. The places carry the partner's lengths - a mirrored capture is the mirror
+// image of the whole recording, the performer's proportions with it - and the copy, rigid, takes only the turns.
+//
+// TWICE IS THE ORIGINAL. The correction of a joint and its partner's are each other's mirror image inverted,
+// Cj = M Cp^-1 M (each the shortest arc between the same two directions, seen from the other side), so mirroring a
+// mirrored capture gives back the original's turns and places exactly - up to the rounding of its numbers.
+
+/// Which side of the body a joint's name puts it on: its first word, `Left` or `Right`, or neither - the midline.
+const BodySide = enum {
+    left,
+    right,
+    midline,
+
+    fn of(name: []const u8) BodySide {
+        if (startsWith(u8, name, "Left")) {
+            return .left;
+        }
+        if (startsWith(u8, name, "Right")) {
+            return .right;
+        }
+        return .midline;
+    }
+};
+
+/// Whether `candidate` is `name`'s partner across the body: `Left` and `Right` swapped at the name's start, the rest
+/// the same; a name on the midline is its own partner.
+fn isPartnerName(name: []const u8, candidate: []const u8) bool {
+    const swaps = [2][2][]const u8{ .{ "Left", "Right" }, .{ "Right", "Left" } };
+    for (swaps) |swap| {
+        if (startsWith(u8, name, swap[0])) {
+            const rest_of_name: []const u8 = name[swap[0].len..];
+            const swapped: bool = startsWith(u8, candidate, swap[1]);
+            return swapped and eql(u8, candidate[swap[1].len..], rest_of_name);
+        }
+    }
+    return eql(u8, name, candidate);
+}
+
+/// A place reflected across the capture's x = 0.
+fn reflectedPlace(place: Vec) Vec {
+    return vec(-place[0], place[1], place[2]);
+}
+
+/// A turn reflected across the capture's x = 0, M R M: on its quaternion (x, y, z, w), (x, -y, -z, w).
+fn reflectedTurn(turn: Quat) Quat {
+    return .{ turn[0], -turn[1], -turn[2], turn[3] };
+}
+
+/// A BODY's REST BONE, in its own frame - the direction it points at rest, which the mirror's correction lines up with
+/// its partner's (`CaptureMirror`): toward its child body on the midline if it has one (the hips toward the spine, the
+/// chest toward the neck), else toward its only child body; and a body with none - a hand, the head, a toe - along its
+/// capsule, away from its joint. A body's frame is its capture joint's own (the model is built from the capture's
+/// skeleton: a child body sits at its joint's offset, in metres), so the bone is the capture joint's too. Null for a
+/// capture joint that is no body, or a body with neither one child nor a capsule.
+fn restBone(imported: *const robot_mjcf.Imported, name: []const u8) ?Vec {
+    const body: u32 = imported.bodyIndex(name) orelse return null;
+    const model: *const rbt.Model = &imported.model;
+    var only_child: ?u32 = null;
+    var child_count: u32 = 0;
+    for (model.body_parent, 0..) |parent, child_index| {
+        const child: u32 = @intCast(child_index);
+        const is_child: bool = parent == body and child != body;
+        if (!is_child) {
+            continue;
+        }
+        if (BodySide.of(imported.names[child]) == .midline) {
+            return model.body_rest_position[child];
+        }
+        child_count += 1;
+        only_child = child;
+    }
+    if (child_count == 1) {
+        return model.body_rest_position[only_child.?];
+    }
+    if (child_count > 1) {
+        return null;
+    }
+    for (model.geom_body, model.geom_shape, 0..) |owner, shape, geom| {
+        const is_capsule: bool = owner == body and shape == .capsule;
+        if (!is_capsule) {
+            continue;
+        }
+        // zimr's capsules lie along their own y.
+        const axis: Vec = rotate(model.geom_local_rotation[geom], vec(0, 1, 0));
+        const away_from_joint: bool = dot3(axis, model.geom_local_position[geom]) >= 0;
+        return if (away_from_joint) axis else -axis;
+    }
+    return null;
+}
+
+/// How a joint's rotation channels compose its turn, so a mirrored turn can be written back into them: Z, Y, X - the
+/// turn qz qy qx, zimrmath's XYZ order - or Y, X, Z - the turn qy qx qz, its ZXY order; or no rotation channel at all.
+const TurnChannels = enum {
+    none,
+    zyx,
+    yxz,
+
+    fn of(channels: []const codecs.bvh.Channel) ?TurnChannels {
+        var order: [3]codecs.bvh.Channel = undefined;
+        var count: usize = 0;
+        for (channels) |channel| {
+            const is_rotation: bool = channel == .x_rotation or channel == .y_rotation or channel == .z_rotation;
+            if (!is_rotation) {
+                continue;
+            }
+            if (count == order.len) {
+                return null;
+            }
+            order[count] = channel;
+            count += 1;
+        }
+        if (count == 0) {
+            return .none;
+        }
+        if (count != order.len) {
+            return null;
+        }
+        const zyx = [3]codecs.bvh.Channel{ .z_rotation, .y_rotation, .x_rotation };
+        const yxz = [3]codecs.bvh.Channel{ .y_rotation, .x_rotation, .z_rotation };
+        if (eql(codecs.bvh.Channel, &order, &zyx)) {
+            return .zyx;
+        }
+        if (eql(codecs.bvh.Channel, &order, &yxz)) {
+            return .yxz;
+        }
+        return null;
+    }
+
+    /// A turn's angles about x, y and z (radians, lanes 0, 1, 2), in this order's composition.
+    fn angles(order: TurnChannels, turn: Quat) Vec {
+        return switch (order) {
+            .none => vec(0, 0, 0),
+            .zyx => quatToEulerXYZ(turn),
+            .yxz => quatToEulerZXY(turn),
+        };
+    }
+};
+
+/// A CAPTURE MIRRORED, left for right (the section's head says how): every joint's partner, and the fixed turn its
+/// mirrored turn takes in its own frame (`restBone`; the identity for a joint with no bone - the capture's helper
+/// joints and end sites, which no body carries). Built once per skeleton; `mirrorFrame` mirrors one frame,
+/// `mirrorCapture` a whole capture.
+pub const CaptureMirror = struct {
+    /// For every capture joint, its partner's index.
+    partners: []u16,
+    /// For every capture joint, its correction, Cj.
+    corrections: []Quat,
+
+    /// The mirror of `capture`'s skeleton, its corrections from the model built from it. Refused: a joint with no
+    /// partner, a hierarchy or channels that do not mirror themselves (a joint's parent's partner must be its
+    /// partner's parent, and partners must have the same channels), rotation channels in an order other than Z, Y, X
+    /// or Y, X, Z, and a body whose partner has no bone.
+    pub fn init(
+        gpa: Allocator,
+        capture: codecs.bvh.Data,
+        imported: *const robot_mjcf.Imported,
+    ) !CaptureMirror {
+        const joint_count: usize = capture.joints.len;
+        const partners: []u16 = try gpa.alloc(u16, joint_count);
+        errdefer gpa.free(partners);
+        const corrections: []Quat = try gpa.alloc(Quat, joint_count);
+        errdefer gpa.free(corrections);
+        for (capture.joints, partners) |joint, *partner| {
+            const partner_index: usize = for (capture.joints, 0..) |candidate, index| {
+                if (isPartnerName(joint.name, candidate.name)) {
+                    break index;
+                }
+            } else return error.MirrorPartnerMissing;
+            partner.* = @intCast(partner_index);
+        }
+        for (capture.joints, partners) |joint, partner| {
+            const partner_joint: codecs.bvh.Joint = capture.joints[partner];
+            const parents_partner: i32 = if (joint.parent < 0) -1 else partners[@intCast(joint.parent)];
+            if (partner_joint.parent != parents_partner) {
+                return error.MirrorHierarchyAsymmetric;
+            }
+            if (!eql(codecs.bvh.Channel, joint.channels, partner_joint.channels)) {
+                return error.MirrorChannelsDiffer;
+            }
+            _ = TurnChannels.of(joint.channels) orelse return error.MirrorRotationOrder;
+        }
+        for (capture.joints, partners, corrections) |joint, partner, *correction| {
+            correction.* = qidentity();
+            const bone: Vec = restBone(imported, joint.name) orelse continue;
+            const partner_name: []const u8 = capture.joints[partner].name;
+            const partner_bone: Vec = restBone(imported, partner_name) orelse return error.MirrorPartnerWithoutBone;
+            correction.* = quatFromTo(bone, reflectedPlace(partner_bone));
+        }
+        return .{ .partners = partners, .corrections = corrections };
+    }
+
+    pub fn deinit(self: *CaptureMirror, gpa: Allocator) void {
+        gpa.free(self.partners);
+        gpa.free(self.corrections);
+        self.* = undefined;
+    }
+
+    /// ONE FRAME MIRRORED: every joint's local place and turn, as `captureFrame` reads them, into the mirrored
+    /// frame's - L'j = Cparent^-1 (M Lp M) Cj and l'j = Cparent^-1 (M lp), the root's parent correction none.
+    pub fn mirrorFrame(
+        self: CaptureMirror,
+        capture: codecs.bvh.Data,
+        places: []const Vec,
+        turns: []const Quat,
+        mirrored_places: []Vec,
+        mirrored_turns: []Quat,
+    ) void {
+        for (capture.joints, self.partners, self.corrections, 0..) |joint, partner, correction, j| {
+            const parent_correction: Quat =
+                if (joint.parent < 0) qidentity() else self.corrections[@intCast(joint.parent)];
+            const undo_parent_correction: Quat = conjugate(parent_correction);
+            const partner_turn_reflected: Quat = reflectedTurn(turns[partner]);
+            mirrored_places[j] = rotate(undo_parent_correction, reflectedPlace(places[partner]));
+            mirrored_turns[j] = qmul(qmul(undo_parent_correction, partner_turn_reflected), correction);
+        }
+    }
+};
+
+/// A WHOLE CAPTURE MIRRORED (`CaptureMirror`): the same skeleton, its frames mirrored one by one and written back into
+/// their channels - places in centimetres, turns as angles in each joint's own channel order. A joint with no
+/// position channels keeps its offset, so its bone keeps its own length; the direction is the mirror's either way.
+/// The caller owns the result; free it with `deinit`, as a parsed capture.
+pub fn mirrorCapture(
+    gpa: Allocator,
+    capture: codecs.bvh.Data,
+    mirror: CaptureMirror,
+) !codecs.bvh.Data {
+    const arena: *ArenaAllocator = try gpa.create(ArenaAllocator);
+    errdefer gpa.destroy(arena);
+    arena.* = ArenaAllocator.init(gpa);
+    errdefer arena.deinit();
+    const arena_allocator: Allocator = arena.allocator();
+    const joints: []codecs.bvh.Joint = try arena_allocator.alloc(codecs.bvh.Joint, capture.joints.len);
+    for (joints, capture.joints) |*joint, original| {
+        joint.* = original;
+        joint.name = try arena_allocator.dupe(u8, original.name);
+        joint.channels = try arena_allocator.dupe(codecs.bvh.Channel, original.channels);
+    }
+    const motion: []f32 = try arena_allocator.alloc(f32, capture.motion.len);
+    const joint_count: usize = capture.joints.len;
+    const places: []Vec = try gpa.alloc(Vec, joint_count);
+    defer gpa.free(places);
+    const turns: []Quat = try gpa.alloc(Quat, joint_count);
+    defer gpa.free(turns);
+    const mirrored_places: []Vec = try gpa.alloc(Vec, joint_count);
+    defer gpa.free(mirrored_places);
+    const mirrored_turns: []Quat = try gpa.alloc(Quat, joint_count);
+    defer gpa.free(mirrored_turns);
+    for (0..capture.frame_count) |frame| {
+        captureFrame(capture, frame, places, turns);
+        mirror.mirrorFrame(capture, places, turns, mirrored_places, mirrored_turns);
+        const row: []f32 = motion[frame * capture.channel_count ..][0..capture.channel_count];
+        var taken: usize = 0;
+        for (capture.joints, mirrored_places, mirrored_turns) |joint, place, turn| {
+            // Every joint's order was checked when the mirror was built.
+            const order: TurnChannels = TurnChannels.of(joint.channels).?;
+            const angles: Vec = order.angles(turn);
+            for (joint.channels) |channel| {
+                row[taken] = switch (channel) {
+                    .x_position => place[0] / cm,
+                    .y_position => place[1] / cm,
+                    .z_position => place[2] / cm,
+                    .x_rotation => degFromRad(angles[0]),
+                    .y_rotation => degFromRad(angles[1]),
+                    .z_rotation => degFromRad(angles[2]),
+                };
+                taken += 1;
+            }
+        }
+    }
+    return .{
+        .arena = arena,
+        .joints = joints,
+        .frame_count = capture.frame_count,
+        .channel_count = capture.channel_count,
+        .frame_time = capture.frame_time,
+        .motion = motion,
+    };
+}
+
+/// A CAPTURE's MIRROR IMAGE AS A CLIP ON THE ROBOT: mirrored where it is still the capture's (`CaptureMirror`,
+/// `mirrorCapture`), then copied as every capture is (`copyClip`) - so the cut and the grounding that follow take it as
+/// they take the original's clip, and it is one more clip to the task.
+///
+/// What it is on the robot: every body turned as its partner was in the original's clip, reflected, then by the
+/// body's correction - and on the symmetric model (`writeSymmetricModel`), where each body is its partner's mirror
+/// image, every body and every sole where its partner's was, reflected: the original's mirror image, to the rounding.
+/// The grounding then rests each frame on its own lowest point, as it rests the original's. The caller owns the clip.
+pub fn copyMirroredClip(
+    gpa: Allocator,
+    imported: *const robot_mjcf.Imported,
+    rest: Posed,
+    capture: codecs.bvh.Data,
+) !dance.Clip {
+    var mirror: CaptureMirror = try .init(gpa, capture, imported);
+    defer mirror.deinit(gpa);
+    var mirrored_capture: codecs.bvh.Data = try mirrorCapture(gpa, capture, mirror);
+    defer mirrored_capture.deinit();
+    return copyClip(gpa, imported, rest, mirrored_capture);
+}
+
+// -------- Geno made symmetric --------
+//
+// Mirrored on the robot, a body j turns as its partner p did, reflected and corrected: W'j = M Wp M Cj (the mirror's
+// rule, above). Its own geometry rides along: a point v of j lands at M Wp (M Cj v), where the partner's point
+// u = M Cj v stood, reflected. So the mirrored clip is the original's mirror image on the robot - every sole where
+// its partner's sole was - exactly when each body's geometry, read in its own frame, is its partner's read through
+// the mirror: v = Cj^-1 M u for every point, Cj^-1 (M G M) for every turn of a shape, Cj^-1 (M I M) Cj for the
+// inertia. A captured body is not so - Geno's left foot's box sits 2.0 cm nearer the heel than the right's, mirrored.
+//
+// SYMMETRIC, BY THE MEAN OF THE TWO. Each pair is made the mean of the two, each read in the other's frame through
+// the mirror: a point v of j and its partner's u become (v + Cj^-1 M u) / 2 in j, and its mirror image M Cj of that
+// in p; a shape's turn the halfway turn; an inertia, a mass and a shape's sizes the mean; a joint's limit the larger.
+// A body's place in its parent's frame is a point of its PARENT, so the parent's correction carries it. A body on the
+// midline is its own partner, and is made its own mirror image the same way. Each side moves half the gap, and the
+// whole body keeps its mass.
+//
+// WHAT IS KEPT. The turns of the bodies' rest frames: they are the capture's joints' (a body's frame is its capture
+// joint's), which the copy reads. And the bones' directions: a correction takes a body's rest bone onto its
+// partner's mirrored, so the two bones are parallel once read through the mirror, and their mean only evens their
+// lengths - the mirror read from the symmetric model is the measured model's.
+
+/// Where a point of body j's PARTNER stands in j's own frame, read through the mirror: u to Cj^-1 M u, with
+/// `correction` j's Cj.
+fn partnerPointSeenFrom(correction: Quat, partner_point: Vec) Vec {
+    return rotate(conjugate(correction), reflectedPlace(partner_point));
+}
+
+/// The way back: j's point v, where its partner holds it - M Cj v.
+fn ownPointForPartner(correction: Quat, own_point: Vec) Vec {
+    return reflectedPlace(rotate(correction, own_point));
+}
+
+/// A turn of the partner's - a shape's, in the partner's frame - read in j's frame: Cj^-1 (M G M).
+fn partnerTurnSeenFrom(correction: Quat, partner_turn: Quat) Quat {
+    return qmul(conjugate(correction), reflectedTurn(partner_turn));
+}
+
+/// The way back: j's turn G, as its partner holds it - M (Cj G) M.
+fn ownTurnForPartner(correction: Quat, own_turn: Quat) Quat {
+    return reflectedTurn(qmul(correction, own_turn));
+}
+
+/// An inertia tensor turned: R I R^T, with R the turn's matrix - its columns the turned axes.
+fn turnedInertia(inertia: [3][3]f32, turn: Quat) [3][3]f32 {
+    const units = [3]Vec{ vec(1, 0, 0), vec(0, 1, 0), vec(0, 0, 1) };
+    var axes: [3][3]f32 = undefined;
+    for (units, &axes) |unit, *axis| {
+        const turned_unit: Vec = rotate(turn, unit);
+        axis.* = .{ turned_unit[0], turned_unit[1], turned_unit[2] };
+    }
+    var turned: [3][3]f32 = undefined;
+    for (0..3) |row| {
+        for (0..3) |column| {
+            var sum: f32 = 0;
+            for (0..3) |k| {
+                for (0..3) |l| {
+                    sum += axes[k][row] * inertia[k][l] * axes[l][column];
+                }
+            }
+            turned[row][column] = sum;
+        }
+    }
+    return turned;
+}
+
+/// An inertia tensor across the midline: M I M - its x row and its x column change sign, and their corner twice.
+fn reflectedInertia(inertia: [3][3]f32) [3][3]f32 {
+    const signs = [3]f32{ -1, 1, 1 };
+    var reflected: [3][3]f32 = undefined;
+    for (0..3) |row| {
+        for (0..3) |column| {
+            reflected[row][column] = signs[row] * signs[column] * inertia[row][column];
+        }
+    }
+    return reflected;
+}
+
+/// The partner's inertia read in j's frame: Cj^-1 (M I M) Cj.
+fn partnerInertiaSeenFrom(correction: Quat, partner_inertia: [3][3]f32) [3][3]f32 {
+    return turnedInertia(reflectedInertia(partner_inertia), conjugate(correction));
+}
+
+/// The way back: j's inertia, as its partner holds it - M (Cj I Cj^-1) M.
+fn ownInertiaForPartner(correction: Quat, own_inertia: [3][3]f32) [3][3]f32 {
+    return reflectedInertia(turnedInertia(own_inertia, correction));
+}
+
+/// The partner's shape read in j's frame: its points and its turn through the mirror, its sizes as they are.
+fn partnerShapeSeenFrom(correction: Quat, shape: ShapeRecord) ShapeRecord {
+    return switch (shape) {
+        .sphere => |sphere| .{ .sphere = .{
+            .centre = partnerPointSeenFrom(correction, sphere.centre),
+            .radius = sphere.radius,
+        } },
+        .capsule => |capsule| .{ .capsule = .{
+            .from = partnerPointSeenFrom(correction, capsule.from),
+            .to = partnerPointSeenFrom(correction, capsule.to),
+            .radius = capsule.radius,
+        } },
+        .box => |box| .{ .box = .{
+            .centre = partnerPointSeenFrom(correction, box.centre),
+            .facing = partnerTurnSeenFrom(correction, box.facing),
+            .half = box.half,
+        } },
+    };
+}
+
+/// The way back: j's shape, as its partner holds it.
+fn ownShapeForPartner(correction: Quat, shape: ShapeRecord) ShapeRecord {
+    return switch (shape) {
+        .sphere => |sphere| .{ .sphere = .{
+            .centre = ownPointForPartner(correction, sphere.centre),
+            .radius = sphere.radius,
+        } },
+        .capsule => |capsule| .{ .capsule = .{
+            .from = ownPointForPartner(correction, capsule.from),
+            .to = ownPointForPartner(correction, capsule.to),
+            .radius = capsule.radius,
+        } },
+        .box => |box| .{ .box = .{
+            .centre = ownPointForPartner(correction, box.centre),
+            .facing = ownTurnForPartner(correction, box.facing),
+            .half = box.half,
+        } },
+    };
+}
+
+fn meanPoint(a: Vec, b: Vec) Vec {
+    return (a + b) * splat(0.5);
+}
+
+/// The turn halfway between two: their normalised sum, the second taken on the first's side of the sphere so that
+/// the two are each other's nearest. Meant for turns a few degrees apart, as a body's and its partner's read through
+/// the mirror are.
+fn meanTurn(a: Quat, b: Quat) Quat {
+    const same_side: bool = dot4(a, b) >= 0;
+    const b_near: Quat = if (same_side) b else -b;
+    return normalize4(a + b_near);
+}
+
+fn meanInertia(a: [3][3]f32, b: [3][3]f32) [3][3]f32 {
+    var mean: [3][3]f32 = undefined;
+    for (0..3) |row| {
+        for (0..3) |column| {
+            mean[row][column] = 0.5 * (a[row][column] + b[row][column]);
+        }
+    }
+    return mean;
+}
+
+pub const SymmetryError = error{
+    SymmetryJointMissing,
+    SymmetryPartnerMissing,
+    SymmetryParentsNotPartners,
+    SymmetryShapesDiffer,
+    SymmetryBoxesTurnedApart,
+};
+
+/// The mean of a body's shape and its partner's read in its frame (`partnerShapeSeenFrom`). A capsule's ends are
+/// paired nearest with nearest, whichever way each fit wrote them. Refused: two shapes of different kinds, and two
+/// boxes turned more than 30 degrees apart.
+fn meanShape(own: ShapeRecord, seen: ShapeRecord) SymmetryError!ShapeRecord {
+    switch (own) {
+        .sphere => |sphere| {
+            const other: ShapeRecord.Sphere = switch (seen) {
+                .sphere => |seen_sphere| seen_sphere,
+                else => return error.SymmetryShapesDiffer,
+            };
+            return .{ .sphere = .{
+                .centre = meanPoint(sphere.centre, other.centre),
+                .radius = 0.5 * (sphere.radius + other.radius),
+            } };
+        },
+        .capsule => |capsule| {
+            const other: ShapeRecord.Capsule = switch (seen) {
+                .capsule => |seen_capsule| seen_capsule,
+                else => return error.SymmetryShapesDiffer,
+            };
+            const paired_as_written: f32 = length3(capsule.from - other.from) + length3(capsule.to - other.to);
+            const paired_crossed: f32 = length3(capsule.from - other.to) + length3(capsule.to - other.from);
+            const other_from: Vec = if (paired_as_written <= paired_crossed) other.from else other.to;
+            const other_to: Vec = if (paired_as_written <= paired_crossed) other.to else other.from;
+            return .{ .capsule = .{
+                .from = meanPoint(capsule.from, other_from),
+                .to = meanPoint(capsule.to, other_to),
+                .radius = 0.5 * (capsule.radius + other.radius),
+            } };
+        },
+        .box => |box| {
+            const other: ShapeRecord.Box = switch (seen) {
+                .box => |seen_box| seen_box,
+                else => return error.SymmetryShapesDiffer,
+            };
+            // Two readings of one box lie a few degrees apart. A box's axes may be numbered differently in two fits,
+            // and the halfway turn between two such readings would be neither box: past 30 degrees, refused.
+            const most_apart_cos_half_angle: f32 = 0.9659258; // cos 15 degrees
+            const turns_alike: f32 = @abs(dot4(box.facing, other.facing));
+            if (turns_alike < most_apart_cos_half_angle) {
+                return error.SymmetryBoxesTurnedApart;
+            }
+            return .{ .box = .{
+                .centre = meanPoint(box.centre, other.centre),
+                .facing = meanTurn(box.facing, other.facing),
+                .half = meanPoint(box.half, other.half),
+            } };
+        },
+    }
+}
+
+/// The joint of `capture` named `name`.
+fn captureJointNamed(capture: codecs.bvh.Data, name: []const u8) ?usize {
+    for (capture.joints, 0..) |joint, index| {
+        if (eql(u8, joint.name, name)) {
+            return index;
+        }
+    }
+    return null;
+}
+
+/// The record of the body named `name`.
+fn recordNamed(records: []const BodyRecord, name: []const u8) ?usize {
+    for (records, 0..) |record, index| {
+        if (eql(u8, record.name, name)) {
+            return index;
+        }
+    }
+    return null;
+}
+
+/// GENO MADE SYMMETRIC (the section's head says how): every pair of bodies the mean of the two read through the
+/// mirror, every body on the midline its own mirror image - in place. `capture` is any capture on the bodies'
+/// skeleton, and `mirror` its mirror (`CaptureMirror`), built from the model these records write.
+pub fn symmetrizeRecords(
+    records: []BodyRecord,
+    capture: codecs.bvh.Data,
+    mirror: CaptureMirror,
+) SymmetryError!void {
+    for (records, 0..) |own, index| {
+        const side: BodySide = .of(own.name);
+        // A body on the right is made with its partner on the left.
+        if (side == .right) {
+            continue;
+        }
+        const joint: usize = captureJointNamed(capture, own.name) orelse return error.SymmetryJointMissing;
+        const correction: Quat = mirror.corrections[joint];
+        const partner_name: []const u8 = capture.joints[mirror.partners[joint]].name;
+        const partner_index: usize = recordNamed(records, partner_name) orelse return error.SymmetryPartnerMissing;
+        const partner: BodyRecord = records[partner_index];
+        // The place is a point of the parent's frame: the parent's correction carries it across, and the two parents
+        // must be partners for the two places to be each other's.
+        var parent_correction: Quat = qidentity();
+        if (own.parent) |up| {
+            const parent_name: []const u8 = records[up].name;
+            const parent_joint: usize =
+                captureJointNamed(capture, parent_name) orelse return error.SymmetryJointMissing;
+            const partner_parent_name: []const u8 = capture.joints[mirror.partners[parent_joint]].name;
+            const partner_up: usize = partner.parent orelse return error.SymmetryParentsNotPartners;
+            if (!eql(u8, records[partner_up].name, partner_parent_name)) {
+                return error.SymmetryParentsNotPartners;
+            }
+            parent_correction = mirror.corrections[parent_joint];
+        }
+
+        var made: BodyRecord = own;
+        // The root's place is in the world, where the reflection has no correction to be read through, and it is
+        // only where the model stands at rest: kept.
+        if (own.parent != null) {
+            made.place = meanPoint(own.place, partnerPointSeenFrom(parent_correction, partner.place));
+        }
+        made.mass = 0.5 * (own.mass + partner.mass);
+        made.centre = meanPoint(own.centre, partnerPointSeenFrom(correction, partner.centre));
+        made.inertia = meanInertia(own.inertia, partnerInertiaSeenFrom(correction, partner.inertia));
+        if (own.range_degrees) |own_range| {
+            const partner_range: f32 = partner.range_degrees orelse own_range;
+            made.range_degrees = @max(own_range, partner_range);
+        }
+        if (own.shape) |own_shape| {
+            const partner_shape: ShapeRecord = partner.shape orelse return error.SymmetryShapesDiffer;
+            made.shape = try meanShape(own_shape, partnerShapeSeenFrom(correction, partner_shape));
+        } else if (partner.shape != null) {
+            return error.SymmetryShapesDiffer;
+        }
+        records[index] = made;
+        if (side == .midline) {
+            continue;
+        }
+
+        // The partner: the mirror image of what this body became.
+        var partner_made: BodyRecord = partner;
+        partner_made.place = ownPointForPartner(parent_correction, made.place);
+        partner_made.mass = made.mass;
+        partner_made.centre = ownPointForPartner(correction, made.centre);
+        partner_made.inertia = ownInertiaForPartner(correction, made.inertia);
+        partner_made.range_degrees = made.range_degrees;
+        if (made.shape) |made_shape| {
+            partner_made.shape = ownShapeForPartner(correction, made_shape);
+        }
+        records[partner_index] = partner_made;
+    }
+}
+
+/// GENO's MODEL, SYMMETRIC - the model every run uses (`model_fixture_path`): the measured model's records
+/// (`modelRecords`) made symmetric (`symmetrizeRecords`) through the mirror of the measured model itself and of
+/// `bind_capture`, any capture on Geno's skeleton. The symmetry keeps the bones' directions, so the mirror read from
+/// the symmetric model is this one. The caller owns the text.
+pub fn writeSymmetricModel(
+    gpa: Allocator,
+    rest: Posed,
+    mesh: Mesh,
+    masses: BodyVolume,
+    ranges: []const Range,
+    bind_capture: codecs.bvh.Data,
+) ![]u8 {
+    const records: []BodyRecord = try modelRecords(gpa, rest, mesh, masses, ranges);
+    defer gpa.free(records);
+    const measured: []u8 = try writeRecords(gpa, records);
+    defer gpa.free(measured);
+    var document: codecs.xml.Document = try codecs.xml.parse(gpa, measured, null);
+    defer document.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &document);
+    defer robot.deinit();
+    var imported: robot_mjcf.Imported = try robot_mjcf.build(gpa, &robot, .{});
+    defer imported.deinit();
+    var mirror: CaptureMirror = try .init(gpa, bind_capture, &imported);
+    defer mirror.deinit(gpa);
+    try symmetrizeRecords(records, bind_capture, mirror);
+    return writeRecords(gpa, records);
 }
 
 const zimrphysics = @import("zimrphysics.zig");
@@ -3461,6 +4258,32 @@ pub fn restClipOnFloor(
     return .{ .frames = raised, .most = most };
 }
 
+/// A clip at another speed, rested on the floor, and how the floor raised it (`clipAtSpeed`).
+pub const ClipAtSpeed = struct { clip: dance.Clip, raise: Raise };
+
+/// A CLIP PLAYED FASTER OR SLOWER, AS A RUN TAKES IT: `dance.Clip.atSpeed`, then rested on the floor as its source
+/// rests (`restClipOnFloor`) - no frame lower than the source's lowest, which for a baked clip is the bake's clearance:
+/// a pose between two frames that rest on the floor can dip a little below it. A run builds its speed variants so when
+/// it starts, from the baked clips and their mirror images. `probe` is any data for `m`. The caller owns the clip.
+pub fn clipAtSpeed(
+    m: *const rbt.Model,
+    probe: *rbt.Data,
+    clip: *const dance.Clip,
+    speed: f32,
+) !ClipAtSpeed {
+    var source_lowest: f32 = floatMax(f32);
+    for (0..clip.frame_count) |frame| {
+        @memcpy(probe.joint_positions, clip.pose(frame));
+        probe.stage = .stale;
+        rbt.kinematics(m, probe);
+        source_lowest = @min(source_lowest, rbt.lowestPoint(m, probe));
+    }
+    var copy: dance.Clip = try clip.atSpeed(m, speed);
+    errdefer copy.deinit();
+    const raise: Raise = restClipOnFloor(m, probe, &copy, source_lowest);
+    return .{ .clip = copy, .raise = raise };
+}
+
 /// A pose HELD: one frame of a capture, copied onto the robot and repeated for `seconds` at `frame_time` -
 /// a clip the task can run like any other, whose reference simply never moves. The root is lifted 5 mm,
 /// as Geno's soles sit 4.5 mm below the floor at rest. The caller owns the clip.
@@ -3502,10 +4325,12 @@ pub fn heldClip(
 // -------- Tests --------
 
 const expect = std.testing.expect;
+const expectError = std.testing.expectError;
+const expectEqual = std.testing.expectEqual;
+const expectApproxEqAbs = std.testing.expectApproxEqAbs;
 const bind_bvh: []const u8 = @embedFile("tests/fixtures/robot/geno_bind.bvh");
 const stance_bvh: []const u8 = @embedFile("tests/fixtures/robot/geno_stance.bvh");
 const mesh_bin: []const u8 = @embedFile("tests/fixtures/robot/geno.bin");
-const mjcf = @import("mjcf.zig");
 
 /// How far apart two rotations are, in degrees (0 = the same rotation, whichever sign each carries).
 ///
@@ -4004,6 +4829,429 @@ fn readAsset(gpa: Allocator, io: Io, path: []const u8) ![]u8 {
     return bytes;
 }
 
+/// The angle between two turns, in radians - from the turn between them, whose half-angle's sine is its axis part's
+/// length: accurate where the angle is small, as an arccosine of their dot product is not.
+fn angleBetweenTurns(a: Quat, b: Quat) f32 {
+    const between: Quat = qmul(conjugate(a), b);
+    const axis_length: f32 = length3(between);
+    return 2.0 * atan2Rad(axis_length, @abs(between[3]));
+}
+
+/// The angle between two directions, in radians - from their cross and dot products, accurate at every angle.
+fn angleBetweenDirections(a: Vec, b: Vec) f32 {
+    return atan2Rad(length3(cross(a, b)), dot3(a, b));
+}
+
+/// Every joint's world turn and place, from its local ones (`captureFrame`): the root's its own; a child's turn its
+/// parent's composed with its own, and its place its parent's plus its own turned by its parent's world turn.
+fn captureWorldPose(
+    capture: codecs.bvh.Data,
+    places: []const Vec,
+    turns: []const Quat,
+    world_places: []Vec,
+    world_turns: []Quat,
+) void {
+    for (capture.joints, places, turns, 0..) |joint, place, turn, j| {
+        if (joint.parent < 0) {
+            world_places[j] = place;
+            world_turns[j] = turn;
+            continue;
+        }
+        const parent: usize = @intCast(joint.parent);
+        world_places[j] = world_places[parent] + rotate(world_turns[parent], place);
+        world_turns[j] = qmul(world_turns[parent], turn);
+    }
+}
+
+test "robot_geno: a capture mirrored - twice the original, and every bone where its partner's pointed, mirrored" {
+    // The four clips on Geno's own skeleton, each mirrored (`mirrorCapture`) and mirrored again, against Geno's model
+    // as the task loads it, whose bodies give the bones (`restBone`). Over every frame and joint, within bars set
+    // from this measurement - the worst found: turns 1.2e-5 rad and places 6e-8 m twice; places 5e-6 m and bones
+    // 6.8e-6 rad once, the world's places rounded through a chain of turns:
+    //   - mirrored twice, each turn and local place the original's;
+    //   - mirrored once, each joint's world place its partner's mirrored, and each body's rest bone - in the mirrored
+    //     world - where its partner's pointed, mirrored.
+    // The corrections are what makes the bones so: left out, each the identity, they point degrees off - the hands
+    // most, by the 4.9 degrees their capsules lie off each other's mirror image.
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    const io: Io = threaded.io();
+    const model_text: []u8 = readAsset(gpa, io, model_fixture_path) catch return error.SkipZigTest;
+    defer gpa.free(model_text);
+    var document: codecs.xml.Document = try codecs.xml.parse(gpa, model_text, null);
+    defer document.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &document);
+    defer robot.deinit();
+    var imported: robot_mjcf.Imported = try robot_mjcf.build(gpa, &robot, .{});
+    defer imported.deinit();
+    const paths = [_][]const u8{
+        "assets/lafan1/walk1_subject2.bvh",
+        "assets/lafan1/run1_subject2.bvh",
+        "assets/lafan1/dance1_subject2.bvh",
+        "assets/lafan1/fallAndGetUp2_subject2.bvh",
+    };
+    var worst_twice_turn: f32 = 0;
+    var worst_twice_place: f32 = 0;
+    var worst_place: f32 = 0;
+    var worst_bone: f32 = 0;
+    var worst_bone_uncorrected: f32 = 0;
+    var worst_bone_uncorrected_joint: []const u8 = "";
+    for (paths) |path| {
+        const bytes: []u8 = readAsset(gpa, io, path) catch return error.SkipZigTest;
+        defer gpa.free(bytes);
+        var capture: codecs.bvh.Data = try codecs.bvh.parse(gpa, bytes, null);
+        defer capture.deinit();
+        var mirror: CaptureMirror = try .init(gpa, capture, &imported);
+        defer mirror.deinit(gpa);
+        var mirrored: codecs.bvh.Data = try mirrorCapture(gpa, capture, mirror);
+        defer mirrored.deinit();
+        var twice: codecs.bvh.Data = try mirrorCapture(gpa, mirrored, mirror);
+        defer twice.deinit();
+        var uncorrected_mirror: CaptureMirror = try .init(gpa, capture, &imported);
+        defer uncorrected_mirror.deinit(gpa);
+        @memset(uncorrected_mirror.corrections, qidentity());
+        var uncorrected: codecs.bvh.Data = try mirrorCapture(gpa, capture, uncorrected_mirror);
+        defer uncorrected.deinit();
+
+        const joint_count: usize = capture.joints.len;
+        const bones: []?Vec = try gpa.alloc(?Vec, joint_count);
+        defer gpa.free(bones);
+        for (capture.joints, bones) |joint, *bone| {
+            bone.* = restBone(&imported, joint.name);
+        }
+        // Per frame: the original, mirrored, twice, uncorrected - local places and turns, then world ones.
+        const Frame = struct { places: []Vec, turns: []Quat, world_places: []Vec, world_turns: []Quat };
+        var frames: [4]Frame = undefined;
+        for (&frames) |*frame| {
+            frame.places = try gpa.alloc(Vec, joint_count);
+            frame.turns = try gpa.alloc(Quat, joint_count);
+            frame.world_places = try gpa.alloc(Vec, joint_count);
+            frame.world_turns = try gpa.alloc(Quat, joint_count);
+        }
+        defer for (frames) |frame| {
+            gpa.free(frame.places);
+            gpa.free(frame.turns);
+            gpa.free(frame.world_places);
+            gpa.free(frame.world_turns);
+        };
+        const captures = [4]codecs.bvh.Data{ capture, mirrored, twice, uncorrected };
+        for (0..capture.frame_count) |frame_index| {
+            for (captures, &frames) |source, frame| {
+                captureFrame(source, frame_index, frame.places, frame.turns);
+                captureWorldPose(source, frame.places, frame.turns, frame.world_places, frame.world_turns);
+            }
+            const original: Frame = frames[0];
+            for (0..joint_count) |j| {
+                // Twice: the original.
+                worst_twice_turn = @max(worst_twice_turn, angleBetweenTurns(original.turns[j], frames[2].turns[j]));
+                worst_twice_place = @max(worst_twice_place, length3(original.places[j] - frames[2].places[j]));
+                // Once: each joint where its partner was, mirrored.
+                const partner_place: Vec = original.world_places[mirror.partners[j]];
+                worst_place = @max(worst_place, length3(frames[1].world_places[j] - reflectedPlace(partner_place)));
+                // Once: each bone where its partner's pointed, mirrored.
+                const bone: Vec = bones[j] orelse continue;
+                const partner: usize = mirror.partners[j];
+                const partner_bone: Vec = bones[partner].?;
+                const partner_pointed: Vec = reflectedPlace(rotate(original.world_turns[partner], partner_bone));
+                const pointed: Vec = rotate(frames[1].world_turns[j], bone);
+                const pointed_uncorrected: Vec = rotate(frames[3].world_turns[j], bone);
+                worst_bone = @max(worst_bone, angleBetweenDirections(pointed, partner_pointed));
+                const uncorrected_angle: f32 = angleBetweenDirections(pointed_uncorrected, partner_pointed);
+                if (uncorrected_angle > worst_bone_uncorrected) {
+                    worst_bone_uncorrected = uncorrected_angle;
+                    worst_bone_uncorrected_joint = imported.names[imported.bodyIndex(capture.joints[j].name).?];
+                }
+            }
+        }
+    }
+    report.print("\n  mirrored twice against the original: turns within {e:.2} rad, places within {e:.2} m\n", .{
+        worst_twice_turn,
+        worst_twice_place,
+    });
+    report.print("  mirrored once, against the partners mirrored: places within {e:.2} m, bones within {e:.2} rad; " ++
+        "uncorrected, bones {d:.2} degrees off ({s})\n", .{
+        worst_place,
+        worst_bone,
+        degFromRad(worst_bone_uncorrected),
+        worst_bone_uncorrected_joint,
+    });
+    const twice_turn_bar: f32 = 5.0e-5;
+    const twice_place_bar: f32 = 1.0e-6;
+    const world_place_bar: f32 = 5.0e-5;
+    const bone_bar: f32 = 5.0e-5;
+    try expect(worst_twice_turn < twice_turn_bar);
+    try expect(worst_twice_place < twice_place_bar);
+    try expect(worst_place < world_place_bar);
+    try expect(worst_bone < bone_bar);
+    try expect(degFromRad(worst_bone_uncorrected) > 4.0);
+}
+
+/// A small skeleton for the mirror's known answers: a torso with a paw on each side, ten centimetres out along x,
+/// each with a tip ten centimetres further. One frame: the torso at (30, 100, 5) cm, unturned; the left paw turned
+/// 60 degrees about y, the right paw at rest. Each paw's rotation channels, and the right paw's parent, let a test
+/// spoil its symmetry.
+fn pawsCapture(
+    gpa: Allocator,
+    left_paw_channels: []const u8,
+    right_paw_channels: []const u8,
+    right_paw_parent: []const u8,
+) !codecs.bvh.Data {
+    const right_paw_under_left: bool = eql(u8, right_paw_parent, "LeftPaw");
+    var right_paw_text: ArrayList(u8) = .empty;
+    defer right_paw_text.deinit(gpa);
+    try right_paw_text.print(gpa,
+        \\  JOINT RightPaw
+        \\  {{
+        \\    OFFSET -10 0 0
+        \\    CHANNELS 3 {s}
+        \\    End Site
+        \\    {{
+        \\      OFFSET -10 0 0
+        \\    }}
+        \\  }}
+        \\
+    , .{right_paw_channels});
+    const right_paw: []const u8 = right_paw_text.items;
+    var text: ArrayList(u8) = .empty;
+    defer text.deinit(gpa);
+    try text.appendSlice(gpa,
+        \\HIERARCHY
+        \\ROOT Torso
+        \\{
+        \\  OFFSET 0 0 0
+        \\  CHANNELS 6 Xposition Yposition Zposition Zrotation Yrotation Xrotation
+        \\  JOINT LeftPaw
+        \\  {
+        \\    OFFSET 10 0 0
+        \\
+    );
+    try text.print(gpa, "    CHANNELS 3 {s}\n", .{left_paw_channels});
+    try text.appendSlice(gpa,
+        \\    End Site
+        \\    {
+        \\      OFFSET 10 0 0
+        \\    }
+        \\
+    );
+    if (right_paw_under_left) {
+        try text.appendSlice(gpa, right_paw);
+    }
+    try text.appendSlice(gpa, "  }\n");
+    if (!right_paw_under_left) {
+        try text.appendSlice(gpa, right_paw);
+    }
+    try text.appendSlice(gpa,
+        \\}
+        \\MOTION
+        \\Frames: 1
+        \\Frame Time: 0.0333333
+        \\30 100 5 0 0 0 0 60 0 0 0 0
+        \\
+    );
+    return codecs.bvh.parse(gpa, text.items, null);
+}
+
+test "robot_geno: the mirror's known answer - a paw turned back, mirrored; and the skeletons it refuses" {
+    // A torso with two paws (`pawsCapture`), the left turned 60 degrees about the vertical, so it points back and out.
+    // Mirrored, worked by hand: the torso at (-30, 100, 5) cm; the left paw takes the right's rest; the right paw takes
+    // the left's turn reflected - the same angle about the vertical, the other way, -60 degrees - so it points back and
+    // out on its own side. No correction: no body of Geno's is named so, and the paws are mirror images. Then four
+    // skeletons spoilt one way each, refused by name: a paw with no partner, partners with different channels, a
+    // rotation order the mirror cannot write back, and a hierarchy that does not mirror itself.
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    const model_text: []u8 = readAsset(gpa, threaded.io(), model_fixture_path) catch return error.SkipZigTest;
+    defer gpa.free(model_text);
+    var document: codecs.xml.Document = try codecs.xml.parse(gpa, model_text, null);
+    defer document.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &document);
+    defer robot.deinit();
+    var imported: robot_mjcf.Imported = try robot_mjcf.build(gpa, &robot, .{});
+    defer imported.deinit();
+    const zyx: []const u8 = "Zrotation Yrotation Xrotation";
+
+    var paws: codecs.bvh.Data = try pawsCapture(gpa, zyx, zyx, "Torso");
+    defer paws.deinit();
+    var mirror: CaptureMirror = try .init(gpa, paws, &imported);
+    defer mirror.deinit(gpa);
+    for (mirror.corrections) |correction| {
+        try expect(eql(f32, &@as([4]f32, correction), &@as([4]f32, qidentity())));
+    }
+    var mirrored: codecs.bvh.Data = try mirrorCapture(gpa, paws, mirror);
+    defer mirrored.deinit();
+    const expected_row = [_]f32{ -30, 100, 5, 0, 0, 0, 0, 0, 0, 0, -60, 0 };
+    for (expected_row, mirrored.frame(0)) |expected, found| {
+        try expectApproxEqAbs(expected, found, 1.0e-4);
+    }
+
+    // Refused.
+    var unpaired_text: ArrayList(u8) = .empty;
+    defer unpaired_text.deinit(gpa);
+    try unpaired_text.appendSlice(gpa,
+        \\HIERARCHY
+        \\ROOT Torso
+        \\{
+        \\  OFFSET 0 0 0
+        \\  CHANNELS 3 Zrotation Yrotation Xrotation
+        \\  JOINT LeftPaw
+        \\  {
+        \\    OFFSET 10 0 0
+        \\    CHANNELS 3 Zrotation Yrotation Xrotation
+        \\    End Site
+        \\    {
+        \\      OFFSET 10 0 0
+        \\    }
+        \\  }
+        \\}
+        \\MOTION
+        \\Frames: 1
+        \\Frame Time: 0.0333333
+        \\0 0 0 0 0 0
+        \\
+    );
+    var unpaired: codecs.bvh.Data = try codecs.bvh.parse(gpa, unpaired_text.items, null);
+    defer unpaired.deinit();
+    try expectError(error.MirrorPartnerMissing, CaptureMirror.init(gpa, unpaired, &imported));
+    const xyz: []const u8 = "Xrotation Yrotation Zrotation";
+    const yxz: []const u8 = "Yrotation Xrotation Zrotation";
+    const Spoilt = struct { left: []const u8, right: []const u8, right_paw_parent: []const u8, refusal: anyerror };
+    const spoilt_skeletons = [_]Spoilt{
+        .{ .left = yxz, .right = zyx, .right_paw_parent = "Torso", .refusal = error.MirrorChannelsDiffer },
+        .{ .left = xyz, .right = xyz, .right_paw_parent = "Torso", .refusal = error.MirrorRotationOrder },
+        .{ .left = zyx, .right = zyx, .right_paw_parent = "LeftPaw", .refusal = error.MirrorHierarchyAsymmetric },
+    };
+    for (spoilt_skeletons) |spoilt| {
+        var spoilt_capture: codecs.bvh.Data =
+            try pawsCapture(gpa, spoilt.left, spoilt.right, spoilt.right_paw_parent);
+        defer spoilt_capture.deinit();
+        try expectError(spoilt.refusal, CaptureMirror.init(gpa, spoilt_capture, &imported));
+    }
+}
+
+test "robot_geno: the speed variants - the minute and its mirror at 0.8 and 1.2, grounded, 6.17 times the frames" {
+    // The six variants a run trains on, built as a run builds them: the minute's four baked clips and their mirror
+    // images, each also played 20% slower and 20% faster (`clipAtSpeed`, grounded as its source: the bake's 1 mm).
+    // Every frame rests on the floor - its lowest point the clearance, or above it in a flight - and the grounding
+    // lifted the poses between two frames by no more than their dip below it: 1.8 mm at most, measured (bar 3 mm).
+    // Together they hold (1 + 1/0.8 + 1/1.2) x 2 = 6.17 times the minute's frames - 6.164 counted, each copy ending on
+    // a whole frame.
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    const io: Io = threaded.io();
+    const model_text: []u8 = readAsset(gpa, io, model_fixture_path) catch return error.SkipZigTest;
+    defer gpa.free(model_text);
+    var document: codecs.xml.Document = try codecs.xml.parse(gpa, model_text, null);
+    defer document.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &document);
+    defer robot.deinit();
+    var imported: robot_mjcf.Imported = try robot_mjcf.build(gpa, &robot, .{});
+    defer imported.deinit();
+    const model: *const rbt.Model = &imported.model;
+    var probe: rbt.Data = try .init(gpa, model);
+    defer probe.deinit();
+    const clearance: f32 = 0.001;
+    const paths = [_][]const u8{
+        "examples/geno_ppo/dance.zclip",
+        "examples/geno_ppo/getup.zclip",
+        "examples/geno_ppo/walk.zclip",
+        "examples/geno_ppo/run.zclip",
+        "examples/geno_ppo/dance_mirrored.zclip",
+        "examples/geno_ppo/getup_mirrored.zclip",
+        "examples/geno_ppo/walk_mirrored.zclip",
+        "examples/geno_ppo/run_mirrored.zclip",
+    };
+    const speeds = [_]f32{ 0.8, 1.2 };
+    var baked_frames: usize = 0;
+    var variant_frames: usize = 0;
+    var deepest_dip: f32 = 0;
+    var lowest_above_floor: f32 = floatMax(f32);
+    for (paths) |path| {
+        const bytes: []u8 = readAsset(gpa, io, path) catch return error.SkipZigTest;
+        defer gpa.free(bytes);
+        var baked: dance.Clip = try .fromBytes(gpa, bytes);
+        defer baked.deinit();
+        baked_frames += baked.frame_count;
+        variant_frames += baked.frame_count;
+        for (speeds) |speed| {
+            var at_speed: ClipAtSpeed = try clipAtSpeed(model, &probe, &baked, speed);
+            defer at_speed.clip.deinit();
+            variant_frames += at_speed.clip.frame_count;
+            deepest_dip = @max(deepest_dip, at_speed.raise.most);
+            for (0..at_speed.clip.frame_count) |frame| {
+                @memcpy(probe.joint_positions, at_speed.clip.pose(frame));
+                probe.stage = .stale;
+                rbt.kinematics(model, &probe);
+                lowest_above_floor = @min(lowest_above_floor, rbt.lowestPoint(model, &probe));
+            }
+        }
+    }
+    // The originals' frames, the mirrored clips' as many again.
+    const minute_frames: usize = baked_frames / 2;
+    const times_the_minute: f32 = float(variant_frames) / float(minute_frames);
+    report.print("\n  the speed variants: {d} frames, {d:.3} times the minute's {d}; the dip between frames " ++
+        "{d:.5} m at most, every frame {d:.6} m or more above the floor\n", .{
+        variant_frames,
+        times_the_minute,
+        minute_frames,
+        deepest_dip,
+        lowest_above_floor,
+    });
+    try expect(@abs(times_the_minute - 6.1667) < 0.01);
+    try expect(lowest_above_floor > clearance - 1.0e-6);
+    try expect(deepest_dip < 3.0e-3);
+}
+
+test "robot_geno: a body's rest bone - its midline child before the others, a leaf along its capsule outward" {
+    // A small model (`restBone`'s rules, each where it decides): a torso whose children are a paw on each side and a
+    // neck on the midline - listed last, so the midline rule, not the order, picks it; the paws leaves whose capsules
+    // are written from the far end back toward the joint, so the axis must be turned outward; the neck a leaf along
+    // its capsule. The torso's bone is toward the neck, each paw's out along its own side, the neck's up.
+    const gpa: Allocator = testing_allocator;
+    const model_text: []const u8 =
+        \\<mujoco>
+        \\  <worldbody>
+        \\    <body name="Torso" pos="0 0 1">
+        \\      <freejoint/>
+        \\      <geom type="box" size="0.1 0.1 0.1" mass="1"/>
+        \\      <body name="LeftPaw" pos="0.1 0 0">
+        \\        <joint name="LeftPaw" type="ball"/>
+        \\        <geom type="capsule" fromto="0.2 0 0 0.05 0 0" size="0.02" mass="0.1"/>
+        \\      </body>
+        \\      <body name="RightPaw" pos="-0.1 0 0">
+        \\        <joint name="RightPaw" type="ball"/>
+        \\        <geom type="capsule" fromto="-0.2 0 0 -0.05 0 0" size="0.02" mass="0.1"/>
+        \\      </body>
+        \\      <body name="Neck" pos="0 0 0.1">
+        \\        <joint name="Neck" type="ball"/>
+        \\        <geom type="capsule" fromto="0 0 0.02 0 0 0.1" size="0.02" mass="0.1"/>
+        \\      </body>
+        \\    </body>
+        \\  </worldbody>
+        \\</mujoco>
+    ;
+    var document: codecs.xml.Document = try codecs.xml.parse(gpa, model_text, null);
+    defer document.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &document);
+    defer robot.deinit();
+    var imported: robot_mjcf.Imported = try robot_mjcf.build(gpa, &robot, .{});
+    defer imported.deinit();
+    const Expected = struct { name: []const u8, direction: Vec };
+    const expected_bones = [_]Expected{
+        .{ .name = "Torso", .direction = vec(0, 0, 1) },
+        .{ .name = "LeftPaw", .direction = vec(1, 0, 0) },
+        .{ .name = "RightPaw", .direction = vec(-1, 0, 0) },
+        .{ .name = "Neck", .direction = vec(0, 0, 1) },
+    };
+    for (expected_bones) |expected| {
+        const bone: Vec = restBone(&imported, expected.name) orelse return error.NoBone;
+        try expect(angleBetweenDirections(bone, expected.direction) < 1.0e-5);
+    }
+    try expectEqual(@as(?Vec, null), restBone(&imported, "Tail"));
+}
+
 test "robot_geno: R6 - joint ranges, from the tracking set's four clips" {
     const gpa: Allocator = testing_allocator;
     var threaded: Io.Threaded = .init(gpa, .{});
@@ -4100,7 +5348,13 @@ test "robot_geno: R6b, R6c, R7 - the model: assembled in the bind pose, standing
     const ranges: []Range = try measureRanges(gpa, bind, &files);
     defer gpa.free(ranges);
 
-    const xml: []u8 = try writeModel(gpa, bind, mesh, masses, ranges);
+    // Two models: the MEASURED one - every body, mass and shape where the bind pose and the fit put them - and the
+    // model every run uses, the same made symmetric (`writeSymmetricModel`) through the bind pose's own mirror.
+    const measured_xml: []u8 = try writeModel(gpa, bind, mesh, masses, ranges);
+    defer gpa.free(measured_xml);
+    var bind_capture: codecs.bvh.Data = try codecs.bvh.parse(gpa, bind_bvh, null);
+    defer bind_capture.deinit();
+    const xml: []u8 = try writeSymmetricModel(gpa, bind, mesh, masses, ranges, bind_capture);
     defer gpa.free(xml);
 
     // R8a, PART 1: THE MODEL AS A FIXTURE. The stored model must be this one, byte for byte. If it is missing
@@ -4112,61 +5366,44 @@ test "robot_geno: R6b, R6c, R7 - the model: assembled in the bind pose, standing
         const file: Io.File = try Io.Dir.cwd().createFile(threaded.io(), model_fixture_path, .{});
         defer file.close(threaded.io());
         try file.writeStreamingAll(threaded.io(), xml);
-        report.print("\n  R8a: {s} was {s} - rewritten from writeModel; review the diff and run again\n", .{
+        report.print("\n  R8a: {s} was {s} - rewritten from writeSymmetricModel; review the diff and run again\n", .{
             model_fixture_path,
             if (stored == null) "missing" else "stale",
         });
     }
     try expect(current);
 
-    // Through the engine's whole import path, exactly as a page would load a robot.
-    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, xml, null);
-    defer doc.deinit();
-    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
-    defer robot.deinit();
-    // Room for a whole body's contacts and joint limits at once, as the engine's other humanoid tests give.
-    var imported: robot_mjcf.Imported = try robot_mjcf.build(gpa, &robot, .{
+    // THE MEASURED MODEL, through the engine's whole import path, exactly as a page would load a robot.
+    var measured_doc: codecs.xml.Document = try codecs.xml.parse(gpa, measured_xml, null);
+    defer measured_doc.deinit();
+    var measured_robot: mjcf.Robot = try mjcf.readRobot(gpa, &measured_doc);
+    defer measured_robot.deinit();
+    var measured_imported: robot_mjcf.Imported = try robot_mjcf.build(gpa, &measured_robot, .{
         .gravity = vec(0, 0, -9.81),
         .max_contacts = 256,
     });
-    defer imported.deinit();
-    var data: rbt.Data = try .init(gpa, &imported.model);
-    defer data.deinit();
-    @memcpy(data.joint_positions, imported.model.reference_joint_positions);
-    @memset(data.joint_velocities, 0);
-    data.stage = .stale;
-    rbt.kinematics(&imported.model, &data);
+    defer measured_imported.deinit();
+    var measured_data: rbt.Data = try .init(gpa, &measured_imported.model);
+    defer measured_data.deinit();
+    @memcpy(measured_data.joint_positions, measured_imported.model.reference_joint_positions);
+    @memset(measured_data.joint_velocities, 0);
+    measured_data.stage = .stale;
+    rbt.kinematics(&measured_imported.model, &measured_data);
 
     // THE KNOWN ANSWER: at rest, every body stands where Geno's bind pose puts its joint (turned z-up).
     var worst: f32 = 0.0;
     for (body_names) |name| {
-        const b: u32 = imported.bodyIndex(name) orelse return error.BodyMissingFromModel;
+        const b: u32 = measured_imported.bodyIndex(name) orelse return error.BodyMissingFromModel;
         const expected: Vec = rotate(y_up_to_z_up, bind.at(name) orelse return error.BodyMissingFromPose);
-        worst = @max(worst, length3(data.body_positions[b] - expected));
+        worst = @max(worst, length3(measured_data.body_positions[b] - expected));
     }
-    // And the body's whole mass arrived, spread over the bodies.
-    var total: f32 = 0.0;
-    for (imported.model.body_mass) |mass| {
-        total += mass;
-    }
-    report.print("\n  R6b: {d} bytes of MJCF, {d} bodies; at rest every body within {e:.1} m " ++
-        "of the bind pose; " ++
-        "{d:.2} kg in the model (the body: {d:.2})\n", .{
-        xml.len,
+    report.print("\n  R6b: {d} bytes of MJCF, {d} bodies; measured, at rest every body within {e:.1} m " ++
+        "of the bind pose\n", .{
+        measured_xml.len,
         body_names.len,
         worst,
-        total,
-        masses.whole().mass(),
     });
     try expect(worst < 1.0e-3);
-    // Every pair of shapes that overlaps at rest is excluded - among them the three that meet across
-    // shapeless bodies (the chest with each upper arm, and with Neck1), so at least those.
-    report.print("  R6c: {d} pairs of shapes overlap at rest, and never collide\n", .{
-        imported.model.exclude_pairs.len,
-    });
-    try expect(imported.model.exclude_pairs.len >= 3);
-    // The shapes are massless, so the body's measured mass is the model's, to the gram.
-    try expect(@abs(total - masses.whole().mass()) < 0.05);
 
     // EVERY SHAPE WHERE THE FITTER PUT IT. The engine places a shape from its body's pose and the shape's
     // own place in that body; at rest that must land on the fitted shape itself (turned z-up) - its
@@ -4175,14 +5412,15 @@ test "robot_geno: R6b, R6c, R7 - the model: assembled in the bind pose, standing
     var placed: usize = 0;
     for (shapes.geoms) |fitted| {
         const carrier: []const u8 = carrierOf(fitted.bone);
-        const b: u32 = imported.bodyIndex(carrier) orelse return error.ShapeBodyMissing;
-        const parsed: mjcf.Body = for (robot.bodies) |candidate| {
+        const b: u32 = measured_imported.bodyIndex(carrier) orelse return error.ShapeBodyMissing;
+        const parsed: mjcf.Body = for (measured_robot.bodies) |candidate| {
             if (std.mem.eql(u8, candidate.name, carrier)) {
                 break candidate;
             }
         } else return error.ShapeBodyNotParsed;
-        const geom: mjcf.Geom = robot.geoms[parsed.geom_start];
-        const at: Vec = data.body_positions[b] + rotate(data.body_orientations[b], geom.pos);
+        const geom: mjcf.Geom = measured_robot.geoms[parsed.geom_start];
+        const body_turn: Quat = measured_data.body_orientations[b];
+        const at: Vec = measured_data.body_positions[b] + rotate(body_turn, geom.pos);
         const centre: Vec = switch (fitted.shape) {
             .capsule => vec(
                 0.5 * (fitted.a[0] + fitted.b[0]),
@@ -4203,6 +5441,89 @@ test "robot_geno: R6b, R6c, R7 - the model: assembled in the bind pose, standing
     });
     try expect(placed == shapes.geoms.len);
     try expect(shape_worst < 1.0e-3);
+
+    // THE MODEL EVERY RUN USES - the symmetric one, the fixture - as a page loads it. Room for a whole body's
+    // contacts and joint limits at once, as the engine's other humanoid tests give.
+    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, xml, null);
+    defer doc.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+    defer robot.deinit();
+    var imported: robot_mjcf.Imported = try robot_mjcf.build(gpa, &robot, .{
+        .gravity = vec(0, 0, -9.81),
+        .max_contacts = 256,
+    });
+    defer imported.deinit();
+    var data: rbt.Data = try .init(gpa, &imported.model);
+    defer data.deinit();
+    @memcpy(data.joint_positions, imported.model.reference_joint_positions);
+    @memset(data.joint_velocities, 0);
+    data.stage = .stale;
+    rbt.kinematics(&imported.model, &data);
+
+    // SYMMETRIC, AT A COST MEASURED: how far the evening moved each body at rest from the bind pose, and each shape
+    // from its fit - half the gap between the two sides, read through the mirror. The body's whole mass arrived,
+    // spread over the bodies, and the evening kept it.
+    var symmetric_worst: f32 = 0.0;
+    var symmetric_worst_body: []const u8 = "";
+    for (body_names) |name| {
+        const b: u32 = imported.bodyIndex(name) orelse return error.BodyMissingFromModel;
+        const expected: Vec = rotate(y_up_to_z_up, bind.at(name) orelse return error.BodyMissingFromPose);
+        const moved: f32 = length3(data.body_positions[b] - expected);
+        if (moved > symmetric_worst) {
+            symmetric_worst = moved;
+            symmetric_worst_body = name;
+        }
+    }
+    var symmetric_shape_worst: f32 = 0.0;
+    var symmetric_shape_worst_body: []const u8 = "";
+    for (imported.model.geom_body, 0..) |body, geom| {
+        if (body == 0) {
+            continue;
+        }
+        const name: []const u8 = imported.names[body];
+        const measured_body: u32 = measured_imported.bodyIndex(name) orelse return error.ShapeBodyMissing;
+        const measured_geom: usize = for (measured_imported.model.geom_body, 0..) |owner, index| {
+            if (owner == measured_body) {
+                break index;
+            }
+        } else return error.ShapeBodyNotParsed;
+        const turn: Quat = data.body_orientations[body];
+        const measured_turn: Quat = measured_data.body_orientations[measured_body];
+        const at: Vec = data.body_positions[body] + rotate(turn, imported.model.geom_local_position[geom]);
+        const measured_local: Vec = measured_imported.model.geom_local_position[measured_geom];
+        const measured_at: Vec = measured_data.body_positions[measured_body] + rotate(measured_turn, measured_local);
+        const moved: f32 = length3(at - measured_at);
+        if (moved > symmetric_shape_worst) {
+            symmetric_shape_worst = moved;
+            symmetric_shape_worst_body = name;
+        }
+    }
+    var total: f32 = 0.0;
+    for (imported.model.body_mass) |mass| {
+        total += mass;
+    }
+    report.print("  R6b symmetric: {d} bytes; at rest every body within {d:.4} m of the bind pose (most: {s}), " ++
+        "every shape within {d:.4} m of its fit (most: {s}); {d:.2} kg (the body: {d:.2})\n", .{
+        xml.len,
+        symmetric_worst,
+        symmetric_worst_body,
+        symmetric_shape_worst,
+        symmetric_shape_worst_body,
+        total,
+        masses.whole().mass(),
+    });
+    // Measured: the bodies within 5.4 mm (the left hand, at the end of two evened arm bones), the shapes within
+    // 1.21 cm (the left toe's box, its two fits the furthest apart).
+    try expect(symmetric_worst < 6.0e-3);
+    try expect(symmetric_shape_worst < 1.3e-2);
+    // Every pair of shapes that overlaps at rest is excluded - among them the three that meet across
+    // shapeless bodies (the chest with each upper arm, and with Neck1), so at least those.
+    report.print("  R6c: {d} pairs of shapes overlap at rest, and never collide\n", .{
+        imported.model.exclude_pairs.len,
+    });
+    try expect(imported.model.exclude_pairs.len >= 3);
+    // The shapes are massless, so the body's measured mass is the model's, to the gram.
+    try expect(@abs(total - masses.whole().mass()) < 0.05);
 
     // -- THE STANDING GUARD (standing rule 7): in a world with a floor, Geno stays ON it. --
     //
@@ -4277,7 +5598,9 @@ test "robot_geno: R6b, R6c, R7 - the model: assembled in the bind pose, standing
     // Two claims, because the captures are not quite rigid: they stretch the thighs and the upper arms by up
     // to 3 mm from frame to frame (the knees' and elbows' own translations move), and no rigid robot can copy
     // a bone that changes length. So: (1) against the capture's kinematics recomputed with the ROBOT's rigid
-    // bone lengths, the copy must be exact; (2) against the capture as recorded, what remains is its stretch.
+    // bone lengths, the copy must be exact; (2) against the capture as recorded, what remains is its stretch, and
+    // the symmetry's evening of each pair of bones - the left forearm 0.5% longer than recorded, the right 0.5%
+    // shorter.
     var worst_rigid: f32 = 0.0;
     var worst_recorded: f32 = 0.0;
     var worst_turn: f32 = 0.0;
@@ -4320,11 +5643,13 @@ test "robot_geno: R6b, R6c, R7 - the model: assembled in the bind pose, standing
         defer gpa.free(places);
         const turns: []Quat = try gpa.alloc(Quat, count);
         defer gpa.free(turns);
-        // The robot's rigid bone lengths: every joint's translation as the bind file has it.
+        // The robot's rigid bones: every body's place in its parent's frame - the capture joint's translation in
+        // the bind file, each pair of bones evened by the symmetry (`symmetrizeRecords`).
         const rigid: []Vec = try gpa.alloc(Vec, count);
         defer gpa.free(rigid);
         for (clip.joints, 0..) |joint, j| {
-            rigid[j] = if (bind.find(joint.name)) |b| bind.bones[b].offset else vec(0, 0, 0);
+            const body: ?u32 = imported.bodyIndex(joint.name);
+            rigid[j] = if (body) |b| imported.model.body_rest_position[b] else vec(0, 0, 0);
         }
         const recorded_places: []Vec = try gpa.alloc(Vec, count);
         defer gpa.free(recorded_places);
@@ -4395,13 +5720,15 @@ test "robot_geno: R6b, R6c, R7 - the model: assembled in the bind pose, standing
     // kinematics puts it with the robot's rigid bones - on every frame of all four clips...
     try expect(worst_turn < 1.0e-2);
     try expect(worst_rigid < 1.0e-4);
-    // ...what remains against the recorded capture is the capture's stretch, never more (3.3 mm at most)...
-    try expect(worst_recorded < 3.5e-3);
+    // ...what remains against the recorded capture is the capture's stretch (3.3 mm at most, measured on the
+    // measured model) and the bones' evening: 7.3 mm at most...
+    try expect(worst_recorded < 8.0e-3);
     // ...and a standing frame's soles are flat.
     try expect(worst_tilt < 5.0);
 
     // R8a, PART 2: THE CLIPS BY COPY. Each tracking clip becomes the task's clip - every frame the engine's
-    // own position vector - and no frame's residual exceeds the capture's own stretch (R7b: 3.2 mm).
+    // own position vector - and no frame's residual exceeds the capture's own stretch and the bones' evening
+    // (R7: 7.3 mm).
     const expected_frames = [_]usize{ 1200, 1200, 1800, 1080 };
     var worst_residual: f32 = 0.0;
     for (files, expected_frames) |clip_bytes, frame_count| {
@@ -4420,7 +5747,7 @@ test "robot_geno: R6b, R6c, R7 - the model: assembled in the bind pose, standing
         imported.model.reference_joint_positions.len,
         worst_residual,
     });
-    try expect(worst_residual < 3.5e-3);
+    try expect(worst_residual < 8.0e-3);
 }
 
 /// How far a robot's joints are from a target: the error in velocity space over every degree of freedom but
@@ -6336,9 +7663,9 @@ test "robot_geno: D3 data - the planner's steps, recorded in the task's own form
     defer run.deinit();
     var planner: Planner = try .init(gpa, &run, &imported, planner_options);
     defer planner.deinit();
-    var replay: robot_track.Replay = try .init(gpa, m, 1, 256);
-    defer replay.deinit();
     const size: usize = robot_track.actionSize(m);
+    var replay: robot_track.Replay = try .init(gpa, m, 1, 256, size);
+    defer replay.deinit();
     const action: []f32 = try gpa.alloc(f32, size);
     defer gpa.free(action);
     // One radian per unit of action while recording: the planner's offsets, as they are.
@@ -6655,13 +7982,50 @@ const lab_clip_path: []const u8 = "examples/geno_ppo/dance.zclip";
 const getup_clip_frames: usize = 1080;
 const getup_clip_path: []const u8 = "examples/geno_ppo/getup.zclip";
 
-test "robot_geno: Geno's clips - the dance, the whole get-up, walking and running, on the floor, baked" {
+/// One cut of a copied capture as the runs take it: frames [first, first + count) of `whole`, each rested on the floor
+/// (`restClipOnFloor`), baked (`dance.Clip.toBytes`) and held byte-equal to the file at `path`. A missing or stale file
+/// is rewritten and the cut reported not current, so the test fails once and the new clip arrives as a diff.
+fn bakeCut(
+    gpa: Allocator,
+    io: Io,
+    model: *const rbt.Model,
+    probe: *rbt.Data,
+    whole: *const dance.Clip,
+    first: usize,
+    count: usize,
+    path: []const u8,
+) !bool {
+    var cut: dance.Clip = try whole.window(first, count);
+    defer cut.deinit();
+    _ = restClipOnFloor(model, probe, &cut, 0.001);
+    const baked: []u8 = try cut.toBytes(gpa);
+    defer gpa.free(baked);
+    const stored: ?[]u8 = readAsset(gpa, io, path) catch null;
+    defer if (stored) |bytes| gpa.free(bytes);
+    const current: bool = if (stored) |bytes| eql(u8, bytes, baked) else false;
+    if (current) {
+        return true;
+    }
+    const file: Io.File = try Io.Dir.cwd().createFile(io, path, .{});
+    defer file.close(io);
+    try file.writeStreamingAll(io, baked);
+    report.print("\n  {s} was {s} - rebaked ({d} bytes); review the diff and run again\n", .{
+        path,
+        if (stored == null) "missing" else "stale",
+        baked.len,
+    });
+    return false;
+}
+
+test "robot_geno: Geno's clips - the dance, the whole get-up, walking and running, and their mirror images, baked" {
     // The GPU page trains SuperTrack on Geno over the stretch where the servo alone falls within a second or so
     // (its first 5 s it already keeps up with) - so learning has room to show; the training lab trains PPO from
     // the same moment, for twice as long; and a two-clip run trains SuperTrack on that dance and on the whole fall
     // and get-up take at once. Each capture copied onto Geno, cut, lifted onto the floor frame by frame, and baked as
-    // the pages and the trainer embed them. Held byte-equal like the model fixture: when missing or stale a clip is
-    // rewritten here and the test fails once, so a changed clip arrives as a diff.
+    // the pages and the trainer embed them (`bakeCut`). The trainer's four clips are baked mirrored too - the same cut
+    // of the capture's mirror image (`copyMirroredClip`), one more clip each that a run may train on. Held byte-equal
+    // like the model fixture: when missing or stale a clip is rewritten here and the test fails once, so a changed
+    // clip arrives as a diff.
     const gpa: Allocator = testing_allocator;
     var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
@@ -6682,26 +8046,47 @@ test "robot_geno: Geno's clips - the dance, the whole get-up, walking and runnin
     defer bind.deinit(gpa);
     var probe: rbt.Data = try .init(gpa, m);
     defer probe.deinit();
-    // Each capture's cuts: frames [first, first + count) of the take copied onto Geno, and the file each is baked to.
-    // Both takes are subject 2's, Geno's skeleton, so one bind pose copies both.
-    const Cut = struct { first: usize, count: usize, path: []const u8 };
+    // Each capture's cuts: frames [first, first + count) of the take copied onto Geno, the file each is baked to, and
+    // the file its mirror image is baked to, for the trainer's clips. The takes are subject 2's, Geno's skeleton, so
+    // one bind pose copies them all.
+    const Cut = struct { first: usize, count: usize, path: []const u8, mirrored_path: ?[]const u8 = null };
     const Capture = struct { path: []const u8, cuts: []const Cut };
     const captures = [_]Capture{
         .{ .path = "assets/lafan1/dance1_subject2.bvh", .cuts = &.{
             .{ .first = train_clip_first, .count = train_clip_frames, .path = train_clip_path },
-            .{ .first = train_clip_first, .count = lab_clip_frames, .path = lab_clip_path },
+            .{
+                .first = train_clip_first,
+                .count = lab_clip_frames,
+                .path = lab_clip_path,
+                .mirrored_path = "examples/geno_ppo/dance_mirrored.zclip",
+            },
         } },
         .{ .path = "assets/lafan1/fallAndGetUp2_subject2.bvh", .cuts = &.{
-            .{ .first = 0, .count = getup_clip_frames, .path = getup_clip_path },
+            .{
+                .first = 0,
+                .count = getup_clip_frames,
+                .path = getup_clip_path,
+                .mirrored_path = "examples/geno_ppo/getup_mirrored.zclip",
+            },
         } },
         // The rest of the minute (`robot_lab.GenoMotion.one_minute`): 11 s of walking and 11 s of running, from the
         // second second of each take - its first is the capture's start, standing still. With the dance's 20 and
         // the get-up's 18, sixty seconds of motion.
         .{ .path = "assets/lafan1/walk1_subject2.bvh", .cuts = &.{
-            .{ .first = 120, .count = 660, .path = "examples/geno_ppo/walk.zclip" },
+            .{
+                .first = 120,
+                .count = 660,
+                .path = "examples/geno_ppo/walk.zclip",
+                .mirrored_path = "examples/geno_ppo/walk_mirrored.zclip",
+            },
         } },
         .{ .path = "assets/lafan1/run1_subject2.bvh", .cuts = &.{
-            .{ .first = 120, .count = 660, .path = "examples/geno_ppo/run.zclip" },
+            .{
+                .first = 120,
+                .count = 660,
+                .path = "examples/geno_ppo/run.zclip",
+                .mirrored_path = "examples/geno_ppo/run_mirrored.zclip",
+            },
         } },
     };
     var all_current: bool = true;
@@ -6712,29 +8097,145 @@ test "robot_geno: Geno's clips - the dance, the whole get-up, walking and runnin
         defer capture.deinit();
         var whole: dance.Clip = try copyClip(gpa, &imported, bind, capture);
         defer whole.deinit();
+        var whole_mirrored: dance.Clip = try copyMirroredClip(gpa, &imported, bind, capture);
+        defer whole_mirrored.deinit();
         for (capture_spec.cuts) |cut_spec| {
-            var cut: dance.Clip = try whole.window(cut_spec.first, cut_spec.count);
-            defer cut.deinit();
-            _ = restClipOnFloor(m, &probe, &cut, 0.001);
-            const baked: []u8 = try cut.toBytes(gpa);
-            defer gpa.free(baked);
-            const stored: ?[]u8 = readAsset(gpa, threaded.io(), cut_spec.path) catch null;
-            defer if (stored) |bytes| gpa.free(bytes);
-            const current: bool = if (stored) |bytes| eql(u8, bytes, baked) else false;
-            if (!current) {
-                const file: Io.File = try Io.Dir.cwd().createFile(threaded.io(), cut_spec.path, .{});
-                defer file.close(threaded.io());
-                try file.writeStreamingAll(threaded.io(), baked);
-                report.print("\n  {s} was {s} - rebaked ({d} bytes); review the diff and run again\n", .{
-                    cut_spec.path,
-                    if (stored == null) "missing" else "stale",
-                    baked.len,
-                });
-            }
+            const io: Io = threaded.io();
+            const current: bool =
+                try bakeCut(gpa, io, m, &probe, &whole, cut_spec.first, cut_spec.count, cut_spec.path);
             all_current = all_current and current;
+            const mirrored_path: []const u8 = cut_spec.mirrored_path orelse continue;
+            const mirrored_current: bool =
+                try bakeCut(gpa, io, m, &probe, &whole_mirrored, cut_spec.first, cut_spec.count, mirrored_path);
+            all_current = all_current and mirrored_current;
         }
     }
     try expect(all_current);
+}
+
+/// A direction or place across the capture's midline, as the test writes it for itself: x to -x. In the robot's world
+/// too - z up, turned there about x (`y_up_to_z_up`), which the reflection leaves alone.
+fn acrossTheMidline(v: Vec) Vec {
+    return vec(-v[0], v[1], v[2]);
+}
+
+/// The lowest point of a foot - its body's shapes and its toe's - from each body's own (`rbt.bodyLowestPoints`).
+fn footLowestPoint(lowest_points: []const f32, foot_body: usize, toe_body: usize) f32 {
+    return @min(lowest_points[foot_body], lowest_points[toe_body]);
+}
+
+test "robot_geno: a mirrored clip on Geno - every body turned and placed as its partner was, every sole as its was" {
+    // The four captures the runs train on, each copied onto Geno as it is and mirrored (`copyMirroredClip`), over every
+    // frame of the cut a run takes, before the grounding (which lifts each frame by its own lowest point). Against the
+    // original's clip, in the robot's world, where the capture's x is still the side-to-side axis - on the symmetric
+    // model (`writeSymmetricModel`), each body its partner's mirror image. Within bars set from this measurement, the
+    // worst found: turns 6.9e-6 rad, places 5.1e-6 m, the soles 2.0e-6 m - the rounding of a chain of turns:
+    //   - each body's three axes, mirrored, are its partner's reflected, after the body's correction: the copy carries
+    //     the mirror's turns onto the robot exactly;
+    //   - each body is where its partner was, reflected: its bones are its partner's, read through the mirror;
+    //   - each foot's lowest point is its partner's: its shapes are its partner's too.
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    const io: Io = threaded.io();
+    const model_text: []u8 = readAsset(gpa, io, model_fixture_path) catch return error.SkipZigTest;
+    defer gpa.free(model_text);
+    var document: codecs.xml.Document = try codecs.xml.parse(gpa, model_text, null);
+    defer document.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &document);
+    defer robot.deinit();
+    var imported: robot_mjcf.Imported = try robot_mjcf.build(gpa, &robot, .{});
+    defer imported.deinit();
+    const model: *const rbt.Model = &imported.model;
+    var bind: Posed = try readPose(gpa, bind_bvh);
+    defer bind.deinit(gpa);
+    var original_pose: rbt.Data = try .init(gpa, model);
+    defer original_pose.deinit();
+    var mirrored_pose: rbt.Data = try .init(gpa, model);
+    defer mirrored_pose.deinit();
+    const original_lowest: []f32 = try gpa.alloc(f32, model.body_count);
+    defer gpa.free(original_lowest);
+    const mirrored_lowest: []f32 = try gpa.alloc(f32, model.body_count);
+    defer gpa.free(mirrored_lowest);
+    const left_foot: usize = imported.bodyIndex("LeftFoot") orelse return error.BodyMissingFromModel;
+    const left_toe: usize = imported.bodyIndex("LeftToeBase") orelse return error.BodyMissingFromModel;
+    const right_foot: usize = imported.bodyIndex("RightFoot") orelse return error.BodyMissingFromModel;
+    const right_toe: usize = imported.bodyIndex("RightToeBase") orelse return error.BodyMissingFromModel;
+    const Cut = struct { path: []const u8, first: usize, count: usize };
+    const cuts = [_]Cut{
+        .{ .path = "assets/lafan1/dance1_subject2.bvh", .first = train_clip_first, .count = lab_clip_frames },
+        .{ .path = "assets/lafan1/fallAndGetUp2_subject2.bvh", .first = 0, .count = getup_clip_frames },
+        .{ .path = "assets/lafan1/walk1_subject2.bvh", .first = 120, .count = 660 },
+        .{ .path = "assets/lafan1/run1_subject2.bvh", .first = 120, .count = 660 },
+    };
+    const axes = [3]Vec{ vec(1, 0, 0), vec(0, 1, 0), vec(0, 0, 1) };
+    var worst_turn: f32 = 0;
+    var worst_place: f32 = 0;
+    var worst_foot: f32 = 0;
+    for (cuts) |cut| {
+        const bytes: []u8 = readAsset(gpa, io, cut.path) catch return error.SkipZigTest;
+        defer gpa.free(bytes);
+        var capture: codecs.bvh.Data = try codecs.bvh.parse(gpa, bytes, null);
+        defer capture.deinit();
+        // The partners and corrections the mirrored clip was made with: the same capture and model, the same mirror.
+        var mirror: CaptureMirror = try .init(gpa, capture, &imported);
+        defer mirror.deinit(gpa);
+        var original_whole: dance.Clip = try copyClip(gpa, &imported, bind, capture);
+        defer original_whole.deinit();
+        var mirrored_whole: dance.Clip = try copyMirroredClip(gpa, &imported, bind, capture);
+        defer mirrored_whole.deinit();
+        var original: dance.Clip = try original_whole.window(cut.first, cut.count);
+        defer original.deinit();
+        var mirrored: dance.Clip = try mirrored_whole.window(cut.first, cut.count);
+        defer mirrored.deinit();
+        for (0..cut.count) |frame| {
+            @memcpy(original_pose.joint_positions, original.pose(frame));
+            original_pose.stage = .stale;
+            rbt.kinematics(model, &original_pose);
+            @memcpy(mirrored_pose.joint_positions, mirrored.pose(frame));
+            mirrored_pose.stage = .stale;
+            rbt.kinematics(model, &mirrored_pose);
+            for (1..model.body_count) |body| {
+                const name: []const u8 = imported.names[body];
+                const joint: usize = for (capture.joints, 0..) |candidate, index| {
+                    if (eql(u8, candidate.name, name)) {
+                        break index;
+                    }
+                } else return error.CaptureMissesBody;
+                const partner_joint: usize = mirror.partners[joint];
+                const partner_name: []const u8 = capture.joints[partner_joint].name;
+                const partner: usize = imported.bodyIndex(partner_name) orelse return error.BodyMissingFromModel;
+                const partner_turn: Quat = original_pose.body_orientations[partner];
+                const mirrored_turn: Quat = mirrored_pose.body_orientations[body];
+                for (axes) |axis| {
+                    const corrected_axis: Vec = rotate(mirror.corrections[joint], axis);
+                    const partner_axis: Vec = rotate(partner_turn, acrossTheMidline(corrected_axis));
+                    const expected_axis: Vec = acrossTheMidline(partner_axis);
+                    const found_axis: Vec = rotate(mirrored_turn, axis);
+                    worst_turn = @max(worst_turn, angleBetweenDirections(found_axis, expected_axis));
+                }
+                const expected_place: Vec = acrossTheMidline(original_pose.body_positions[partner]);
+                const place_gap: f32 = length3(mirrored_pose.body_positions[body] - expected_place);
+                worst_place = @max(worst_place, place_gap);
+            }
+            rbt.bodyLowestPoints(model, &original_pose, original_lowest);
+            rbt.bodyLowestPoints(model, &mirrored_pose, mirrored_lowest);
+            const mirrored_left: f32 = footLowestPoint(mirrored_lowest, left_foot, left_toe);
+            const mirrored_right: f32 = footLowestPoint(mirrored_lowest, right_foot, right_toe);
+            const original_left: f32 = footLowestPoint(original_lowest, left_foot, left_toe);
+            const original_right: f32 = footLowestPoint(original_lowest, right_foot, right_toe);
+            worst_foot = @max(worst_foot, @abs(mirrored_left - original_right));
+            worst_foot = @max(worst_foot, @abs(mirrored_right - original_left));
+        }
+    }
+    report.print("\n  a mirrored clip on Geno: turns {e:.2} rad, places {e:.2} m, the soles {e:.2} m\n", .{
+        worst_turn,
+        worst_place,
+        worst_foot,
+    });
+    try expect(worst_turn < 2.0e-5);
+    try expect(worst_place < 2.0e-5);
+    try expect(worst_foot < 1.0e-5);
 }
 
 /// The page's learner, as a recipe: its window, its small networks, SuperTrack's own collection.

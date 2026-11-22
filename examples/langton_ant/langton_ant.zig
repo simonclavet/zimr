@@ -33,9 +33,9 @@ const atan2Rad = zm.atan2Rad;
 const pi = zm.pi;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
-const grid_w = 200;
-const grid_h = 200;
-const path_len = 28; // footsteps kept for the trail polyline
+const grid_w: i32 = 200;
+const grid_h: i32 = 200;
+const path_len: usize = 28; // footsteps kept for the trail polyline
 
 const bg_col: Color = .{ .r = 18, .g = 21, .b = 29, .a = 255 };
 const white_col: Color = .{ .r = 226, .g = 231, .b = 240, .a = 255 };
@@ -114,8 +114,8 @@ const State = struct {
     step_accum: f64 = 0,
 
     /// Camera: which cell sits at the screen centre, and pixels per cell.
-    cam_x: f32 = grid_w / 2,
-    cam_y: f32 = grid_h / 2,
+    cam_x: f32 = float(grid_w / 2),
+    cam_y: f32 = float(grid_h / 2),
     zoom: f32 = 6.0,
     follow: bool = true,
 
@@ -182,8 +182,8 @@ fn reset(s: *State) void {
     s.steps = 0;
     s.path_n = 0;
     s.path_head = 0;
-    s.cam_x = grid_w / 2;
-    s.cam_y = grid_h / 2;
+    s.cam_x = float(grid_w / 2);
+    s.cam_y = float(grid_h / 2);
     s.follow = true;
 }
 

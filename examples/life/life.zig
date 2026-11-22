@@ -21,9 +21,9 @@ const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const float = zm.float;
 const pow = zm.pow;
 
-const grid_w = 80;
-const grid_h = 45;
-const cell_px = 10; // 10x10 pixels per cell -> 800x450 canvas
+const grid_w: usize = 80;
+const grid_h: usize = 45;
+const cell_px: usize = 10; // 10x10 pixels per cell -> 800x450 canvas
 
 const State = struct {
     /// Owned shapes-texture state. id=1 -> rlgl's internal 1x1 white pixel.
@@ -144,8 +144,8 @@ fn update(f: *z.Frame, state: *State) void {
     // Skip when the UI had the mouse last frame (dragging the panel must not
     // paint through it). One-frame lag on the hit-test is imperceptible.
     if (!state.ui_capturing and z.isMouseButtonDown(f.input, .left)) {
-        const mx: i32 = @divFloor(z.getMouseX(f.input), cell_px);
-        const my: i32 = @divFloor(z.getMouseY(f.input), cell_px);
+        const mx: i32 = @divFloor(z.getMouseX(f.input), @as(i32, cell_px));
+        const my: i32 = @divFloor(z.getMouseY(f.input), @as(i32, cell_px));
         if (mx >= 0 and mx < grid_w and my >= 0 and my < grid_h) {
             state.cur[idx(@intCast(mx), @intCast(my))] = 1;
         }
@@ -194,7 +194,8 @@ fn update(f: *z.Frame, state: *State) void {
     f.gl.text(.{ 8, 8 }, hud, .{ .size = 18, .color = hud_color, .font = &state.font });
 
     const help: []const u8 = "tap a cell to paint  -  buttons below";
-    f.gl.text(.{ 8, grid_h * cell_px - 24 }, help, .{ .size = 14, .color = z.colors.slate_400, .font = &state.font });
+    const help_y: f32 = float(grid_h * cell_px - 24);
+    f.gl.text(.{ 8, help_y }, help, .{ .size = 14, .color = z.colors.slate_400, .font = &state.font });
 
     // ---- Touch-friendly control panel (the keyboard shortcuts still work on
     // desktop; these give phones a way to pause/clear/seed/speed). ----

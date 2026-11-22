@@ -2276,7 +2276,7 @@ fn chooseGpu(self: *Host) BringUpError!Gpu {
             .max_memory_allocations = properties.limits.max_memory_allocation_count,
             .max_bound_descriptor_sets = properties.limits.max_bound_descriptor_sets,
             .max_storage_buffer_range = properties.limits.max_storage_buffer_range,
-            .compute = try computeCapabilities(self, physical_device, properties.limits),
+            .compute = try computeCapabilities(self, physical_device, properties.limits, family),
         };
         if (choice) |wanted| {
             const index_wanted: ?usize = parseInt(usize, wanted, 10) catch null;
@@ -2315,7 +2315,11 @@ fn chooseGpu(self: *Host) BringUpError!Gpu {
         if (compute.float32_atomic_add) "yes" else "no",
     });
     const timestamps: []const u8 = if (compute.timestamps_in_compute) "yes" else "no";
-    log.info("compute: timestamps {s}, a tick every {d} ns", .{ timestamps, compute.timestamp_period_ns });
+    log.info("compute: timestamps {s}, a tick every {d} ns, {d} bits", .{
+        timestamps,
+        compute.timestamp_period_ns,
+        compute.timestamp_valid_bits,
+    });
     const megabyte: u64 = 1 &lt;&lt; 20;
     log.info("compute: storage bindings up to {d} MB; device-local memory {d} MB", .{
         compute.max_storage_binding_bytes / megabyte,
@@ -3057,6 +3061,17 @@ fn waitForOldestStagingChunk(self: *Host) BringUpError!bool {
     try retireCompleted(self);
     return true;
 }</code></pre></details>
+
+<p>The budget bounds the chunks that wait for the GPU. It does not bound a write larger than a chunk. Such a
+write gets a chunk of exactly its own size, and a chunk lives as long as the host does, so a program whose large
+writes keep growing keeps one chunk for every size it reached:</p>
+
+<pre class="sketch"><code>writes, each submitted     5    6    7    8    9    10 MiB
+chunks afterwards          5    6    7    8    9    10 MiB      six chunks, 45 MiB, where the budget is four
+
+a later write of up to 10 MiB takes the smallest free chunk that fits, and adds none</code></pre>
+
+<p>Large writes of one size, repeated, use the same chunk again every time.</p>
 
 <details class="src-fold" data-src="src/wgpu_vulkan.zig" data-decl="fn stage(self: *Host"><summary><code>stage</code></summary><pre><code class="zig">/// Copies `data` into staging memory, 16-byte aligned (every copy's source offset then suits every texel size), and
 /// says where it went. The next submit consumes it.
@@ -5402,7 +5417,8 @@ pub const ComputeOutput = struct {
     name: []const u8,
     /// The kernel file, as the build names it: two different files must not share a `name`.
     source_name: []const u8,
-    /// The kernel file's SPIR-V, as the compiler writes it: every entry of the file.
+    /// The kernel file's SPIR-V, every entry of the file, as the native host takes it: through the optimizer's -O
+    /// pipeline (`spirvopt_exe`), or as the compiler writes it in a build that turns the optimizer off.
     spv: LazyPath,
     /// This entry's WGSL, translated from `spv` by spv2wgsl.
     wgsl: LazyPath,

@@ -21,11 +21,11 @@ const Vec2 = zm.Vec2;
 const Color = zm.Color;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
-const triangle_count = 120;
+const triangle_count: usize = 120;
 
-const mode_none = 0;
-const mode_wheel = 1;
-const mode_slider = 2;
+const mode_none: u8 = 0;
+const mode_wheel: u8 = 1;
+const mode_slider: u8 = 2;
 
 const State = struct {
     font: z.Font,

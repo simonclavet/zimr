@@ -41,7 +41,7 @@ const Tag = std.zig.Token.Tag;
 const eql = std.mem.eql;
 const startsWith = std.mem.startsWith;
 
-const style_marker = "<!--docfmt:style-->";
+const style_marker: []const u8 = "<!--docfmt:style-->";
 
 /// THE stylesheet.  Every published page gets exactly this and nothing else, so
 /// changing a colour here changes it everywhere.  Softer than pure white on

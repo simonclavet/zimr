@@ -905,26 +905,26 @@ pub fn addVertexGradScaledPC(
 /// quad), gets up to one new vertex per clip-plane crossing
 /// (Sutherland-Hodgman: 6 frustum planes + 4 scissor planes), so
 /// 4 + 6 + 4 = 14.  Donor: `SW_MAX_CLIPPED_POLYGON_VERTICES`.
-pub const max_clipped_polygon_vertices = 14;
+pub const max_clipped_polygon_vertices: usize = 14;
 
 /// Max depth of the projection-matrix stack.  Donor:
 /// `SW_MAX_PROJECTION_STACK_SIZE`.
-pub const max_projection_stack_size = 2;
+pub const max_projection_stack_size: usize = 2;
 
 /// Max depth of the modelview-matrix stack.  Donor:
 /// `SW_MAX_MODELVIEW_STACK_SIZE`.
-pub const max_modelview_stack_size = 8;
+pub const max_modelview_stack_size: usize = 8;
 
 /// Max depth of the texture-matrix stack.  Donor:
 /// `SW_MAX_TEXTURE_STACK_SIZE`.
-pub const max_texture_stack_size = 2;
+pub const max_texture_stack_size: usize = 2;
 
 /// Max number of user-allocated framebuffer objects (off-screen
 /// render targets).  Donor: `SW_MAX_FRAMEBUFFERS`.
-pub const max_framebuffers = 8;
+pub const max_framebuffers: usize = 8;
 
 /// Max number of user-allocated textures.  Donor: `SW_MAX_TEXTURES`.
-pub const max_textures = 128;
+pub const max_textures: usize = 128;
 
 // ---- Pixel-format property tables
 // Re-exports from `raster_pixel.zig`.  Originally defined here, moved

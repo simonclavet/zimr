@@ -1,0 +1,49 @@
+// THE FIRST NIGHT, RUN 3 - PLAIN SUPERTRACK: the world model and the policy through it, nothing else - no teacher, no
+// flow, no model planner, no skip head, no critic, no pushes, no returns, no curriculum - at the control's batch,
+// rates, clips and seed. The bar every other run of the night must beat: what run 1's parts add is run 1 against
+// this one, and what each part adds alone is runs 4 to 10 against run 1.
+.{
+    .task = .{ .motion = .one_minute, .variants = .{ .mirrored = true, .speed_change = 0.2 } },
+    .learner = .{ .supertrack = .{
+        // The control's characters, decisions, replay and networks.
+        .characters = 1024,
+        .physics = .device,
+        .limb_stiffness = true,
+        .decide_every = 2,
+        .max_steps = 300,
+        .replay_steps = 64,
+        // 1,024 windows a batch; the world model learns on 8 decisions, the policy imagines 16 single decisions
+        // (0.53 s, SuperTrack's own horizon of 32 frames at 60 Hz).
+        .rows = 1024,
+        .window = 8,
+        .policy_window = 16,
+        .hidden = 680,
+        .policy_hidden = 680,
+        // The control's round: 16 decisions of every character, then 16 updates of each network.
+        .collect = 16,
+        .world_updates = 16,
+        .policy_updates = 16,
+        // The control's optimisers: SuperMimic's rates, its policy's bounds, Muon on the hidden matrices.
+        .world_rate = 2e-4,
+        .policy_rate = 2e-4,
+        .policy_beta2 = 0.95,
+        .policy_gradient_clip = 1,
+        .policy_element_clip = 0.1,
+        .world_gradient_clip = 50,
+        .policy_muon = true,
+        .rate_decay_hours = 8,
+        .rate_floor_share = 0.03,
+        // Judged as its slow average, as the control is; the control's seed.
+        .policy_average_decay = 0.995,
+        .seed = 1,
+    } },
+    .controls = .{
+        // The control's hour, judged and probed at 20, 40 and 60 minutes; saved every 5 minutes; a policy kept every
+        // 10 - the lab's timeline of the run - and no state checkpoints.
+        .stop_after_hours = 1,
+        .judge_minutes = 20,
+        .checkpoint_minutes = 10,
+        .kept_state_checkpoints = 0,
+        .save_minutes = 5,
+    },
+}

@@ -28,7 +28,6 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 const splitScalar = std.mem.splitScalar;
 const cli = @import("cli");
 const Allocator = std.mem.Allocator;
-const eql = std.mem.eql;
 const indexOf = std.mem.indexOf;
 const indexOfPos = std.mem.indexOfPos;
 const startsWith = std.mem.startsWith;
@@ -36,6 +35,7 @@ const endsWith = std.mem.endsWith;
 const trim = std.mem.trim;
 const allocPrint = std.fmt.allocPrint;
 const ArrayList = std.ArrayList;
+const StringHashMapUnmanaged = std.StringHashMapUnmanaged;
 
 const File = Io.File;
 
@@ -51,6 +51,8 @@ const pairs = [_]Pair{
         .srcs = &.{
             "src/robot.zig",
             "src/robot_mpc.zig",
+            // The quaternion and pose helpers robot.zig and robotgpu share, and the gap a device check measures.
+            "src/zimrmath.zig",
             // Part VIII, many worlds on the GPU.
             "src/robotgpu.zig",
             "src/robotgpu_host.zig",
@@ -61,6 +63,11 @@ const pairs = [_]Pair{
             "tools/vk_host_test.zig",
             // One device for the physics and the learner: the copy between two pipelines.
             "src/compute_host.zig",
+            // The learner's side of a decision on the device: its ring and the copy into it, the books kept from
+            // the device's flags, and the trainer driven on the device.
+            "src/robot_latent_kit.zig",
+            "src/robot_track.zig",
+            "src/robot_track_resident.zig",
         },
     },
     .{
@@ -98,6 +105,8 @@ const pairs = [_]Pair{
             "src/robot_bmpc_dance.zig",
             "src/robot_bmpc_kit.zig",
             "examples/geno_ppo/geno_ppo.zig",
+            // The quaternion helpers robot.zig re-exports (`rotateQuatByAngularVel`, `twoAxis`, `fromTwoAxis`).
+            "src/zimrmath.zig",
             "tools/geno_trainer.zig",
         },
     },
@@ -138,19 +147,6 @@ fn unescape(gpa: Allocator, html: []const u8) ![]u8 {
     return out.toOwnedSlice(gpa);
 }
 
-/// True when `needle` appears in `haystack` as a whole line, ignoring indentation. Line
-/// granularity is the right unit: it survives reflowing and reordering, and it still
-/// catches every edit to the code itself.
-fn hasLine(haystack: []const u8, needle: []const u8) bool {
-    var it = splitScalar(u8, haystack, '\n');
-    while (it.next()) |line| {
-        if (eql(u8, trim(u8, line, " \t\r"), needle)) {
-            return true;
-        }
-    }
-    return false;
-}
-
 /// A `<pre ...>` opening tag carries a class that exempts the block from checking.
 fn isExempt(open_tag: []const u8) bool {
     return indexOf(u8, open_tag, "class=\"bad\"") != null or
@@ -163,6 +159,7 @@ fn checkPair(gpa: Allocator, io: Io, pair: Pair) !Report {
     const limit: Io.Limit = .limited(64 * 1024 * 1024);
     const doc: []u8 = try Io.Dir.cwd().readFileAlloc(io, pair.doc, gpa, limit);
     defer gpa.free(doc);
+    // The sources' texts, which `source_lines` points into.
     var sources: ArrayList([]u8) = .empty;
     defer {
         for (sources.items) |text| {
@@ -170,9 +167,19 @@ fn checkPair(gpa: Allocator, io: Io, pair: Pair) !Report {
         }
         sources.deinit(gpa);
     }
+    // Every line of every source, trimmed, in one set: a quoted line passes when it is one of them - a whole line,
+    // indentation ignored. Line granularity is the right unit: it survives reflowing and reordering, and it still
+    // catches every edit to the code itself. (Scanning every source for every quoted line, until Nov 22, was
+    // quadratic - some 3 billion line compares a run, in Debug, for the two tutorials of that day.)
+    var source_lines: StringHashMapUnmanaged(void) = .empty;
+    defer source_lines.deinit(gpa);
     for (pair.srcs) |path| {
         const text: []u8 = try Io.Dir.cwd().readFileAlloc(io, path, gpa, limit);
         try sources.append(gpa, text);
+        var text_lines = splitScalar(u8, text, '\n');
+        while (text_lines.next()) |text_line| {
+            try source_lines.put(gpa, trim(u8, text_line, " \t\r"), {});
+        }
     }
 
     var rep: Report = .{ .checked = 0, .drifted = 0, .exempt = 0 };
@@ -212,13 +219,7 @@ fn checkPair(gpa: Allocator, io: Io, pair: Pair) !Report {
                 continue;
             }
             rep.checked += 1;
-            var found: bool = false;
-            for (sources.items) |text| {
-                if (hasLine(text, line)) {
-                    found = true;
-                    break;
-                }
-            }
+            const found: bool = source_lines.contains(line);
             if (!found) {
                 rep.drifted += 1;
                 const msg: []u8 = try allocPrint(

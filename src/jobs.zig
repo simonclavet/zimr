@@ -67,7 +67,9 @@
 //! very same `invoke` the worker calls, and the job is already complete when you first
 //! `poll` it. A native program runs its jobs on threads of its own instead (`native_jobs`),
 //! where they land like a worker's, a few frames later - except a registry whose kernels
-//! work in their module's globals (`Options.kernels_work_in_globals`), which runs inline.
+//! work in globals the app shares (`Globals.shared_with_the_app`), which runs inline, and
+//! one whose app lends them (`Globals.lent_to_one_job`), which runs on a thread one job at
+//! a time.
 //!
 //! So the API cannot fail, there is ONE code path, and an example that uses jobs works
 //! everywhere - where workers are unavailable it merely hitches, exactly as it would
@@ -207,6 +209,9 @@ const native_jobs = struct {
         error_name_buffer: [48]u8 = @splat(0),
         error_name_length: usize = 0,
         is_failure_logged: bool = false,
+        /// Whether the job works in globals its app lends it (`Globals.lent_to_one_job`): such jobs take turns, one on
+        /// a thread at a time (`isLentJobRunning`).
+        works_in_lent_globals: bool = false,
     };
 
     // lint:off module-var: the program's job table, one for every registry - a handle names a slot of it
@@ -300,11 +305,30 @@ const native_jobs = struct {
         return count;
     }
 
-    /// The oldest waiting job's slot, or null when none waits.
-    fn oldestQueued() ?*Slot {
+    /// Whether a job working in lent globals is on a thread now: started, and not yet landed - its globals still in
+    /// use (`Globals.lent_to_one_job`).
+    fn isLentJobRunning() bool {
+        for (&slots) |*slot| {
+            const is_on_thread: bool = slot.state == .running or slot.state == .abandoned;
+            const holds_lent_globals: bool = is_on_thread and slot.works_in_lent_globals;
+            if (holds_lent_globals and !slot.is_done.load(.acquire)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// The oldest waiting job that may start now, or null when none may: a job working in lent globals waits while
+    /// another such job runs, and the jobs behind it start meanwhile.
+    fn oldestStartable() ?*Slot {
+        const lent_globals_are_in_use: bool = isLentJobRunning();
         var oldest: ?*Slot = null;
         for (&slots) |*slot| {
             if (slot.state != .queued) {
+                continue;
+            }
+            const must_wait_its_turn: bool = slot.works_in_lent_globals and lent_globals_are_in_use;
+            if (must_wait_its_turn) {
                 continue;
             }
             const is_older: bool = if (oldest) |current| slot.submit_order < current.submit_order else true;
@@ -315,12 +339,13 @@ const native_jobs = struct {
         return oldest;
     }
 
-    /// Starts waiting jobs, oldest first, while fewer than `runningLimit` run. A job the pool cannot take runs here,
-    /// on the app's thread, and has landed when this returns.
+    /// Starts waiting jobs, oldest first, while fewer than `runningLimit` run - a job in lent globals only while no
+    /// other such job runs (`oldestStartable`). A job the pool cannot take runs here, on the app's thread, and has
+    /// landed when this returns.
     fn startQueuedJobs() void {
         var running_count: usize = runningCount();
         while (running_count < runningLimit()) {
-            const slot: *Slot = oldestQueued() orelse return;
+            const slot: *Slot = oldestStartable() orelse return;
             slot.state = .running;
             running_count += 1;
             slot.future = jobIo().concurrent(runSlot, .{slot}) catch inline_run: {
@@ -365,13 +390,15 @@ const native_jobs = struct {
     }
 
     /// Queues a job: its input copied into a free slot of the table, then started on a thread if one is free
-    /// (`startQueuedJobs`). Its handle; 0 when the table is full or the input cannot be held.
+    /// (`startQueuedJobs`) - and, for a job working in lent globals, if no other such job runs. Its handle; 0 when
+    /// the table is full or the input cannot be held.
     pub fn submit(
         kernel_name: []const u8,
         invoker: Invoker,
         header_bytes: []const u8,
         payload: []const u8,
         max_output: usize,
+        works_in_lent_globals: bool,
     ) u32 {
         reapAbandoned();
         const free_index: usize = for (slots, 0..) |slot, slot_index| {
@@ -397,6 +424,7 @@ const native_jobs = struct {
             .max_output = max_output,
             .input = input,
             .header_length = header_bytes.len,
+            .works_in_lent_globals = works_in_lent_globals,
         };
         const handle: u32 = handleOf(free_index);
         startQueuedJobs();
@@ -695,6 +723,23 @@ pub fn parallel() bool {
     return job_host.available();
 }
 
+/// WHAT A REGISTRY's KERNELS DO WITH THEIR MODULE's GLOBALS - `compute_host`'s kernels read and write `M.g`, the CPU
+/// twin's buffers - and so, natively, where its jobs may run. In a browser it changes nothing: a worker's globals are
+/// its own wasm instance's, and a job run inline puts them back before the app sees them.
+pub const Globals = enum {
+    /// The kernels work in their arguments alone: natively, on threads, as many at once as the pool runs.
+    untouched,
+    /// The kernels work in globals the app's frame may use too: on a thread they would be written while the frame
+    /// reads them. So natively the jobs run inline - the frame hitches, as with no worker - and never on a thread.
+    shared_with_the_app,
+    /// The kernels work in globals the app LENDS to its jobs: it promises not to touch them - no dispatch on a `.cpu`
+    /// pipe of their module - while a job of the registry runs. Natively the jobs run on a thread, ONE AT A TIME: the
+    /// lent jobs of every registry take turns, which is more than safety needs when two registries lend two modules'
+    /// globals, and one rule instead of a key per module. What a page does that trains on a kernel module's CPU twin
+    /// inside a job, its frame driving only a GPU pipe, which never writes those globals (`examples/zimrnum_fit`).
+    lent_to_one_job,
+};
+
 pub const Options = struct {
     /// Largest header + payload a kernel may receive. A policy cap, not a buffer: the
     /// worker allocates exactly what each job needs.
@@ -702,12 +747,8 @@ pub const Options = struct {
     /// Largest result a kernel may produce. `out` is a fixed writer over a buffer this
     /// size, so a runaway kernel gets `error.WriteFailed` rather than eating memory.
     max_output: usize = 24 << 20,
-    /// Whether the kernels work in their module's globals - `compute_host`'s do, reading and writing `M.g` - rather
-    /// than only in their arguments. In a browser's worker those globals are the worker's own, and inline the kernel
-    /// restores them before the app sees them; on a thread they would be the app's, written while its frame reads
-    /// them. So natively such a registry's jobs run inline - the frame hitches, as with no worker - and never on a
-    /// thread.
-    kernels_work_in_globals: bool = false,
+    /// What the kernels do with their module's globals, and so where natively its jobs may run (`Globals`).
+    globals: Globals = .untouched,
 };
 
 /// Check the table's shape at comptime, so a malformed entry is a clear message here
@@ -1134,11 +1175,21 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
             //
             // The worker still receives exactly the same bytes. `invoke` splits them back
             // apart at `@sizeOf(H)`, on whichever side runs the kernel - see `runInline`.
-            // Natively, on a thread of the program's own (`native_jobs`) - unless the kernels work in their module's
-            // globals, which a thread would share with the app (`Options.kernels_work_in_globals`).
-            if (comptime has_job_threads and !opts.kernels_work_in_globals) {
+            // Natively, on a thread of the program's own (`native_jobs`) - unless the kernels work in globals the app
+            // shares, which a thread would write while the frame reads them (`Globals.shared_with_the_app`). Lent
+            // globals go to a thread too, one job at a time.
+            const may_run_on_a_thread: bool = comptime has_job_threads and opts.globals != .shared_with_the_app;
+            if (may_run_on_a_thread) {
                 const invoker: native_jobs.Invoker = ThreadInvoker(kernel).invoke;
-                const native_handle: u32 = native_jobs.submit(name, invoker, header_bytes, payload, opts.max_output);
+                const works_in_lent_globals: bool = opts.globals == .lent_to_one_job;
+                const native_handle: u32 = native_jobs.submit(
+                    name,
+                    invoker,
+                    header_bytes,
+                    payload,
+                    opts.max_output,
+                    works_in_lent_globals,
+                );
                 if (native_handle == 0) {
                     return Error.QueueFull;
                 }
@@ -1542,6 +1593,87 @@ test "jobs: natively, a job runs on a thread of its own, not the one that submit
     var job_thread_id: u64 = 0;
     @memcpy(asBytes(&job_thread_id), result[0..8]);
     try testing.expect(job_thread_id != @as(u64, std.Thread.getCurrentId()));
+}
+
+// lint:off module-var: how many of the overlap test's jobs are running now, counted by their own threads
+var overlap_jobs_running: std.atomic.Value(u32) = .init(0);
+// lint:off module-var: the most of the overlap test's jobs seen running at once
+var overlap_jobs_most_at_once: std.atomic.Value(u32) = .init(0);
+
+/// How long an overlap job waits for a second one to start beside it, in yields: long enough for a pool that runs two
+/// at once to start the second, short enough that three jobs waiting it out cost the test a fraction of a second.
+const overlap_wait_yields: u32 = 20_000;
+
+/// Counts itself running, waits a while for another job of its kind to start beside it, notes the most it saw running
+/// at once, and writes the id of the thread it ran on, as `tkThreadId` does.
+fn tkOverlap(
+    gpa: Allocator,
+    hdr: extern struct { pad: u32 },
+    payload: []const u8,
+    out: *Writer,
+) !void {
+    _ = gpa;
+    _ = hdr;
+    _ = payload;
+    const running_with_this_one: u32 = overlap_jobs_running.fetchAdd(1, .acq_rel) + 1;
+    _ = overlap_jobs_most_at_once.fetchMax(running_with_this_one, .acq_rel);
+    var yields: u32 = 0;
+    while (yields < overlap_wait_yields and overlap_jobs_running.load(.acquire) < 2) : (yields += 1) {
+        // lint:off catch-suppression: a yield that fails only spins the loop once more
+        std.Thread.yield() catch {};
+    }
+    _ = overlap_jobs_most_at_once.fetchMax(overlap_jobs_running.load(.acquire), .acq_rel);
+    _ = overlap_jobs_running.fetchSub(1, .acq_rel);
+    const thread_id: u64 = std.Thread.getCurrentId();
+    try out.writeAll(asBytes(&thread_id));
+}
+
+const overlap_free_registry = Registry(.{.{ "overlap_free", tkOverlap }}, test_opts);
+const overlap_lent_registry = Registry(.{.{ "overlap_lent", tkOverlap }}, .{
+    .max_input = test_opts.max_input,
+    .max_output = test_opts.max_output,
+    .globals = .lent_to_one_job,
+});
+
+test "jobs: natively, jobs in lent globals run on a thread, one at a time" {
+    if (comptime !has_job_threads) {
+        return error.SkipZigTest;
+    }
+    // THE CONTROL: where the pool runs two at once, two jobs of a registry that lends nothing DO run together - so the
+    // count of one below is the lending's doing, not a pool too small to show anything else.
+    const pool_runs_two_at_once: bool = native_jobs.runningLimit() >= 2;
+    if (!pool_runs_two_at_once) {
+        return error.SkipZigTest;
+    }
+    overlap_jobs_most_at_once.store(0, .release);
+    var free_jobs: [2]Job = @splat(.{});
+    defer for (&free_jobs) |*free_job| {
+        free_job.deinit();
+    };
+    for (&free_jobs) |*free_job| {
+        free_job.* = try overlap_free_registry.submit(testing.allocator, tkOverlap, .{ .pad = 0 }, &.{});
+    }
+    for (&free_jobs) |*free_job| {
+        _ = try landedResult(free_job);
+    }
+    try testing.expectEqual(@as(u32, 2), overlap_jobs_most_at_once.load(.acquire));
+
+    // THE LENT ONES: three submitted together, each run on a thread other than this one, never two at once.
+    overlap_jobs_most_at_once.store(0, .release);
+    var lent_jobs: [3]Job = @splat(.{});
+    defer for (&lent_jobs) |*lent_job| {
+        lent_job.deinit();
+    };
+    for (&lent_jobs) |*lent_job| {
+        lent_job.* = try overlap_lent_registry.submit(testing.allocator, tkOverlap, .{ .pad = 0 }, &.{});
+    }
+    for (&lent_jobs) |*lent_job| {
+        const result: []const u8 = try landedResult(lent_job);
+        var job_thread_id: u64 = 0;
+        @memcpy(asBytes(&job_thread_id), result[0..8]);
+        try testing.expect(job_thread_id != @as(u64, std.Thread.getCurrentId()));
+    }
+    try testing.expectEqual(@as(u32, 1), overlap_jobs_most_at_once.load(.acquire));
 }
 
 test "jobs: a kernel wasm's log lines are kept for the worker to send, and the ones past the buffer counted" {

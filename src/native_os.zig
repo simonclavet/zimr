@@ -147,6 +147,36 @@ pub fn monotonicMilliseconds() f64 {
     return millisecondsOf(@intCast(now.sec), @intCast(now.nsec));
 }
 
+// ---- The program's priority ----
+
+/// The C library's `setpriority`, as every Unix but Linux offers it here: a build that links no C library on Linux
+/// goes to the kernel's own call instead (`lowerProgramPriority`).
+extern "c" fn setpriority(which: c_int, who: c_uint, priority: c_int) c_int;
+
+/// LOWERS THIS PROGRAM's PRIORITY below the machine's other programs: the operating system's scheduler then gives a
+/// core to any of their threads that wants one before it gives it to this program's, so a long computation takes
+/// the time the others leave, and the user working beside it is not slowed. Windows: the process's priority class,
+/// below normal (`SetPriorityClass`, `BELOW_NORMAL_PRIORITY_CLASS`) - between every program's normal class and the
+/// idle one, so the program still runs before the machine's idle chores. Linux and the other Unixes: a niceness of
+/// 10 for the process (`setpriority`), what the `nice` command gives by default. Whether it was lowered.
+pub fn lowerProgramPriority() bool {
+    if (comptime is_windows) {
+        const process: win32.HANDLE = win32.GetCurrentProcess();
+        return win32.SetPriorityClass(process, win32.BELOW_NORMAL_PRIORITY_CLASS) != 0;
+    }
+    // `which` = the process (0, PRIO_PROCESS), `who` = this one (0); the niceness, from -20 (first) to 19 (last).
+    const of_process: c_int = 0;
+    const this_process: c_uint = 0;
+    const niceness: c_int = 10;
+    if (comptime builtin.os.tag == .linux) {
+        const linux = std.os.linux;
+        const niceness_bits: usize = @intCast(niceness);
+        const answer: usize = linux.syscall3(.setpriority, @intCast(of_process), this_process, niceness_bits);
+        return linux.errno(answer) == .SUCCESS;
+    }
+    return setpriority(of_process, this_process, niceness) == 0;
+}
+
 // ---- The services' Io ----
 
 // lint:off module-var: the program's one `std.Io`, started at its first use and kept for the program's life

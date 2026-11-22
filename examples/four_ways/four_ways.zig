@@ -58,7 +58,7 @@ const kernel_wgsls: [fk.kernels.len]Pipe.KernelWgsl = blk: {
 // claim this demo is making, and the reason it is worth making.
 const ascii_w: usize = 40;
 const ascii_h: usize = 18;
-const ramp = " .:-=+*#%@";
+const ramp: []const u8 = " .:-=+*#%@";
 
 const ascii_art: [ascii_h][ascii_w]u8 = blk: {
     @setEvalBranchQuota(2_000_000);

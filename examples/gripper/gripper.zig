@@ -121,7 +121,9 @@ const State = struct {
     cam: z.OrbitCamera,
     ui_host: z.UiHost,
     font: z.Font,
+    /// The open tube under a capsule; the capped one for a cylinder geom, whose ends nothing covers.
     cylinder: z.Mesh,
+    cylinder_capped: z.Mesh,
     sphere: z.Mesh,
     cube: z.Mesh,
     transform: [1]Mat,
@@ -210,6 +212,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22);
     s.ui_host = z.UiHost.init(gpa, s.font);
     s.cylinder = try z.genMeshCylinder(gpa, 1.0, 1.0, 16, 2);
+    s.cylinder_capped = try common.genMeshCylinderCapped(gpa, 1.0, 1.0, 16);
     s.sphere = try z.genMeshSphere(gpa, 1.0, 10, 8);
     s.cube = try z.genMeshCube(gpa, 1.0, 1.0, 1.0);
     s.transform = .{identity()};
@@ -219,6 +222,10 @@ fn deinit(gpa: Allocator, s: *State) void {
     gpa.free(s.ik_scratch);
     gpa.free(s.pose_scratch);
     gpa.free(s.home);
+    z.unloadMesh(gpa, s.cylinder);
+    z.unloadMesh(gpa, s.cylinder_capped);
+    z.unloadMesh(gpa, s.sphere);
+    z.unloadMesh(gpa, s.cube);
     z.unloadFont(gpa, s.font);
     s.ui_host.deinit();
     s.actuated.deinit();
@@ -382,11 +389,12 @@ fn drawScene(s: *State, gl: *z.WgpuGl) void {
                 z.drawMeshInstanced(gl, &s.cylinder, &s.transform, tint);
             },
             .cylinder => |cyl| {
+                // CAPPED, unlike the capsule's tube: nothing covers this one's ends.
                 s.transform[0] = mulMat(
                     mulMat(place, translation(0, -cyl.half_height, 0)),
                     scaling(cyl.radius, 2.0 * cyl.half_height, cyl.radius),
                 );
-                z.drawMeshInstanced(gl, &s.cylinder, &s.transform, tint);
+                z.drawMeshInstanced(gl, &s.cylinder_capped, &s.transform, tint);
             },
             .box => |b| {
                 s.transform[0] = mulMat(place, scaling(

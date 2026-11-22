@@ -32,29 +32,29 @@
 /// CRITICAL: re-read `.buffer` AFTER EVERY call into the kernel. Growing a wasm memory
 /// DETACHES the old ArrayBuffer, so any view taken beforehand is dead - and it dies silently,
 /// as a zero-length read. This is the classic wasm-in-JS bug.
-pub const memory = "memory";
+pub const memory: []const u8 = "memory";
 
 /// `alloc(n) -> ptr`. Reserve n bytes inside the kernel wasm for the incoming job. 0 on
 /// failure.
-pub const alloc = "zimr_job_alloc";
+pub const alloc: []const u8 = "zimr_job_alloc";
 
 /// `zimr_job_<name>(n) -> len`. ONE EXPORT PER KERNEL - no id, no dispatch table - so a job
 /// physically cannot reach the wrong kernel. `len >= 0` is the result size in bytes; `len < 0`
 /// means the kernel returned a Zig error.
-pub const kernel_prefix = "zimr_job_";
+pub const kernel_prefix: []const u8 = "zimr_job_";
 
 /// `out_ptr() -> ptr`. Where the result was written. Only meaningful after a successful run.
-pub const out_ptr = "zimr_job_out_ptr";
+pub const out_ptr: []const u8 = "zimr_job_out_ptr";
 
 /// `err_ptr()` / `err_len()`. The kernel's error NAME as UTF-8, so a failure reads
 /// "ShortPayload" rather than a bare "-1".
-pub const err_ptr = "zimr_job_err_ptr";
-pub const err_len = "zimr_job_err_len";
+pub const err_ptr: []const u8 = "zimr_job_err_ptr";
+pub const err_len: []const u8 = "zimr_job_err_len";
 
 // The log lines the last job wrote (`Registry.workerLogFn`), as UTF-8 text, one line each: where they are in the
 // kernel's memory, and how many bytes. The worker sends them home with the job's reply, and the page prints them.
-pub const log_ptr = "zimr_job_log_ptr";
-pub const log_len = "zimr_job_log_len";
+pub const log_ptr: []const u8 = "zimr_job_log_ptr";
+pub const log_len: []const u8 = "zimr_job_log_len";
 
 /// Message tags. The host sends `init` and `job`; the worker replies `ready` and `done`.
 pub const msg = struct {

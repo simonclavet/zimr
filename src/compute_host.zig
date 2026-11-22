@@ -66,10 +66,15 @@ const float64 = zm.float64;
 ///
 ///   .gpu     - a WGSL compute dispatch. Asynchronous, ~1 frame of readback latency.
 ///
-/// The three are interchangeable in CODE, not in COST. Read `.worker`'s doc on `run`
+///   .measure - nowhere: a pipe that holds no buffers and runs nothing. Every upload and
+///             dispatch is ignored, and nothing reads back. What a program measures a layout
+///             with where it has neither a device nor a CPU twin (`initMeasure`): it builds
+///             everything a run builds, and keeps only the numbers.
+///
+/// The first three are interchangeable in CODE, not in COST. Read `.worker`'s doc on `run`
 /// before reaching for it: it copies the entire `Buffers` to the worker and back on every
 /// dispatch, and it runs ONE job at a time.
-pub const Backend = enum { cpu, worker, gpu };
+pub const Backend = enum { cpu, worker, gpu, measure };
 
 /// The header a kompute job carries to its worker: the dispatch count, and the kernel's
 /// params by value.
@@ -182,9 +187,9 @@ pub fn komputeRegistry(comptime M: type) type {
     return jobs.Registry(komputeTable(M), .{
         .max_input = @sizeOf(JobHeader(M)) + @sizeOf(M.Buffers),
         .max_output = @sizeOf(M.Buffers),
-        // The kernel works in `M.g`, the module's globals: natively, inline rather than on a thread, which would share
-        // them with the app while its frame reads them.
-        .kernels_work_in_globals = true,
+        // The kernel works in `M.g`, the module's globals, which the app's own `.cpu` pipes use too: natively, inline
+        // rather than on a thread, which would write them while the app's frame reads them.
+        .globals = .shared_with_the_app,
     });
 }
 
@@ -512,6 +517,164 @@ pub fn copyFieldBetween(
     wgpu.queueSubmit(source.queue, commands);
 }
 
+/// HOW A PIPE's TIME ON THE GPU IS MEASURED (`Compute.enableTimings`).
+pub const TimingOptions = struct {
+    /// The marks a pipe may write between two reads (`Compute.readTimings`): the timestamps its pool holds. The
+    /// segments of one submission share the marks between them, so n segments in a submission are n + 1 marks.
+    mark_capacity: u32 = 8192,
+    /// A segment per dispatch, so that a read tells each kernel's time: a mark between every two dispatches. Off, a
+    /// segment runs for as long as the phase stays the same within a submission.
+    per_dispatch: bool = false,
+};
+
+/// WHAT ONE READ OF A PIPE's TIMINGS COVERED (`Compute.readTimings`).
+pub const TimingsRead = struct {
+    /// The segments timed, and the dispatches no segment covered - the marks had run out.
+    segments: u32 = 0,
+    untimed_dispatches: u32 = 0,
+    /// The device's clock at the read's first mark and at its last, in ticks, with what turns ticks into time: a
+    /// tick's nanoseconds and how many of a tick count's bits the clock keeps before it wraps. Every pipe of one
+    /// device reads the same clock.
+    first_tick: u64 = 0,
+    last_tick: u64 = 0,
+    tick_nanoseconds: f64 = 0,
+    valid_bits: u32 = 0,
+};
+
+/// The ticks from `earlier` to `later` on a clock that keeps `valid_bits` bits of its count (`TimingsRead`): their
+/// difference within those bits, so a clock that wrapped once between the two still gives the ticks between them.
+pub fn ticksBetween(
+    earlier: u64,
+    later: u64,
+    valid_bits: u32,
+) u64 {
+    const difference: u64 = later -% earlier;
+    const keeps_every_bit: bool = valid_bits >= 64;
+    if (keeps_every_bit) {
+        return difference;
+    }
+    const kept_bits: u6 = @intCast(valid_bits);
+    const kept_mask: u64 = (@as(u64, 1) << kept_bits) - 1;
+    return difference & kept_mask;
+}
+
+/// THE SPAN OF SEVERAL PIPES' TIMINGS ON ONE DEVICE's CLOCK, in microseconds: from the earliest first mark among
+/// `reads` to the latest last mark - zero when none of them timed a segment. Every segment of every read lies inside
+/// it, and no two segments overlap - one queue runs its submissions one after another - so the reads' segment times
+/// add up to at most this span: what is left of it is the time the device spent between segments, waiting for the
+/// host. The reads cover less than half the clock's wrap, as a training round does on any device.
+pub fn timingsSpanMicroseconds(reads: []const TimingsRead) f64 {
+    // The first read that timed anything gives the origin; every other mark is placed after or before it.
+    const origin: TimingsRead = for (reads) |read| {
+        if (read.segments > 0) {
+            break read;
+        }
+    } else return 0;
+    const valid_bits: u32 = origin.valid_bits;
+    const half_wrap: u64 = ticksBetween(0, zm.maxInt(u64), valid_bits) / 2;
+    // Ticks before the origin's first mark, and ticks after it, over every read.
+    var ticks_before: u64 = 0;
+    var ticks_after: u64 = 0;
+    for (reads) |read| {
+        if (read.segments == 0) {
+            continue;
+        }
+        const first_after_origin: u64 = ticksBetween(origin.first_tick, read.first_tick, valid_bits);
+        const starts_before_origin: bool = first_after_origin > half_wrap;
+        if (starts_before_origin) {
+            const first_before_origin: u64 = ticksBetween(read.first_tick, origin.first_tick, valid_bits);
+            ticks_before = @max(ticks_before, first_before_origin);
+        }
+        const last_after_origin: u64 = ticksBetween(origin.first_tick, read.last_tick, valid_bits);
+        const ends_after_origin: bool = last_after_origin <= half_wrap;
+        if (ends_after_origin) {
+            ticks_after = @max(ticks_after, last_after_origin);
+        }
+    }
+    const span_ticks: f64 = float64(ticks_before) + float64(ticks_after);
+    return span_ticks * origin.tick_nanoseconds / 1000.0;
+}
+
+/// A SHARE OF THE MACHINE: how a long computation on the GPU - a night's training - leaves the device to the rest of
+/// the machine's work, and to its user.
+///
+/// A GPU runs one program's work at a time, or close to it: while a submission of compute dispatches runs, the
+/// desktop's drawing and every other program's work wait their turn or share what is left of the device. A program
+/// that keeps the queue full takes the whole device, for as long as it runs. A share below one makes it take turns:
+/// after each submission of dispatches the pipe waits for the device to finish it - blocked in the driver until the
+/// device signals, rather than polling in a loop of its own (`wgpu.queueWaitIdle`) - then rests, the device left to
+/// others, as long as the share asks:
+///
+///     rest = work x (1 - share) / share
+///
+///     share 1     |work|work|work|work|work|work|        nothing waits, nothing rests: as without a share
+///     share 0.5   |work|    |work|    |work|    |        busy half the time, in turns one submission long
+///     share 0.25  |work|            |work|            |  three times as long resting as working
+///
+/// The rests are owed and paid in sleeps, and a sleep is rarely exactly as long as asked: Windows' timer ticks every
+/// 15.6 ms unless a program asks for finer, and a sleep of 3 ms then lasts a whole tick. So what is owed is a
+/// balance. Each submission adds its rest; each sleep takes off what it really lasted; a sleep that overran leaves a
+/// credit, which the next submissions spend, working without a sleep until the balance is owed again. Over many
+/// submissions the device's share comes out as asked, whatever the timer. The credit is capped
+/// (`most_credit_ms`): a long overrun - the program descheduled in its sleep - must not buy a long stretch of work
+/// without rest.
+///
+/// One value serves every pipe of a program (`Compute.shareMachine`): they submit to one queue, and the device's
+/// time is theirs together. Its totals say what the share costs: the device's time on the submissions, as waited
+/// for, and the time slept. A program whose schedules should follow the work done rather than the hours passed - a
+/// trainer's curriculum, its time limits - leaves the slept time out of its clock.
+///
+/// The share rests the device; the program's other demands are its own to limit - the cores its threads take, its
+/// priority among the machine's programs. Native only: a browser's thread cannot wait for its GPU.
+pub const MachineShare = struct {
+    /// The share of the device's time the program takes, in (0, 1].
+    share: f32 = 1,
+    /// The `Io` the rests sleep on: kept here because the rests happen inside the pipes' submissions, which do no
+    /// other I/O and take no `Io` of their own.
+    io: Io,
+    /// The most credit kept from sleeps that overran, in milliseconds: two of Windows' default timer ticks.
+    most_credit_ms: f64 = 32,
+    /// The rest owed, in milliseconds: positive when a sleep is due, negative while a credit lasts - never below
+    /// `-most_credit_ms`.
+    owed_ms: f64 = 0,
+    /// The device's time on the submissions, from each submission to the end of the wait for it, and the time slept;
+    /// in milliseconds, since the share began.
+    worked_ms: f64 = 0,
+    slept_ms: f64 = 0,
+
+    /// Whether the share leaves the device any rest. A share of 1 does nothing at all: a pipe given one submits and
+    /// goes on, its work overlapping the host's.
+    pub fn rests(machine_share: *const MachineShare) bool {
+        return machine_share.share < 1;
+    }
+
+    /// AFTER A SUBMISSION, made at `submitted_at_ms` (`wgpu.nowMs`) on `queue`: the wait for the device to finish
+    /// it, then the rest the balance owes.
+    pub fn afterSubmission(
+        machine_share: *MachineShare,
+        queue: wgpu.QueueHandle,
+        submitted_at_ms: f64,
+    ) void {
+        wgpu.queueWaitIdle(queue);
+        const finished_at_ms: f64 = wgpu.nowMs();
+        const work_ms: f64 = finished_at_ms - submitted_at_ms;
+        machine_share.worked_ms += work_ms;
+        const share: f64 = machine_share.share;
+        const rest_per_work: f64 = (1.0 - share) / share;
+        machine_share.owed_ms += work_ms * rest_per_work;
+        if (machine_share.owed_ms <= 0) {
+            return;
+        }
+        const owed_microseconds: i64 = @ceil(machine_share.owed_ms * 1000.0);
+        const rest: Io.Duration = .fromMicroseconds(owed_microseconds);
+        // lint:off catch-suppression: a rest cut short is paid by what it lasted, as any sleep's
+        machine_share.io.sleep(rest, .awake) catch {};
+        const slept_ms: f64 = wgpu.nowMs() - finished_at_ms;
+        machine_share.slept_ms += slept_ms;
+        machine_share.owed_ms = @max(machine_share.owed_ms - slept_ms, -machine_share.most_credit_ms);
+    }
+};
+
 pub fn Compute(comptime M: type) type {
     comptime {
         if (!@hasDecl(M, "config")) {
@@ -544,9 +707,19 @@ pub fn Compute(comptime M: type) type {
         /// Whether the module names its kernels (`M.kernels`, the list its device module is compiled with). A module
         /// that does not - an example whose build lists its entries itself - runs without counts.
         const counts_dispatches: bool = @hasDecl(M, "kernels");
+        /// Whether this build of the module has its CPU TWIN (`M.cpu_twin`; a module that does not say has one): its
+        /// buffers as static arrays in the program, its kernels as host functions - what the `.cpu` and `.worker`
+        /// backends run on. A GPU program whose buffers are large leaves it out: the arrays are part of the program's
+        /// image, and Windows refuses to start an image near 2 GB. Without the twin those two backends are compiled
+        /// out - nothing here then reads the arrays, so the program does not hold them - and `initCpu` and
+        /// `initWorker` are compile errors.
+        const has_cpu_twin: bool = !@hasDecl(M, "cpu_twin") or M.cpu_twin;
 
         backend: Backend = .cpu,
         params: Params = undefined,
+        /// The phase the next dispatches are timed under (`setPhase`, `enableTimings`): a number of the caller's own
+        /// meaning.
+        phase: u32 = 0,
         /// How many times each of the module's kernels has been dispatched on this pipe, by its place in
         /// `M.kernels` (`dispatchKernel`): what a test reads to know which kernels a run really sent to its device -
         /// a check on a CPU twin alone proves nothing about a GPU.
@@ -583,7 +756,11 @@ pub fn Compute(comptime M: type) type {
             queue: wgpu.QueueHandle,
             field_bufs: [field_count]wgpu.BufferHandle,
             uniform: wgpu.BufferHandle,
+            /// The readback's staging buffer, and its size in bytes. A `.ranges` module's is made at `staging_bytes`
+            /// with the pipe; a mirror's at its first readback, at the size of the fields' packed prefixes
+            /// (`ensureMirrorStaging`) - none until then.
             staging: wgpu.BufferHandle,
+            staging_size: u32,
             /// One compute pipeline per installed kernel, parallel to
             /// `kernel_names`. Heap-sized to the kernel count, so there is no
             /// fixed cap to overflow - the old fixed array's overflow assert
@@ -680,25 +857,43 @@ pub fn Compute(comptime M: type) type {
             /// in debug). Allocated in initGpu, freed in deinit.
             /// None for a `.ranges` module (`kompute.Readback`), which reads with `readRange` instead.
             mirror: ?*Buffers,
-            /// TIMINGS (`enableTimings`): a timestamp pool of two slots per kernel, its start and its end - 0 when
-            /// the pipe does not time its kernels - and, per kernel, whether a dispatch wrote its slots since the last
-            /// read.
-            timestamp_pool: u32 = 0,
-            kernel_timed: []bool = &.{},
+            /// TIMINGS (`enableTimings`): the pipe's marks and segments - null for a pipe that times nothing.
+            timing: ?Timing = null,
             /// LENDING (`lendField`, `initGpuBorrowing`): how many of this pipe's buffers other pipes still borrow,
             /// and per field the loan count of the pipe this one borrowed it from - null for a buffer of its own.
             loans_out: u32 = 0,
             borrowed_from: []?*u32 = &.{},
+            /// THE MACHINE's SHARE this pipe keeps to (`shareMachine`): each submission of dispatches waited for and
+            /// followed by the device's rest. Null for a pipe that runs flat out.
+            machine_share: ?*MachineShare = null,
         };
 
         fn ElemOf(comptime field: Field) type {
             return meta.Elem(meta.fieldInfo(Buffers, field).type);
         }
 
+        /// How many elements field `field` holds: its array's length, read off the type, so that nothing outside the
+        /// twin's own backends refers to the twin's arrays (`has_cpu_twin`).
+        fn fieldLength(comptime field: Field) usize {
+            const FieldArray: type = meta.fieldInfo(Buffers, field).type;
+            return @typeInfo(FieldArray).array.len;
+        }
+
         /// CPU backend: zero GPU resources, instant. The kernel module's globals
         /// (`M.g.B` / `M.g.P`) ARE the storage - upload writes them, run loops.
         pub fn initCpu() Self {
+            if (comptime !has_cpu_twin) {
+                @compileError("Compute(" ++ @typeName(M) ++ ").initCpu: this build of the module has no CPU twin " ++
+                    "(its `cpu_twin` is false); a program without one measures a layout with `initMeasure`");
+            }
             return .{ .backend = .cpu };
+        }
+
+        /// A pipe that runs nothing (`Backend.measure`): every upload and dispatch ignored, nothing read back - a range
+        /// read gives zeros, the latest readback none. What a program with neither a device nor a CPU twin builds a
+        /// learner on to measure the buffers it needs (`geno_trainer --layout`).
+        pub fn initMeasure() Self {
+            return .{ .backend = .measure };
         }
 
         /// The same kernel, on a Web Worker: a compute fallback that does not freeze the
@@ -710,6 +905,10 @@ pub fn Compute(comptime M: type) type {
         /// backend still produces the right answer everywhere. It just blocks, exactly as
         /// `.cpu` would have.
         pub fn initWorker(gpa: Allocator) !Self {
+            if (comptime !has_cpu_twin) {
+                @compileError("Compute(" ++ @typeName(M) ++ ").initWorker: this build of the module has no CPU twin " ++
+                    "(its `cpu_twin` is false), which a worker runs");
+            }
             comptime {
                 if (!@hasDecl(M, "kernels")) {
                     @compileError("Compute(" ++ @typeName(M) ++ ").initWorker: the .worker backend needs\n" ++
@@ -789,8 +988,7 @@ pub fn Compute(comptime M: type) type {
                 if (gp.mirror) |mirror| {
                     gp.gpa.destroy(mirror);
                 }
-                destroyTimestampPool(gp);
-                gp.gpa.free(gp.kernel_timed);
+                destroyTimings(gp);
             }
         }
 
@@ -938,7 +1136,6 @@ pub fn Compute(comptime M: type) type {
                 }
             }
             assertf(@sizeOf(Buffers) > 0, @src(), "initGpu: Buffers has zero size", .{});
-            const buf_bytes: u32 = @sizeOf(Buffers);
             // Per-field storage buffers (t1178): one buffer + one binding per
             // Buffers field - the megastruct single-binding shape corrupted
             // on Adreno. Binding numbers are the ones kompute declares (below).
@@ -990,13 +1187,15 @@ pub fn Compute(comptime M: type) type {
                 .usage = .{ .uniform = true, .copy_dst = true },
                 .label = "kompute_params",
             });
-            // The staging buffer: the size of all of `Buffers` for the mirror, `staging_bytes` for ranges.
-            const staging_size: u32 = if (reads_ranges) staging_bytes else buf_bytes;
-            const staging: wgpu.BufferHandle = wgpu.createBuffer(dev, .{
+            // The staging buffer: `staging_bytes` for ranges, made now; a mirror's at its first readback, the size of
+            // what it copies (`ensureMirrorStaging`) - not all of `Buffers`, which for a module of large buffers (the
+            // trainer's kit, gigabytes) would be as large again in memory the host can map.
+            const staging_size: u32 = if (reads_ranges) staging_bytes else 0;
+            const staging: wgpu.BufferHandle = if (reads_ranges) wgpu.createBuffer(dev, .{
                 .size = staging_size,
                 .usage = .{ .map_read = true, .copy_dst = true },
                 .label = "kompute_staging",
-            });
+            }) else .invalid;
             // ---- Per-kernel bind groups (the structural fix) ----
             // Each kernel binds ONLY the Buffers fields it actually uses (plus
             // the Params uniform), not the whole struct. Why this matters: a
@@ -1167,6 +1366,7 @@ pub fn Compute(comptime M: type) type {
                     .borrowed_from = borrowed_from,
                     .uniform = uniform,
                     .staging = staging,
+                    .staging_size = staging_size,
                     .pipelines = pipelines,
                     .pipelines_pending = pipelines_made == .in_the_background,
                     .kernel_names = kernel_names,
@@ -1346,7 +1546,7 @@ pub fn Compute(comptime M: type) type {
         pub fn deviceField(self: *const Self, comptime field: Field) DeviceField {
             const gp: *const Gpu = &self.gpu.?;
             const field_index: usize = fieldIndex(@tagName(field));
-            const element_count: usize = @field(M.g.B, @tagName(field)).len;
+            const element_count: usize = comptime fieldLength(field);
             const byte_count: u32 = @intCast(element_count * @sizeOf(ElemOf(field)));
             return .{ .device = gp.dev, .queue = gp.queue, .buffer = gp.field_bufs[field_index], .bytes = byte_count };
         }
@@ -1382,19 +1582,23 @@ pub fn Compute(comptime M: type) type {
             offset: usize,
             data: []const ElemOf(field),
         ) void {
+            const capacity: usize = comptime fieldLength(field);
             assertf(
-                offset + data.len <= @field(M.g.B, @tagName(field)).len,
+                offset + data.len <= capacity,
                 @src(),
                 "uploadAt to '" ++ @tagName(field) ++ "': {d} + {d} elements exceeds capacity {d}",
-                .{ offset, data.len, @field(M.g.B, @tagName(field)).len },
+                .{ offset, data.len, capacity },
             );
             switch (self.backend) {
-                .cpu => {
+                .cpu => if (comptime has_cpu_twin) {
                     const dst: *@TypeOf(@field(M.g.B, @tagName(field))) = &@field(M.g.B, @tagName(field));
                     @memcpy(dst[offset..][0..data.len], data);
+                } else {
+                    unreachable;
                 },
+                .measure => {},
                 .worker => {
-                    if (comptime @hasDecl(M, "kernels")) {
+                    if (comptime has_cpu_twin and @hasDecl(M, "kernels")) {
                         const wk: *Worker = &(self.worker orelse {
                             assertUnreachable(@src(), "uploadAt: .worker needs initWorker(gpa)", .{});
                             return;
@@ -1418,17 +1622,21 @@ pub fn Compute(comptime M: type) type {
             comptime field: Field,
             data: []const ElemOf(field),
         ) void {
+            const capacity: usize = comptime fieldLength(field);
             assertf(
-                data.len <= @field(M.g.B, @tagName(field)).len,
+                data.len <= capacity,
                 @src(),
                 "upload to '" ++ @tagName(field) ++ "': {d} elements exceeds capacity {d}",
-                .{ data.len, @field(M.g.B, @tagName(field)).len },
+                .{ data.len, capacity },
             );
             switch (self.backend) {
-                .cpu => {
+                .cpu => if (comptime has_cpu_twin) {
                     const dst: *@TypeOf(@field(M.g.B, @tagName(field))) = &@field(M.g.B, @tagName(field));
                     @memcpy(dst[0..data.len], data);
+                } else {
+                    unreachable;
                 },
+                .measure => {},
                 // A `.worker` pipe OWNS ITS STATE. It stages into its own mirror, ships that
                 // mirror, and reads the answer back into it - it never touches `M.g.B` in
                 // this address space at all.
@@ -1445,7 +1653,7 @@ pub fn Compute(comptime M: type) type {
                 // The mirror was already allocated for the readback. Using it for input as
                 // well costs nothing, and it makes the arm SYMMETRIC: one buffer, in and out.
                 .worker => {
-                    if (comptime @hasDecl(M, "kernels")) {
+                    if (comptime has_cpu_twin and @hasDecl(M, "kernels")) {
                         const wk: *Worker = &(self.worker orelse {
                             assertUnreachable(@src(), "upload: .worker needs initWorker(gpa)", .{});
                             return;
@@ -1491,8 +1699,8 @@ pub fn Compute(comptime M: type) type {
         }
 
         /// Slots in the params table: past this many dispatches a recording submits what it has
-        /// and carries on in a new one.
-        const recording_slots: u32 = 2048;
+        /// and carries on in a new one. A page that keeps a batch to one submission sizes it by this.
+        pub const recording_slots: u32 = 2048;
 
         /// -- MANY DISPATCHES, ONE SUBMISSION, EACH WITH ITS OWN PARAMS --
         ///
@@ -1555,6 +1763,13 @@ pub fn Compute(comptime M: type) type {
                 const at: u32 = gp.rec_base * @sizeOf(Params);
                 wgpu.queueWriteBuffer(gp.queue, gp.rec_table, at, sliceAsBytes(used));
             }
+            // With timings, the mark that ends the recording's last segment, in a pass of its own: every recorded
+            // dispatch closed its pass behind it.
+            if (hasOpenSegment(gp)) {
+                const end_pass: wgpu.ComputePassEncoderHandle = compute_pass.begin(gp.rec_enc);
+                timeSubmissionEnd(gp, end_pass);
+                compute_pass.end(end_pass);
+            }
             const cmd: wgpu.CommandBufferHandle = wgpu.finishCommandEncoder(gp.rec_enc);
             submitDispatch(gp, cmd);
             gp.rec_enc = .invalid;
@@ -1570,12 +1785,18 @@ pub fn Compute(comptime M: type) type {
             gp.uniform_synced = null;
         }
 
+        /// A BATCH INSIDE A RECORDING IS PART OF THE RECORDING: its dispatches are recorded with the others, each with
+        /// its own params slot, and `endBatch` submits nothing - so a caller that batches (a simulator's decision)
+        /// can be recorded whole by whoever calls it, one submission in all.
         pub fn beginBatch(self: *Self, params: Params) void {
             self.params = params;
             if (self.backend != .gpu) {
                 return;
             }
             const gp: *Gpu = &self.gpu.?;
+            if (gp.rec_enc != .invalid) {
+                return;
+            }
             assertf(gp.batch_enc == .invalid, @src(), "beginBatch: a batch is already open", .{});
             gp.batch_params = params;
             self.syncParamsUniform(gp);
@@ -1589,6 +1810,10 @@ pub fn Compute(comptime M: type) type {
                 return;
             }
             const gp: *Gpu = &self.gpu.?;
+            // A batch begun inside a recording opened nothing (`beginBatch`): the recording holds its dispatches.
+            if (gp.rec_enc != .invalid) {
+                return;
+            }
             assertf(gp.batch_enc != .invalid, @src(), "endBatch: no batch is open", .{});
             // The uniform was written once at beginBatch; if params changed since,
             // those changes never reached the GPU (batched dispatches don't
@@ -1600,6 +1825,7 @@ pub fn Compute(comptime M: type) type {
                     "not after (a post-beginBatch change is silently ignored on-device)",
                 .{},
             );
+            timeSubmissionEnd(gp, gp.batch_pass);
             compute_pass.end(gp.batch_pass);
             const cmd: wgpu.CommandBufferHandle = wgpu.finishCommandEncoder(gp.batch_enc);
             submitDispatch(gp, cmd);
@@ -1774,130 +2000,303 @@ pub fn Compute(comptime M: type) type {
             return written;
         }
 
-        /// TIME THIS PIPE'S KERNELS ON THE GPU. From now on every dispatch is bracketed by two timestamps - the GPU's
-        /// clock at the top of the pipeline before it and at the bottom after it, in the kernel's two slots of a pool -
-        /// and `kernelTimings` reads each kernel's last duration:
+        /// A PIPE's TIMINGS (`enableTimings`): the pool its marks are written into, the segments closed since the last
+        /// read, and the segment open in the submission being encoded.
+        const Timing = struct {
+            pool: u32,
+            per_dispatch: bool,
+            /// Marks written since the last read - mark i is the pool's timestamp i - of `mark_capacity`.
+            marks_used: u32 = 0,
+            mark_capacity: u32,
+            /// The segments closed since the last read, the first `segment_count` of the list: fewer than the marks.
+            segments: []Segment,
+            segment_count: u32 = 0,
+            open: ?OpenSegment = null,
+            /// Dispatches no segment covers: the marks had run out.
+            untimed_dispatches: u32 = 0,
+            /// The marks' ticks as the device answers them: `readTimings`' scratch.
+            ticks: []u64,
+        };
+
+        /// A run of dispatches between two marks: the phase it was dispatched under, its kernel - on a pipe timing
+        /// per dispatch; null where a segment may hold several kernels' dispatches - and its two marks.
+        const Segment = struct {
+            phase: u32,
+            kernel: ?u32,
+            first_mark: u32,
+            last_mark: u32,
+        };
+
+        /// The segment a submission's next dispatch may join: `Segment` without its last mark.
+        const OpenSegment = struct {
+            phase: u32,
+            kernel: ?u32,
+            first_mark: u32,
+        };
+
+        /// TIME THIS PIPE's WORK ON THE GPU. From now on the pipe writes MARKS into its command stream - the device's
+        /// clock, taken once the work before the mark has finished - and the dispatches between two marks are a
+        /// SEGMENT, timed by the marks' difference:
         ///
-        ///     kernel k's slots:   2k = start, 2k + 1 = end
-        ///     a dispatch:         [ reset 2k, 2k + 1 ] [ write 2k at the top ] [ dispatch ]
-        ///                         [ write 2k + 1 at the bottom ]
+        ///     one submission:   mark | dispatches of phase A | mark | dispatches of phase B | mark
+        ///                              a segment under A            a segment under B
         ///
-        /// Native only - Vulkan's timestamps; WebGPU's cover render passes alone - and a pipe on the CPU has nothing to
-        /// time. The device must write timestamps in compute (`ComputeCapabilities.timestamps_in_compute`).
-        pub fn enableTimings(self: *Self) Allocator.Error!void {
+        /// A segment begins at a submission's first dispatch and wherever the PHASE changes (`setPhase`: what the
+        /// caller says its dispatches are for), and the last ends with the submission. The time between two
+        /// submissions, while the device waits for the host, is in no segment. With `per_dispatch` every dispatch
+        /// is a segment of its own, and a read tells each kernel's time. `readTimings` waits for the device, sums
+        /// the segments by phase and by kernel, and starts the marks over.
+        ///
+        /// BOTH ENDS OF A SEGMENT ARE TAKEN AT THE BOTTOM OF THE PIPELINE - when the work before the mark has
+        /// finished, not when the device reaches the mark. Two segments that follow each other therefore share one
+        /// mark, and the segments' times add up with nothing counted twice: a mark at the top of the pipeline could
+        /// be taken while the dispatch before it still ran.
+        ///
+        /// Native only - Vulkan's timestamps; WebGPU's cover render passes alone - and a pipe on the CPU has nothing
+        /// to time. Returns whether the pipe is now timed: false on the CPU, and on a device whose compute queue
+        /// writes no timestamps (`ComputeCapabilities.timestamps_in_compute`), where every read reports nothing.
+        /// Memory: the segments' list and the ticks' scratch, the pipe's, freed with it.
+        pub fn enableTimings(self: *Self, options: TimingOptions) Allocator.Error!bool {
             if (comptime host.is_browser) {
                 @compileError("enableTimings: GPU timestamps for compute are native only");
             }
             if (self.backend != .gpu) {
-                return;
+                return false;
             }
             const gp: *Gpu = &self.gpu.?;
-            if (gp.timestamp_pool != 0) {
-                return;
+            if (gp.timing != null) {
+                return true;
             }
             const capabilities: wgpu.vulkan_host.ComputeCapabilities = wgpu.computeCapabilities();
-            const no_timestamps: []const u8 = "enableTimings: this device writes no compute timestamps";
-            assertf(capabilities.timestamps_in_compute, @src(), no_timestamps, .{});
-            const kernel_count: usize = gp.kernel_names.len;
-            gp.kernel_timed = try gp.gpa.alloc(bool, kernel_count);
-            @memset(gp.kernel_timed, false);
-            const slot_count: u32 = @intCast(2 * kernel_count);
-            gp.timestamp_pool = wgpu.vulkan_host.createTimestampPool(slot_count);
+            if (!capabilities.timestamps_in_compute) {
+                return false;
+            }
+            // A segment needs two marks: its start, and the one kept back for its end.
+            assertf(options.mark_capacity >= 2, @src(), "enableTimings: {d} marks, a segment needs two", .{
+                options.mark_capacity,
+            });
+            const segments: []Segment = try gp.gpa.alloc(Segment, options.mark_capacity);
+            errdefer gp.gpa.free(segments);
+            const ticks: []u64 = try gp.gpa.alloc(u64, options.mark_capacity);
+            const pool: u32 = wgpu.vulkan_host.createTimestampPool(options.mark_capacity);
+            gp.timing = .{
+                .pool = pool,
+                .per_dispatch = options.per_dispatch,
+                .mark_capacity = options.mark_capacity,
+                .segments = segments,
+                .ticks = ticks,
+            };
+            return true;
         }
 
-        /// One kernel's last time on the GPU (`kernelTimings`).
-        pub const KernelTiming = struct {
-            name: []const u8,
-            microseconds: f64,
-        };
+        /// The phase the pipe's next dispatches are timed under (`enableTimings`): a number of the caller's own
+        /// meaning - a training round's parts, say. Kept on every backend and on a pipe that times nothing, so a
+        /// caller sets it without asking.
+        pub fn setPhase(self: *Self, phase: u32) void {
+            self.phase = phase;
+        }
 
-        /// Each kernel's last duration on the GPU, in microseconds, into `timings` in the pipe's kernel order - zero
-        /// for a kernel not dispatched since the last read, and for every kernel of a pipe without timings. A duration
-        /// is the difference of the kernel's two timestamps, in ticks, times the device's tick in nanoseconds. It waits
-        /// until the dispatches have run, so not inside an open batch or recording, whose commands are not yet
-        /// submitted.
-        pub fn kernelTimings(self: *Self, timings: *[M.kernels.len]KernelTiming) void {
-            if (comptime host.is_browser) {
-                @compileError("kernelTimings: GPU timestamps for compute are native only");
-            }
-            for (timings) |*timing| {
-                timing.* = .{ .name = "", .microseconds = 0 };
-            }
+        /// SHARES THE MACHINE (`MachineShare`): from now on each of this pipe's submissions of dispatches is waited
+        /// for and followed by the rest the share asks. The pipes of one device take one value, which outlives them.
+        /// A share of 1 leaves the pipe as it was, and so does a pipe on the CPU, which has no device to rest.
+        pub fn shareMachine(self: *Self, machine_share: *MachineShare) void {
             if (self.backend != .gpu) {
                 return;
             }
             const gp: *Gpu = &self.gpu.?;
-            if (gp.timestamp_pool == 0) {
-                return;
+            gp.machine_share = if (machine_share.rests()) machine_share else null;
+        }
+
+        /// The pipe's kernels by name, in the order `readTimings` reports them: the order the pipe was made with.
+        /// None on the CPU.
+        pub fn kernelNames(self: *const Self) []const []const u8 {
+            if (self.backend != .gpu) {
+                return &.{};
             }
+            return self.gpu.?.kernel_names;
+        }
+
+        /// THE TIME SINCE THE LAST READ, BY PHASE AND BY KERNEL. Each closed segment's time on the GPU, in
+        /// microseconds, is ADDED to its phase's entry of `phase_microseconds` and counted in `phase_segments` -
+        /// added, so the pipes of one device fill the same sums, one read after another. On a pipe timing per
+        /// dispatch each segment is also added to its kernel's entry of `kernel_microseconds` and counted in
+        /// `kernel_dispatches`, in the pipe's kernel order (`kernelNames`); a caller that wants no kernels passes
+        /// empty slices. Then the marks start over.
+        ///
+        /// IT WAITS until the device has finished everything submitted to it so far - this pipe's work and every
+        /// other's - so that every mark holds this read's tick, and none an earlier read's. So it is called outside
+        /// a batch or recording, whose commands are not yet submitted, and when the caller is ready to wait: a
+        /// round's end. A segment's time is its two marks' difference in the clock's ticks (`ticksBetween`) times
+        /// the tick's nanoseconds. A pipe that times nothing reports nothing and adds nothing.
+        pub fn readTimings(
+            self: *Self,
+            phase_microseconds: []f64,
+            phase_segments: []u32,
+            kernel_microseconds: []f64,
+            kernel_dispatches: []u64,
+        ) TimingsRead {
+            if (comptime host.is_browser) {
+                @compileError("readTimings: GPU timestamps for compute are native only");
+            }
+            if (self.backend != .gpu) {
+                return .{};
+            }
+            const gp: *Gpu = &self.gpu.?;
+            if (gp.timing == null) {
+                return .{};
+            }
+            const timing: *Timing = &gp.timing.?;
             const outside_batch: bool = gp.batch_enc == .invalid and gp.rec_enc == .invalid;
-            assertf(outside_batch, @src(), "kernelTimings inside an open batch or recording", .{});
-            const tick_nanoseconds: f64 = wgpu.computeCapabilities().timestamp_period_ns;
-            for (gp.kernel_names, gp.kernel_timed, timings, 0..) |name, *was_timed, *timing, kernel_index| {
-                timing.name = name;
-                if (!was_timed.*) {
+            assertf(outside_batch, @src(), "readTimings inside an open batch or recording", .{});
+            // Every submission closes its last segment, so none is open here.
+            assertf(timing.open == null, @src(), "readTimings with a segment open", .{});
+            const capabilities: wgpu.vulkan_host.ComputeCapabilities = wgpu.computeCapabilities();
+            var read: TimingsRead = .{
+                .untimed_dispatches = timing.untimed_dispatches,
+                .tick_nanoseconds = capabilities.timestamp_period_ns,
+                .valid_bits = capabilities.timestamp_valid_bits,
+            };
+            const marks_used: u32 = timing.marks_used;
+            const segment_count: u32 = timing.segment_count;
+            // The marks start over whatever the device answers.
+            timing.marks_used = 0;
+            timing.segment_count = 0;
+            timing.untimed_dispatches = 0;
+            if (segment_count == 0) {
+                return read;
+            }
+            const ticks: []u64 = timing.ticks[0..marks_used];
+            const answered: bool = wgpu.vulkan_host.timestampPoolRead(timing.pool, 0, marks_used, ticks.ptr);
+            if (!answered) {
+                return read;
+            }
+            const wants_kernels: bool = timing.per_dispatch and kernel_microseconds.len > 0;
+            for (timing.segments[0..segment_count]) |segment| {
+                const first_tick: u64 = ticks[segment.first_mark];
+                const last_tick: u64 = ticks[segment.last_mark];
+                const elapsed_ticks: u64 = ticksBetween(first_tick, last_tick, read.valid_bits);
+                const microseconds: f64 = float64(elapsed_ticks) * read.tick_nanoseconds / 1000.0;
+                phase_microseconds[segment.phase] += microseconds;
+                phase_segments[segment.phase] += 1;
+                if (!wants_kernels) {
                     continue;
                 }
-                var ticks: [2]u64 = undefined;
-                const first_slot: u32 = @intCast(2 * kernel_index);
-                const answered: bool = wgpu.vulkan_host.timestampPoolRead(gp.timestamp_pool, first_slot, 2, &ticks);
-                if (answered) {
-                    // A clock with fewer than 64 valid bits wraps: the difference wraps with it.
-                    const elapsed_ticks: u64 = ticks[1] -% ticks[0];
-                    const elapsed_nanoseconds: f64 = float64(elapsed_ticks) * tick_nanoseconds;
-                    timing.microseconds = elapsed_nanoseconds / 1000.0;
+                const kernel: u32 = segment.kernel orelse continue;
+                kernel_microseconds[kernel] += microseconds;
+                kernel_dispatches[kernel] += 1;
+            }
+            // The marks were written in the order the device ran them: the first and the last bound the read.
+            read.segments = segment_count;
+            read.first_tick = ticks[0];
+            read.last_tick = ticks[marks_used - 1];
+            return read;
+        }
+
+        /// WITH TIMINGS, BEFORE A DISPATCH IS ENCODED into `pass`: the dispatch joins the open segment where it
+        /// continues it - the same phase, on a pipe not timing per dispatch - and otherwise a mark ends the open
+        /// segment and begins the dispatch's own. A mark is kept back for an open segment's end, so a segment once
+        /// open is always closed; a dispatch that finds no mark left is counted untimed. Nothing on the web or
+        /// without a GPU.
+        fn timeDispatch(
+            self: *const Self,
+            gp: *Gpu,
+            pass: wgpu.ComputePassEncoderHandle,
+            kernel_index: usize,
+        ) void {
+            if (comptime host.is_browser or !host.has_gpu) {
+                return;
+            }
+            if (gp.timing == null) {
+                return;
+            }
+            const timing: *Timing = &gp.timing.?;
+            const kernel: ?u32 = if (timing.per_dispatch) @intCast(kernel_index) else null;
+            if (timing.open) |open| {
+                const continues: bool = !timing.per_dispatch and open.phase == self.phase;
+                if (continues) {
+                    return;
                 }
-                was_timed.* = false;
+                // One mark ends the open segment and begins the next - if a mark is left to end that one.
+                const boundary: u32 = writeMark(timing, pass);
+                closeSegment(timing, open, boundary);
+                const has_mark_for_its_end: bool = timing.marks_used < timing.mark_capacity;
+                if (!has_mark_for_its_end) {
+                    timing.open = null;
+                    timing.untimed_dispatches += 1;
+                    return;
+                }
+                timing.open = .{ .phase = self.phase, .kernel = kernel, .first_mark = boundary };
+                return;
             }
+            // No segment open: the dispatch's own start, with a mark kept back for its end.
+            const has_both_marks: bool = timing.marks_used + 2 <= timing.mark_capacity;
+            if (!has_both_marks) {
+                timing.untimed_dispatches += 1;
+                return;
+            }
+            const start_mark: u32 = writeMark(timing, pass);
+            timing.open = .{ .phase = self.phase, .kernel = kernel, .first_mark = start_mark };
         }
 
-        /// With timings on: kernel `kernel_index`'s two slots reset, and the GPU's clock written into the first, at the
-        /// top of the pipeline, before the dispatch that follows. Nothing on the web or without a GPU.
-        fn timeKernelStart(
-            gp: *Gpu,
-            pass: wgpu.ComputePassEncoderHandle,
-            kernel_index: usize,
-        ) void {
+        /// WITH TIMINGS, AFTER A SUBMISSION's LAST DISPATCH, into `pass`: the mark that ends the open segment. What
+        /// the device does after it, until the next submission's first mark, is in no segment.
+        fn timeSubmissionEnd(gp: *Gpu, pass: wgpu.ComputePassEncoderHandle) void {
             if (comptime host.is_browser or !host.has_gpu) {
                 return;
             }
-            if (gp.timestamp_pool == 0) {
+            if (gp.timing == null) {
                 return;
             }
+            const timing: *Timing = &gp.timing.?;
+            const open: OpenSegment = timing.open orelse return;
+            const end_mark: u32 = writeMark(timing, pass);
+            closeSegment(timing, open, end_mark);
+            timing.open = null;
+        }
+
+        /// Whether a segment is open in the submission being encoded: whether `timeSubmissionEnd` has a mark to write.
+        fn hasOpenSegment(gp: *const Gpu) bool {
+            const timing: Timing = gp.timing orelse return false;
+            return timing.open != null;
+        }
+
+        /// The next mark, written into `pass`'s command stream: its timestamp reset, then the device's clock taken at
+        /// the bottom of the pipeline - once the work before it has finished. Its number.
+        fn writeMark(timing: *Timing, pass: wgpu.ComputePassEncoderHandle) u32 {
+            const mark: u32 = timing.marks_used;
             const pass_id: u32 = @backingInt(pass);
-            const start_slot: u32 = @intCast(2 * kernel_index);
-            wgpu.vulkan_host.computePassResetTimestamps(pass_id, gp.timestamp_pool, start_slot, 2);
-            wgpu.vulkan_host.computePassWriteTimestamp(pass_id, gp.timestamp_pool, start_slot, false);
+            wgpu.vulkan_host.computePassResetTimestamps(pass_id, timing.pool, mark, 1);
+            const after_the_work_before: bool = true;
+            wgpu.vulkan_host.computePassWriteTimestamp(pass_id, timing.pool, mark, after_the_work_before);
+            timing.marks_used += 1;
+            return mark;
         }
 
-        /// With timings on: the GPU's clock written into kernel `kernel_index`'s second slot, at the bottom of the
-        /// pipeline, once the dispatch before has finished.
-        fn timeKernelEnd(
-            gp: *Gpu,
-            pass: wgpu.ComputePassEncoderHandle,
-            kernel_index: usize,
+        /// The open segment, closed at `last_mark`, into the list a read sums.
+        fn closeSegment(
+            timing: *Timing,
+            open: OpenSegment,
+            last_mark: u32,
         ) void {
-            if (comptime host.is_browser or !host.has_gpu) {
-                return;
-            }
-            if (gp.timestamp_pool == 0) {
-                return;
-            }
-            const pass_id: u32 = @backingInt(pass);
-            const end_slot: u32 = @intCast(2 * kernel_index + 1);
-            wgpu.vulkan_host.computePassWriteTimestamp(pass_id, gp.timestamp_pool, end_slot, true);
-            gp.kernel_timed[kernel_index] = true;
+            timing.segments[timing.segment_count] = .{
+                .phase = open.phase,
+                .kernel = open.kernel,
+                .first_mark = open.first_mark,
+                .last_mark = last_mark,
+            };
+            timing.segment_count += 1;
         }
 
-        /// The timings' pool released with the pipe.
-        fn destroyTimestampPool(gp: *Gpu) void {
+        /// The timings' pool and lists released with the pipe.
+        fn destroyTimings(gp: *Gpu) void {
             if (comptime host.is_browser or !host.has_gpu) {
                 return;
             }
-            if (gp.timestamp_pool != 0) {
-                wgpu.vulkan_host.timestampPoolDestroy(gp.timestamp_pool);
-                gp.timestamp_pool = 0;
-            }
+            const timing: Timing = gp.timing orelse return;
+            wgpu.vulkan_host.timestampPoolDestroy(timing.pool);
+            gp.gpa.free(timing.segments);
+            gp.gpa.free(timing.ticks);
+            gp.timing = null;
         }
 
         /// `run` and `runPushed`'s body: `pushes` (compile-time, so a module that never pushes never reaches the
@@ -1914,6 +2313,13 @@ pub fn Compute(comptime M: type) type {
             @compileError("run('" ++ name ++ "'): the module's kernel list does not name it - no device module has it");
         }
 
+        /// The most invocations a dispatch of this module may have: its `config.dispatch_max` where it sets one, else
+        /// its `config.max`, the length of its buffers.
+        fn dispatchCapacity() u32 {
+            const sets_dispatch_max: bool = @hasField(@TypeOf(M.config), "dispatch_max") and M.config.dispatch_max > 0;
+            return if (sets_dispatch_max) M.config.dispatch_max else M.config.max;
+        }
+
         fn dispatchKernel(
             self: *Self,
             comptime name: []const u8,
@@ -1926,14 +2332,16 @@ pub fn Compute(comptime M: type) type {
                 self.dispatch_counts[kernel_index] +|= 1;
             }
             assertf(n > 0, @src(), "run('" ++ name ++ "'): n must be > 0", .{});
+            const capacity: u32 = comptime dispatchCapacity();
             assertf(
-                n <= M.config.max,
+                n <= capacity,
                 @src(),
-                "run('" ++ name ++ "'): n={d} exceeds capacity config.max={d}",
-                .{ n, M.config.max },
+                "run('" ++ name ++ "'): n={d} exceeds the module's dispatch capacity {d} (config.max, or dispatch_max)",
+                .{ n, capacity },
             );
             switch (self.backend) {
-                .cpu => {
+                .measure => {},
+                .cpu => if (comptime has_cpu_twin) {
                     // `M.g.P` is set either way: the LEAN form reads it through `g.uniform()`,
                     // and the stock form's `Ctx` carries a copy.
                     M.g.P = self.params;
@@ -1954,6 +2362,8 @@ pub fn Compute(comptime M: type) type {
                             @field(M, name)(.{ .id = id, .params = self.params });
                         }
                     }
+                } else {
+                    unreachable;
                 },
                 // The same loop, somewhere else. Three things diverge from `.cpu`, and
                 // they are the price of not freezing the frame:
@@ -1972,8 +2382,9 @@ pub fn Compute(comptime M: type) type {
                     // Gated on `kernels` so a module that never opts in pays NOTHING for
                     // this arm - an untaken comptime `if` is never analyzed, so none of
                     // the jobs machinery is linked. Selecting `.worker` requires
-                    // `initWorker`, which is a compile error without it.
-                    if (comptime @hasDecl(M, "kernels")) {
+                    // `initWorker`, which is a compile error without it - or without the
+                    // module's CPU twin, which the worker runs.
+                    if (comptime has_cpu_twin and @hasDecl(M, "kernels")) {
                         const wk: *Worker = &(self.worker orelse {
                             assertUnreachable(@src(), "run('" ++ name ++ "'): .worker needs initWorker(gpa)", .{});
                             return;
@@ -2050,9 +2461,8 @@ pub fn Compute(comptime M: type) type {
                         if (comptime pushes) {
                             pushValues(rp, push_bytes);
                         }
-                        timeKernelStart(gp, rp, ki);
+                        self.timeDispatch(gp, rp, ki);
                         compute_pass.dispatchWorkgroups(rp, .{ .x = grid.x, .y = grid.y });
-                        timeKernelEnd(gp, rp, ki);
                         compute_pass.end(rp);
                         gp.rec_count += 1;
                         return;
@@ -2068,9 +2478,8 @@ pub fn Compute(comptime M: type) type {
                         if (comptime pushes) {
                             pushValues(gp.batch_pass, push_bytes);
                         }
-                        timeKernelStart(gp, gp.batch_pass, ki);
+                        self.timeDispatch(gp, gp.batch_pass, ki);
                         compute_pass.dispatchWorkgroups(gp.batch_pass, .{ .x = grid.x, .y = grid.y });
-                        timeKernelEnd(gp, gp.batch_pass, ki);
                         return;
                     }
                     self.syncParamsUniform(gp);
@@ -2081,9 +2490,9 @@ pub fn Compute(comptime M: type) type {
                     if (comptime pushes) {
                         pushValues(cp, push_bytes);
                     }
-                    timeKernelStart(gp, cp, ki);
+                    self.timeDispatch(gp, cp, ki);
                     compute_pass.dispatchWorkgroups(cp, .{ .x = grid.x, .y = grid.y });
-                    timeKernelEnd(gp, cp, ki);
+                    timeSubmissionEnd(gp, cp);
                     compute_pass.end(cp);
                     const cmd: wgpu.CommandBufferHandle = wgpu.finishCommandEncoder(enc);
                     // Both dispatch paths go through `submitDispatch`, which counts. I
@@ -2118,9 +2527,18 @@ pub fn Compute(comptime M: type) type {
         /// A counter maintained at N call sites is a counter that will be wrong the first time
         /// someone adds the N+1th. Both sites call this now, and the readback copy deliberately
         /// does not - it submits a copy, not work.
+        ///
+        /// It is also where a pipe that shares the machine (`shareMachine`) waits for the device and rests it: every
+        /// submission of work passes here, and no copy does.
         fn submitDispatch(gp: *Gpu, cmd: wgpu.CommandBufferHandle) void {
+            const submitted_at_ms: f64 = wgpu.nowMs();
             wgpu.queueSubmit(gp.queue, cmd);
             gp.submitted += 1;
+            if (comptime host.is_browser) {
+                return;
+            }
+            const machine_share: *MachineShare = gp.machine_share orelse return;
+            machine_share.afterSubmission(gp.queue, submitted_at_ms);
         }
 
         pub const Generation = struct {
@@ -2174,6 +2592,34 @@ pub fn Compute(comptime M: type) type {
             return @intCast(@min(whole, @divCeil(bytes, 4) * 4));
         }
 
+        /// The bytes of every field's first `count` elements, packed back to back (`prefixBytes` each): what a
+        /// mirror's readback copies.
+        fn packedPrefixBytes(count: usize) u32 {
+            var total: u32 = 0;
+            inline for (fields_by_offset) |fi| {
+                total += prefixBytes(buffer_field_names[fi], count);
+            }
+            return total;
+        }
+
+        /// A MIRROR's STAGING BUFFER of at least `byte_count` bytes: kept while it is large enough, else released and
+        /// made at that size - so it grows with `element_count` and never holds more than a readback copies. Called
+        /// between readbacks, with none in flight to read the buffer it releases.
+        fn ensureMirrorStaging(gp: *Gpu, byte_count: u32) void {
+            if (gp.staging_size >= byte_count) {
+                return;
+            }
+            if (gp.staging != .invalid) {
+                wgpu.destroyBuffer(gp.staging);
+            }
+            gp.staging = wgpu.createBuffer(gp.dev, .{
+                .size = byte_count,
+                .usage = .{ .map_read = true, .copy_dst = true },
+                .label = "kompute_staging",
+            });
+            gp.staging_size = byte_count;
+        }
+
         /// The packed copy sits at the mirror's start, its fields in MEMORY order
         /// (`fields_by_offset`); move each field's prefix up to the field's own offset. LAST
         /// FIELD FIRST: in memory order a packed offset never exceeds the real one, so a
@@ -2208,7 +2654,7 @@ pub fn Compute(comptime M: type) type {
         /// still in flight would overwrite it on landing, and is not guarded here - no learner runs on that backend.
         pub fn discardReadback(self: *Self) void {
             switch (self.backend) {
-                .cpu, .worker => {},
+                .cpu, .worker, .measure => {},
                 .gpu => {
                     const gp: *Gpu = &self.gpu.?;
                     gp.have_read = false;
@@ -2235,7 +2681,7 @@ pub fn Compute(comptime M: type) type {
             destination: []ElemOf(field),
         ) void {
             const Element: type = ElemOf(field);
-            const field_length: usize = @field(M.g.B, @tagName(field)).len;
+            const field_length: usize = comptime fieldLength(field);
             const end: usize = @as(usize, first) + destination.len;
             assertf(end <= field_length, @src(), "readRange: elements {d}..{d} of a field of {d}", .{
                 first,
@@ -2243,10 +2689,14 @@ pub fn Compute(comptime M: type) type {
                 field_length,
             });
             switch (self.backend) {
-                .cpu => {
+                .cpu => if (comptime has_cpu_twin) {
                     const source: []const Element = @field(M.g.B, @tagName(field))[first..end];
                     @memcpy(destination, source);
+                } else {
+                    unreachable;
                 },
+                // Nothing was kept: zeros.
+                .measure => @memset(destination, zeroes(Element)),
                 .worker => {
                     assertUnreachable(@src(), "readRange: a worker pipe reads through readLatest", .{});
                 },
@@ -2394,7 +2844,7 @@ pub fn Compute(comptime M: type) type {
         ) Allocator.Error!RangeRequest(field) {
             const Element: type = ElemOf(field);
             const Request: type = RangeRequest(field);
-            const field_length: usize = @field(M.g.B, @tagName(field)).len;
+            const field_length: usize = comptime fieldLength(field);
             const end: usize = @as(usize, first) + count;
             assertf(count > 0 and end <= field_length, @src(), "requestRange: elements {d}..{d} of a field of {d}", .{
                 first,
@@ -2402,9 +2852,18 @@ pub fn Compute(comptime M: type) type {
                 field_length,
             });
             switch (self.backend) {
-                .cpu => {
+                .cpu => if (comptime has_cpu_twin) {
                     const snapshot: []Element = try gpa.alloc(Element, count);
                     @memcpy(snapshot, @field(M.g.B, @tagName(field))[first..end]);
+                    const request: Request = .{ .count = count, .snapshot = snapshot, .snapshot_owner = gpa };
+                    return request;
+                } else {
+                    unreachable;
+                },
+                // Nothing was kept: a snapshot of zeros.
+                .measure => {
+                    const snapshot: []Element = try gpa.alloc(Element, count);
+                    @memset(snapshot, zeroes(Element));
                     const request: Request = .{ .count = count, .snapshot = snapshot, .snapshot_owner = gpa };
                     return request;
                 },
@@ -2453,17 +2912,21 @@ pub fn Compute(comptime M: type) type {
             // slice to THEIR OWN array length, never the particle count - else
             // grid_counts (grid_cells long) overruns the next field. Clamp to the
             // lesser of the two.
-            const arr_len: usize = @field(M.g.B, @tagName(field)).len;
+            const arr_len: usize = comptime fieldLength(field);
             const n: usize = @min(self.element_count, arr_len);
             switch (self.backend) {
-                .cpu => {
+                .cpu => if (comptime has_cpu_twin) {
                     return @field(M.g.B, @tagName(field))[0..n];
+                } else {
+                    unreachable;
                 },
+                // Nothing reads back.
+                .measure => return null,
                 // Same contract as the GPU arm: null until it lands, then the data -
                 // out of our OWN mirror, never out of `M.g.B`, so a `.cpu` pipe on the
                 // same module keeps its answer.
                 .worker => {
-                    if (comptime @hasDecl(M, "kernels")) {
+                    if (comptime has_cpu_twin and @hasDecl(M, "kernels")) {
                         const wk: *Worker = &(self.worker orelse return null);
                         if (wk.job.poll()) |maybe_bytes| {
                             if (maybe_bytes) |bytes| {
@@ -2525,6 +2988,7 @@ pub fn Compute(comptime M: type) type {
                         // weights. The data a caller sees is unchanged: it was always sliced to
                         // `element_count`.
                         const count: usize = self.element_count;
+                        ensureMirrorStaging(gp, packedPrefixBytes(count));
                         const enc: wgpu.CommandEncoderHandle = wgpu.createCommandEncoder(gp.dev);
                         // In MEMORY order, which `unpackPrefixes` relies on (`fields_by_offset`).
                         var packed_at: u32 = 0;
@@ -2557,6 +3021,64 @@ pub fn Compute(comptime M: type) type {
     };
 }
 
+test "compute_host: the ticks between two marks are taken within the clock's bits" {
+    // A clock that keeps every bit: the plain difference.
+    try expectEqual(@as(u64, 250), ticksBetween(1000, 1250, 64));
+    // A clock of 36 bits, the first mark 100 ticks before it wraps and the second 150 after: 250 ticks between them,
+    // where the plain difference is a number near 2^64.
+    const wrap: u64 = @as(u64, 1) << 36;
+    const before_the_wrap: u64 = wrap - 100;
+    const after_the_wrap: u64 = 150;
+    try expectEqual(@as(u64, 250), ticksBetween(before_the_wrap, after_the_wrap, 36));
+    // The same clock without a wrap between the two.
+    try expectEqual(@as(u64, 250), ticksBetween(wrap - 1000, wrap - 750, 36));
+}
+
+test "compute_host: several pipes' timings span from the earliest first mark to the latest last, on any clock" {
+    // Two pipes on a clock of 2,000 nanoseconds a tick: the second began before the first and ended inside it. The
+    // span is 500 to 5,000: 4,500 ticks, 9,000 microseconds - whichever is listed first.
+    const long_read: TimingsRead = .{
+        .segments = 2,
+        .first_tick = 1000,
+        .last_tick = 5000,
+        .tick_nanoseconds = 2000,
+        .valid_bits = 64,
+    };
+    const early_read: TimingsRead = .{
+        .segments = 1,
+        .first_tick = 500,
+        .last_tick = 3000,
+        .tick_nanoseconds = 2000,
+        .valid_bits = 64,
+    };
+    try expectEqual(@as(f64, 9000), timingsSpanMicroseconds(&.{ long_read, early_read }));
+    try expectEqual(@as(f64, 9000), timingsSpanMicroseconds(&.{ early_read, long_read }));
+    // A pipe that timed nothing has no marks: its zeros are not the clock's, and it widens no span.
+    const untimed_read: TimingsRead = .{ .tick_nanoseconds = 2000, .valid_bits = 64 };
+    try expectEqual(@as(f64, 9000), timingsSpanMicroseconds(&.{ untimed_read, long_read, early_read }));
+    try expectEqual(@as(f64, 0), timingsSpanMicroseconds(&.{untimed_read}));
+    try expectEqual(@as(f64, 0), timingsSpanMicroseconds(&.{}));
+    // A clock of 36 bits, a microsecond a tick, wrapping within the span: one pipe from 2,000 ticks before the wrap to
+    // 500 before it, the other from 300 after it to 1,000 after it - 3,000 ticks from the first mark to the last.
+    const wrap: u64 = @as(u64, 1) << 36;
+    const before_the_wrap: TimingsRead = .{
+        .segments = 3,
+        .first_tick = wrap - 2000,
+        .last_tick = wrap - 500,
+        .tick_nanoseconds = 1000,
+        .valid_bits = 36,
+    };
+    const after_the_wrap: TimingsRead = .{
+        .segments = 1,
+        .first_tick = 300,
+        .last_tick = 1000,
+        .tick_nanoseconds = 1000,
+        .valid_bits = 36,
+    };
+    try expectEqual(@as(f64, 3000), timingsSpanMicroseconds(&.{ before_the_wrap, after_the_wrap }));
+    try expectEqual(@as(f64, 3000), timingsSpanMicroseconds(&.{ after_the_wrap, before_the_wrap }));
+}
+
 test "compute_host: a pipe counts every dispatch of every kernel" {
     const M = struct {
         pub const config = .{ .max = 64, .workgroup = 64 };
@@ -2585,6 +3107,44 @@ test "compute_host: a pipe counts every dispatch of every kernel" {
     pipe.run("triple", 2);
     try expectEqual(@as(u32, 0), pipe.dispatch_counts[0]);
     try expectEqual(@as(u32, 2), pipe.dispatch_counts[1]);
+}
+
+test "compute_host: a module without its CPU twin measures on a pipe that runs nothing" {
+    // A module that keeps no CPU twin (`cpu_twin` false), its globals WITHOUT the buffers' arrays, and a kernel that
+    // reaches for them: were anything here to touch the twin - an upload, a dispatch or a read on the CPU's arms, or
+    // the kernel run on the host - this test would not compile.
+    const M = struct {
+        pub const config = .{ .max = 64, .workgroup = 64 };
+        pub const cpu_twin: bool = false;
+        pub const Buffers = extern struct { data: [64]f32, more: [16]f32 };
+        pub const Params = extern struct {
+            count: u32,
+            _pad0: u32 = 0,
+            _pad1: u32 = 0,
+            _pad2: u32 = 0,
+        };
+        pub const g = struct {
+            pub var P: Params = undefined;
+        };
+        pub const kernels = [_][:0]const u8{"double"};
+        pub fn double(c: struct { id: u32, params: Params }) void {
+            g.B.data[c.id] *= 2;
+        }
+    };
+    var pipe: Compute(M) = .initMeasure();
+    const numbers = [_]f32{ 1, 2, 3, 4 };
+    pipe.upload(.data, &numbers);
+    pipe.uploadAt(.more, 12, &numbers);
+    pipe.params = .{ .count = 4 };
+    pipe.run("double", 4);
+    // The dispatch counted, as on any pipe; nothing ran.
+    try expectEqual(@as(u32, 1), pipe.dispatch_counts[0]);
+    // A range read gives zeros, and nothing reads back.
+    var read: [4]f32 = @splat(7);
+    pipe.readRange(.data, 0, &read);
+    try expectEqualSlices(f32, &.{ 0, 0, 0, 0 }, &read);
+    pipe.element_count = 4;
+    try expect(pipe.readLatest(.data) == null);
 }
 
 test "Compute .worker runs the SAME kernel and gets the SAME answer" {

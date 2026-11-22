@@ -62,3 +62,36 @@ pub fn print(comptime format: []const u8, args: anytype) void {
         std.debug.print(format, args);
     }
 }
+
+/// SEVERAL CHECKS OF ONE TEST, EVERY ONE LOOKED AT. `try expect` leaves a test at its first failing check, and the
+/// run says nothing of the checks after it. A check given to `holds` is explained when it does not hold (`failure`)
+/// and counted; the test goes on, and fails where it calls `finish`. One run then names every check that fails.
+///
+///     var checks: report.Checks = .{};
+///     checks.holds(pushes > 0, "no push was given\n", .{});
+///     checks.holds(watched <= pushes, "{d} watched of {d} pushes\n", .{ watched, pushes });
+///     try checks.finish();
+pub const Checks = struct {
+    failed: u32 = 0,
+
+    /// Counts and explains the check when `condition` is false. `format` and `args` are `failure`'s.
+    pub fn holds(
+        checks: *Checks,
+        condition: bool,
+        comptime format: []const u8,
+        args: anytype,
+    ) void {
+        if (condition) {
+            return;
+        }
+        checks.failed += 1;
+        failure(format, args);
+    }
+
+    /// Fails the test when any check did not hold.
+    pub fn finish(checks: Checks) !void {
+        if (checks.failed > 0) {
+            return error.ChecksDoNotHold;
+        }
+    }
+};

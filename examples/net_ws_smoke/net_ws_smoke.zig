@@ -21,8 +21,8 @@ const bufPrint = std.fmt.bufPrint;
 const indexOfScalar = std.mem.indexOfScalar;
 const startsWith = std.mem.startsWith;
 
-const default_room = "zimr-demo";
-const max_log = 12; // how many recent messages to keep on screen
+const default_room: []const u8 = "zimr-demo";
+const max_log: usize = 12; // how many recent messages to keep on screen
 
 const State = struct {
     gpa: Allocator,

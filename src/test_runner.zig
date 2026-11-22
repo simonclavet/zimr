@@ -10,6 +10,17 @@
 //!
 //!     zig build test -Dslow-tests -Dtest-timing     each process also lists its tests of a second or more
 //!
+//! And a third: `--filter=TEXT`, THE TESTS CHOSEN WHEN THE BINARY RUNS - those whose names contain the text. Zig's
+//! own filter is a compiler flag, so every new filter compiled the whole binary again, minutes for the robot roots;
+//! chosen at run time, one compiled binary serves every filter, and a filtered run after any other run of the same
+//! sources is the run alone (`-Dtest-filter` passes it, build.zig's fast tier).
+//!
+//! And a fourth: `--skip-prefix=PREFIX`, THE TESTS ANOTHER BINARY RUNS - those whose names begin with the prefix,
+//! left out as a filter leaves out what it does not choose. A test binary holds the tests of every file its root
+//! reaches by path, so a file that is a test root of its own also has its tests compiled into every binary that
+//! imports it: the robot family reaches `codecs.zig` by path and ran 131 of its tests - 27 s - that `test-codecs`
+//! runs anyway (build.zig, `tests_run_elsewhere`).
+//!
 //! * Everything else is std's runner as of the pinned 0.17 (`lib/compiler/test_runner.zig`): the same
 //! server protocol, a fresh `testing.allocator` and `testing.io` for every test, the same leak and
 //! logged-error accounting. Fuzzing and the simple-backend path are left out - no zimr test fuzzes, and
@@ -24,6 +35,7 @@ const ArrayList = std.ArrayList;
 const SafeAllocator = std.heap.SafeAllocator;
 const eql = std.mem.eql;
 const startsWith = std.mem.startsWith;
+const indexOf = std.mem.indexOf;
 const indexOfScalar = std.mem.indexOfScalar;
 const sortSlice = std.mem.sort;
 const parseInt = std.fmt.parseInt;
@@ -48,23 +60,48 @@ var log_err_count: usize = 0;
 // lint:off module-var: filled by `runOne`, read by the sort's comparator, which carries no state of its own.
 var test_ns: []u64 = &.{};
 
-/// The tests one process runs: those whose index is `index` modulo `count`.
+/// The tests one process runs: those whose index is `index` modulo `count` - and, with a filter, whose name contains
+/// it - listed in `selected` by `select`.
 const Shard = struct {
     index: u32 = 0,
     count: u32 = 1,
+    /// The indices in `builtin.test_functions` this process runs, in order (`select`).
+    selected: []const u32 = &.{},
+
+    /// The shard's tests whose names contain `filter` (every one for an empty filter) and begin with none of
+    /// `skip_prefixes`, into `selected`.
+    fn select(shard: *Shard, filter: []const u8, skip_prefixes: []const []const u8) void {
+        const gpa: Allocator = std.heap.page_allocator;
+        var chosen: ArrayList(u32) = .empty;
+        const total: usize = builtin.test_functions.len;
+        var index: usize = shard.index;
+        while (index < total) : (index += shard.count) {
+            const name: []const u8 = builtin.test_functions[index].name;
+            const is_chosen: bool = filter.len == 0 or indexOf(u8, name, filter) != null;
+            if (!is_chosen) {
+                continue;
+            }
+            const is_run_elsewhere: bool = for (skip_prefixes) |prefix| {
+                if (startsWith(u8, name, prefix)) {
+                    break true;
+                }
+            } else false;
+            if (is_run_elsewhere) {
+                continue;
+            }
+            chosen.append(gpa, @intCast(index)) catch |err| panic("unable to list the tests: {t}", .{err});
+        }
+        shard.selected = chosen.items;
+    }
 
     /// How many of the binary's tests this shard runs.
     fn len(shard: Shard) u32 {
-        const total: u32 = @intCast(builtin.test_functions.len);
-        if (shard.index >= total) {
-            return 0;
-        }
-        return (total - shard.index + shard.count - 1) / shard.count;
+        return @intCast(shard.selected.len);
     }
 
     /// The index in `builtin.test_functions` of this shard's `local`-th test.
     fn global(shard: Shard, local: u32) u32 {
-        return shard.index + local * shard.count;
+        return shard.selected[local];
     }
 
     /// `K/N`, from `--shard=K/N`.
@@ -85,10 +122,28 @@ const Shard = struct {
     }
 };
 
+/// Whether a `--filter` or a `--skip-prefix` chose this run's tests: read by a test whose verdict needs every other
+/// test to have run - the Vulkan host test's report of which kernels the tests dispatched
+/// (`@import("root").tests_are_filtered`).
+// lint:off module-var: a test reaches its runner through `@import("root")` alone, which carries no context.
+pub var tests_are_filtered: bool = false;
+
+/// At most this many `--skip-prefix=` arguments.
+const max_skip_prefixes: usize = 4;
+
 const Options = struct {
     listen: bool = false,
     timing: bool = false,
     shard: Shard = .{},
+    /// `--filter=TEXT` (`Shard.select`).
+    filter: []const u8 = "",
+    /// `--skip-prefix=PREFIX`, one each (`Shard.select`): the first `skip_prefix_count` hold them.
+    skip_prefix_storage: [max_skip_prefixes][]const u8 = undefined,
+    skip_prefix_count: u32 = 0,
+
+    fn skipPrefixes(options: *const Options) []const []const u8 {
+        return options.skip_prefix_storage[0..options.skip_prefix_count];
+    }
 };
 
 /// What running one test came to.
@@ -353,11 +408,22 @@ pub fn main(init: std.process.Init.Minimal) void {
             options.shard = Shard.parse(arg["--shard=".len..]);
         } else if (eql(u8, arg, "--timing")) {
             options.timing = true;
+        } else if (startsWith(u8, arg, "--filter=")) {
+            options.filter = arg["--filter=".len..];
+        } else if (startsWith(u8, arg, "--skip-prefix=")) {
+            if (options.skip_prefix_count == max_skip_prefixes) {
+                panic("at most {d} --skip-prefix arguments, got another: {s}", .{ max_skip_prefixes, arg });
+            }
+            options.skip_prefix_storage[options.skip_prefix_count] = arg["--skip-prefix=".len..];
+            options.skip_prefix_count += 1;
         } else {
             panic("unrecognized command line argument: {s}", .{arg});
         }
     }
 
+    options.shard.select(options.filter, options.skipPrefixes());
+    // A run that leaves tests to another binary has not run every test either.
+    tests_are_filtered = options.filter.len > 0 or options.skip_prefix_count > 0;
     test_ns = std.heap.page_allocator.alloc(u64, builtin.test_functions.len) catch |err| {
         panic("unable to allocate the test times: {t}", .{err});
     };

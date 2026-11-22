@@ -27,8 +27,9 @@ const vec2 = zm.vec2;
 // The flagship roster. Order = switch order. A broad tour of the engine: 3D PBR,
 // full UI, physics (2D and 3D, alone and side by side), robot dynamics with a
 // live MPC planner, two CPU-vs-GPU side-by-sides, 2D/3D plots, two GPU fluids,
-// a warp starfield, switchable 2D post-fx, Go, a scale played with two hands,
-// and fractals.
+// a network learning a curve you draw (in a job, or on the GPU), a warp
+// starfield, switchable 2D post-fx, Go, a scale played with two hands, and
+// fractals.
 const flagships = [_]z.AppVtable{
     z.eraseApp(@import("ex_helmet_sw").app), // CPU vs GPU PBR helmet
     z.eraseApp(@import("ex_bone_socket").app), // rigged character, skeletal animation + socketed sword
@@ -51,6 +52,7 @@ const flagships = [_]z.AppVtable{
     z.eraseApp(@import("ex_sph_fluid_2d").app), // GPU SPH fluid
     z.eraseApp(@import("ex_fluid_sort").app), // GPU SPH fluid (sorted grid)
     z.eraseApp(@import("ex_zimrnum_field").app), // zimrnum on the CPU and the GPU, and their difference
+    z.eraseApp(@import("ex_zimrnum_fit").app), // draw a curve, a network learns it: the CPU in a job, or the GPU
     z.eraseApp(@import("ex_four_ways").app),
     z.eraseApp(@import("ex_worker_png").app), // PNG encode on a Web Worker (off the main thread)
     z.eraseApp(@import("ex_mandel_julia").app), // fractal explorer
@@ -69,9 +71,9 @@ const flagships = [_]z.AppVtable{
     z.eraseApp(@import("ex_quadruped").app), // articulated robot: gimbal + contact readouts
     z.eraseApp(@import("ex_gallery_all").app), // 2x2 grid of 4 mini-apps (launcher-in-launcher!)
 };
-const n_apps = flagships.len;
+const n_apps: usize = flagships.len;
 
-pub const std_options = z.std_options;
+pub const std_options: std.Options = z.std_options;
 
 const State = struct {
     launcher: z.Launcher,

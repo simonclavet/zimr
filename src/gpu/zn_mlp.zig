@@ -29,6 +29,18 @@ const clamp = zm.clamp;
 const cosRad = zm.cosRad;
 const pi = zm.pi;
 const sinRad = zm.sinRad;
+const Pose = zm.Pose;
+const poseSeenFrom = zm.poseSeenFrom;
+const pose_seen_numbers = zm.pose_seen_numbers;
+const integratePose = zm.integratePose;
+const PoseGradient = zm.PoseGradient;
+const PoseIntegrationGradients = zm.PoseIntegrationGradients;
+const poseSeenFromBackward = zm.poseSeenFromBackward;
+const integratePoseBackward = zm.integratePoseBackward;
+const angleBetween = zm.angleBetween;
+const poseFromSeen = zm.poseFromSeen;
+const Vec = zm.Vec;
+const vec = zm.vec;
 
 /// Floats per buffer: 256k (1 MiB). A SAC critic for the humanoid - 97 inputs, two layers of
 /// 256, batch 256 - needs ~150k floats of activations; its weights ~92k.
@@ -36,13 +48,25 @@ const sinRad = zm.sinRad;
 /// copied in under that name by its build (the trainer's).
 const sizes = @import("zn_mlp_sizes.zig");
 
-pub const config = k.Config{ .max = sizes.params_len, .workgroup = 64 };
+/// A LARGE DISPATCH allowed (`kompute.Config.large_dispatch`): at the reference implementations' batches a kernel over
+/// every number of a batch's windows passes 65,535 workgroups of 64. Every kernel here takes its block and its lane
+/// from its index alone (`blockLane`), so rows of workgroups change nothing it computes. And a dispatch may range over
+/// the activations (`dispatch_max`), not only over the parameters' length (`max`): the windows' gather at 1,024
+/// windows is 1,024 x 11 steps x a wide row of over a thousand numbers - 12 million invocations, past the parameters'
+/// 8.
+pub const config = k.Config{
+    .max = sizes.params_len,
+    .workgroup = 64,
+    .large_dispatch = true,
+    .dispatch_max = sizes.acts_len,
+};
+/// Whether this build keeps the kernels' CPU twin (the sizes file says, `compute_host.Compute`'s `has_cpu_twin`): a
+/// program that runs them on a device alone leaves it out, and with it every buffer's static array.
+pub const cpu_twin: bool = sizes.cpu_twin;
 
 /// What a layer's output goes through.
 pub const Act = enum(u32) { linear = 0, tanh = 1, relu = 2 };
 
-/// Whether a loss kernel counts every row, or only the rows a mask marks (`row_mask`): a replay window that has run
-/// past its episode's end still rolls forward, but its rows count for nothing in the loss from then on.
 /// How MPPI's elites are weighed (`mppi_elites`): exp(`mppi_temperature` x (score - best)) ABSOLUTE - TD-MPC2's
 /// rule, for scores of a value's scale (tens), where a difference of 1 is small; or RELATIVE to the elites' own
 /// spread, exp(`mppi_temperature` x (score - best) / (best - worst elite)) - so the worst elite weighs
@@ -53,6 +77,8 @@ pub const MppiTemperature = enum(u32) {
     relative_to_elites = 1,
 };
 
+/// Whether a loss kernel counts every row, or only the rows a mask marks (`row_mask`): a replay window that has run
+/// past its episode's end still rolls forward, but its rows count for nothing in the loss from then on.
 pub const RowMask = enum(u32) {
     /// Every row counts.
     every_row = 0,
@@ -139,9 +165,9 @@ pub const Params = extern struct {
     w_pole: f32 = 10.0,
     w_pole_rate: f32 = 0.1,
     w_action: f32 = 0.01,
-    // -- The latent model's gather (`lat_gather`): sizes, and where each resident region starts
-    // in the activation buffer. Named for what they are rather than borrowing other kernels'
-    // fields - twelve words, 48 bytes, so the struct keeps its 16-byte multiple.
+    // -- The latent model's gather (`lat_gather`): sizes, and where each resident region starts - in the activation
+    // buffer, but `ring_off`, which is in the replay's own (`Buffers.ring`). Named for what they are rather than
+    // borrowing other kernels' fields - twelve words, 48 bytes, so the struct keeps its 16-byte multiple.
     lat_features: u32 = 0,
     lat_references: u32 = 0,
     lat_actions: u32 = 0,
@@ -155,12 +181,13 @@ pub const Params = extern struct {
     blocks_off: u32 = 0,
     targets_off: u32 = 0,
     /// Goal columns in front of each wide row (0, or the feature count when a policy trains through
-    /// the rollout), and where the contiguous goal block starts. Two padding words keep the 16-byte
-    /// multiple.
+    /// the rollout), and where the contiguous goal block starts. Then the world model's running statistics' fold
+    /// (`lat_world_moments`): the ring slot of the first record it folds, and the epsilon its inputs' spreads take.
+    /// 16 bytes.
     lat_lead: u32 = 0,
     goals_off: u32 = 0,
-    _p7: u32 = 0,
-    _p8: u32 = 0,
+    lat_first_slot: u32 = 0,
+    lat_norm_epsilon: f32 = 0.01,
     /// The policy's action, as `lat_act` writes it: `lat_scale * (raw + lat_sigma * noise)`, the
     /// noise a hash of (`lat_seed`, row, column) - declared together so the noise needs no second
     /// change to this block - and THE ACTION FILTER's share of it in the action written (`lat_filter`; 1 is no
@@ -287,11 +314,12 @@ pub const Params = extern struct {
     /// The per-step cost's cap far from the reference (`boundedCost`, `lat_tracking_cost`); 0 for none.
     cost_cap: f32 = 0,
     // -- A plan's knots (`planKnots`): its first `plan_fine_steps` steps each a knot, then a knot every
-    // `plan_knot_span` steps to the horizon's last; 0 fine steps for every step a knot. 16 bytes.
+    // `plan_knot_span` steps to the horizon's last; 0 fine steps for every step a knot. Then a statistic summed in
+    // chunks (`ChunkedStatistic`): the terms a chunk holds, and where in params the chunks' sums go. 16 bytes.
     plan_fine_steps: u32 = 0,
     plan_knot_span: u32 = 1,
-    _p21: u32 = 0,
-    _p22: u32 = 0,
+    stat_chunk: u32 = 0,
+    stat_partials_off: u32 = 0,
     // -- The world model's change in units of each feature's typical change (`lat_advance`): whether it is, and
     // where the statistics are in acts - `count` means, then `count` spreads. 16 bytes.
     lat_increments_on: u32 = 0,
@@ -299,18 +327,74 @@ pub const Params = extern struct {
     /// Row stride of a dense layer's output (`dense_fwd`); 0 means rows of `out_dim`. A stride wider than the layer
     /// writes into rows laid out for someone else - a simulator's padded action rows - leaving the gaps untouched.
     y_stride: u32 = 0,
-    _p24: u32 = 0,
+    /// A dense layer's INPUT AFFINE (`inputAffine`): where in params each input column's shift and scale are -
+    /// `in_dim` shifts, then `in_dim` scales - the layer reading each input as (input - shift) x scale. 0: none, the
+    /// inputs as they are (no such region starts the parameters).
+    in_affine_off: u32 = 0,
+    // -- THE WORLD MODEL's HEADS (`LatentKit.heads`): the share of its head's output a step adds to the state
+    // (`lat_advance`; 1 for SuperTrack's single head), and whether a gather reads its steps' record offsets from a
+    // SCHEDULE at acts `lat_schedule_at` (`lat_gather`). 16 bytes.
+    lat_step_scale: f32 = 1.0,
+    lat_schedule_on: u32 = 0,
+    lat_schedule_at: u32 = 0,
+    _p25: u32 = 0,
+    // -- THE ROOT IN IMAGINATION (`lat_gather`, `lat_root_step`, `lat_root_bwd`, `LatentKit.imagined_root`): whether
+    // the policy's goal carries the root target, and where the root's two blocks are in acts, each [step][row][pose]
+    // (`lat_root_pose_numbers` a pose): the root at each decision, and the reference's root at each decision's goal.
+    // Then a step's decision, the root's velocity's and angular velocity's first columns in the features, the step's
+    // seconds, and where the root's carried gradient is in dacts. 32 bytes.
+    lat_root_target: u32 = 0,
+    lat_roots_off: u32 = 0,
+    lat_goal_roots_off: u32 = 0,
+    lat_root_decision: u32 = 0,
+    lat_root_velocity_column: u32 = 0,
+    lat_root_angular_column: u32 = 0,
+    lat_root_seconds: f32 = 0,
+    lat_root_gradient_off: u32 = 0,
+    // -- THE ROOT's COST (`lat_root_bwd`, `lat_root_drift`): the weights of the drift's position and rotation in the
+    // policy's loss, the scale a decision's cost takes there (its decisions over the rows), and whether the decision's
+    // root target is read by a policy step (none at the rollout's last state). 16 bytes.
+    lat_root_position_weight: f32 = 0,
+    lat_root_rotation_weight: f32 = 0,
+    lat_root_cost_scale: f32 = 0,
+    lat_root_read_by_policy: u32 = 0,
+    // -- MUON (`kit_mlp.Muon`): a product's scales - out = alpha (A B) + beta D, B read transposed or not - the
+    // momentum, the weight decay's factor (rate x decay) and the step's length (the adjusted rate). Then A FLOW's
+    // DRIFTING NOISE (`ou_noise_step`): how much of itself it keeps from one decision to the next, and the scale its
+    // starting point takes. 32 bytes.
+    muon_alpha: f32 = 1.0,
+    muon_beta: f32 = 0,
+    muon_b_transposed: u32 = 0,
+    muon_momentum: f32 = 0,
+    muon_decay: f32 = 0,
+    muon_step: f32 = 0,
+    flow_noise_correlation: f32 = 0,
+    flow_noise_scale: f32 = 0,
+    // -- THE WORLD MODEL's RUNNING STATISTICS (`lat_world_moments`): how many transitions its running moments take
+    // before they stay as they are - 0, none - and the epsilon its change's spreads take. Then whether a statistic
+    // weighs each feature's terms by its loss weight at acts `u_off` (`stat_no_change_error`,
+    // `stat_mean_square_difference`: the world model's gate in the loss's own units); 0, every term weighs 1. And the
+    // clip's frames a decision advances (`lat_gather_policy_starts`: robot_track's `decide_every`). 16 bytes.
+    lat_moments_limit: f32 = 0,
+    lat_change_epsilon: f32 = 0,
+    stat_weights_on: u32 = 0,
+    lat_decision_frames: u32 = 1,
 };
 
 /// The activation buffer is the one that grows: eight times the others. Everything the latent
 /// world model's training keeps RESIDENT on the GPU lives in it - the rollout's blocks, and past them
-/// the replay of features and the reference tables - because it cannot live in a buffer of its own:
-/// WebGPU guarantees only 8 storage buffers to a shader stage, this kit already binds 7, and a binding
-/// past the limit is not an error anywhere - its writes are silently dropped (compute_host.zig tells
-/// that story). Every buffer is sized by its own field here, on the GPU and in the CPU twin alike;
-/// the twin's arrays are static, so for the pages this is 8 MB of wasm memory on every page using the
+/// the reference tables and the window starts. Every buffer is sized by its own field here, on the GPU and in the
+/// CPU twin alike; the twin's arrays are static, so for the pages this is 8 MB of wasm memory on every page using the
 /// kit (`zn_mlp_sizes.zig`; the trainer's sizes are its own).
 pub const acts_len: u32 = sizes.acts_len;
+
+/// THE REPLAY OF RECORDS (`robot_latent_kit.RecordRing`), a buffer of its own: the characters' records and a
+/// planner's candidates', read by every gather (`lat_gather`, `lat_gather_start_actions`) and the running statistics'
+/// fold (`lat_world_moments`), written by uploads and by copies from a simulator. Apart from the activations so that
+/// a long replay does not take the batches' room. It is the EIGHTH storage buffer, WebGPU's guaranteed floor for a
+/// shader stage: a binding past it is not an error anywhere, its writes silently dropped (compute_host.zig tells
+/// that story), so this module has no room for a ninth.
+pub const ring_len: u32 = sizes.ring_len;
 
 /// The activation gradients' buffer, sized on its own: a learner's backward keeps a gradient for every activation of
 /// every application it learns from - EfficientTDMPC's rollout over a whole batch of windows, every head at every step
@@ -326,10 +410,13 @@ pub const Buffers = extern struct {
     adam_m: [config.max]f32,
     adam_v: [config.max]f32,
     loss: [config.max]f32,
+    /// Last, so every other buffer keeps its binding number and its place in a loan (`compute_host`'s borrowed).
+    ring: [ring_len]f32,
 };
 
 pub const g = k.Globals(@This());
 const b_acts = g.bind(.acts);
+const b_ring = g.bind(.ring);
 const b_dacts = g.bind(.dacts);
 const b_params = g.bind(.params);
 const b_grads = g.bind(.grads);
@@ -368,7 +455,33 @@ inline fn outputStride() u32 {
     return if (params.y_stride != 0) params.y_stride else params.out_dim;
 }
 
-/// y[r, o] = act(b[o] + sum_i x[r, i] W[i, o]); one thread per (r, o).
+/// AN INPUT AS A DENSE LAYER READS IT, column `column` of its inputs: as it is, or - with an input affine
+/// (`in_affine_off`) - shifted and scaled, (value - shift) x scale, that column's shift and scale read from the
+/// parameters. A NORMALISER OF A NETWORK's INPUTS, applied where its first layer reads them - the world model's
+/// (`LatentKit.inputs_affine_at`), as SuperMimic's model normalises its state and action and XMimic's its whole input
+/// - so the rows it reads keep their own units for every other reader of them. With the affine the forward, the
+/// weights' gradient and the inputs' gradient all read through it: the layer is trained in the normalised inputs.
+inline fn inputAffine(value: f32, column: u32) f32 {
+    if (params.in_affine_off == 0) {
+        return value;
+    }
+    const shift: f32 = b_params[params.in_affine_off + column];
+    const scale: f32 = b_params[params.in_affine_off + params.in_dim + column];
+    const shifted: f32 = value - shift;
+    return shifted * scale;
+}
+
+/// The factor an input's gradient takes back through the input affine (`inputAffine`): d input = scale x d (the
+/// layer's normalised input) - and 1 without an affine, which leaves a gradient's bits as they are.
+inline fn inputAffineScale(column: u32) f32 {
+    if (params.in_affine_off == 0) {
+        return 1.0;
+    }
+    return b_params[params.in_affine_off + params.in_dim + column];
+}
+
+/// y[r, o] = act(b[o] + sum_i x[r, i] W[i, o]), each input through the layer's affine (`inputAffine`); one thread per
+/// (r, o).
 pub fn dense_fwd(id: u32) void {
     if (id >= params.rows * params.out_dim) {
         return;
@@ -378,7 +491,8 @@ pub fn dense_fwd(id: u32) void {
     var acc: f32 = b_params[params.w_off + params.in_dim * params.out_dim + o];
     var i: u32 = 0;
     while (i < params.in_dim) : (i += 1) {
-        acc += b_acts[params.x_off + r * inputStride() + i] * b_params[params.w_off + i * params.out_dim + o];
+        const input: f32 = inputAffine(b_acts[params.x_off + r * inputStride() + i], i);
+        acc += input * b_params[params.w_off + i * params.out_dim + o];
     }
     b_acts[params.y_off + r * outputStride() + o] = activate(acc, params.act);
 }
@@ -414,7 +528,7 @@ pub fn act_bwd(id: u32) void {
     b_dacts[params.dy_off + id] = b_dacts[params.dy_off + id] * derivative(y, params.act);
 }
 
-/// dx[r, i] = sum_o dz[r, o] W[i, o]; one thread per (r, i).
+/// dx[r, i] = sum_o dz[r, o] W[i, o], back through the input affine (`inputAffineScale`); one thread per (r, i).
 pub fn dense_bwd_x(id: u32) void {
     if (id >= params.rows * params.in_dim) {
         return;
@@ -426,10 +540,11 @@ pub fn dense_bwd_x(id: u32) void {
     while (o < params.out_dim) : (o += 1) {
         acc += b_dacts[params.dy_off + r * params.out_dim + o] * b_params[params.w_off + i * params.out_dim + o];
     }
-    b_dacts[params.dx_off + id] = acc;
+    b_dacts[params.dx_off + id] = acc * inputAffineScale(i);
 }
 
-/// gW[i, o] = sum_r x[r, i] dz[r, o], then gb[o] = sum_r dz[r, o]: one thread per weight.
+/// gW[i, o] = sum_r x[r, i] dz[r, o], then gb[o] = sum_r dz[r, o] - each x through the input affine
+/// (`inputAffine`): one thread per weight.
 pub fn dense_bwd_w(id: u32) void {
     const weights: u32 = params.in_dim * params.out_dim;
     if (id >= weights + params.out_dim) {
@@ -441,7 +556,8 @@ pub fn dense_bwd_w(id: u32) void {
         const i: u32 = id / params.out_dim;
         const o: u32 = id % params.out_dim;
         while (r < params.rows) : (r += 1) {
-            acc += b_acts[params.x_off + r * inputStride() + i] * b_dacts[params.dy_off + r * params.out_dim + o];
+            const input: f32 = inputAffine(b_acts[params.x_off + r * inputStride() + i], i);
+            acc += input * b_dacts[params.dy_off + r * params.out_dim + o];
         }
     } else {
         const o: u32 = id - weights;
@@ -454,6 +570,374 @@ pub fn dense_bwd_w(id: u32) void {
     } else {
         b_grads[params.w_off + id] = acc;
     }
+}
+
+// -- THE DENSE LAYERS IN BLOCKS --
+//
+// The three dense kernels above - and Muon's products - as one REGISTER-BLOCKED PRODUCT, the standard form of a matrix
+// product on a GPU. A product C = A B, A `rows` x `inner` and B `inner` x `columns`, is cut into blocks of 64 x 64 of
+// C, one workgroup each, and each of the workgroup's 64 lanes keeps 8 x 8 of the block's sums in its own registers:
+//
+//     a lane's rows      block_row + lane_row + 8 i              i = 0..7     lane_row    = lane / 8
+//     a lane's columns   block_column + lane_column + 8 j        j = 0..7     lane_column = lane % 8
+//
+// The inner index runs in steps of 8. At each step the workgroup copies the step's SLABS into workgroup memory - A's 64
+// rows of the block at the step's 8 inner indices, B's 8 inner indices at the block's 64 columns, 8 numbers of each a
+// lane - then each lane takes, for each of the step's inner indices, its 8 rows' numbers of A and its 8 columns' of B,
+// and adds their 64 products to its 64 sums:
+//
+//     slab of A, inner-major                 slab of B
+//       inner 0   [ row 0 ... row 63 ]         inner 0   [ column 0 ... column 63 ]
+//       ...                                    ...
+//       inner 7   [ row 0 ... row 63 ]         inner 7   [ column 0 ... column 63 ]
+//
+//     a step, for each lane:   16 global reads, 128 reads of workgroup memory, 512 multiply-adds
+//
+// A dense layer's sums are few beside the numbers they read - each number of A takes part in `columns` products, each
+// of B in `rows` - so what bounds such a kernel is how often it reads a number, not how many products it makes. A tile
+// of 8 x 8 with one sum a lane made 4 multiply-adds a global read and one a read of workgroup memory; the blocks make
+// 32 and 4. In a group of 32 lanes, the numbers of A read at once are 4, each by 8 lanes, and of B 8 neighbours, each
+// by 4: every read of workgroup memory is a broadcast, no two lanes meeting in one bank at two addresses.
+//
+// EACH SUM IN THE UNTILED KERNEL's ORDER: the bias or zero first, then the inner index ascending, step after step - so
+// on the CPU twin, which computes each of a lane's sums straight from global memory, the results are the untiled
+// kernels' bits; on a device they differ only where a driver contracts a multiply-add differently.
+//
+// THE RULES OF A BARRIER (`zn_matmul`'s): no early return - every lane walks every step and reaches every barrier, only
+// the final writes are guarded; the block's coordinates from the global id; loads masked by multiplication, not
+// selection - an out-of-range index collapses to 0 and its value to 0.
+//
+// A DISPATCH of a blocked kernel is 64 lanes for each 64 x 64 block of its output (`denseTiledInvocations`).
+
+/// A block's side: 64 x 64 sums, one workgroup's.
+const dense_block: u32 = 64;
+/// The lanes along a block's side - the module's 64 lanes as an 8 x 8 grid - and each lane's sums along it: 8 x 8.
+const dense_lane_grid: u32 = 8;
+const dense_lane_sums: u32 = dense_block / dense_lane_grid;
+/// The inner indices a step copies into workgroup memory.
+const dense_step: u32 = 8;
+/// A lane's sums of one row are held as vectors of 4 (`LaneVector`), 2 of them for its 8 columns.
+const LaneVector = Vec;
+const lane_vector_numbers: u32 = 4;
+const dense_lane_vectors: u32 = dense_lane_sums / lane_vector_numbers;
+const dense_slab_left = k.shared(f32, dense_step * dense_block, "dense_slab_left");
+const dense_slab_right = k.shared(f32, dense_step * dense_block, "dense_slab_right");
+
+/// THE FOUR BLOCKED PRODUCTS (`blockedProduct`): what each multiplies, where it reads A's and B's numbers, what its
+/// sums start from and where they go.
+const BlockedProduct = enum {
+    /// A layer's forward, y = act(b + x W): A the inputs (acts `x_off`, rows `inputStride()` apart, each through the
+    /// input affine), B the weights (params `w_off`, `out_dim` wide), each sum started at its column's bias.
+    dense_forward,
+    /// The inputs' gradient, dx = dz W^T, back through the input affine's scales: A the gradient at the outputs (dacts
+    /// `dy_off`), B the weights read transposed.
+    dense_inputs_gradient,
+    /// The weights' gradient, gW = x^T dz, and the bias's as one more row of A whose x is 1: A the inputs read
+    /// transposed, B the gradient at the outputs - written, or added (`accumulate`).
+    dense_weights_gradient,
+    /// Muon's product, out = alpha (A B) + beta D, all in acts (`muon_matmul_tiled`).
+    muon,
+};
+
+/// A blocked product's sizes: C is `rows` x `columns`, each sum over `inner` indices.
+const BlockedShape = struct {
+    rows: u32,
+    columns: u32,
+    inner: u32,
+};
+
+fn blockedShape(comptime product: BlockedProduct) BlockedShape {
+    return switch (product) {
+        .dense_forward => .{ .rows = params.rows, .columns = params.out_dim, .inner = params.in_dim },
+        .dense_inputs_gradient => .{ .rows = params.rows, .columns = params.in_dim, .inner = params.out_dim },
+        .dense_weights_gradient => .{ .rows = params.in_dim + 1, .columns = params.out_dim, .inner = params.rows },
+        .muon => .{ .rows = params.rows, .columns = params.out_dim, .inner = params.in_dim },
+    };
+}
+
+/// 0 or 1 as a float, for a masked load's value.
+inline fn maskFloat(mask: u32) f32 {
+    return float(mask);
+}
+
+/// A's number at row `row` and inner index `inner` - 0 where `ok` is 0, its index collapsed so that no read leaves the
+/// operand's buffer.
+inline fn blockedLeft(
+    comptime product: BlockedProduct,
+    row: u32,
+    inner: u32,
+    ok: u32,
+) f32 {
+    switch (product) {
+        .dense_forward => {
+            const at: u32 = (params.x_off + row * inputStride() + inner) * ok;
+            return inputAffine(b_acts[at], inner * ok) * maskFloat(ok);
+        },
+        .dense_inputs_gradient => {
+            const at: u32 = (params.dy_off + row * params.out_dim + inner) * ok;
+            return b_dacts[at] * maskFloat(ok);
+        },
+        .dense_weights_gradient => {
+            // Row `row` of A is input `row` across the batch - x transposed - or, for the row past the inputs, the
+            // bias's 1.
+            const is_input: u32 = @intFromBool(row < params.in_dim);
+            const x_ok: u32 = ok & is_input;
+            const one_ok: u32 = ok & (1 - is_input);
+            const at: u32 = (params.x_off + inner * inputStride() + row) * x_ok;
+            const x_value: f32 = inputAffine(b_acts[at], row * x_ok);
+            return x_value * maskFloat(x_ok) + maskFloat(one_ok);
+        },
+        .muon => {
+            const at: u32 = (params.x_off + row * params.in_dim + inner) * ok;
+            return b_acts[at] * maskFloat(ok);
+        },
+    }
+}
+
+/// B's number at inner index `inner` and column `column` - 0 where `ok` is 0, as A's.
+inline fn blockedRight(
+    comptime product: BlockedProduct,
+    inner: u32,
+    column: u32,
+    ok: u32,
+) f32 {
+    switch (product) {
+        .dense_forward => {
+            const at: u32 = (params.w_off + inner * params.out_dim + column) * ok;
+            return b_params[at] * maskFloat(ok);
+        },
+        .dense_inputs_gradient => {
+            // The weights read transposed: the weight from input `column` to output `inner`.
+            const at: u32 = (params.w_off + column * params.out_dim + inner) * ok;
+            return b_params[at] * maskFloat(ok);
+        },
+        .dense_weights_gradient => {
+            const at: u32 = (params.dy_off + inner * params.out_dim + column) * ok;
+            return b_dacts[at] * maskFloat(ok);
+        },
+        .muon => {
+            const straight: u32 = params.v_off + inner * params.out_dim + column;
+            const transposed: u32 = params.v_off + column * params.in_dim + inner;
+            const index: u32 = if (params.muon_b_transposed != 0) transposed else straight;
+            return b_acts[index * ok] * maskFloat(ok);
+        },
+    }
+}
+
+/// Where column `column`'s sums start: its bias for a layer's forward, zero for every other product. A column outside
+/// the output (`ok` 0) reads the parameters' first number, a sum never written.
+inline fn blockedStart(comptime product: BlockedProduct, column: u32, ok: u32) f32 {
+    if (product != .dense_forward) {
+        return 0.0;
+    }
+    const at: u32 = (params.w_off + params.in_dim * params.out_dim + column) * ok;
+    return b_params[at];
+}
+
+/// A finished sum, of row `row` and column `column` of the output, written where its product puts it. A function of
+/// its own, called for each of a lane's 64 sums: inlined, its activation - a tanh, a few dozen instructions - would be
+/// copied 64 times into the kernel.
+fn blockedFinish(comptime product: BlockedProduct, row: u32, column: u32, sum: f32) void {
+    switch (product) {
+        .dense_forward => {
+            b_acts[params.y_off + row * outputStride() + column] = activate(sum, params.act);
+        },
+        .dense_inputs_gradient => {
+            b_dacts[params.dx_off + row * params.in_dim + column] = sum * inputAffineScale(column);
+        },
+        .dense_weights_gradient => {
+            const gradient_at: u32 = params.w_off + row * params.out_dim + column;
+            if (params.accumulate != 0) {
+                b_grads[gradient_at] += sum;
+            } else {
+                b_grads[gradient_at] = sum;
+            }
+        },
+        .muon => {
+            const out_at: u32 = row * params.out_dim + column;
+            const product_part: f32 = params.muon_alpha * sum;
+            const added: f32 = if (params.muon_beta != 0) params.muon_beta * b_acts[params.u_off + out_at] else 0.0;
+            b_acts[params.y_off + out_at] = product_part + added;
+        },
+    }
+}
+
+/// FOUR FINISHED SUMS of row `row`, its columns `first_column` and the 3 after it a lane's grid apart
+/// (`dense_lane_grid`), each inside the output written (`blockedFinish`). A function of its own, called 16 times a
+/// lane: inlined, each call's guards and its writes would be copied as many times into the kernel.
+fn blockedFinishFour(
+    comptime product: BlockedProduct,
+    shape: BlockedShape,
+    row: u32,
+    first_column: u32,
+    four_sums: LaneVector,
+) void {
+    if (row >= shape.rows) {
+        return;
+    }
+    inline for (0..lane_vector_numbers) |component| {
+        const component_number: u32 = @intCast(component);
+        const column: u32 = first_column + dense_lane_grid * component_number;
+        if (column < shape.columns) {
+            blockedFinish(product, row, column, four_sums[component]);
+        }
+    }
+}
+
+/// A lane's place in a blocked output of `columns` columns: its block's first row and first column, its lane, and the
+/// lane's row and column in the block's grid of lanes (`dense_lane_grid`).
+const BlockLane = struct {
+    block_row: u32,
+    block_column: u32,
+    lane: u32,
+    lane_row: u32,
+    lane_column: u32,
+};
+
+fn blockLane(id: u32, columns: u32) BlockLane {
+    const lanes: u32 = dense_lane_grid * dense_lane_grid;
+    const cell: u32 = id / lanes;
+    const lane: u32 = id % lanes;
+    const blocks_per_row: u32 = (columns + dense_block - 1) / dense_block;
+    return .{
+        .block_row = (cell / blocks_per_row) * dense_block,
+        .block_column = (cell % blocks_per_row) * dense_block,
+        .lane = lane,
+        .lane_row = lane / dense_lane_grid,
+        .lane_column = lane % dense_lane_grid,
+    };
+}
+
+/// The invocations a blocked kernel's output of `rows` x `columns` takes: 64 for each of its 64 x 64 blocks.
+pub fn denseTiledInvocations(rows: u32, columns: u32) u32 {
+    const block_rows: u32 = (rows + dense_block - 1) / dense_block;
+    const block_columns: u32 = (columns + dense_block - 1) / dense_block;
+    return block_rows * block_columns * dense_lane_grid * dense_lane_grid;
+}
+
+/// THE BLOCKED PRODUCT, ONE LANE's PART (the section's head): its 8 x 8 sums started, carried through every step of the
+/// inner index - on the device through the slabs in workgroup memory, on the CPU twin straight from the operands, in
+/// the same order - and each one inside the output finished.
+inline fn blockedProduct(comptime product: BlockedProduct, id: u32) void {
+    const shape: BlockedShape = blockedShape(product);
+    const place: BlockLane = blockLane(id, shape.columns);
+    // Each row's sums as two vectors of four columns: the sums held, read and added a vector at a time - four
+    // multiply-adds an instruction - which keeps the kernel a quarter of the length of one written sum by sum.
+    var sums: [dense_lane_sums * dense_lane_vectors]LaneVector = undefined;
+    var starts: [dense_lane_vectors]LaneVector = undefined;
+    inline for (0..dense_lane_vectors) |half| {
+        inline for (0..lane_vector_numbers) |component| {
+            const sum_column: u32 = @intCast(half * lane_vector_numbers + component);
+            const column: u32 = place.block_column + place.lane_column + dense_lane_grid * sum_column;
+            const column_ok: u32 = @intFromBool(column < shape.columns);
+            starts[half][component] = blockedStart(product, column, column_ok);
+        }
+    }
+    inline for (0..dense_lane_sums) |sum_row| {
+        inline for (0..dense_lane_vectors) |half| {
+            sums[sum_row * dense_lane_vectors + half] = starts[half];
+        }
+    }
+    if (k.is_gpu) {
+        // The lane's part of each slab: A's row `block_row + lane` and B's column `block_column + lane`, at each of the
+        // step's inner indices.
+        const load_row: u32 = place.block_row + place.lane;
+        const load_column: u32 = place.block_column + place.lane;
+        const load_row_ok: u32 = @intFromBool(load_row < shape.rows);
+        const load_column_ok: u32 = @intFromBool(load_column < shape.columns);
+        const steps: u32 = (shape.inner + dense_step - 1) / dense_step;
+        var step: u32 = 0;
+        while (step < steps) : (step += 1) {
+            inline for (0..dense_step) |copied| {
+                const copied_number: u32 = @intCast(copied);
+                const inner: u32 = step * dense_step + copied_number;
+                const inner_ok: u32 = @intFromBool(inner < shape.inner);
+                const slab_at: u32 = copied_number * dense_block + place.lane;
+                dense_slab_left[slab_at] = blockedLeft(product, load_row, inner, load_row_ok & inner_ok);
+                dense_slab_right[slab_at] = blockedRight(product, inner, load_column, load_column_ok & inner_ok);
+            }
+            k.workgroupBarrier();
+            // The step's inner indices one after another - a loop, not unrolled: each turn's 64 multiply-adds are
+            // work enough beside its counting, and eight copies of them would make the kernel eight times longer for
+            // every driver to compile.
+            var in_step: u32 = 0;
+            while (in_step < dense_step) : (in_step += 1) {
+                const slab_row_at: u32 = in_step * dense_block;
+                var left_values: [dense_lane_sums]f32 = undefined;
+                inline for (0..dense_lane_sums) |sum_row| {
+                    const row_number: u32 = @intCast(sum_row);
+                    left_values[sum_row] = dense_slab_left[slab_row_at + place.lane_row + dense_lane_grid * row_number];
+                }
+                var right_vectors: [dense_lane_vectors]LaneVector = undefined;
+                inline for (0..dense_lane_vectors) |half| {
+                    inline for (0..lane_vector_numbers) |component| {
+                        const sum_column: u32 = @intCast(half * lane_vector_numbers + component);
+                        const right_at: u32 = slab_row_at + place.lane_column + dense_lane_grid * sum_column;
+                        right_vectors[half][component] = dense_slab_right[right_at];
+                    }
+                }
+                inline for (0..dense_lane_sums) |sum_row| {
+                    const left_splat: LaneVector = @splat(left_values[sum_row]);
+                    inline for (0..dense_lane_vectors) |half| {
+                        const products: LaneVector = left_splat * right_vectors[half];
+                        sums[sum_row * dense_lane_vectors + half] += products;
+                    }
+                }
+            }
+            k.workgroupBarrier();
+        }
+    } else {
+        inline for (0..dense_lane_sums) |sum_row| {
+            inline for (0..dense_lane_sums) |sum_column| {
+                const row_number: u32 = @intCast(sum_row);
+                const column_number: u32 = @intCast(sum_column);
+                const row: u32 = place.block_row + place.lane_row + dense_lane_grid * row_number;
+                const column: u32 = place.block_column + place.lane_column + dense_lane_grid * column_number;
+                const in_output: bool = row < shape.rows and column < shape.columns;
+                if (in_output) {
+                    const vector_at: usize = sum_row * dense_lane_vectors + sum_column / lane_vector_numbers;
+                    const component: usize = sum_column % lane_vector_numbers;
+                    var inner: u32 = 0;
+                    while (inner < shape.inner) : (inner += 1) {
+                        const left: f32 = blockedLeft(product, row, inner, 1);
+                        const right: f32 = blockedRight(product, inner, column, 1);
+                        sums[vector_at][component] += left * right;
+                    }
+                }
+            }
+        }
+    }
+    // The finished sums, four columns of a row at a time.
+    inline for (0..dense_lane_sums) |sum_row| {
+        const row_number: u32 = @intCast(sum_row);
+        const row: u32 = place.block_row + place.lane_row + dense_lane_grid * row_number;
+        inline for (0..dense_lane_vectors) |half| {
+            const half_number: u32 = @intCast(half);
+            const first_column: u32 = place.block_column + place.lane_column + dense_block / 2 * half_number;
+            blockedFinishFour(product, shape, row, first_column, sums[sum_row * dense_lane_vectors + half]);
+        }
+    }
+}
+
+/// `dense_fwd` in blocks: y[r, o] = act(b[o] + sum_i x[r, i] W[i, o]), the sum over i ascending, each input through the
+/// layer's affine (`inputAffine`) - read at column 0's for a masked load, so a lane outside the inputs reads nothing
+/// past them.
+pub fn dense_fwd_tiled(id: u32) void {
+    blockedProduct(.dense_forward, id);
+}
+
+/// `dense_bwd_x` in blocks: dx[r, i] = sum_o dz[r, o] W[i, o], the sum over o ascending - W read transposed - then back
+/// through the input affine (`inputAffineScale`).
+pub fn dense_bwd_x_tiled(id: u32) void {
+    blockedProduct(.dense_inputs_gradient, id);
+}
+
+/// `dense_bwd_w` in blocks: gW[i, o] = sum_r x[r, i] dz[r, o] for the `in_dim` weight rows, and the bias's gradient
+/// gb[o] = sum_r dz[r, o] as one more row whose x is 1 - each sum over r ascending, x read transposed, each x through
+/// the input affine (`inputAffine`; column 0's for a masked load). Written, or added to what the gradients hold
+/// (`accumulate`).
+pub fn dense_bwd_w_tiled(id: u32) void {
+    blockedProduct(.dense_weights_gradient, id);
 }
 
 /// The gradient of a mean squared error, one thread per value: for the loss mean over n values of (y - t)^2, each
@@ -632,6 +1116,22 @@ pub fn adam(id: u32) void {
     adamStep(parameter_index, gradient);
 }
 
+/// SGD WITH MOMENTUM over `count` parameters from `w_off`, ONE THREAD PER PARAMETER, in zimrnum's form
+/// (`zimrnum.sgdMomentum`): velocity = momentum x velocity + gradient, then w -= rate x velocity. The velocity lives
+/// in `adam_m`, laid out like the parameters, and the momentum rides in `beta1`: no field of its own, so `Params` and
+/// every kernel's uniform stay as they are. A momentum of 0 is plain SGD exactly - the velocity is the gradient.
+pub fn sgd(id: u32) void {
+    if (id >= params.count) {
+        return;
+    }
+    const parameter_index: u32 = params.w_off + id;
+    const gradient: f32 = b_grads[parameter_index];
+    const momentum: f32 = params.beta1;
+    const velocity: f32 = momentum * b_m[parameter_index] + gradient;
+    b_m[parameter_index] = velocity;
+    b_params[parameter_index] -= params.rate * velocity;
+}
+
 // -- ONE CLIP OF THE GLOBAL GRADIENT NORM, THEN ADAM --
 //
 // A learner that clips its gradient by its GLOBAL norm (BMPC: 20 over the whole world model) scales every gradient
@@ -663,6 +1163,105 @@ pub fn grad_square_partials(id: u32) void {
         squares.add(gradient * gradient);
     }
     b_acts[params.y_off + id] = squares.value();
+}
+
+// -- MUON --
+//
+// MUON (Jordan et al. 2024; `torch.optim.Muon`, which SuperMimic's official code and BlinkMimic use on every hidden
+// matrix): a hidden matrix's update is its gradient's Nesterov momentum ORTHOGONALISED - every singular value of the
+// update brought near 1, its singular vectors kept - so no direction the gradient happens to favour takes the whole
+// step. The orthogonalisation is five rounds of a Newton-Schulz iteration on the momentum normalised to unit
+// Frobenius length:
+//
+//     X  <-  a X + (b G + c G G) X        G = X X^T        (a, b, c) = (3.4445, -4.7750, 2.0315)
+//
+// a quintic whose coefficients pull every singular value in (0, 1] toward 1 fast, trading exactness for speed. The
+// kernels below are its pieces; `kit_mlp.Muon` orders them.
+
+/// MUON's MOMENTUM, one thread per weight of a matrix of `count` from params `w_off`: the gradient - times the clip
+/// factor at acts `x_off` - folded into the momentum buffer, which Adam's first-moment buffer holds for the matrix,
+/// and the Nesterov input into acts `y_off`, as `torch.optim.Muon` writes them:
+///
+///     buffer  <-  buffer + (1 - momentum)(g - buffer)        (buf.lerp_(grad, 1 - momentum))
+///     input    =  g + momentum (buffer - g)                  (grad.lerp(buf, momentum))
+pub fn muon_momentum(id: u32) void {
+    if (id >= params.count) {
+        return;
+    }
+    const weight_at: u32 = params.w_off + id;
+    const clip: f32 = b_acts[params.x_off];
+    const gradient: f32 = b_grads[weight_at] * clip;
+    const kept: f32 = b_m[weight_at];
+    const momentum: f32 = params.muon_momentum;
+    const buffer: f32 = kept + (1.0 - momentum) * (gradient - kept);
+    b_m[weight_at] = buffer;
+    b_acts[params.y_off + id] = gradient + momentum * (buffer - gradient);
+}
+
+/// Muon's partial sums of squares, one thread per chunk of `stride` numbers of acts from `x_off` (`count` in all), each
+/// summed with compensation into acts `y_off` + chunk - the Frobenius length's pieces (`muon_inverse_length`).
+pub fn muon_square_partials(id: u32) void {
+    const chunk_length: u32 = params.stride;
+    const chunk_start: u32 = id * chunk_length;
+    if (chunk_start >= params.count) {
+        return;
+    }
+    const chunk_end: u32 = @min(chunk_start + chunk_length, params.count);
+    var squares: zm.CompensatedSum(f32) = .{};
+    var index: u32 = chunk_start;
+    while (index < chunk_end) : (index += 1) {
+        const value: f32 = b_acts[params.x_off + index];
+        squares.add(value * value);
+    }
+    b_acts[params.y_off + id] = squares.value();
+}
+
+/// ONE THREAD: the inverse of the Frobenius length - the square root of the `rows` partial sums at acts `x_off`, summed
+/// with compensation - held at least `epsilon` (torch's `norm().clamp(min=eps)`), into acts `z_off`.
+pub fn muon_inverse_length(id: u32) void {
+    if (id != 0) {
+        return;
+    }
+    var squares: zm.CompensatedSum(f32) = .{};
+    var chunk: u32 = 0;
+    while (chunk < params.rows) : (chunk += 1) {
+        squares.add(b_acts[params.x_off + chunk]);
+    }
+    const frobenius_length: f32 = sqrt(squares.value());
+    b_acts[params.z_off] = 1.0 / @max(frobenius_length, params.epsilon);
+}
+
+/// `count` numbers of acts from `x_off` times the factor at acts `z_off`, into acts `y_off` - in place when they are
+/// the same.
+pub fn muon_scale(id: u32) void {
+    if (id >= params.count) {
+        return;
+    }
+    b_acts[params.y_off + id] = b_acts[params.x_off + id] * b_acts[params.z_off];
+}
+
+/// A PRODUCT IN BLOCKS, all in acts: out = alpha (A B) + beta D, A `rows` x `in_dim` at `x_off`, B `in_dim` x
+/// `out_dim` at `v_off` - or, with `muon_b_transposed`, B's transpose read from an `out_dim` x `in_dim` matrix there -
+/// D and out `rows` x `out_dim` at `u_off` and `y_off` (`blockedProduct`). The sum over the inner index ascending, as
+/// the dense blocks' (and on the CPU twin straight from memory, in the same order); a dispatch of
+/// `denseTiledInvocations(rows, out_dim)`. The Newton-Schulz round's three products: G = X X^T, U = b G + c G G,
+/// X' = a X + U X.
+pub fn muon_matmul_tiled(id: u32) void {
+    blockedProduct(.muon, id);
+}
+
+/// MUON's STEP, one thread per weight of a matrix of `count` from params `w_off`: the decoupled weight decay, then
+/// the orthogonalised update at acts `x_off` at the step's length - torch's `param.mul_(1 - lr wd)` then
+/// `param.add_(update, alpha=-adjusted_lr)`:
+///
+///     w  <-  w (1 - muon_decay) - muon_step x        muon_decay = rate x decay, muon_step = rate x 0.2 sqrt(max side)
+pub fn muon_apply(id: u32) void {
+    if (id >= params.count) {
+        return;
+    }
+    const weight_at: u32 = params.w_off + id;
+    const decayed: f32 = b_params[weight_at] * (1.0 - params.muon_decay);
+    b_params[weight_at] = decayed - params.muon_step * b_acts[params.x_off + id];
 }
 
 /// The global norm and the clip factor, ONE THREAD: the square root of the `rows` partial sums at acts `x_off`
@@ -748,13 +1347,15 @@ pub fn adam_clipped(id: u32) void {
 // -- THE NORMED LAYER (TD-MPC2's NormedDense: zimrnum's `NormedDense`) --
 //
 // EfficientTDMPC's networks are built of one layer: linear, then a LAYER NORM over the row's outputs together, then
-// a gain and a bias per output, then Mish - or, at the end of the encoder, SimNorm. On the kit it is three steps,
-// because each needs a different shape of thread:
+// a gain and a bias per output, then Mish - or, at the end of the encoder, SimNorm. A world model in SuperMimic's
+// form is built of the same layer ending in SiLU. On the kit it is three steps, because each needs a different shape
+// of thread:
 //
 //     dense_fwd (linear)   p = b + x W               one thread per output value, as every dense layer here
 //     norm_fwd             n = (p - mean) * inv      one thread per ROW: a row's mean and spread need all of it
 //                          s = n * gain + bias
 //     mish_fwd             y = Mish(s)               one thread per value
+//  or silu_fwd             y = SiLU(s)               one thread per value
 //  or simnorm_fwd          y = softmax per group     one thread per GROUP of `simnorm_group` values
 //
 // The row statistics and the group softmax are zimrmath's own (`zm.layerNormRowStatistics`,
@@ -817,6 +1418,18 @@ pub fn mish_fwd(id: u32) void {
     b_acts[params.y_off + id] = zm.mish(value);
 }
 
+/// SiLU on `rows` x `out_dim` values, ONE THREAD PER VALUE: y = SiLU(s) = s sigmoid(s) from `x_off` into `y_off`
+/// (`zm.silu`) - a world model in the normed form. Its input is kept, as Mish's is: the backward reads its slope from
+/// s.
+pub fn silu_fwd(id: u32) void {
+    const value_count: u32 = params.rows * params.out_dim;
+    if (id >= value_count) {
+        return;
+    }
+    const value: f32 = b_acts[params.x_off + id];
+    b_acts[params.y_off + id] = zm.silu(value);
+}
+
 /// SimNorm on `rows` x `out_dim` values, ONE THREAD PER GROUP: each row's values in consecutive groups of
 /// `simnorm_group`, each group softmaxed (`zm.softmaxGroupStatistics`, `zm.softmaxGroupValue`) - from `x_off` into
 /// `y_off`. `out_dim` is a whole number of groups (the host's layer is built so).
@@ -850,6 +1463,7 @@ pub fn simnorm_fwd(id: u32) void {
 // The backward runs the forward's steps in reverse, each the same shape of thread as its forward:
 //
 //     mish_bwd             ds = dy * Mish'(s)                        per value, from the stored s
+//  or silu_bwd             ds = dy * SiLU'(s)                        per value, from the stored s
 //  or simnorm_bwd          ds = y * (dy - sum(dy * y))               per group, from the stored output y
 //     norm_params_bwd      d gain = sum over rows of ds * n          per column: the gain's and the norm bias's
 //                          d norm_bias = sum over rows of ds            gradients, into grads
@@ -894,6 +1508,18 @@ pub fn mish_bwd(id: u32) void {
     const input: f32 = b_acts[params.x_off + id];
     const arriving: f32 = b_dacts[params.dy_off + id];
     b_dacts[params.dx_off + id] = arriving * zm.mishSlope(input);
+}
+
+/// SiLU's backward, ONE THREAD PER VALUE: ds = dy * SiLU'(s) (`zm.siluSlope`), s from acts at `x_off` (`silu_fwd`'s
+/// input), dy from dacts at `dy_off`, ds into dacts at `dx_off` (which may be `dy_off`: each value reads its own).
+pub fn silu_bwd(id: u32) void {
+    const value_count: u32 = params.rows * params.out_dim;
+    if (id >= value_count) {
+        return;
+    }
+    const input: f32 = b_acts[params.x_off + id];
+    const arriving: f32 = b_dacts[params.dy_off + id];
+    b_dacts[params.dx_off + id] = arriving * zm.siluSlope(input);
 }
 
 /// SimNorm's backward, ONE THREAD PER GROUP: each input's gradient its probability times how far its arriving
@@ -1549,6 +2175,15 @@ pub fn zero_rows(id: u32) void {
         return;
     }
     b_acts[params.y_off + id] = 0;
+}
+
+/// Zeros `count` weight gradients from `w_off`: the regions a backward may meet none, some or all of its steps in -
+/// a world model's two heads (`LatentKit.zeroHeadGradients`) - so what it adds into them starts from nothing.
+pub fn zero_weight_gradients(id: u32) void {
+    if (id >= params.count) {
+        return;
+    }
+    b_grads[params.w_off + id] = 0;
 }
 
 /// Zeros `rows` numbers of dacts from `y_off`: a gradient a recurrence carries back from its start, such as the action
@@ -2437,6 +3072,10 @@ pub fn add_block(id: u32) void {
 /// loss kernels read contiguous rows). z_k is read strided from X_k at `x_off`; the change is
 /// contiguous at `t_off`; the next block at `y_off`, the contiguous copy at `z_off`. One thread per
 /// (row, feature); the next block's other columns - its reference and action - are not touched.
+///
+/// WITH TWO HEADS (`LatentKit.heads`) the output is the offset of a projection, and a step adds the share
+/// `lat_step_scale` of it: z_{k+1} = z_k + scale x change - the lerp toward the projection. At the scale of 1 - every
+/// step of a world model with one head - the product is the change itself, exactly.
 pub fn lat_advance(id: u32) void {
     if (id >= params.rows * params.count) {
         return;
@@ -2451,7 +3090,7 @@ pub fn lat_advance(id: u32) void {
         const change_spread: f32 = b_acts[params.lat_increments_at + params.count + c];
         change = change_mean + change_spread * change;
     }
-    const next: f32 = b_acts[params.x_off + r * params.stride + c] + change;
+    const next: f32 = b_acts[params.x_off + r * params.stride + c] + params.lat_step_scale * change;
     b_acts[params.y_off + r * params.stride + c] = next;
     b_acts[params.z_off + r * params.count + c] = next;
 }
@@ -2469,6 +3108,48 @@ pub fn lat_scale_columns(id: u32) void {
     b_dacts[params.y_off + id] = b_dacts[params.x_off + id] * factor;
 }
 
+/// AN ACTION HELD OVER A SKIP, ONE THREAD PER (row, action number): the action columns of the first `lat_steps` wide
+/// blocks - `rows` rows each, `stride` floats apart, the blocks `rows` x `stride` apart from acts `x_off`, the action
+/// at column `col` - replaced in every one of them by their mean, summed block by block in order. The recorded
+/// actions of a skip's decisions made one held action, which the one-step head chained under and the skip head read
+/// (`Resident.trainSkipConsistency`).
+pub fn lat_hold_mean_action(id: u32) void {
+    if (id >= params.rows * params.count) {
+        return;
+    }
+    const row: u32 = id / params.count;
+    const number: u32 = id % params.count;
+    const block_floats: u32 = params.rows * params.stride;
+    const first_at: u32 = params.x_off + row * params.stride + params.col + number;
+    var action_sum: f32 = 0;
+    var block: u32 = 0;
+    while (block < params.lat_steps) : (block += 1) {
+        action_sum += b_acts[first_at + block * block_floats];
+    }
+    const mean_action: f32 = action_sum / float(params.lat_steps);
+    block = 0;
+    while (block < params.lat_steps) : (block += 1) {
+        b_acts[first_at + block * block_floats] = mean_action;
+    }
+}
+
+/// THE GRADIENT OF A STEP's OUTPUT AT A SHARE, ONE THREAD PER VALUE: `rows` rows of `count` from dacts `x_off` - the
+/// gradient of the state the step reached - into dacts `y_off`, times the step's share of its head's output
+/// (`lat_step_scale`), and times each feature's spread when the change is predicted in units of the typical change
+/// (the statistics at acts `lat_increments_at`, spreads after the `count` means): z' = z + scale x (mean + spread x
+/// output), so d output = scale x spread x dz'.
+pub fn lat_step_gradient(id: u32) void {
+    if (id >= params.rows * params.count) {
+        return;
+    }
+    const column: u32 = id % params.count;
+    var factor: f32 = params.lat_step_scale;
+    if (params.lat_increments_on != 0) {
+        factor *= b_acts[params.lat_increments_at + params.count + column];
+    }
+    b_dacts[params.y_off + id] = b_dacts[params.x_off + id] * factor;
+}
+
 /// The backward join: the gradient that reached a block's z columns (strided, at `dx_off`) added
 /// into the state's contiguous gradient (at `dy_off`) - the path by which the loss at later steps
 /// reaches earlier states THROUGH the network, beside the residual path `add_block` carries. One
@@ -2482,23 +3163,31 @@ pub fn lat_take(id: u32) void {
     b_dacts[params.dy_off + r * params.count + c] += b_dacts[params.dx_off + r * params.stride + c];
 }
 
-/// Exploration noise, identical on every device: an integer hash of (seed, row, column) - shifts,
-/// xors and wrapping multiplies, the same bits on any GPU - turned into four uniforms from its top 24
-/// bits (exact as floats), summed, centred and scaled by sqrt(3): mean 0, variance 1, bounded at
-/// +-3.46 (Irwin-Hall, rather than Box-Muller, whose log and cos GPUs may round differently). Plain
-/// Zig, so the CPU reference calls THIS function too - no copy to drift.
 // -------- The resident data's layouts --------
 //
-// Three parties have to agree on the shapes below, and only two of them exist today: the host packing
-// a record (`Resident.appendLatest`) and `lat_gather` reading one. The third arrives when the
-// simulator itself moves onto the GPU and a KERNEL writes the records instead of the host. Spelled out
-// once here - in the module both sides already import for `latNoise` - that day is one edit rather
-// than a hunt through every place the arithmetic was written out by hand.
+// Three parties agree on the shapes below: the host packing a record from a CPU fleet's replay
+// (robot_latent_kit's `buildStepRecords`), the simulator's kernel packing one on the device (robotgpu's
+// `record_rows`), and `lat_gather` reading one. Spelled out once here, in the module the kit and its host
+// both import, so a change of layout is one edit here; the device's kernel writes the same arithmetic in its
+// own module, and the two sides' records are compared bit for bit.
+
+/// How many numbers a ROOT's WORLD POSE takes in a record and in a table row (`zm.pose_numbers`, as `Pose.numbers`
+/// writes them): its position's three, then its rotation's four, the scalar last. The features say how a character
+/// stands in its root's own frame and nothing of where that root is; the root target (robot.zig's
+/// `root_target_size`, `zm.poseSeenFrom`) needs both the character's root and the reference's, in the world.
+pub const lat_root_pose_numbers: u32 = zm.pose_numbers;
 
 /// Floats in one record of the feature ring: a character's raw (unnormalised) features, the action it
-/// took on that step, and one more for which reference-table row it was aiming at.
+/// took on that step, one more for which reference-table row it was aiming at, and its root's world pose
+/// (`lat_root_pose_numbers`) - its live floats - then padding up to a multiple of four. A simulator on the
+/// device keeps each world's numbers in a block of that length (robotgpu's four-number alignment,
+/// `padToVector`), so the rows its kernel writes are copied into the ring whole, one copy for every world.
+/// Nothing reads the padding.
+///
+///     [ features | action | table row | root position, root rotation | padding ]
 pub fn latRecordWidth(features: u32, actions: u32) u32 {
-    return features + actions + 1;
+    const live_floats: u32 = features + actions + 1 + lat_root_pose_numbers;
+    return (live_floats + 3) / 4 * 4;
 }
 
 /// Where a record's reference-table row sits: the last column, kept as a float like everything else
@@ -2507,10 +3196,23 @@ pub fn latRecordTableRow(features: u32, actions: u32) u32 {
     return features + actions;
 }
 
+/// Where a record's root pose begins: right after its table row (`lat_root_pose_numbers` of them).
+pub fn latRecordRootPose(features: u32, actions: u32) u32 {
+    return features + actions + 1;
+}
+
 /// Floats in one row of the reference tables: a frame's features, then the servo targets the fleet
-/// would aim at for it - everything a rollout needs about a reference frame, so a window can be built
-/// without the clips being on the device at all.
+/// would aim at for it, then the reference root's world pose (`lat_root_pose_numbers`) - everything a
+/// rollout needs about a reference frame, so a window can be built without the clips being on the
+/// device at all.
+///
+///     [ features | servo targets | root position, root rotation ]
 pub fn latTableWidth(features: u32, references: u32) u32 {
+    return features + references + lat_root_pose_numbers;
+}
+
+/// Where a table row's root pose begins: right after its servo targets.
+pub fn latTableRootPose(features: u32, references: u32) u32 {
     return features + references;
 }
 
@@ -2531,10 +3233,11 @@ inline fn normalisedFeature(raw: f32, column: u32, f: u32) f32 {
 
 /// THE WINDOWS' STARTING ACTIONS, gathered from the ring beside `lat_gather`: for each window's row, the action given
 /// at the decision before its first record - what the action filter blends the window's first decision into and the
-/// policy reads as applied before it - or rest, zero, when the window opens its segment (an episode's first record,
-/// or one whose predecessor the ring no longer holds). One thread per (row, action number) over `rows x lat_actions`.
-/// The rows' flags at `x_off` (1: the record before is the same segment's and held), written to `y_off` packed
-/// `lat_actions` wide; the starts and the ring as `lat_gather` reads them.
+/// policy reads as applied before it - or rest, zero, when the window opens its episode, whose first step starts from
+/// rest. A push ends a segment, never an episode, so a window starting just after one still reads the record before.
+/// One thread per (row, action number) over `rows x lat_actions`. The rows' flags at `x_off` (1: the window continues
+/// its episode, the record before it held by the ring), written to `y_off` packed `lat_actions` wide; the starts and
+/// the ring as `lat_gather` reads them.
 pub fn lat_gather_start_actions(id: u32) void {
     const f: u32 = params.lat_features;
     const a: u32 = params.lat_actions;
@@ -2560,7 +3263,87 @@ pub fn lat_gather_start_actions(id: u32) void {
     const record_index: u32 = previous_slot * params.lat_envs + env;
     const record: u32 = params.ring_off + record_index * latRecordWidth(f, a);
     const action_at: u32 = record + latRecordAction(f) + number;
-    b_acts[written_at] = b_acts[action_at];
+    b_acts[written_at] = b_ring[action_at];
+}
+
+/// A GOAL's COLUMN PAST ITS FEATURES, at acts `at`, in a wide row a gather fills (`lat_gather`, `plan_gather`):
+/// the goal is the reference's features, then - a lead past them - the root target's slots (robot.zig's
+/// `root_target_size`): where the reference's root is, seen from the character's. A gather knows the reference's
+/// root but not the character's, which a rollout moves; it writes zeros, the slots' value when the root target is
+/// off, and a rollout that integrates the root fills them.
+fn latGoalPastFeatures(at: u32) void {
+    b_acts[at] = 0;
+}
+
+/// THE WINDOW's RECORD WHERE A GATHER's STEP `step` BEGINS: the step itself, or its schedule's offset
+/// (`lat_gather`).
+fn latScheduleOffset(step: u32) u32 {
+    if (params.lat_schedule_on == 0) {
+        return step;
+    }
+    return @trunc(b_acts[params.lat_schedule_at + step]);
+}
+
+/// A pose read from the activations at `at`, its numbers as `Pose.numbers` writes them (`lat_root_pose_numbers`).
+fn latPoseAt(at: u32) Pose {
+    var written: [lat_root_pose_numbers]f32 = undefined;
+    var number: u32 = 0;
+    while (number < lat_root_pose_numbers) : (number += 1) {
+        written[number] = b_acts[at + number];
+    }
+    const pose: Pose = .fromNumbers(written);
+    return pose;
+}
+
+/// A pose read from the replay's records at `at` (`b_ring`), as `latPoseAt` reads one from the activations.
+fn latRecordPoseAt(at: u32) Pose {
+    var written: [lat_root_pose_numbers]f32 = undefined;
+    var number: u32 = 0;
+    while (number < lat_root_pose_numbers) : (number += 1) {
+        written[number] = b_ring[at + number];
+    }
+    const pose: Pose = .fromNumbers(written);
+    return pose;
+}
+
+/// THE ROOT's BLOCKS (`lat_root_target`), number `number` of a pose, by one of a goal column's threads: at step 0 the
+/// window's first root, from its first record (`latRecordRootPose`) - where the imagined root starts; at step k >= 1
+/// the reference's root at wide row k - 1's goal, from this record's table row (`latTableRootPose`) - where that
+/// row's root target aims. Each block [step][row][pose].
+fn latGatherRootPose(
+    step: u32,
+    row: u32,
+    number: u32,
+    record: u32,
+    table_row: u32,
+) void {
+    const f: u32 = params.lat_features;
+    const r: u32 = params.lat_references;
+    const a: u32 = params.lat_actions;
+    const in_block: u32 = row * lat_root_pose_numbers + number;
+    if (step == 0) {
+        b_acts[params.lat_roots_off + in_block] = b_ring[record + latRecordRootPose(f, a) + number];
+        return;
+    }
+    const block_floats: u32 = params.rows * lat_root_pose_numbers;
+    const goal_root_at: u32 = params.lat_goal_roots_off + (step - 1) * block_floats + in_block;
+    const table_row_at: u32 = params.table_off + table_row * latTableWidth(f, r);
+    b_acts[goal_root_at] = b_acts[table_row_at + latTableRootPose(f, r) + number];
+}
+
+/// THE FIRST ROW's ROOT TARGET, its number `number`: where the reference's root at the first row's goal is, seen from
+/// the window's first root (`zm.poseSeenFrom`) - the root as its first record holds it, the goal's as the table row of
+/// the record after holds it: both recorded, so exact, where every later row's target is imagined. Each slot's thread
+/// computes the whole target and keeps its own number.
+fn latFirstRootTarget(number: u32, first_record: u32, goal_table_row: u32) f32 {
+    const f: u32 = params.lat_features;
+    const r: u32 = params.lat_references;
+    const a: u32 = params.lat_actions;
+    const root: Pose = latRecordPoseAt(first_record + latRecordRootPose(f, a));
+    const goal_table_row_at: u32 = params.table_off + goal_table_row * latTableWidth(f, r);
+    const goal_root: Pose = latPoseAt(goal_table_row_at + latTableRootPose(f, r));
+    const target: [pose_seen_numbers]f32 = poseSeenFrom(root, goal_root);
+    return target[number];
 }
 
 /// A batch of training windows, assembled on the GPU from what is resident there: the feature ring
@@ -2578,7 +3361,20 @@ pub fn lat_gather_start_actions(id: u32) void {
 ///     [goal | encoded targets] and a wide row [state | reference | action], so the reference sits
 ///     at the SAME offset in both and one index serves.
 ///   * action columns (k < steps) - copied from step k's record.
-/// The wide rows' state columns for k >= 1 are left alone: the rollout fills them.
+///   * goal columns (k >= 1, the first `lat_lead`) - the reference's features at step k's record's frame, into
+///     wide row k - 1 and goal block k - 1; past the features, the root target's slots: zeros, or with the root
+///     target on (`lat_root_target`) the first row's exact target (`latFirstRootTarget`).
+///   * THE ROOT's BLOCKS, with the root target on - the first `lat_root_pose_numbers` goal columns' threads of every
+///     step (`latGatherRootPose`): step 0 the window's first root, step k >= 1 the reference's root at row k - 1's
+///     goal.
+/// The wide rows' state columns for k >= 1 are left alone: the rollout fills them - and with the root target on, the
+/// slots of rows 1 and on, from the root it imagines.
+///
+/// A SCHEDULE OF SKIPS (`lat_schedule_on`): step k then begins at the window's record `offset(k)` - read at acts
+/// `lat_schedule_at` + k, a float holding an integer, `offset(0)` 0 and one entry past the last step - rather than at
+/// record k. Every rule above holds with `offset` in place of the step: a target is the state at the record its jump
+/// ends on, a reference the frame the servo aimed at during the jump's last decision, a goal that frame's features;
+/// and an ACTION column holds the MEAN of the actions given over the jump's records - the action a skip head reads.
 pub fn lat_gather(id: u32) void {
     const f: u32 = params.lat_features;
     const r: u32 = params.lat_references;
@@ -2601,19 +3397,42 @@ pub fn lat_gather(id: u32) void {
     const first_slot: u32 = @trunc(b_acts[params.starts_off + row * 2 + 1]);
     // The ring is step-major: slot s holds every character's record for one replay index, side by
     // side, so a character's consecutive records are `envs` records apart - and the ring wraps.
-    const slot: u32 = (first_slot + step) % params.lat_capacity;
-    const record: u32 = params.ring_off + (slot * params.lat_envs + env) * latRecordWidth(f, a);
-    const table_row: u32 = @trunc(b_acts[record + latRecordTableRow(f, a)]);
+    const step_offset: u32 = latScheduleOffset(step);
+    const slot: u32 = (first_slot + step_offset) % params.lat_capacity;
+    const record_width: u32 = latRecordWidth(f, a);
+    const record: u32 = params.ring_off + (slot * params.lat_envs + env) * record_width;
+    const table_row: u32 = @trunc(b_ring[record + latRecordTableRow(f, a)]);
     if (column < lead) {
-        // GOAL columns (lead is the feature count): the reference where step `step - 1` was GOING -
-        // this record's frame - normalised like every state. It is the policy's input at step - 1
-        // (SuperTrack's Local(K_{i+1})), and the tracking target for the state that step produced.
+        // The root's blocks, with the root target on: a pose's numbers, by the goal's first threads.
+        const writes_root: bool = params.lat_root_target != 0 and column < lat_root_pose_numbers;
+        if (writes_root) {
+            latGatherRootPose(step, row, column, record, table_row);
+        }
+        // GOAL columns: the reference where step `step - 1` was GOING - this record's frame - normalised
+        // like every state. It is the policy's input at step - 1 (SuperTrack's Local(K_{i+1})), and the
+        // tracking target for the state that step produced. Past the features, up to the lead, the
+        // root target's slots (robot.zig's `root_target_size`).
         if (step == 0) {
+            return;
+        }
+        const goal_at: u32 = params.blocks_off + ((step - 1) * params.rows + row) * width + column;
+        if (column >= f) {
+            // The first row's slots hold its exact root target, with the root target on - from the window's first
+            // record, read where it is, not from the root block step 0's threads write in the same dispatch. Every
+            // other row's are zeros here (`latGoalPastFeatures`): the rollout's to fill.
+            const first_row_target: bool = params.lat_root_target != 0 and step == 1;
+            if (!first_row_target) {
+                latGoalPastFeatures(goal_at);
+                return;
+            }
+            const first_slot_in_ring: u32 = first_slot % params.lat_capacity;
+            const first_record: u32 = params.ring_off + (first_slot_in_ring * params.lat_envs + env) * record_width;
+            b_acts[goal_at] = latFirstRootTarget(column - f, first_record, table_row);
             return;
         }
         const raw_goal: f32 = b_acts[params.table_off + table_row * latTableWidth(f, r) + column];
         const goal: f32 = normalisedFeature(raw_goal, column, f);
-        b_acts[params.blocks_off + ((step - 1) * params.rows + row) * width + column] = goal;
+        b_acts[goal_at] = goal;
         b_acts[params.goals_off + ((step - 1) * params.rows + row) * f + column] = goal;
         return;
     }
@@ -2624,7 +3443,7 @@ pub fn lat_gather(id: u32) void {
         // later step's state is a TARGET - what the simulator reached, which the rollout's prediction
         // is scored against. The later rows' state columns are the rollout's to fill, with its own
         // predictions: the whole point of training through rollouts.
-        const value: f32 = normalisedFeature(b_acts[record + c], c, f);
+        const value: f32 = normalisedFeature(b_ring[record + c], c, f);
         if (step == 0) {
             b_acts[params.blocks_off + row * width + lead + c] = value;
         } else {
@@ -2639,10 +3458,531 @@ pub fn lat_gather(id: u32) void {
             b_acts[block + c] = b_acts[params.table_off + table_row * latTableWidth(f, r) + c];
         }
     } else if (step < steps) {
-        // ACTION columns: the action this record's step took.
+        // ACTION columns: the action this record's step took - or, over a jump of a schedule, the mean of the
+        // actions its records took, in the records' order.
         const block: u32 = params.blocks_off + (step * params.rows + row) * width + lead;
-        b_acts[block + c] = b_acts[record + latRecordAction(f) + (c - f - r)];
+        const number: u32 = c - f - r;
+        const skip: u32 = latScheduleOffset(step + 1) - step_offset;
+        if (skip == 1) {
+            b_acts[block + c] = b_ring[record + latRecordAction(f) + number];
+            return;
+        }
+        var action_sum: f32 = 0;
+        var taken: u32 = 0;
+        while (taken < skip) : (taken += 1) {
+            const taken_slot: u32 = (first_slot + step_offset + taken) % params.lat_capacity;
+            const taken_record: u32 = params.ring_off + (taken_slot * params.lat_envs + env) * record_width;
+            action_sum += b_ring[taken_record + latRecordAction(f) + number];
+        }
+        b_acts[block + c] = action_sum / float(skip);
     }
+}
+
+/// THE POLICY's STARTS, assembled on the GPU (`Resident.drawPolicyStarts`): one record a start - its state the
+/// rollout's first - and every later step's goal, reference and goal root from the clip's tables, not from records:
+/// the rollout's states are imagined, so nothing recorded after the start is read, and a start a decision before a
+/// fall is a start. Step k's table row is the start record's own plus k decisions of the clip's frames
+/// (`lat_decision_frames`, the fleet's `decide_every`) - on a schedule of skips, plus `offset(k)` decisions
+/// (`latScheduleOffset`) - which stays inside the start's clip: the host draws only starts a horizon of their clip
+/// follows (`robot_track.Replay.Books.sampleStart`). Over `rows x (steps + 1) x width` threads as `lat_gather`, the
+/// same columns written the same way:
+///   * state columns - step 0 only: the start's state into the first wide row. No targets: nothing to score the
+///     imagined states against but the goals.
+///   * reference columns (k >= 1) - from table row k into wide row k - 1.
+///   * goal columns (k >= 1) - the features of table row k into wide row k - 1 and goal block k - 1; past them the root
+///     target's slots, the first row's exact target with the root target on (`latFirstRootTarget`).
+///   * the root's blocks, with the root target on (`latGatherRootPose`): step 0 the start record's root, step k the
+///     root of table row k.
+///   * action columns - none: the policy writes each decision's action as it acts.
+/// On a start whose horizon of records continues unbroken, every column written is the window gather's to the bit -
+/// the same table rows, read by the same arithmetic. The action given before decision 0 is
+/// `lat_gather_start_actions`'s, from the record before the start.
+pub fn lat_gather_policy_starts(id: u32) void {
+    const f: u32 = params.lat_features;
+    const r: u32 = params.lat_references;
+    const a: u32 = params.lat_actions;
+    const lead: u32 = params.lat_lead;
+    const width: u32 = lead + f + r + a;
+    const steps: u32 = params.lat_steps;
+    if (id >= params.rows * (steps + 1) * width) {
+        return;
+    }
+    const column: u32 = id % width;
+    const step: u32 = (id / width) % (steps + 1);
+    const row: u32 = id / (width * (steps + 1));
+    const env: u32 = @trunc(b_acts[params.starts_off + row * 2]);
+    const start_slot: u32 = @trunc(b_acts[params.starts_off + row * 2 + 1]);
+    const record_width: u32 = latRecordWidth(f, a);
+    const slot_in_ring: u32 = start_slot % params.lat_capacity;
+    const start_record: u32 = params.ring_off + (slot_in_ring * params.lat_envs + env) * record_width;
+    const start_table_row: u32 = @trunc(b_ring[start_record + latRecordTableRow(f, a)]);
+    const table_row: u32 = start_table_row + latScheduleOffset(step) * params.lat_decision_frames;
+    if (column < lead) {
+        const writes_root: bool = params.lat_root_target != 0 and column < lat_root_pose_numbers;
+        if (writes_root) {
+            latGatherRootPose(step, row, column, start_record, table_row);
+        }
+        if (step == 0) {
+            return;
+        }
+        const goal_at: u32 = params.blocks_off + ((step - 1) * params.rows + row) * width + column;
+        if (column >= f) {
+            const first_row_target: bool = params.lat_root_target != 0 and step == 1;
+            if (!first_row_target) {
+                latGoalPastFeatures(goal_at);
+                return;
+            }
+            b_acts[goal_at] = latFirstRootTarget(column - f, start_record, table_row);
+            return;
+        }
+        const raw_goal: f32 = b_acts[params.table_off + table_row * latTableWidth(f, r) + column];
+        const goal: f32 = normalisedFeature(raw_goal, column, f);
+        b_acts[goal_at] = goal;
+        b_acts[params.goals_off + ((step - 1) * params.rows + row) * f + column] = goal;
+        return;
+    }
+    const c: u32 = column - lead;
+    if (c < f) {
+        if (step == 0) {
+            const value: f32 = normalisedFeature(b_ring[start_record + c], c, f);
+            b_acts[params.blocks_off + row * width + lead + c] = value;
+        }
+        return;
+    }
+    if (c < f + r and step > 0) {
+        const block: u32 = params.blocks_off + ((step - 1) * params.rows + row) * width + lead;
+        b_acts[block + c] = b_acts[params.table_off + table_row * latTableWidth(f, r) + c];
+    }
+}
+
+/// RUNNING MOMENTS of one number: how many values they hold, their mean and their variance (the population's, over the
+/// count).
+const LatMoments = struct {
+    count: f32,
+    mean: f32,
+    variance: f32,
+};
+
+/// One number's running moments from params `at`: its count there, its mean `stride` on, its variance `2 x stride` on
+/// - the layout of a block of counts, then as many means, then as many variances, one of each a number, so each
+/// thread keeps its own.
+fn latLoadMoments(at: u32, stride: u32) LatMoments {
+    return .{
+        .count = b_params[at],
+        .mean = b_params[at + stride],
+        .variance = b_params[at + 2 * stride],
+    };
+}
+
+/// `moments` written back where `latLoadMoments` read them.
+fn latStoreMoments(at: u32, stride: u32, moments: LatMoments) void {
+    b_params[at] = moments.count;
+    b_params[at + stride] = moments.mean;
+    b_params[at + 2 * stride] = moments.variance;
+}
+
+/// THE POOLED UPDATE: `running`, the moments of everything folded so far (count c), and `batch`, a batch's own (n
+/// values, n above 0), as the moments of the two together - the statistics rsl_rl's `EmpiricalNormalization` and
+/// BlinkMimic's `RunningNorm` both keep, in the form BlinkMimic computes them (XMimic's `rn_update`):
+///
+///     c'     = c + n                     d = batch mean - mean
+///     mean'  = mean + d n / c'
+///     var'   = (var c + batch var n + d^2 c n / c') / c'
+///
+/// - each batch weighed by its size: exact, whatever the batches' sizes, as the pooled variance of two groups is.
+/// The variance is a weighed sum of positive terms, so nothing cancels: from the starting count of 0 and variance of
+/// 1, the first batch's variance comes back whole however small it is - written as var + (n / c') (batch var - var +
+/// ...), a variance of 1e-6 would keep only the digits left after taking it from 1.
+fn latPooledMoments(running: LatMoments, batch: LatMoments) LatMoments {
+    const count: f32 = running.count + batch.count;
+    const mean_difference: f32 = batch.mean - running.mean;
+    const mean: f32 = running.mean + mean_difference * batch.count / count;
+    const between_means: f32 = mean_difference * mean_difference * running.count * batch.count / count;
+    const weighed_variances: f32 = running.variance * running.count + batch.variance * batch.count;
+    const variance: f32 = (weighed_variances + between_means) / count;
+    return .{ .count = count, .mean = mean, .variance = variance };
+}
+
+/// WHETHER THE FOLD's RECORD AT `step` OF CHARACTER `env` ENDS A TRANSITION (`lat_world_moments`): the flag the host
+/// wrote at acts `t_off`, [step][character] - 1 where the record continues the one before it in one stretch of
+/// unbroken motion, no restart and no push between the two.
+fn latTransitionFlagged(step: u32, env: u32) bool {
+    const flag: f32 = b_acts[params.t_off + step * params.lat_envs + env];
+    return flag != 0;
+}
+
+/// Where a record of the fold's transition at `step` of character `env` begins in the ring: the transition's end, the
+/// record in slot `lat_first_slot` + `step` (`records_back` 0), or its start, the slot before it (`records_back` 1) -
+/// the ring wrapping.
+fn latFoldRecord(step: u32, env: u32, records_back: u32) u32 {
+    const record_width: u32 = latRecordWidth(params.lat_features, params.lat_actions);
+    const capacity: u32 = params.lat_capacity;
+    const slot: u32 = (params.lat_first_slot + step + capacity - records_back) % capacity;
+    return params.ring_off + (slot * params.lat_envs + env) * record_width;
+}
+
+/// WHAT `lat_world_moments` FOLDS, one number of a transition: a column of the world model's input as its first
+/// layer reads it for that transition, or a feature's change over it.
+const LatFolded = enum { input_column, feature_change };
+
+/// Number `index` of the transition ending at the fold's record `step` of character `env`, in raw units, as
+/// `folded` says. AN INPUT COLUMN, as the window's gather lays the world model's input out (`lat_gather`): the
+/// state's features from the transition's first record, the servo's encoded targets the step drove toward from the
+/// table row of its second (the record whose frame it reached), the action from its first. A FEATURE's CHANGE: the
+/// second record's feature less the first's.
+fn latTransitionValue(folded: LatFolded, index: u32, step: u32, env: u32) f32 {
+    const f: u32 = params.lat_features;
+    const r: u32 = params.lat_references;
+    const first_record: u32 = latFoldRecord(step, env, 1);
+    const second_record: u32 = latFoldRecord(step, env, 0);
+    if (folded == .feature_change) {
+        return b_ring[second_record + index] - b_ring[first_record + index];
+    }
+    if (index < f) {
+        return b_ring[first_record + index];
+    }
+    if (index < f + r) {
+        const table_row: u32 = @trunc(b_ring[second_record + latRecordTableRow(f, params.lat_actions)]);
+        return b_acts[params.table_off + table_row * latTableWidth(f, r) + index];
+    }
+    return b_ring[first_record + latRecordAction(f) + index - f - r];
+}
+
+/// ONE NUMBER's RUNNING MOMENTS, THE FOLD's FLAGGED TRANSITIONS FOLDED IN: loaded from params `moments_at`
+/// (`latLoadMoments`, its block `stride` wide), and - until they hold `lat_moments_limit` transitions - the batch's
+/// mean and variance about it, two passes over the same transitions, pooled in (`latPooledMoments`) and stored back.
+/// The moments as they then stand are returned, a batch of no transitions leaving them as they were.
+fn latFoldTransitions(
+    folded: LatFolded,
+    index: u32,
+    moments_at: u32,
+    stride: u32,
+) LatMoments {
+    const running: LatMoments = latLoadMoments(moments_at, stride);
+    const still_folding: bool = running.count < params.lat_moments_limit;
+    if (!still_folding) {
+        return running;
+    }
+    var transition_count: f32 = 0;
+    var value_sum: f32 = 0;
+    var step: u32 = 0;
+    while (step < params.lat_steps) : (step += 1) {
+        var env: u32 = 0;
+        while (env < params.lat_envs) : (env += 1) {
+            if (latTransitionFlagged(step, env)) {
+                value_sum += latTransitionValue(folded, index, step, env);
+                transition_count += 1;
+            }
+        }
+    }
+    if (transition_count == 0) {
+        return running;
+    }
+    const batch_mean: f32 = value_sum / transition_count;
+    var square_sum: f32 = 0;
+    step = 0;
+    while (step < params.lat_steps) : (step += 1) {
+        var env: u32 = 0;
+        while (env < params.lat_envs) : (env += 1) {
+            if (latTransitionFlagged(step, env)) {
+                const deviation: f32 = latTransitionValue(folded, index, step, env) - batch_mean;
+                square_sum += deviation * deviation;
+            }
+        }
+    }
+    const batch_variance: f32 = square_sum / transition_count;
+    const batch: LatMoments = .{ .count = transition_count, .mean = batch_mean, .variance = batch_variance };
+    const pooled: LatMoments = latPooledMoments(running, batch);
+    latStoreMoments(moments_at, stride, pooled);
+    return pooled;
+}
+
+/// THE WORLD MODEL's RUNNING STATISTICS, THE NEWEST TRANSITIONS FOLDED IN, one thread per input column and one per
+/// feature: XMimic's three running normalisers of its world model, which it folds every transition it collects into
+/// (`rn_update` in its `collect_step`) - `in_norm` over the whole input its first layer reads, `out_norm` by whose
+/// moments its output is standardised, and `inc_norm` by whose spread its loss divides each error. The network's
+/// output here is the change of the state's features itself, so its targets ARE the changes, and one set of moments
+/// serves the last two.
+///
+/// THE BATCH: `lat_steps` replay steps of the ring from slot `lat_first_slot`, the `lat_envs` characters' records at
+/// each - and of those, the records the host flagged as ending a transition (`latTransitionFlagged`), each with the
+/// record before it (`latTransitionValue`), in raw units: metres, the numbers of unit axes, metres and radians a
+/// second, the servo's encoded targets and the actions as they are. Every number's moments are a count, a mean and a
+/// variance, pooled batch by batch from a count of 0, a mean of 0 and a variance of 1 until they hold
+/// `lat_moments_limit` transitions (XMimic's stop at 2e8) - the input columns' at params `x_off`, `inputs` wide (the
+/// features, the `lat_references` servo targets, the `lat_actions` action numbers), the changes' at params `w_off`,
+/// `lat_features` wide.
+///
+/// WHAT THE STATISTICS WRITE, from the moments as they then stand - whatever the batch held, so a fold of no steps
+/// writes them from the moments alone (at a start, and on a resume):
+///
+///     params y_off   the inputs' affine, shifts then scales (`LatentKit.inputs_affine_at`), the first layer reading
+///                    (x - shift) x scale = (raw - mean) / sqrt(var + eps_in^2), XMimic's `rn_apply`. The state's
+///                    columns arrive in the clips' units, z = (raw - m) / s by the normaliser at acts `norm_off`, so
+///                    theirs are composed with it: shift (mean - m) / s, scale s / sqrt(var + eps_in^2).
+///     acts z_off     the change's means, then spreads, in the clips' units: mean / s, sqrt(var + eps^2) / s
+///                    (`LatentKit.increments_at`: change = mean + spread x output - XMimic's `out_norm`)
+///     acts l_off     the loss's weights (s / max(sqrt(var + eps^2), floor))^2 (`LatentKit.loss_weights_at` - XMimic's
+///                    error over `inc_norm`'s spread, floored, squared)
+///
+/// with eps_in `lat_norm_epsilon` (XMimic's 1e-2), eps `lat_change_epsilon` (its 1e-4), and each feature's floor in raw
+/// units at acts `u_off` (XMimic's `err_floor`). The floor keeps a feature that hardly moves from being judged without
+/// bound, while its output is still scaled by its own spread.
+pub fn lat_world_moments(id: u32) void {
+    const f: u32 = params.lat_features;
+    const inputs: u32 = f + params.lat_references + params.lat_actions;
+    if (id >= inputs + f) {
+        return;
+    }
+    if (id < inputs) {
+        const column: u32 = id;
+        const moments: LatMoments = latFoldTransitions(.input_column, column, params.x_off + column, inputs);
+        const input_epsilon: f32 = params.lat_norm_epsilon;
+        const input_spread: f32 = @sqrt(@max(moments.variance, 0.0) + input_epsilon * input_epsilon);
+        var shift: f32 = moments.mean;
+        var scale: f32 = 1.0 / input_spread;
+        if (column < f) {
+            const clip_mean: f32 = b_acts[params.norm_off + column];
+            const clip_spread: f32 = b_acts[params.norm_off + f + column];
+            shift = (moments.mean - clip_mean) / clip_spread;
+            scale = clip_spread / input_spread;
+        }
+        b_params[params.y_off + column] = shift;
+        b_params[params.y_off + inputs + column] = scale;
+        return;
+    }
+    const feature: u32 = id - inputs;
+    const moments: LatMoments = latFoldTransitions(.feature_change, feature, params.w_off + feature, f);
+    const clip_spread: f32 = b_acts[params.norm_off + f + feature];
+    const epsilon: f32 = params.lat_change_epsilon;
+    const spread: f32 = @sqrt(@max(moments.variance, 0.0) + epsilon * epsilon);
+    const loss_floor: f32 = b_acts[params.u_off + feature];
+    const loss_spread: f32 = @max(spread, loss_floor);
+    const loss_spread_in_features: f32 = loss_spread / clip_spread;
+    b_acts[params.z_off + feature] = moments.mean / clip_spread;
+    b_acts[params.z_off + f + feature] = spread / clip_spread;
+    b_acts[params.l_off + feature] = 1.0 / (loss_spread_in_features * loss_spread_in_features);
+}
+
+/// A pose's numbers written to the activations at `at`, as `Pose.numbers` writes them (`latPoseAt` reads them back).
+fn latWritePose(at: u32, pose: Pose) void {
+    const written: [lat_root_pose_numbers]f32 = pose.numbers();
+    var number: u32 = 0;
+    while (number < lat_root_pose_numbers) : (number += 1) {
+        b_acts[at + number] = written[number];
+    }
+}
+
+/// THREE OF A STATE's FEATURES IN THE WORLD's UNITS, from `column`: each feature taken out of the normaliser's units
+/// (mean + spread x feature: `normalisedFeature` undone), the normaliser at `norm_off` (means, then spreads).
+fn latRawFeatureVec(state_at: u32, column: u32) Vec {
+    const f: u32 = params.lat_features;
+    var raw: [3]f32 = undefined;
+    var number: u32 = 0;
+    while (number < 3) : (number += 1) {
+        const feature: u32 = column + number;
+        const mean: f32 = b_acts[params.norm_off + feature];
+        const spread: f32 = b_acts[params.norm_off + f + feature];
+        raw[number] = b_acts[state_at + feature] * spread + mean;
+    }
+    return vec(raw[0], raw[1], raw[2]);
+}
+
+/// THE ROOT IN IMAGINATION, ONE STEP (`LatentKit.imagined_root`), one thread per row, for decision
+/// `lat_root_decision` = k >= 1: the root at decision k, moved from decision k - 1's by the velocities the world model
+/// predicted for state k - the root's velocity and angular velocity, in its own frame, read from the state's features
+/// (`lat_root_velocity_column`, `lat_root_angular_column`) and taken out of the normaliser's units - over the step's
+/// `lat_root_seconds` (`zm.integratePose`: turned, then moved along the turned frame - semi-implicit, as SuperTrack's
+/// world model integrates); then, for k below the rollout's `lat_steps`, wide row k's root target from it and the
+/// reference's root at the row's goal (`zm.poseSeenFrom`) - what the policy reads at decision k. At k = `lat_steps`,
+/// the rollout's last state, no policy step follows and no goal is gathered: the root is moved, for its cost alone.
+///
+///     reads    roots[k - 1], goal roots[k]          the root's blocks (`lat_roots_off`, `lat_goal_roots_off`)
+///              state k                               acts `x_off`, rows `stride` apart; the normaliser `norm_off`
+///     writes   roots[k]
+///              the root target's slots               acts `y_off`, rows `stride` apart
+pub fn lat_root_step(id: u32) void {
+    if (id >= params.rows) {
+        return;
+    }
+    const row: u32 = id;
+    const decision: u32 = params.lat_root_decision;
+    const block_floats: u32 = params.rows * lat_root_pose_numbers;
+    const in_block: u32 = row * lat_root_pose_numbers;
+    const before: Pose = latPoseAt(params.lat_roots_off + (decision - 1) * block_floats + in_block);
+    const state_at: u32 = params.x_off + row * params.stride;
+    const local_velocity: Vec = latRawFeatureVec(state_at, params.lat_root_velocity_column);
+    const local_angular: Vec = latRawFeatureVec(state_at, params.lat_root_angular_column);
+    const moved: Pose = integratePose(before, local_velocity, local_angular, params.lat_root_seconds);
+    latWritePose(params.lat_roots_off + decision * block_floats + in_block, moved);
+    if (decision >= params.lat_steps) {
+        return;
+    }
+    const goal_root: Pose = latPoseAt(params.lat_goal_roots_off + decision * block_floats + in_block);
+    const target: [pose_seen_numbers]f32 = poseSeenFrom(moved, goal_root);
+    const slots_at: u32 = params.y_off + row * params.stride;
+    var slot: u32 = 0;
+    while (slot < pose_seen_numbers) : (slot += 1) {
+        b_acts[slots_at + slot] = target[slot];
+    }
+}
+
+/// How many numbers the root's gradient takes, a row's, carried from decision to decision (`lat_root_bwd`): its
+/// position's three, in world axes, then its turn's three, in the root's own frame (`zm.PoseGradient`).
+pub const lat_root_gradient_numbers: u32 = 6;
+
+/// A GRADIENT AT THREE FEATURES IN THE WORLD's UNITS, added to a state's gradient at `state_gradient_at` from
+/// `column`, in the normaliser's units: a feature x = mean + spread z moves by spread for each unit of z, so its
+/// gradient is the world's times the spread (`latRawFeatureVec` undone).
+fn latAddFeatureGradient(state_gradient_at: u32, column: u32, gradient: Vec) void {
+    const f: u32 = params.lat_features;
+    // At indices known when compiling: a vector's lane is chosen by one.
+    inline for (0..3) |number| {
+        const feature: u32 = column + @as(u32, number);
+        const spread: f32 = b_acts[params.norm_off + f + feature];
+        b_dacts[state_gradient_at + feature] += gradient[number] * spread;
+    }
+}
+
+/// THE REFERENCE's ROOT AT STATE k's OWN FRAME (`lat_root_bwd`, `lat_root_drift`): the one at row k - 1's goal, goal
+/// roots[k - 1] - a row's goal is the frame its decision aims at. The root imagined at state k is judged from it: their
+/// difference seen from that root (`zm.poseSeenFrom`) is the root's DRIFT - its tracking error, as the judgement
+/// measures it, in the root target's numbers (the position, then the two axes less the identity's).
+fn latStateReferenceRoot(decision: u32, in_block: u32) Pose {
+    const block_floats: u32 = params.rows * lat_root_pose_numbers;
+    return latPoseAt(params.lat_goal_roots_off + (decision - 1) * block_floats + in_block);
+}
+
+/// THE ROOT's COST AT ITS DRIFT d, for one row (`lat_tracking_cost`): w_position |d_position|^2 + w_rotation
+/// |d_axes|^2, the weights `lat_root_position_weight` and `lat_root_rotation_weight` - `latRootCostGradient`'s cost,
+/// unscaled.
+fn latRootCost(drift: [pose_seen_numbers]f32) f32 {
+    var cost: f32 = 0;
+    var slot: u32 = 0;
+    while (slot < pose_seen_numbers) : (slot += 1) {
+        const is_position: bool = slot < 3;
+        const weight: f32 = if (is_position) params.lat_root_position_weight else params.lat_root_rotation_weight;
+        cost += weight * drift[slot] * drift[slot];
+    }
+    return cost;
+}
+
+/// THE ROOT's COST's GRADIENT AT ITS DRIFT (`lat_root_bwd`): the policy's loss charges a decision's drift d as
+///
+///     cost = scale x (w_position |d_position|^2 + w_rotation |d_rotation|^2)
+///
+/// - the squared-distance form of the tracking terms - so its gradient at each number is 2 scale w d. `scale` is the
+/// decision's weight over the rows (`lat_root_cost_scale`), the tracking terms' own.
+fn latRootCostGradient(drift: [pose_seen_numbers]f32) [pose_seen_numbers]f32 {
+    var gradient: [pose_seen_numbers]f32 = undefined;
+    var slot: u32 = 0;
+    while (slot < pose_seen_numbers) : (slot += 1) {
+        const is_position: bool = slot < 3;
+        const weight: f32 = if (is_position) params.lat_root_position_weight else params.lat_root_rotation_weight;
+        gradient[slot] = 2.0 * params.lat_root_cost_scale * weight * drift[slot];
+    }
+    return gradient;
+}
+
+/// THE ROOT IN IMAGINATION, BACKWARD, ONE STEP (`lat_root_step` undone), one thread per row, for decision
+/// `lat_root_decision` = k >= 1, the decisions taken from the last down. The gradient at root k is the one carried
+/// from the decisions after it - at `lat_root_gradient_off`, a row's `lat_root_gradient_numbers` - plus:
+///
+///   * the one row k's root target sends it, where a policy step read the target (`lat_root_read_by_policy`;
+///     `zm.poseSeenFromBackward`: the policy's input gradient at `dx_off`, rows `lat_lead + lat_features` apart, its
+///     slots after the goal's features) - none at the rollout's last state, which no policy step reads;
+///   * THE ROOT's COST at state k, where it has weight (`latRootCostGradient` at the drift from the reference's root at
+///     state k's frame, `latStateReferenceRoot`): the policy's loss charging the imagined root's distance from the
+///     reference's.
+///
+/// Through the step that moved it there (`zm.integratePoseBackward`, everything recomputed from the forward's own
+/// numbers), it reaches state k's root velocity and angular velocity - added, times their spreads
+/// (`latAddFeatureGradient`), to the state's gradient at `dy_off`, [row][feature] - and root k - 1, whose gradient is
+/// carried, written over the one read, for the decision before. The window's first root is recorded: what reaches it
+/// is dropped.
+///
+///     reads    roots[k - 1], roots[k], goal roots[k - 1], goal roots[k]    the root's blocks
+///              state k                               acts `x_off`, rows `stride` apart; the normaliser `norm_off`
+///              the slots' gradient, the carried one      dacts `dx_off`, `lat_root_gradient_off`
+///     adds     state k's gradient                        dacts `dy_off`
+///     writes   the carried gradient, now root k - 1's
+pub fn lat_root_bwd(id: u32) void {
+    if (id >= params.rows) {
+        return;
+    }
+    const row: u32 = id;
+    const f: u32 = params.lat_features;
+    const decision: u32 = params.lat_root_decision;
+    const block_floats: u32 = params.rows * lat_root_pose_numbers;
+    const in_block: u32 = row * lat_root_pose_numbers;
+    const root: Pose = latPoseAt(params.lat_roots_off + decision * block_floats + in_block);
+    const carried_at: u32 = params.lat_root_gradient_off + row * lat_root_gradient_numbers;
+    var root_gradient: PoseGradient = .{
+        .pos = vec(b_dacts[carried_at], b_dacts[carried_at + 1], b_dacts[carried_at + 2]),
+        .rot = vec(b_dacts[carried_at + 3], b_dacts[carried_at + 4], b_dacts[carried_at + 5]),
+    };
+    // Row k's root target's gradient, where a policy step read it: the policy's input gradient at its slots.
+    if (params.lat_root_read_by_policy != 0) {
+        const goal_root: Pose = latPoseAt(params.lat_goal_roots_off + decision * block_floats + in_block);
+        const policy_inputs: u32 = params.lat_lead + f;
+        const slots_gradient_at: u32 = params.dx_off + row * policy_inputs + f;
+        var slots_gradient: [pose_seen_numbers]f32 = undefined;
+        var slot: u32 = 0;
+        while (slot < pose_seen_numbers) : (slot += 1) {
+            slots_gradient[slot] = b_dacts[slots_gradient_at + slot];
+        }
+        const from_target: PoseGradient = poseSeenFromBackward(root, goal_root, slots_gradient);
+        root_gradient.pos += from_target.pos;
+        root_gradient.rot += from_target.rot;
+    }
+    // The root's cost at state k, where it has weight: the drift's gradient, back to the root.
+    const has_cost: bool = params.lat_root_position_weight != 0 or params.lat_root_rotation_weight != 0;
+    if (has_cost) {
+        const reference_root: Pose = latStateReferenceRoot(decision, in_block);
+        const drift: [pose_seen_numbers]f32 = poseSeenFrom(root, reference_root);
+        const from_cost: PoseGradient = poseSeenFromBackward(root, reference_root, latRootCostGradient(drift));
+        root_gradient.pos += from_cost.pos;
+        root_gradient.rot += from_cost.rot;
+    }
+    // The step that moved the root to decision k, from decision k - 1's, by state k's velocities.
+    const before: Pose = latPoseAt(params.lat_roots_off + (decision - 1) * block_floats + in_block);
+    const state_at: u32 = params.x_off + row * params.stride;
+    const local_velocity: Vec = latRawFeatureVec(state_at, params.lat_root_velocity_column);
+    const local_angular: Vec = latRawFeatureVec(state_at, params.lat_root_angular_column);
+    const gradients: PoseIntegrationGradients =
+        integratePoseBackward(before, local_velocity, local_angular, params.lat_root_seconds, root_gradient);
+    const state_gradient_at: u32 = params.dy_off + row * f;
+    latAddFeatureGradient(state_gradient_at, params.lat_root_velocity_column, gradients.local_velocity);
+    latAddFeatureGradient(state_gradient_at, params.lat_root_angular_column, gradients.local_angular);
+    // Root k - 1's gradient, carried to the decision before.
+    const carried_before: PoseGradient = gradients.pose;
+    inline for (0..3) |number| {
+        b_dacts[carried_at + number] = carried_before.pos[number];
+        b_dacts[carried_at + 3 + number] = carried_before.rot[number];
+    }
+}
+
+/// THE ROOT's DRIFT FOR THE LOG (`LatentKit.recordRootDrift`), one thread per row and decision of the rollout: how
+/// far the root imagined at state k is from the reference's root at state k's frame (`latStateReferenceRoot`) - the
+/// distance in metres, and the angle between the two rotations in radians (`zm.angleBetween`): the judgement's two
+/// root measures (robot.zig's `TrackingError.root_position`, `root_rotation`). Decisions k = 1 .. `lat_steps`, into
+/// acts `y_off`, [decision - 1][row] - the distances, then as many angles.
+pub fn lat_root_drift(id: u32) void {
+    const drift_count: u32 = params.lat_steps * params.rows;
+    if (id >= drift_count) {
+        return;
+    }
+    const row: u32 = id % params.rows;
+    const decision: u32 = id / params.rows + 1;
+    const in_block: u32 = row * lat_root_pose_numbers;
+    const block_floats: u32 = params.rows * lat_root_pose_numbers;
+    const root: Pose = latPoseAt(params.lat_roots_off + decision * block_floats + in_block);
+    const reference_root: Pose = latStateReferenceRoot(decision, in_block);
+    const gap: Vec = reference_root.pos - root.pos;
+    const distance: f32 = @sqrt(gap[0] * gap[0] + gap[1] * gap[1] + gap[2] * gap[2]);
+    const turn: f32 = angleBetween(root.rot, reference_root.rot);
+    b_acts[params.y_off + id] = distance;
+    b_acts[params.y_off + drift_count + id] = turn;
 }
 
 /// Chris Wellons' lowbias32: a well-mixed 32-bit integer hash.
@@ -2656,6 +3996,11 @@ fn latHash(input: u32) u32 {
     return x;
 }
 
+/// Exploration noise, identical on every device: an integer hash of (seed, row, column) - shifts,
+/// xors and wrapping multiplies, the same bits on any GPU - turned into four uniforms from its top 24
+/// bits (exact as floats), summed, centred and scaled by sqrt(3): mean 0, variance 1, bounded at
+/// +-3.46 (Irwin-Hall, rather than Box-Muller, whose log and cos GPUs may round differently). Plain
+/// Zig, so the CPU reference calls THIS function too - no copy to drift.
 pub fn latNoise(seed: u32, row: u32, column: u32) f32 {
     const key: u32 = latHash(seed ^ latHash(row *% 0x9e3779b9 +% column));
     var sum: f32 = 0.0;
@@ -2687,6 +4032,28 @@ fn latFilterShare(number: u32) f32 {
     return if (number < offset_count) params.lat_filter else params.lat_stiffness_filter;
 }
 
+/// THE ACTION GIVEN from what a policy chose, for row `row`'s action number `number` - THE ACTION FILTER: the physics
+/// is given a blend of the choice and of the action it was given at the decision before,
+///
+///     given = share x chosen  +  (1 - share) x the previous action
+///
+/// the number's share its kind's (`latFilterShare`), the previous action read at `lat_prev_action`, rows
+/// `lat_prev_action_stride` apart. At a share of 1 the choice itself, exactly. The one definition of the blend: what
+/// imagination writes (`lat_act`), and what a label is compared with (`latLabelDifference`).
+fn latGivenAction(chosen: f32, row: u32, number: u32) f32 {
+    const share: f32 = latFilterShare(number);
+    if (share == 1.0) {
+        return chosen;
+    }
+    // The action filter: this number's share of the new action, the rest of the action applied before it.
+    const previous_at: u32 = params.lat_prev_action + row * params.lat_prev_action_stride + number;
+    const previous: f32 = b_acts[previous_at];
+    const kept_share: f32 = 1.0 - share;
+    const new_part: f32 = share * chosen;
+    const kept_part: f32 = kept_share * previous;
+    return new_part + kept_part;
+}
+
 /// The policy's action into its row: `lat_scale * raw` into the wide row's action columns, so the
 /// world model's next step reads the action the policy just chose. `raw` is the policy's output,
 /// contiguous at `x_off` (`count` per row); the action columns start at `y_off`, rows `stride` apart.
@@ -2695,7 +4062,7 @@ fn latFilterShare(number: u32) f32 {
 /// that still work when it cannot act exactly as it meant to.
 ///
 /// THE ACTION FILTER, with `lat_filter` below 1: the physics is given a blend of what the policy chose and what it was
-/// given at the previous decision, so imagination writes the same blend -
+/// given at the previous decision, so imagination writes the same blend (`latGivenAction`) -
 ///
 ///     action = lat_filter x lat_scale x (raw + noise)  +  (1 - lat_filter) x the previous action
 ///
@@ -2715,18 +4082,7 @@ pub fn lat_act(id: u32) void {
     const noisy: f32 = raw + scaled_noise;
     const chosen: f32 = params.lat_scale * noisy;
     const written_at: u32 = params.y_off + r * params.stride + j;
-    const share: f32 = latFilterShare(j);
-    if (share == 1.0) {
-        b_acts[written_at] = chosen;
-        return;
-    }
-    // The action filter: this number's share of the new action, the rest of the action applied before it.
-    const previous_at: u32 = params.lat_prev_action + r * params.lat_prev_action_stride + j;
-    const previous: f32 = b_acts[previous_at];
-    const kept_share: f32 = 1.0 - share;
-    const new_part: f32 = share * chosen;
-    const kept_part: f32 = kept_share * previous;
-    b_acts[written_at] = new_part + kept_part;
+    b_acts[written_at] = latGivenAction(chosen, r, j);
 }
 
 /// The action's gradient back to the policy's raw output: `d raw = lat_scale * d action +
@@ -2786,6 +4142,48 @@ pub fn lat_act_bwd(id: u32) void {
     const raw_share: f32 = share * params.lat_scale;
     const through_action: f32 = raw_share * whole_gradient;
     b_dacts[raw_gradient_at] = through_action + price_gradient + smooth;
+}
+
+// -- THE POLICY LEARNING FROM LABELS --
+//
+// A LABEL is an action recorded where a teacher acted - a planner following its plan - kept with the state it was
+// taken from. The policy learns it by behaviour cloning: at that state, the action the policy would give is pulled
+// toward the label. Nothing is rolled and no world model is read: one decision, one squared distance.
+
+/// HOW FAR THE POLICY IS FROM A LABEL, for row `row`'s action number `number`: the action the policy would give - its
+/// raw output at acts `x_off` (packed, `count` a row) scaled by `lat_scale`, through the action filter
+/// (`latGivenAction`), with no exploration - less the label: the row's recorded action, at acts `t_off`, rows `stride`
+/// apart.
+fn latLabelDifference(row: u32, number: u32) f32 {
+    const raw: f32 = b_acts[params.x_off + row * params.count + number];
+    const chosen: f32 = params.lat_scale * raw;
+    const given: f32 = latGivenAction(chosen, row, number);
+    const label: f32 = b_acts[params.t_off + row * params.stride + number];
+    return given - label;
+}
+
+/// THE LABELS' GRADIENT AT THE POLICY's RAW OUTPUT, one thread per (row, action number). The loss is the mean, over
+/// `rows` x `count` numbers, of the squared distance between the action the policy would give and the label
+/// (`latLabelDifference`), times `loss_weight`:
+///
+///     d loss / d given  =  loss_weight x 2 (given - label) / (rows x count)        (a mean squared error's: `mse_bwd`)
+///     d loss / d raw    =  share x lat_scale x d loss / d given                    (`latGivenAction`, backward)
+///
+/// The raw output's part of the given action is its number's share of the filter times the scale. The action given
+/// before is the blend's other part and takes no gradient: one decision is learned, so nothing is carried from a
+/// later one (`lat_act_bwd` carries a window's). Into dacts `dy_off`, packed `count` a row.
+pub fn lat_label_bwd(id: u32) void {
+    if (id >= params.rows * params.count) {
+        return;
+    }
+    const row: u32 = id / params.count;
+    const number: u32 = id % params.count;
+    const difference: f32 = latLabelDifference(row, number);
+    const number_count: f32 = float(params.rows * params.count);
+    const unweighted_gradient: f32 = 2.0 * difference / number_count;
+    const given_gradient: f32 = unweighted_gradient * params.loss_weight;
+    const raw_share: f32 = latFilterShare(number) * params.lat_scale;
+    b_dacts[params.dy_off + row * params.count + number] = raw_share * given_gradient;
 }
 
 // -- SUPERTRACK'S FAILURE BARRIER --
@@ -2977,6 +4375,12 @@ pub fn boundedCost(cost: f32, cap: f32) f32 {
 ///
 ///     cost = (1 / features) x sum over features of (z - g)^2
 ///          + barrier_weight x (the head's hinge + the tilt's hinge)
+///          + w_position |d_position|^2 + w_rotation |d_axes|^2       the root's drift, with a root imagined
+///
+/// The root's term where its weights are not 0 (`lat_root_position_weight`, `lat_root_rotation_weight`): the drift d of
+/// the row's root at acts `lat_roots_off` + row x 7 from the reference's at `lat_goal_roots_off` + row x 7
+/// (`zm.poseSeenFrom`) - what the policy's loss charges a rolled state (`lat_root_bwd`), so a planner scores the root
+/// as the policy learns it.
 ///
 ///   reads  acts `y_off` the states Z, `t_off` the goals G, both normalised, [rows, out_dim]; acts `u_off` the
 ///          normaliser's means, then its spreads
@@ -3014,9 +4418,17 @@ pub fn lat_tracking_cost(id: u32) void {
         );
         barrier_cost = params.barrier_weight * hinges;
     }
+    // The root's drift, with a root imagined and its cost weighed.
+    var root_cost: f32 = 0;
+    const has_root_cost: bool = params.lat_root_position_weight != 0 or params.lat_root_rotation_weight != 0;
+    if (has_root_cost) {
+        const root: Pose = latPoseAt(params.lat_roots_off + id * lat_root_pose_numbers);
+        const reference_root: Pose = latPoseAt(params.lat_goal_roots_off + id * lat_root_pose_numbers);
+        root_cost = latRootCost(poseSeenFrom(root, reference_root));
+    }
     // Bounded far from the reference when the cost has a cap (`boundedCost`): the critic, the planner and FPO all read
     // this; the policy's pathwise loss has its own gradient and keeps SuperTrack's cost.
-    const step_cost: f32 = mean_square + barrier_cost;
+    const step_cost: f32 = mean_square + barrier_cost + root_cost;
     b_acts[params.x_off + id] = boundedCost(step_cost, params.cost_cap);
 }
 
@@ -3192,21 +4604,85 @@ pub fn flow_dpg_bwd(id: u32) void {
     }
 }
 
+/// HOW MANY FLOATS A MODEL PLANNER's STATE INPUTS TAKE (`gather_plan_states`, `plan_gather`): its `features`
+/// normalised features, its start row and its clip's last row - and with the root target on, its nine slots.
+fn planStateInputFloats(features: u32) u32 {
+    const root_slots: u32 = if (params.lat_root_target != 0) pose_seen_numbers else 0;
+    return features + 2 + root_slots;
+}
+
+/// THE PLANNER's ROOT BLOCKS (`plan_gather`, with the root target on), number `number` of a pose, by one of a goal
+/// column's threads. A planner knows its state's root only as the acting row saw it - its root target at the first
+/// goal, the reference's root seen from the character's (`gather_plan_states` copies the nine slots) - so it imagines
+/// the root in the frame of the character's own root at the state: step 0's root is the identity, and the reference's
+/// root at row k - 1's goal is the first goal's, as the slots place it (`zm.poseFromSeen`), moved as the reference
+/// moved from the first goal's frame to that one's (both from the table, `latTableRootPose`):
+///
+///     goal root(k - 1)  =  S o ref(first goal)^-1 o ref(goal k - 1)        S the slots' pose
+///
+/// Everything the root target and the root's cost read is one pose seen from another, which a placement of both in
+/// another frame leaves as it is - and the root's step moves a root in its own frame - so the planner's numbers are the
+/// training's, in a frame of their own.
+fn planGatherRootPose(
+    step: u32,
+    row: u32,
+    number: u32,
+    inputs_at: u32,
+    start_row: u32,
+    last_row: u32,
+) void {
+    const f: u32 = params.lat_features;
+    const r: u32 = params.lat_references;
+    const in_block: u32 = row * lat_root_pose_numbers + number;
+    if (step == 0) {
+        const character_root: [lat_root_pose_numbers]f32 = Pose.identity.numbers();
+        b_acts[params.lat_roots_off + in_block] = character_root[number];
+        return;
+    }
+    var slots_seen: [pose_seen_numbers]f32 = undefined;
+    var slot: u32 = 0;
+    while (slot < pose_seen_numbers) : (slot += 1) {
+        slots_seen[slot] = b_acts[inputs_at + f + 2 + slot];
+    }
+    const first_goal_relative: Pose = poseFromSeen(slots_seen);
+    const table_width: u32 = latTableWidth(f, r);
+    const first_goal_row: u32 = @min(start_row + latScheduleOffset(1), last_row);
+    const goal_row: u32 = @min(start_row + latScheduleOffset(step), last_row);
+    const first_goal_root: Pose = latPoseAt(params.table_off + first_goal_row * table_width + latTableRootPose(f, r));
+    const goal_root: Pose = latPoseAt(params.table_off + goal_row * table_width + latTableRootPose(f, r));
+    const reference_moved: Pose = first_goal_root.inverse().compose(goal_root);
+    const goal_relative: Pose = first_goal_relative.compose(reference_moved);
+    const written: [lat_root_pose_numbers]f32 = goal_relative.numbers();
+    const block_floats: u32 = params.rows * lat_root_pose_numbers;
+    b_acts[params.lat_goal_roots_off + (step - 1) * block_floats + in_block] = written[number];
+}
+
 /// THE TRACKING PLANNER'S GATHER, ONE THREAD PER NUMBER WRITTEN over `rows x (lat_steps + 1) x width`: a planner
 /// kit's rows - [state][candidate], `plan_candidates` rows per state - filled from each state's start and the
 /// reference table, in `lat_gather`'s conventions, so a planned rollout sees what a training window would:
 ///   * GOAL columns (the first `lat_lead`), step k >= 1: the reference where step k - 1 is going - table row
 ///     (start + k), normalised - into wide row k - 1's goal columns and goal block G_k: the flow's condition at step
-///     k - 1, and the cost's goal for the state that step produces
+///     k - 1, and the cost's goal for the state that step produces; past the features, the root target's slots:
+///     zeros (`latGoalPastFeatures`), or with the root target on (`lat_root_target`) the first row's the state's own
+///   * THE ROOT's BLOCKS, with the root target on - the first `lat_root_pose_numbers` goal columns' threads of every
+///     step (`planGatherRootPose`): step 0 the character's root, step k >= 1 the reference's root at row k - 1's goal,
+///     both in the frame of the character's root
 ///   * STATE columns, step 0: the state's start, already normalised
 ///   * REFERENCE columns, step k < `lat_steps`: table row (start + k)'s encoded targets - a table row is [goal |
 ///     encoded targets] and the world model's slice [state | reference | action], so the reference sits at the same
 ///     offset in both
 ///   * ACTION columns: left alone - the search's and the flow's to write
 /// The table rows run on from the state's start row and hold at its clip's last row, as the training records do.
-/// Each state's inputs at acts `starts_off` + state x (features + 2): its normalised start features, then its start
-/// row and its clip's last row (floats holding integers, exact below 2^24). The table at `table_off`, the normaliser
+/// Each state's inputs at acts `starts_off` + state x `planStateInputFloats`: its normalised start features, then its
+/// start row and its clip's last row (floats holding integers, exact below 2^24), then with the root target on its
+/// root target's nine numbers. The table at `table_off`, the normaliser
 /// at `norm_off` (means, then spreads), the wide rows at `blocks_off`, the goal blocks at `goals_off`.
+///
+/// ON A SCHEDULE (`lat_schedule_on`, a plan whose last steps are the skip head's): step k starts `off(k)` decisions
+/// in - the schedule's table at `lat_schedule_at`, `lat_steps` + 1 offsets (`latScheduleOffset`) - so the goal after
+/// step k - 1 is row (start + off(k)), and step k's reference the one the servo aims at during its last decision, row
+/// (start + off(k + 1) - 1): the skip head's input, as its training gathers it. Off a schedule off(k) = k, and both
+/// are the rows above.
 pub fn plan_gather(id: u32) void {
     const f: u32 = params.lat_features;
     const r: u32 = params.lat_references;
@@ -3220,15 +4696,33 @@ pub fn plan_gather(id: u32) void {
     const step: u32 = (id / width) % (steps + 1);
     const row: u32 = id / (width * (steps + 1));
     const state: u32 = row / params.plan_candidates;
-    const inputs_at: u32 = params.starts_off + state * (f + 2);
+    const inputs_at: u32 = params.starts_off + state * planStateInputFloats(f);
     const start_row: u32 = @trunc(b_acts[inputs_at + f]);
     const last_row: u32 = @trunc(b_acts[inputs_at + f + 1]);
-    const table_row: u32 = @min(start_row + step, last_row);
-    const table_row_at: u32 = params.table_off + table_row * latTableWidth(f, r);
+    const table_width: u32 = latTableWidth(f, r);
     if (column < lead) {
+        // The root's blocks, with the root target on: a pose's numbers, by the goal's first threads.
+        const writes_root: bool = params.lat_root_target != 0 and column < lat_root_pose_numbers;
+        if (writes_root) {
+            planGatherRootPose(step, row, column, inputs_at, start_row, last_row);
+        }
         if (step == 0) {
             return;
         }
+        if (column >= f) {
+            // The first row's slots hold the state's own root target, with the root target on - as the acting row
+            // read it; every other row's are zeros here, the rollout's to fill.
+            const goal_at: u32 = params.blocks_off + ((step - 1) * params.rows + row) * width + column;
+            const first_row_target: bool = params.lat_root_target != 0 and step == 1;
+            if (!first_row_target) {
+                latGoalPastFeatures(goal_at);
+                return;
+            }
+            b_acts[goal_at] = b_acts[inputs_at + f + 2 + column - f];
+            return;
+        }
+        const goal_row: u32 = @min(start_row + latScheduleOffset(step), last_row);
+        const table_row_at: u32 = params.table_off + goal_row * table_width;
         const raw_goal: f32 = b_acts[table_row_at + column];
         const goal: f32 = normalisedFeature(raw_goal, column, f);
         b_acts[params.blocks_off + ((step - 1) * params.rows + row) * width + column] = goal;
@@ -3246,6 +4740,8 @@ pub fn plan_gather(id: u32) void {
     }
     const is_reference: bool = c < f + r;
     if (is_reference and step < steps) {
+        const reference_row: u32 = @min(start_row + latScheduleOffset(step + 1) - 1, last_row);
+        const table_row_at: u32 = params.table_off + reference_row * table_width;
         b_acts[wide_row_at + column] = b_acts[table_row_at + c];
     }
 }
@@ -3313,9 +4809,329 @@ pub fn fpo_advantages(id: u32) void {
 
 // -- STATISTICS FOR THE LOG (`robot_latent_kit.DeviceStats`) --
 //
-// Each writes one or two numbers into the parameter buffer at `y_off`: the learner's stats block, inside the range it
-// reads back every frame, so the numbers reach the host with the weights at no transfer of their own. One thread
-// each: a statistic is taken once per update, over a few thousand numbers at most.
+// Each writes one to three numbers into the parameter buffer at `stat_off`: the learner's stats block, inside the
+// range it reads back every round, so the numbers reach the host with the weights at no transfer of their own.
+//
+// Most are sums over a whole batch: a loss is the mean of a term over every number of a rollout - 1,024 windows of
+// 8 decisions of 387 features make 3.2 million terms. One thread adding them one after another runs at the pace of
+// one of the device's threads, among thousands: tens of milliseconds a statistic, several a round. So a statistic
+// over many terms is summed in TWO PASSES, as the gradient's global length is (`grad_square_partials`,
+// `clip_factor`):
+//
+//     <name>_partials   one thread per CHUNK of `stat_chunk` terms: the chunk's sums, its terms added in order,
+//                       into params `stat_partials_off` + chunk x the statistic's sum count
+//     <name>            one thread: the chunks' sums added in the chunks' order, and the statistic from them,
+//                       into params `stat_off`
+//
+//     terms     t0 t1 ... t1023 | t1024 ... t2047 | t2048 ...          the chunks run side by side
+//     partials  s0              | s1              | s2 ...
+//     total     ((s0 + s1) + s2) + ...                                 one thread, the chunks in order
+//
+// The same terms in another grouping: the statistic agrees with one running total to rounding. The CPU twin runs
+// the same chunks in the same order, so its numbers are the device's arithmetic exactly; and a statistic of no more
+// terms than one chunk holds is one running total, as before. `ChunkedStatistic` names the statistics summed so, by
+// their second pass's kernel; `kit_mlp.runStatistic` dispatches both passes, and any other statistic - an FPO
+// batch's few dozen examples - in one thread.
+
+/// THE KINDS OF FEATURE the world model's loss is logged by (`stat_world_loss_in_units`), each feature's kind a small
+/// integer in a table the learner writes once - robot.zig's `LocalFeatureKind` in its order (positions, the rotations'
+/// axes, velocities, angular velocities, heights, the up direction), numbered by `robot_latent_kit.worldLossKind`.
+pub const world_loss_kinds: u32 = 6;
+
+/// THE STATISTICS SUMMED IN CHUNKS, each by the name of its second pass's kernel; its first pass's is that name with
+/// `_partials` after it (`statisticPartials`, `statisticTotal`).
+pub const ChunkedStatistic = enum {
+    stat_root_mean_square,
+    stat_no_change_error,
+    stat_pair_response,
+    stat_mean_square_difference,
+    stat_label_loss,
+    critic_value_stats,
+    stat_barrier,
+    stat_world_loss_in_units,
+
+    /// How many sums a chunk of it keeps: one; three - a response's product and its two squared lengths, the critic's
+    /// values, spreads and squared errors; or eight - the world model's weighted error over every term, over its last
+    /// step's, and over each kind of feature's (`world_loss_kinds`).
+    pub fn sumCount(statistic: ChunkedStatistic) u32 {
+        return switch (statistic) {
+            .stat_pair_response, .critic_value_stats => 3,
+            .stat_world_loss_in_units => 2 + world_loss_kinds,
+            .stat_root_mean_square,
+            .stat_no_change_error,
+            .stat_mean_square_difference,
+            .stat_label_loss,
+            .stat_barrier,
+            => 1,
+        };
+    }
+};
+
+/// The most sums a chunk keeps (`ChunkedStatistic.sumCount`): the world model's loss in its own units.
+pub const stat_most_sums: u32 = 2 + world_loss_kinds;
+
+/// The fewest terms a chunk holds, as the gradient's chunks hold (`kit_mlp.ClippedAdam`): a thread's share long
+/// enough that the chunks' sums stay few, short enough that a thread finishes in microseconds.
+pub const stat_least_chunk: u32 = 1024;
+
+/// A chunk's sums, the unused ones 0.
+const StatisticSums = [stat_most_sums]f32;
+
+/// HOW MANY TERMS `statistic` SUMS with its params' `rows`, `count` and `lat_steps` (`steps`) - a term each number
+/// of a batch, or each row (the critic's, over its heads), or each row of each step (the barrier's, `count` steps).
+/// The numbers themselves are its arguments, not the params, so that the host and the kernels share it.
+pub fn statisticTerms(
+    comptime statistic: ChunkedStatistic,
+    rows: u32,
+    count: u32,
+    steps: u32,
+) u32 {
+    return switch (statistic) {
+        .stat_root_mean_square, .stat_mean_square_difference, .critic_value_stats => rows,
+        .stat_no_change_error => steps * rows * count,
+        .stat_pair_response => rows / 2 * count,
+        .stat_label_loss => rows * count,
+        .stat_barrier => count * rows,
+        .stat_world_loss_in_units => steps * rows * count,
+    };
+}
+
+/// THE CHUNKS' LENGTH for `terms` terms with room for the sums of `most_chunks` chunks: the least chunk
+/// (`stat_least_chunk`), or longer, so that the chunks fit.
+pub fn statisticChunkLength(terms: u32, most_chunks: u32) u32 {
+    const shortest_that_fits: u32 = (terms + most_chunks - 1) / most_chunks;
+    return @max(stat_least_chunk, shortest_that_fits);
+}
+
+/// How many chunks of `chunk_length` terms hold `terms`, the last one what is left.
+pub fn statisticChunks(terms: u32, chunk_length: u32) u32 {
+    return (terms + chunk_length - 1) / chunk_length;
+}
+
+/// THE WEIGHT a statistic gives feature `number`'s terms: its loss weight at acts `u_off` when the statistic weighs
+/// them (`stat_weights_on` - the world model's gate, in the loss's own units), 1 otherwise.
+inline fn statisticWeightOf(number: u32) f32 {
+    if (params.stat_weights_on == 0) {
+        return 1.0;
+    }
+    return b_acts[params.u_off + number];
+}
+
+/// TERM `term` OF `statistic` ADDED INTO `sums`. The terms are numbered in the order one thread over the whole
+/// statistic adds them - steps, then rows, then numbers - so that one chunk is that thread's running total.
+inline fn addStatisticTerm(
+    comptime statistic: ChunkedStatistic,
+    sums: *StatisticSums,
+    term: u32,
+) void {
+    switch (statistic) {
+        .stat_root_mean_square => {
+            const value: f32 = b_dacts[params.x_off + term];
+            sums[0] += value * value;
+        },
+        .stat_no_change_error => {
+            // [step][row][number] of the targets, against the window's first state, its rows `stride` apart.
+            const rows: u32 = params.rows;
+            const count: u32 = params.count;
+            const number: u32 = term % count;
+            const row: u32 = (term / count) % rows;
+            const step: u32 = term / (count * rows);
+            const target: f32 = b_acts[params.t_off + (step * rows + row) * count + number];
+            const first: f32 = b_acts[params.x_off + row * params.stride + number];
+            const difference: f32 = target - first;
+            sums[0] += statisticWeightOf(number) * difference * difference;
+        },
+        .stat_pair_response => {
+            // Pair p is rows 2p and 2p + 1; the term is its number `number`.
+            const count: u32 = params.count;
+            const pair: u32 = term / count;
+            const number: u32 = term % count;
+            const first_at: u32 = 2 * pair * count + number;
+            const second_at: u32 = first_at + count;
+            const physics_change: f32 = b_acts[params.t_off + first_at] - b_acts[params.t_off + second_at];
+            const model_change: f32 = b_acts[params.x_off + first_at] - b_acts[params.x_off + second_at];
+            sums[0] += physics_change * model_change;
+            sums[1] += physics_change * physics_change;
+            sums[2] += model_change * model_change;
+        },
+        .stat_mean_square_difference => {
+            // Weighed, the terms are rows of `count` features; unweighed, `count` is unset and never divided by.
+            const difference: f32 = b_acts[params.x_off + term] - b_acts[params.t_off + term];
+            const weighs: bool = params.stat_weights_on != 0;
+            const weight: f32 = if (weighs) b_acts[params.u_off + term % params.count] else 1.0;
+            sums[0] += weight * difference * difference;
+        },
+        .stat_label_loss => {
+            const difference: f32 = latLabelDifference(term / params.count, term % params.count);
+            sums[0] += difference * difference;
+        },
+        .critic_value_stats => {
+            // Row `term`: its heads' values, [head][row], their mean, their spread about it, their errors.
+            const rows: u32 = params.rows;
+            const heads: u32 = params.count;
+            const head_count: f32 = float(@max(heads, 1));
+            var row_sum: f32 = 0;
+            var head: u32 = 0;
+            while (head < heads) : (head += 1) {
+                row_sum += b_acts[params.x_off + head * rows + term];
+            }
+            const row_mean: f32 = row_sum / head_count;
+            const target: f32 = b_acts[params.t_off + term];
+            var row_squares: f32 = 0;
+            head = 0;
+            while (head < heads) : (head += 1) {
+                const value: f32 = b_acts[params.x_off + head * rows + term];
+                row_squares += (value - row_mean) * (value - row_mean);
+                sums[2] += (value - target) * (value - target);
+            }
+            sums[0] += row_sum;
+            sums[1] += @sqrt(row_squares / head_count);
+        },
+        .stat_barrier => {
+            // Row `row` of step `step`: its rolled state and its goal, each step's block `rows` x `out_dim` on.
+            const rows: u32 = params.rows;
+            const features: u32 = params.out_dim;
+            const step: u32 = term / rows;
+            const row: u32 = term % rows;
+            const block_floats: u32 = rows * features;
+            const states_at: u32 = params.y_off + step * block_floats;
+            const goals_at: u32 = params.t_off + step * block_floats;
+            const means_at: u32 = params.u_off;
+            const spreads_at: u32 = params.u_off + features;
+            const row_start: u32 = row * features;
+            const measures: BarrierMeasures = barrierMeasures(row_start, states_at, goals_at, means_at, spreads_at);
+            sums[0] += barrierHinges(
+                measures,
+                params.barrier_head_margin,
+                params.barrier_head_width,
+                params.barrier_tilt_margin,
+                params.barrier_tilt_width,
+            );
+        },
+        .stat_world_loss_in_units => {
+            // [step][row][number] of the predictions and the recorded states, packed alike; the term weighed by its
+            // feature's loss weight, into the window's sum, its last step's, and its feature's kind's.
+            const rows: u32 = params.rows;
+            const count: u32 = params.count;
+            const number: u32 = term % count;
+            const step: u32 = term / (count * rows);
+            const difference: f32 = b_acts[params.x_off + term] - b_acts[params.t_off + term];
+            const weighted_square: f32 = b_acts[params.u_off + number] * difference * difference;
+            sums[0] += weighted_square;
+            const at_last_step: bool = step + 1 == params.lat_steps;
+            if (at_last_step) {
+                sums[1] += weighted_square;
+            }
+            const kind: u32 = @trunc(b_acts[params.z_off + number]);
+            // Each kind's sum by a comptime index: a sum chosen at run time would index a shader's private array.
+            inline for (0..world_loss_kinds) |kind_index| {
+                if (kind == kind_index) {
+                    sums[2 + kind_index] += weighted_square;
+                }
+            }
+        },
+    }
+}
+
+/// THE STATISTIC FROM ITS TOTALS - each sum over all `terms` terms - into params `stat_off`, and the slots after it
+/// for a statistic of several numbers.
+inline fn writeStatistic(
+    comptime statistic: ChunkedStatistic,
+    totals: StatisticSums,
+    terms: u32,
+) void {
+    const term_count: f32 = float(@max(terms, 1));
+    switch (statistic) {
+        .stat_root_mean_square => {
+            b_params[params.stat_off] = @sqrt(totals[0] / term_count);
+        },
+        .stat_no_change_error, .stat_mean_square_difference, .stat_label_loss, .stat_barrier => {
+            b_params[params.stat_off] = totals[0] / term_count;
+        },
+        .stat_world_loss_in_units => {
+            // The window's mean step - with steps of equal size, the mean over every term - then the last step's mean,
+            // then each kind's mean step over its own numbers (0 for a kind the features do not have).
+            const rows: u32 = params.rows;
+            const count: u32 = params.count;
+            const step_numbers: f32 = float(@max(rows * count, 1));
+            b_params[params.stat_off] = totals[0] / term_count;
+            b_params[params.stat_off + 1] = totals[1] / step_numbers;
+            inline for (0..world_loss_kinds) |kind_index| {
+                var kind_features: u32 = 0;
+                var feature: u32 = 0;
+                while (feature < count) : (feature += 1) {
+                    const kind: u32 = @trunc(b_acts[params.z_off + feature]);
+                    if (kind == kind_index) {
+                        kind_features += 1;
+                    }
+                }
+                const kind_terms: u32 = params.lat_steps * rows * kind_features;
+                const kind_mean: f32 = if (kind_terms > 0) totals[2 + kind_index] / float(kind_terms) else 0.0;
+                b_params[params.stat_off + 2 + kind_index] = kind_mean;
+            }
+        },
+        .stat_pair_response => {
+            const physics_dot_model: f32 = totals[0];
+            const physics_squares: f32 = totals[1];
+            const model_squares: f32 = totals[2];
+            const lengths_product: f32 = @sqrt(physics_squares * model_squares);
+            const cosine: f32 = if (lengths_product > 0) physics_dot_model / lengths_product else 0;
+            const length_ratio: f32 = if (physics_squares > 0) @sqrt(model_squares / physics_squares) else 0;
+            b_params[params.stat_off] = cosine;
+            b_params[params.stat_off + 1] = length_ratio;
+        },
+        .critic_value_stats => {
+            // The terms are the rows; the values number rows x heads.
+            const value_count: f32 = float(@max(terms * params.count, 1));
+            b_params[params.stat_off] = totals[0] / value_count;
+            b_params[params.stat_off + 1] = totals[1] / term_count;
+            b_params[params.stat_off + 2] = @sqrt(totals[2] / value_count);
+        },
+    }
+}
+
+/// A CHUNKED STATISTIC's FIRST PASS, ONE THREAD PER CHUNK: chunk `id`'s sums - its `stat_chunk` terms from
+/// id x stat_chunk, the last chunk what is left, added in order - into params `stat_partials_off` + id x the
+/// statistic's sum count.
+inline fn statisticPartials(comptime statistic: ChunkedStatistic, id: u32) void {
+    const terms: u32 = statisticTerms(statistic, params.rows, params.count, params.lat_steps);
+    const chunk_length: u32 = params.stat_chunk;
+    const chunk_start: u32 = id * chunk_length;
+    if (chunk_start >= terms) {
+        return;
+    }
+    const chunk_end: u32 = @min(chunk_start + chunk_length, terms);
+    var sums: StatisticSums = @splat(0);
+    var term: u32 = chunk_start;
+    while (term < chunk_end) : (term += 1) {
+        addStatisticTerm(statistic, &sums, term);
+    }
+    const sum_count: u32 = comptime statistic.sumCount();
+    const partials_at: u32 = params.stat_partials_off + id * sum_count;
+    inline for (0..sum_count) |sum_index| {
+        b_params[partials_at + sum_index] = sums[sum_index];
+    }
+}
+
+/// A CHUNKED STATISTIC's SECOND PASS, ONE THREAD: every chunk's sums (`statisticPartials`) added in the chunks'
+/// order, then the statistic from the totals (`writeStatistic`).
+inline fn statisticTotal(comptime statistic: ChunkedStatistic, id: u32) void {
+    if (id != 0) {
+        return;
+    }
+    const terms: u32 = statisticTerms(statistic, params.rows, params.count, params.lat_steps);
+    const chunk_count: u32 = statisticChunks(terms, params.stat_chunk);
+    const sum_count: u32 = comptime statistic.sumCount();
+    var totals: StatisticSums = @splat(0);
+    var chunk: u32 = 0;
+    while (chunk < chunk_count) : (chunk += 1) {
+        const partials_at: u32 = params.stat_partials_off + chunk * sum_count;
+        inline for (0..sum_count) |sum_index| {
+            totals[sum_index] += b_params[partials_at + sum_index];
+        }
+    }
+    writeStatistic(statistic, totals, terms);
+}
 
 /// ONE NUMBER COPIED: the activation at acts `x_off` into params `stat_off` - a value another kernel already worked
 /// out, such as a clipped optimiser's gradient length, kept for the log.
@@ -3326,33 +5142,134 @@ pub fn stat_copy(id: u32) void {
     b_params[params.stat_off] = b_acts[params.x_off];
 }
 
+/// The root mean square's first pass (`stat_root_mean_square`): a chunk's squares.
+pub fn stat_root_mean_square_partials(id: u32) void {
+    statisticPartials(.stat_root_mean_square, id);
+}
+
 /// THE ROOT MEAN SQUARE of `rows` gradients at dacts `x_off` - how large a gradient is, whatever its sign - into
-/// params `stat_off`.
+/// params `stat_off`, from its chunks' squares.
 pub fn stat_root_mean_square(id: u32) void {
+    statisticTotal(.stat_root_mean_square, id);
+}
+
+/// THE NO-CHANGE MODEL's ERROR over gathered windows, per number: the mean squared difference between every target
+/// state - `lat_steps` blocks of `rows` packed rows of `count` numbers at acts `t_off`, the states the simulator
+/// reached - and its window's FIRST state, read at acts `x_off`, rows `stride` apart (the first wide row's state
+/// columns). What a model that predicts no change at all would score on the windows a world model is scored on - the
+/// baseline that model's error is set against (`LatentKit.recordWorldModelGate`), into params `stat_off`:
+///
+///     no-change error = mean over steps k, rows r, numbers c of w_c (target_k[r][c] - first[r][c])^2
+///
+/// with w_c number c's loss weight at acts `u_off` when the statistic weighs (`stat_weights_on`), 1 otherwise. From
+/// its chunks' squares (`stat_no_change_error_partials`).
+pub fn stat_no_change_error(id: u32) void {
+    statisticTotal(.stat_no_change_error, id);
+}
+
+/// The no-change error's first pass (`stat_no_change_error`): a chunk's squares.
+pub fn stat_no_change_error_partials(id: u32) void {
+    statisticPartials(.stat_no_change_error, id);
+}
+
+/// THE WORLD MODEL's LOSS IN ITS OWN UNITS - XMimic's - over `lat_steps` blocks of `rows` packed rows of `count`
+/// predictions at acts `x_off` against the recorded states at acts `t_off`, each term weighed by its feature's loss
+/// weight at acts `u_off` (`LatentKit.loss_weights_at`: 1 / the change's spread squared, floored), so that a feature's
+/// error counts in units of how much it changes in a step:
+///
+///     term(k, r, c) = w_c (x_k[r][c] - t_k[r][c])^2
+///
+/// Eight numbers into params `stat_off` on (`DeviceStats.world_loss` and the seven after it): the window's mean step -
+/// each step's mean over its rows and features, averaged over the steps; the last step's mean, where an open-loop
+/// rollout has drifted furthest; and the mean step over each kind of feature's own numbers, each feature's kind read
+/// from the table of `count` small integers at acts `z_off` (`world_loss_kinds`). A model that predicts no change
+/// scores about 1 at a window's first step: its error there is the change itself, in the change's own units. From its
+/// chunks' sums (`stat_world_loss_in_units_partials`).
+pub fn stat_world_loss_in_units(id: u32) void {
+    statisticTotal(.stat_world_loss_in_units, id);
+}
+
+/// The world model's loss in its own units, first pass (`stat_world_loss_in_units`): a chunk's eight sums.
+pub fn stat_world_loss_in_units_partials(id: u32) void {
+    statisticPartials(.stat_world_loss_in_units, id);
+}
+
+/// THE WORLD MODEL's GRADIENT OVER A ROUND, ONE THREAD, after each of its optimiser's steps (`kit_mlp.ClippedAdam`):
+/// the step's gradient length before its clip at acts `x_off`, the clip's factor at acts `x_off + 1` - below 1 when
+/// the bound clipped it - folded into four numbers at params `stat_off` on (`DeviceStats.world_updates_in_round` and
+/// the three after it): the round's updates so far, the share of them clipped, the length's mean and its most. The
+/// share and the mean are kept as running means, so the four are all there is - no hidden sums. `accumulate` 0
+/// restarts them, at a round's first update; 1 folds this update into what they hold.
+pub fn stat_gradient_tally(id: u32) void {
     if (id != 0) {
         return;
     }
-    var squares: f32 = 0;
-    var index: u32 = 0;
-    while (index < params.rows) : (index += 1) {
-        const value: f32 = b_dacts[params.x_off + index];
-        squares += value * value;
-    }
-    const count: f32 = @floatFromInt(@max(params.rows, 1));
-    b_params[params.stat_off] = @sqrt(squares / count);
+    const gradient_length: f32 = b_acts[params.x_off];
+    const clip_factor_of_step: f32 = b_acts[params.x_off + 1];
+    const was_clipped: f32 = if (clip_factor_of_step < 1.0) 1.0 else 0.0;
+    const restarts: bool = params.accumulate == 0;
+    const updates_before: f32 = if (restarts) 0.0 else b_params[params.stat_off];
+    const clipped_share_before: f32 = if (restarts) 0.0 else b_params[params.stat_off + 1];
+    const length_mean_before: f32 = if (restarts) 0.0 else b_params[params.stat_off + 2];
+    const length_most_before: f32 = if (restarts) 0.0 else b_params[params.stat_off + 3];
+    const updates: f32 = updates_before + 1.0;
+    b_params[params.stat_off] = updates;
+    b_params[params.stat_off + 1] = clipped_share_before + (was_clipped - clipped_share_before) / updates;
+    b_params[params.stat_off + 2] = length_mean_before + (gradient_length - length_mean_before) / updates;
+    b_params[params.stat_off + 3] = @max(length_most_before, gradient_length);
+}
+
+/// A MODEL's ANSWER TO AN ACTION, AGAINST THE PHYSICS', over pairs of windows that set out from ONE state with
+/// different actions - rows 2p and 2p + 1, `rows / 2` pairs (two candidates of one planner's replan). At one step's
+/// packed block, `count` numbers a row: the physics' change between the pair's two states - the targets at acts
+/// `t_off` - and the model's between its two predictions - at acts `x_off`. Pooled over the pairs, into params
+/// `stat_off` and the slot after it:
+///
+///     cosine         sum_p <physics_p, model_p> / sqrt( sum_p |physics_p|^2  x  sum_p |model_p|^2 )
+///     length ratio   sqrt( sum_p |model_p|^2 / sum_p |physics_p|^2 )
+///
+/// 1 and 1 for a model that answers an action exactly as the physics does: the direction it gives an action's
+/// effect, and the size. A gradient through the model rides on this answer, not on its state error. Pooled, a pair
+/// whose actions barely differ weighs as little as its difference, rather than adding a cosine of noise. With no
+/// difference at all on either side, both are 0. From its chunks' three sums (`stat_pair_response_partials`).
+pub fn stat_pair_response(id: u32) void {
+    statisticTotal(.stat_pair_response, id);
+}
+
+/// The response's first pass (`stat_pair_response`): a chunk's products and squared lengths, pair by pair, number
+/// by number.
+pub fn stat_pair_response_partials(id: u32) void {
+    statisticPartials(.stat_pair_response, id);
 }
 
 /// THE MEAN SQUARED DIFFERENCE of `rows` activations at acts `x_off` and at acts `t_off` - a regression's loss per
-/// number, as flow matching's is between the velocity given and the path's - into params `stat_off`.
+/// number, as flow matching's is between the velocity given and the path's - into params `stat_off`, from its chunks'
+/// squares (`stat_mean_square_difference_partials`). With `stat_weights_on` the activations are rows of `count`
+/// features and each square is weighed by its feature's loss weight at acts `u_off` (the world model's gate).
 pub fn stat_mean_square_difference(id: u32) void {
-    if (id != 0) {
-        return;
-    }
-    b_params[params.stat_off] = meanSquaredDifference(params.x_off, params.t_off, params.rows);
+    statisticTotal(.stat_mean_square_difference, id);
+}
+
+/// The mean squared difference's first pass (`stat_mean_square_difference`): a chunk's squared differences.
+pub fn stat_mean_square_difference_partials(id: u32) void {
+    statisticPartials(.stat_mean_square_difference, id);
+}
+
+/// THE LABELS' LOSS (`lat_label_bwd`), unweighted: the mean, over `rows` x `count` numbers, of the squared distance
+/// between the action the policy would give and the label - the gradient's own difference (`latLabelDifference`),
+/// read from the same places - into params `stat_off`, from its chunks' squares (`stat_label_loss_partials`).
+pub fn stat_label_loss(id: u32) void {
+    statisticTotal(.stat_label_loss, id);
+}
+
+/// The labels' loss's first pass (`stat_label_loss`): a chunk's squared distances.
+pub fn stat_label_loss_partials(id: u32) void {
+    statisticPartials(.stat_label_loss, id);
 }
 
 /// THE MEAN AND THE SAMPLE DEVIATION of `rows` activations at acts `x_off` - the deviation divided by rows - 1, as
-/// `zimrrl.normalizeAdvantages` takes it; 0 for fewer than two - into params `stat_off` and `stat_off + 1`.
+/// `zimrrl.normalizeAdvantages` takes it; 0 for fewer than two - into params `stat_off` and `stat_off + 1`. One
+/// thread and one pass: its rows are a batch's examples, a few dozen.
 pub fn stat_mean_and_deviation(id: u32) void {
     if (id != 0) {
         return;
@@ -3469,73 +5386,28 @@ pub fn plan_gain_stats(id: u32) void {
 /// rows' targets at acts `t_off` - into params `stat_off` the heads' mean value, `stat_off + 1` their mean SPREAD (each
 /// row's standard deviation across the heads, averaged over the rows: the disagreement a pessimistic critic adds to its
 /// value), and `stat_off + 2` the heads' error against the targets as a root mean square, in the cost's own units.
+/// From its chunks' three sums over rows (`critic_value_stats_partials`).
 pub fn critic_value_stats(id: u32) void {
-    if (id != 0) {
-        return;
-    }
-    const rows: u32 = params.rows;
-    const heads: u32 = params.count;
-    var value_sum: f32 = 0;
-    var spread_sum: f32 = 0;
-    var error_squares: f32 = 0;
-    var row: u32 = 0;
-    while (row < rows) : (row += 1) {
-        var row_sum: f32 = 0;
-        var head: u32 = 0;
-        while (head < heads) : (head += 1) {
-            row_sum += b_acts[params.x_off + head * rows + row];
-        }
-        const row_mean: f32 = row_sum / float(@max(heads, 1));
-        var row_squares: f32 = 0;
-        const target: f32 = b_acts[params.t_off + row];
-        head = 0;
-        while (head < heads) : (head += 1) {
-            const value: f32 = b_acts[params.x_off + head * rows + row];
-            row_squares += (value - row_mean) * (value - row_mean);
-            error_squares += (value - target) * (value - target);
-        }
-        value_sum += row_sum;
-        spread_sum += @sqrt(row_squares / float(@max(heads, 1)));
-    }
-    const value_count: f32 = float(@max(rows * heads, 1));
-    b_params[params.stat_off] = value_sum / value_count;
-    b_params[params.stat_off + 1] = spread_sum / float(@max(rows, 1));
-    b_params[params.stat_off + 2] = @sqrt(error_squares / value_count);
+    statisticTotal(.critic_value_stats, id);
+}
+
+/// The critic's statistics' first pass (`critic_value_stats`): a chunk of rows' values, spreads and squared errors.
+pub fn critic_value_stats_partials(id: u32) void {
+    statisticPartials(.critic_value_stats, id);
 }
 
 /// THE FAILURE BARRIER'S HINGES over a rollout: `count` steps of `rows` rows, each step's rolled states at acts `y_off`
 /// and goals at `t_off` advancing one block (`rows` x `out_dim`) a step, the normaliser at `u_off` - each row's head
 /// and tilt hinges as the tracking cost charges them (`barrierMeasures`, `barrierHinges`, the `barrier_` fields), their
 /// mean into params `stat_off`, unweighted: 0 while every imagined state keeps well inside the failure rule, larger the
-/// more and the deeper the rollouts press against it.
+/// more and the deeper the rollouts press against it. From its chunks' hinges (`stat_barrier_partials`).
 pub fn stat_barrier(id: u32) void {
-    if (id != 0) {
-        return;
-    }
-    const rows: u32 = params.rows;
-    const features: u32 = params.out_dim;
-    const block_floats: u32 = rows * features;
-    const means_at: u32 = params.u_off;
-    const spreads_at: u32 = params.u_off + features;
-    var hinge_sum: f32 = 0;
-    var step: u32 = 0;
-    while (step < params.count) : (step += 1) {
-        const states_at: u32 = params.y_off + step * block_floats;
-        const goals_at: u32 = params.t_off + step * block_floats;
-        var row: u32 = 0;
-        while (row < rows) : (row += 1) {
-            const row_start: u32 = row * features;
-            const measures: BarrierMeasures = barrierMeasures(row_start, states_at, goals_at, means_at, spreads_at);
-            hinge_sum += barrierHinges(
-                measures,
-                params.barrier_head_margin,
-                params.barrier_head_width,
-                params.barrier_tilt_margin,
-                params.barrier_tilt_width,
-            );
-        }
-    }
-    b_params[params.stat_off] = hinge_sum / float(@max(rows * params.count, 1));
+    statisticTotal(.stat_barrier, id);
+}
+
+/// The barrier's first pass (`stat_barrier`): a chunk of rolled rows' hinges, step by step, row by row.
+pub fn stat_barrier_partials(id: u32) void {
+    statisticPartials(.stat_barrier, id);
 }
 
 /// FPO'S RATIOS over `rows` examples - each exp(L_old - L_new), from the old losses at acts `x_off` and the new at
@@ -3629,6 +5501,20 @@ pub fn fpo_velocity_gradient(id: u32) void {
 // buffer. Forward, the correction is decoded and added; backward, the raw action's gradient is projected onto the
 // synergies - the chain rule through raw + B^T c, which gives d/dc = B d/draw.
 
+/// One number of a row's correction, sum over j of c[row][j] B[j][action]: the coefficients at acts `x_off`
+/// [rows][`count`], the synergies at params `w_off` [`count`][`out_dim`].
+fn synergyCorrection(row: u32, action: u32) f32 {
+    const action_width: u32 = params.out_dim;
+    const synergy_count: u32 = params.count;
+    var correction: f32 = 0;
+    var synergy: u32 = 0;
+    while (synergy < synergy_count) : (synergy += 1) {
+        const coefficient: f32 = b_acts[params.x_off + row * synergy_count + synergy];
+        correction += coefficient * b_params[params.w_off + synergy * action_width + action];
+    }
+    return correction;
+}
+
 /// A flow's correction DECODED AND ADDED, ONE THREAD PER (row, action): raw[row][a] += sum over j of c[row][j] B[j][a].
 ///   reads  acts `x_off` the coefficients [rows][`count`], params `w_off` the synergies [`count`][`out_dim`]
 ///   adds into acts `y_off` the raw actions [rows][`out_dim`]
@@ -3639,14 +5525,226 @@ pub fn synergy_decode_add(id: u32) void {
     }
     const row: u32 = id / action_width;
     const action: u32 = id % action_width;
-    const synergy_count: u32 = params.count;
-    var correction: f32 = 0;
-    var synergy: u32 = 0;
-    while (synergy < synergy_count) : (synergy += 1) {
-        const coefficient: f32 = b_acts[params.x_off + row * synergy_count + synergy];
-        correction += coefficient * b_params[params.w_off + synergy * action_width + action];
+    b_acts[params.y_off + id] += synergyCorrection(row, action);
+}
+
+/// A flow's correction DECODED INTO STRIDED ROWS, ONE THREAD PER (row, action): y[row][a] = sum over j of c[row][j]
+/// B[j][a], written at acts `y_off` + row x `stride` + a - the first `out_dim` numbers of each row; what follows them
+/// in a row is not written. (A simulator's rows of corrections, as wide as its actions: `LatentKit.correctOnRows`.)
+///   reads  acts `x_off` the coefficients [rows][`count`], params `w_off` the synergies [`count`][`out_dim`]
+pub fn synergy_decode_strided(id: u32) void {
+    const action_width: u32 = params.out_dim;
+    if (id >= params.rows * action_width) {
+        return;
     }
-    b_acts[params.y_off + id] += correction;
+    const row: u32 = id / action_width;
+    const action: u32 = id % action_width;
+    b_acts[params.y_off + row * params.stride + action] = synergyCorrection(row, action);
+}
+
+/// A MODEL PLANNER's STATES FROM ACTING ROWS, ONE THREAD PER (state, column): each of `rows` states named by the
+/// table at acts `t_off` - [state][3], an acting row, the reference table's start row and its clip's last row, as
+/// floats - its inputs at acts `y_off` + state x `planStateInputFloats` (`TrackingPlanner.stateInputsAt`): the
+/// `count` normalised state features from the acting row, at acts `x_off` + row x `stride` + `col` (the row's state,
+/// after its goal), then the two rows of the table - and with the root target on (`lat_root_target`), the row's root
+/// target, the slots just before its state: where the reference's root at the first goal is, seen from the
+/// character's. The planner's gather reads them (`plan_gather`).
+pub fn gather_plan_states(id: u32) void {
+    const feature_count: u32 = params.count;
+    const input_width: u32 = planStateInputFloats(feature_count);
+    if (id >= params.rows * input_width) {
+        return;
+    }
+    const state: u32 = id / input_width;
+    const column: u32 = id % input_width;
+    const table_row_at: u32 = params.t_off + 3 * state;
+    const destination: u32 = params.y_off + state * input_width + column;
+    if (column < feature_count) {
+        const row: u32 = @trunc(b_acts[table_row_at]);
+        b_acts[destination] = b_acts[params.x_off + row * params.stride + params.col + column];
+        return;
+    }
+    const is_table_row: bool = column < feature_count + 2;
+    if (is_table_row) {
+        const table_column: u32 = 1 + column - feature_count;
+        b_acts[destination] = b_acts[table_row_at + table_column];
+        return;
+    }
+    const row: u32 = @trunc(b_acts[table_row_at]);
+    const slot: u32 = column - feature_count - 2;
+    const slot_count: u32 = pose_seen_numbers;
+    const slots_at: u32 = params.x_off + row * params.stride + params.col - slot_count;
+    b_acts[destination] = b_acts[slots_at + slot];
+}
+
+/// A MODEL PLANNER's FIRST CORRECTIONS SCATTERED TO THEIR ROWS, ONE THREAD PER (state, action): each state's chosen
+/// first coefficients, [rows][`count`] at acts `x_off`, decoded through the synergies at params `w_off`
+/// [`count`][`out_dim`] into the row the table at acts `t_off` names ([state][3], its first number) - acts `y_off` +
+/// row x `stride` + action: the acting rows' corrections, the planned characters' replaced by their plans'.
+pub fn scatter_plan_corrections(id: u32) void {
+    const action_width: u32 = params.out_dim;
+    if (id >= params.rows * action_width) {
+        return;
+    }
+    const state: u32 = id / action_width;
+    const action: u32 = id % action_width;
+    const row: u32 = @trunc(b_acts[params.t_off + 3 * state]);
+    b_acts[params.y_off + row * params.stride + action] = synergyCorrection(state, action);
+}
+
+/// An example's choice, action number `action` of the acting row whose actions start `action_row_at` into each
+/// block: around the policy its raw action plus the plan's offset; for a whole action, the filter undone.
+fn flowExampleChoice(action_row_at: u32, action: u32, plan_numbers_are_given: bool) f32 {
+    const plan_number: f32 = b_acts[params.z_off + action_row_at + action];
+    if (!plan_numbers_are_given) {
+        const policy_action: f32 = b_acts[params.u_off + action_row_at + action];
+        return policy_action + plan_number;
+    }
+    const applied: f32 = b_acts[params.v_off + action_row_at + action];
+    const share: f32 = latFilterShare(action);
+    const kept_of_applied: f32 = (1.0 - share) * applied;
+    return (plan_number - kept_of_applied) / (share * params.lat_scale);
+}
+
+/// One (example, column) of `gather_flow_examples` and its whole-action form.
+fn gatherFlowExample(id: u32, plan_numbers_are_given: bool) void {
+    const condition_width: u32 = params.in_dim;
+    const action_width: u32 = params.count;
+    const example_width: u32 = condition_width + 2 * action_width;
+    if (id >= params.rows * example_width) {
+        return;
+    }
+    const example: u32 = id / example_width;
+    const column: u32 = id % example_width;
+    const row: u32 = @trunc(b_acts[params.t_off + 2 * example]);
+    const slot: u32 = @trunc(b_acts[params.t_off + 2 * example + 1]);
+    const destination: u32 = params.y_off + slot * example_width + column;
+    if (column < condition_width) {
+        b_acts[destination] = b_acts[params.x_off + row * params.stride + column];
+        return;
+    }
+    const action_row_at: u32 = row * params.destination_stride;
+    const is_applied: bool = column < condition_width + action_width;
+    if (is_applied) {
+        const action: u32 = column - condition_width;
+        b_acts[destination] = b_acts[params.v_off + action_row_at + action];
+        return;
+    }
+    const action: u32 = column - condition_width - action_width;
+    b_acts[destination] = flowExampleChoice(action_row_at, action, plan_numbers_are_given);
+}
+
+/// A FLOW's EXAMPLES KEPT FROM PLANS, ONE THREAD PER (example, column): each of `rows` examples named by the table at
+/// acts `t_off` - [example][2], an acting row and a slot of the ring, as floats - written into the ring at acts
+/// `y_off`, a slot `in_dim` + 2 `count` numbers, all read from the acting row:
+///
+///     condition   `in_dim`   the [goal | state] the policy acted from, at acts `x_off` + row x `stride`
+///     applied     `count`    the action applied before the decision, which the policy also read, at acts `v_off`
+///     choice      `count`    the planner's choice as a raw action - what the policy would have had to answer -
+///                            from the plan's numbers at acts `z_off` (`flowExampleChoice`)
+///
+/// the last two's rows `destination_stride` apart. The choice is kept whole, not as an offset: the offset it means is
+/// taken against the policy as it is when the example is learned (`synergy_project_difference`), so an offset the
+/// policy has since learned is not counted twice. Teacher 2's ring on the device (`robot_track_resident.FlowExamples`).
+/// Around the policy: the plan's numbers are its offset, the choice the policy's raw action at acts `u_off` plus it.
+pub fn gather_flow_examples(id: u32) void {
+    const plan_numbers_are_given: bool = false;
+    gatherFlowExample(id, plan_numbers_are_given);
+}
+
+/// `gather_flow_examples` for plans of whole actions: the plan's numbers are the action GIVEN - written over the
+/// filtered one - and the choice is the raw action whose filtered value it is, the action filter undone with the
+/// filter's shares (`latFilterShare`) and the scale `lat_scale`,
+///
+///     given = share x scale x raw + (1 - share) x applied
+///     raw   = (given - (1 - share) x applied) / (share x scale)
+///
+/// - the raw answer that, given by the policy, the filter would have made the plan's action.
+pub fn gather_flow_examples_given(id: u32) void {
+    const plan_numbers_are_given: bool = true;
+    gatherFlowExample(id, plan_numbers_are_given);
+}
+
+/// A BATCH FROM A FLOW's EXAMPLES, ONE THREAD PER (batch row, column): each of `rows` batch rows takes the ring's slot
+/// the table at acts `t_off` names (one float a row) - its condition, `in_dim` numbers, to acts `y_off` + row x
+/// `stride` (packed rows at a stride of 0; a kit's wide rows otherwise); its applied action, `out_dim` numbers, to acts
+/// `v_off` [rows][`out_dim`]; its choice, `out_dim` numbers, to acts `z_off` [rows][`out_dim`]. The ring at acts
+/// `x_off`, a slot `in_dim` + 2 `out_dim` numbers (`gather_flow_examples`). Teacher 2's batch on the device: the
+/// policy reads the first two again before every update, and the flow learns what separates its answer from the
+/// third; or the rows a policy learns the flow's main mode on, its conditions in the kit's first wide rows.
+pub fn gather_flow_batch(id: u32) void {
+    const condition_width: u32 = params.in_dim;
+    const action_width: u32 = params.out_dim;
+    const example_width: u32 = condition_width + 2 * action_width;
+    if (id >= params.rows * example_width) {
+        return;
+    }
+    const row: u32 = id / example_width;
+    const column: u32 = id % example_width;
+    const slot: u32 = @trunc(b_acts[params.t_off + row]);
+    const value: f32 = b_acts[params.x_off + slot * example_width + column];
+    if (column < condition_width) {
+        const condition_stride: u32 = if (params.stride == 0) condition_width else params.stride;
+        b_acts[params.y_off + row * condition_stride + column] = value;
+        return;
+    }
+    const is_applied: bool = column < condition_width + action_width;
+    if (is_applied) {
+        b_acts[params.v_off + row * action_width + column - condition_width] = value;
+        return;
+    }
+    b_acts[params.z_off + row * action_width + column - condition_width - action_width] = value;
+}
+
+/// THE DIFFERENCE OF TWO ACTIONS IN THE FLOW's COEFFICIENTS, ONE THREAD PER (row, synergy): for each of `rows` rows,
+///
+///     c[j] = sum over a of B[j][a] (x[a] - z[a])
+///
+/// x at acts `x_off`, z at acts `z_off`, both [rows][`out_dim`]; the synergies at params `w_off`, [`count`][`out_dim`]
+/// with orthonormal rows, so c decodes to the difference's closest correction; c to acts `y_off` [rows][`count`].
+/// Teacher 2's targets, taken just before an update: a planner's whole choice x less what the policy would answer
+/// now, z - the offset still to learn.
+pub fn synergy_project_difference(id: u32) void {
+    const synergy_count: u32 = params.count;
+    if (id >= params.rows * synergy_count) {
+        return;
+    }
+    const row: u32 = id / synergy_count;
+    const synergy: u32 = id % synergy_count;
+    const action_width: u32 = params.out_dim;
+    var coefficient: f32 = 0;
+    var action: u32 = 0;
+    while (action < action_width) : (action += 1) {
+        const target: f32 = b_acts[params.x_off + row * action_width + action];
+        const answer: f32 = b_acts[params.z_off + row * action_width + action];
+        coefficient += b_params[params.w_off + synergy * action_width + action] * (target - answer);
+    }
+    b_acts[params.y_off + row * synergy_count + synergy] = coefficient;
+}
+
+/// A FLOW's DRIFTING NOISE ONE DECISION ON (Ornstein-Uhlenbeck, as `zimrrl.ouStep`), ONE THREAD PER (row, synergy):
+/// each row's noise kept at acts `x_off` [rows][`count`] moves to
+///
+///     noise <- rho noise + sqrt(1 - rho^2) fresh            rho = `flow_noise_correlation`
+///
+/// from the fresh standard normal already at acts `y_off` + row x `stride` + `col` + synergy - a sampler's first
+/// block's point columns, where `hashed_noise` drew it - and the kept noise times `flow_noise_scale` then replaces the
+/// fresh there: the flow's starting point. The noise keeps its spread (1) whatever rho, and drifts with a memory of
+/// about 1 / (1 - rho) decisions, so a character's correction wanders smoothly rather than jumping each decision.
+pub fn ou_noise_step(id: u32) void {
+    const synergy_count: u32 = params.count;
+    if (id >= params.rows * synergy_count) {
+        return;
+    }
+    const row: u32 = id / synergy_count;
+    const synergy: u32 = id % synergy_count;
+    const fresh_at: u32 = params.y_off + row * params.stride + params.col + synergy;
+    const kept_at: u32 = params.x_off + row * synergy_count + synergy;
+    const correlation: f32 = params.flow_noise_correlation;
+    const fresh_share: f32 = @sqrt(1.0 - correlation * correlation);
+    const kept: f32 = correlation * b_acts[kept_at] + fresh_share * b_acts[fresh_at];
+    b_acts[kept_at] = kept;
+    b_acts[fresh_at] = params.flow_noise_scale * kept;
 }
 
 /// A raw action's gradient PROJECTED ONTO THE SYNERGIES, ONE THREAD PER (row, synergy):

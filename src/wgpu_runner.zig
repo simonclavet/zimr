@@ -15,7 +15,7 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const user_app = @import("user_app");
 
-pub const std_options = z.std_options;
+pub const std_options: std.Options = z.std_options;
 
 const spec = user_app.app;
 const State = @TypeOf(spec).State;
@@ -166,7 +166,7 @@ fn clampToI32(bytes: usize) i32 {
 /// precise, fragmentation-free CPU twin of the GPU handle census. Growth across
 /// the twice-lifecycle probe is exactly a per-lifecycle CPU leak.
 pub export fn runnerLiveBytes() i32 {
-    return clampToI32(zimr_app.counting.live_bytes);
+    return clampToI32(zimr_app.example_meter.live_bytes);
 }
 
 /// `--leak-trace`: put the allocation tracer under both counters. The smoke harness calls
@@ -192,7 +192,7 @@ pub export fn runnerTraceReport() void {
 /// and bind-group caches, `Renderer2D`, `Cube3D`. Across an example's lifecycle this
 /// must not grow either - growth here means the engine kept memory the example caused.
 pub export fn runnerEngineLiveBytes() i32 {
-    return clampToI32(zimr_app.engine_counting.live_bytes);
+    return clampToI32(zimr_app.engine_meter.live_bytes);
 }
 
 /// How many frees (or shrinks) took more bytes than the counter they went through had
@@ -200,7 +200,7 @@ pub export fn runnerEngineLiveBytes() i32 {
 /// the gate fails on any.
 pub export fn runnerWrongSideFrees() i32 {
     // Saturating: a counter of mistakes must not itself trap on overflow in a safety build.
-    const total: u32 = zimr_app.counting.wrong_side_frees +| zimr_app.engine_counting.wrong_side_frees;
+    const total: u32 = zimr_app.example_meter.wrong_side_frees +| zimr_app.engine_meter.wrong_side_frees;
     const i32_max: u32 = (1 << 31) - 1;
     return @intCast(@min(total, i32_max));
 }

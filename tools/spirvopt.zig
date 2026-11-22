@@ -2804,7 +2804,7 @@ pub const Kind = enum(u8) {
     ShDebug100_DebugImportedEntity,
     Clspv_KernelPropertyFlags,
 };
-pub const kind_count = 91;
+pub const kind_count: usize = 91;
 
 pub const KindCategory = enum(u8) { id, literal, bit_enum, value_enum, composite };
 pub fn kindCategory(kind: Kind) KindCategory {
@@ -53306,8 +53306,10 @@ pub fn main(init: std.process.Init) !void {
     var d: Driver = .{ .io = init.io, .gpa = init.gpa };
     defer d.pending_consumers.deinit(d.gpa);
     var args: List([]const u8) = .{};
-    var it: std.process.Args.Iterator = init.minimal.args.iterate();
-    while (it.next()) |a| args.push(a);
+    // `toSlice`, not `iterate`: Windows' command line is decoded with an allocator (`iterate` is a compile error
+    // there); the arena keeps the strings for the whole run.
+    const argv: []const [:0]const u8 = init.minimal.args.toSlice(init.arena.allocator()) catch oom();
+    for (argv) |a| args.push(a);
     if (args.len() == 0) args.push("spirvopt");
 
     const status: DrvStatus = drvParseFlags(&d, args.items);

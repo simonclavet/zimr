@@ -97,7 +97,7 @@ const ArrayList = std.ArrayList;
 const eql = std.mem.eql;
 const startsWith = std.mem.startsWith;
 
-const default_port = "7777";
+const default_port: []const u8 = "7777";
 
 // Signaling messages are tiny - an SDP offer is a couple KB, an ICE candidate
 // is a few hundred bytes. 16 KB is comfortably roomy. If a peer ever tries to

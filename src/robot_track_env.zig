@@ -454,41 +454,50 @@ pub const NStep = struct {
 
 const testing = std.testing;
 
-/// Feeds one decision to a one-environment, one-feature NStep: its observation and action are its step's number,
-/// `after` the next step's number, `terminal` 99.
-fn feed(
-    nstep: *NStep,
-    step: f32,
-    reward: f32,
-    end: EndKind,
-    out: []Transition,
-) usize {
-    const obs = [1]f32{step};
-    const after = [1]f32{step + 1.0};
-    const terminal = [1]f32{99.0};
-    return nstep.push(0, &obs, &obs, .{ .reward = reward, .end = end }, &after, &terminal, out);
-}
+/// Feeds decisions to a one-environment, one-feature NStep: each decision's observation and action are its step's
+/// number, the observation after it the next step's number, and the terminal state 99. The arrays live in the feeder,
+/// not in `feed`'s frame: a transition's `next` is a slice of what `push` was given, read after `feed` returns.
+const Feeder = struct {
+    obs: [1]f32 = .{0},
+    after: [1]f32 = .{0},
+    terminal: [1]f32 = .{99.0},
+
+    fn feed(
+        feeder: *Feeder,
+        nstep: *NStep,
+        step: f32,
+        reward: f32,
+        end: EndKind,
+        out: []Transition,
+    ) usize {
+        feeder.obs = .{step};
+        feeder.after = .{step + 1.0};
+        const outcome: Outcome = .{ .reward = reward, .end = end };
+        return nstep.push(0, &feeder.obs, &feeder.obs, outcome, &feeder.after, &feeder.terminal, out);
+    }
+};
 
 test "robot_track_env: NStep - full windows, a cut, a stop, against the closed form" {
     var arena_state: ArenaAllocator = .init(testing.allocator);
     defer arena_state.deinit();
     var nstep: NStep = try .init(arena_state.allocator(), 1, 1, 1, 3, 0.5);
     var out: [3]Transition = undefined;
+    var feeder: Feeder = .{};
     // Rewards 1, 2, 4, 8, 16: each window's terms come out equal, so its return is easy to state.
-    try testing.expectEqual(@as(usize, 0), feed(&nstep, 0, 1, .none, &out));
-    try testing.expectEqual(@as(usize, 0), feed(&nstep, 1, 2, .none, &out));
+    try testing.expectEqual(@as(usize, 0), feeder.feed(&nstep, 0, 1, .none, &out));
+    try testing.expectEqual(@as(usize, 0), feeder.feed(&nstep, 1, 2, .none, &out));
     // The window is full: step 0's transition - 1 + 0.5 * 2 + 0.25 * 4 = 3, bootstrapping from step 3 at 0.5^3.
-    try testing.expectEqual(@as(usize, 1), feed(&nstep, 2, 4, .none, &out));
+    try testing.expectEqual(@as(usize, 1), feeder.feed(&nstep, 2, 4, .none, &out));
     try testing.expectEqual(@as(f32, 0), out[0].obs[0]);
     try testing.expectEqual(@as(f32, 3), out[0].reward);
     try testing.expectEqual(@as(f32, 3), out[0].next[0]);
     try testing.expectEqual(@as(f32, 0.125), out[0].discount);
     // Step 1's: 2 + 2 + 2 = 6.
-    try testing.expectEqual(@as(usize, 1), feed(&nstep, 3, 8, .none, &out));
+    try testing.expectEqual(@as(usize, 1), feeder.feed(&nstep, 3, 8, .none, &out));
     try testing.expectEqual(@as(f32, 1), out[0].obs[0]);
     try testing.expectEqual(@as(f32, 6), out[0].reward);
     // A CUT at step 4: steps 2, 3 and 4 all go out, bootstrapping from the terminal state at 0.5^3, ^2, ^1.
-    try testing.expectEqual(@as(usize, 3), feed(&nstep, 4, 16, .cut, &out));
+    try testing.expectEqual(@as(usize, 3), feeder.feed(&nstep, 4, 16, .cut, &out));
     const cut_obs = [3]f32{ 2, 3, 4 };
     const cut_returns = [3]f32{ 12, 16, 16 };
     const cut_discounts = [3]f32{ 0.125, 0.25, 0.5 };
@@ -499,9 +508,9 @@ test "robot_track_env: NStep - full windows, a cut, a stop, against the closed f
         try testing.expectEqual(d, t.discount);
     }
     // A fresh episode, lost on its third decision: everything pending goes out with a discount of zero.
-    try testing.expectEqual(@as(usize, 0), feed(&nstep, 5, 1, .none, &out));
-    try testing.expectEqual(@as(usize, 0), feed(&nstep, 6, 2, .none, &out));
-    try testing.expectEqual(@as(usize, 3), feed(&nstep, 7, 4, .stop, &out));
+    try testing.expectEqual(@as(usize, 0), feeder.feed(&nstep, 5, 1, .none, &out));
+    try testing.expectEqual(@as(usize, 0), feeder.feed(&nstep, 6, 2, .none, &out));
+    try testing.expectEqual(@as(usize, 3), feeder.feed(&nstep, 7, 4, .stop, &out));
     const stop_returns = [3]f32{ 3, 4, 4 };
     for (out, stop_returns, 0..) |t, r, k| {
         try testing.expectEqual(5.0 + float(k), t.obs[0]);
@@ -509,7 +518,7 @@ test "robot_track_env: NStep - full windows, a cut, a stop, against the closed f
         try testing.expectEqual(@as(f32, 0), t.discount);
     }
     // And a cut on an episode's FIRST decision: one transition, at gamma^1.
-    try testing.expectEqual(@as(usize, 1), feed(&nstep, 8, 5, .cut, &out));
+    try testing.expectEqual(@as(usize, 1), feeder.feed(&nstep, 8, 5, .cut, &out));
     try testing.expectEqual(@as(f32, 5), out[0].reward);
     try testing.expectEqual(@as(f32, 0.5), out[0].discount);
 }
@@ -520,10 +529,11 @@ test "robot_track_env: NStep - with n = 1, exactly the one-step rows" {
     const gamma: f32 = 0.99;
     var nstep: NStep = try .init(arena_state.allocator(), 1, 1, 1, 1, gamma);
     var out: [1]Transition = undefined;
+    var feeder: Feeder = .{};
     const ends = [_]EndKind{ .none, .none, .cut, .none, .stop, .none };
     for (ends, 0..) |end, k| {
         const reward: f32 = 0.1 * float(k + 1) + 0.037;
-        try testing.expectEqual(@as(usize, 1), feed(&nstep, float(k), reward, end, &out));
+        try testing.expectEqual(@as(usize, 1), feeder.feed(&nstep, float(k), reward, end, &out));
         const t: Transition = out[0];
         // The return is the reward itself, bit for bit; the discount is gamma (1 - done), bit for bit.
         try testing.expectEqual(reward, t.reward);

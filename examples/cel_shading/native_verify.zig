@@ -38,11 +38,13 @@ const ink_color: [4]f32 = .{ 0.05, 0.05, 0.06, 1 };
 const bands: f32 = 4.0;
 const ink_world: f32 = 0.015;
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     const gpa: Allocator = std.heap.page_allocator;
-    var io_threaded: Io.Threaded = .init(gpa, .{});
-    defer io_threaded.deinit();
-    const io: Io = io_threaded.io();
+    const io: Io = init.io;
+    // The picture goes where the build says (`ZIMR_CAPTURE_DIR`, zig-out/verify) - by hand, the working directory.
+    const capture_path: []const u8 = init.environ_map.get("ZIMR_CAPTURE_DIR") orelse ".";
+    const capture_dir: Io.Dir = try Io.Dir.cwd().createDirPathOpen(io, capture_path, .{});
+    defer capture_dir.close(io);
 
     // ---- proxy bunny, measured + framed like the app ----
     var mn: [3]f32 = .{ 1.0e30, 1.0e30, 1.0e30 };
@@ -147,19 +149,17 @@ pub fn main() !void {
             ink_px += 1;
         }
     }
-    std.debug.print("cel_verify: paper {d} px, top-band {d} px, ink {d} px (all must be >0)\n", .{
-        paper,
-        bright_band,
-        ink_px,
-    });
-
     const png: []u8 = try z.codecs.png.encode(gpa, @ptrCast(&img), img_w, img_h);
     defer gpa.free(png);
-    try Io.Dir.cwd().writeFile(io, .{ .sub_path = "cel_verify.png", .data = png });
-    std.debug.print("  wrote cel_verify.png\n", .{});
+    try capture_dir.writeFile(io, .{ .sub_path = "cel_verify.png", .data = png });
 
-    if (paper == 0 or bright_band == 0 or ink_px == 0) {
+    // Silent when the look is right (a passing check prints nothing); its counts, and the picture's place, when not.
+    const look_is_right: bool = paper > 0 and bright_band > 0 and ink_px > 0;
+    if (!look_is_right) {
+        std.debug.print(
+            "cel_verify: paper {d} px, top-band {d} px, ink {d} px (all must be >0) - see {s}/cel_verify.png\n",
+            .{ paper, bright_band, ink_px, capture_path },
+        );
         return error.CelLookWrong;
     }
-    std.debug.print("  OK\n", .{});
 }

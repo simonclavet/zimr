@@ -1,0 +1,175 @@
+// THE FIRST NIGHT, RUN 4 - WITHOUT THE PHYSICS TEACHER: run 1 with no planners - no labels, no phases, no lookaheads
+// for the world model; the flow, whose teacher the planners are, and the model planner, which needs them both, off
+// with them. What the teacher brings: run 1 against this one.
+.{
+    // The minute (dance, get-up, walk, run) and each clip's variants: its mirror image, and both sides at 0.8 and 1.2
+    // of their speed - 24 clips, the characters assigned to them by index.
+    .task = .{ .motion = .one_minute, .variants = .{ .mirrored = true, .speed_change = 0.2 } },
+    .learner = .{ .supertrack = .{
+        // 1,024 characters on the device, each with a stiffness per limb in its action.
+        .characters = 1024,
+        .physics = .device,
+        .limb_stiffness = true,
+        // The policy and the world model at 30 Hz over 60 Hz physics: every count below is in decisions.
+        .decide_every = 2,
+        .max_steps = 300,
+        // 64 decisions of replay per character (2.1 s): 65,536 records in all, about 31 million floats - each record
+        // the character's 387 features, its action, a table row and its root's pose. Beside them the clips' 22,192
+        // frames of reference (about 12 million), the candidates' 4 kept lookaheads (about 9 million), the acting rows,
+        // the model planner's rows and the networks. A round adds 16,384 records, a quarter of the replay.
+        .replay_steps = 64,
+        // 1,024 windows a batch (SuperMimic's world model takes 2,048, its policy 4,096; the dry run's 32 learned
+        // nothing). The world model learns on 8 decisions; the policy imagines 5 single decisions, then 5 steps of the
+        // skip head's 4 - 25 decisions, 0.83 s, in 10 steps - with the critic past them. In all 273 million floats of
+        // the trainer's 537 million activations, 83 million of its 134 million gradients (`geno_trainer --layout`).
+        .rows = 1024,
+        .window = 8,
+        .policy_window = 5,
+        .policy_skip_steps = 5,
+        // The networks at a third of the reference implementations' widths: the world model and the policy 680 wide
+        // (SuperMimic's 2048), the critic's heads 170 (EfficientTDMPC's 512).
+        .hidden = 680,
+        .policy_hidden = 680,
+        // THE ACTOR: the policy's slow average corrected by a flow, each character with its own drifting noise. The
+        // flow learns the planners' offsets around that base by flow matching (teacher 2) - every way back they found,
+        // kept apart - and nothing from the world model's gradient (FlowDPG off: the policy climbs it already). Its
+        // third teacher, the CPU's real steps in danger, is off on the device.
+        // WITHOUT THE TEACHER the flow has none of its own (it learns the planners' offsets): the policy and its
+        // noise act.
+        .actor = .gaussian,
+        // THE MODEL PLANNER: from phase 2, at every decision, the physics' 8 planners and the 32 characters in most
+        // trouble after them plan through the world model - 16 candidates around the policy (2 of them the flow's own
+        // plans) over 4 steps, the last 2 through the skip head (2 + 2 x 4 = 10 decisions), 2 rounds - and act on
+        // their plans' first corrections in the flow's place; the planners' plans seed their next physics replan.
+        // The model planner needs the teacher's planners, the phases and the flow: off with them.
+        .planning = .{
+            .enabled = false,
+            .flags = .{ .budget = 40 },
+            .candidates = 16,
+            .horizon = 4,
+            .skip_steps = 2,
+            .rounds = 2,
+            .elites = 4,
+            .flow_plans = 2,
+        },
+        // THE SKIP HEAD: a second last layer of the world model for a step of 4 decisions, both heads predicting the
+        // state 6 decisions on, a step the lerp toward it. A quarter of the world model's updates are its own: the
+        // window of 8 as two steps of 4, each step's action the mean of the 4 given.
+        .skip_steps = 4,
+        .world_form = .dense_tanh,
+        .projection_steps = 6,
+        .skip_batch_share = 0.25,
+        // Half of the skip head's updates train it toward the world model's slow average (0.99 a world update): its
+        // one-step head chained over the 4 decisions under one held action, the recorded actions' mean.
+        .skip_consistency_share = 0.5,
+        .world_average_decay = 0.99,
+        // A round: 16 decisions of every character - 16,384 records - then 16 world model updates and 16 policy
+        // updates of 1,024 windows: each record in about 8 of the world model's window steps (XMimic's 8) and 10 of the
+        // policy's rollout steps (XMimic's 6.4). `time.csv` says what a round's training costs beside its acting.
+        .collect = 16,
+        .world_updates = 16,
+        .policy_updates = 16,
+        // The rates as SuperMimic's: 2e-4 for both networks.
+        .world_rate = 2e-4,
+        .policy_rate = 2e-4,
+        // The policy's optimiser as SuperMimic's: Adam's second moment over about 20 updates, the gradient's length
+        // bounded at 1, then each of its numbers at 0.1. The world model's bounded at 50, which a fall's contacts reach
+        // and a calm update does not.
+        .policy_beta2 = 0.95,
+        .policy_gradient_clip = 1,
+        .policy_element_clip = 0.1,
+        .world_gradient_clip = 50,
+        // Muon on the two networks' hidden-to-hidden matrices, Adam on every other weight (SuperMimic's optimiser).
+        .policy_muon = true,
+        // THE ROOT TARGET: the policy's goal shows where the reference's root is, seen from the character's, and its
+        // loss charges the imagined root's drift from the reference's - half the bodies' weight, as SuperMimic weighs
+        // its root against its bodies.
+        .root_target = true,
+        // The rates' cosine over the 8 hours planned, down to 3% (SuperMimic's floor); held there if the run goes on.
+        .rate_decay_hours = 8,
+        .rate_floor_share = 0.03,
+        // The critic: its discount 1 - 1/45 a decision (a second and a half), fitted to its real transitions as
+        // lambda-returns at 0.5 - not to the policy's imagined rollouts, which step through skips. Its value past the
+        // horizon in the policy's loss at full weight once trusted, ramped over 1,000 updates. The cost capped at 25 a step
+        // far from the reference, so that a fallen state is valued by its time to return.
+        .train_critic = true,
+        .critic = .{ .hidden = 170, .discount = 0.97777778, .imagined_share = 0, .real_lambda = 0.5 },
+        .value_tail = 1.0,
+        .value_tail_ramp_updates = 1000,
+        .return_cost_cap = 25,
+        // The policy judged, probed and saved as its slow average over about the last 200 updates.
+        .policy_average_decay = 0.995,
+        // The control's seed; the ablations share it, so each differs from run 1 in its one change from the start.
+        .seed = 1,
+        // New episodes start toward the stretches failing now, in bins of a second (the curriculum's own mixture).
+        .curriculum = .{ .bin_seconds = 1 },
+        // Pushes from the first minute, one every two seconds per character: their speeds from 0.5 m/s up to a top
+        // that opens along the training clock to 5 m/s at hour 6, and holds while the characters come back from
+        // fewer than 0.6 of the pushes near it; a quarter of starts in trouble, at the top.
+        .pushes = .{
+            .rate_per_second = 0.5,
+            .speed_min = 0.5,
+            .speed_max = 5,
+            .full_hours = 6,
+            .brake = .{ .come_back_bar = 0.6 },
+            .start_share = 0.25,
+        },
+        // RETURNS: a character that loses its reference lives on for 150 decisions (5 s), and has returned after 4
+        // decisions holding the reference again; a quarter of the policy's windows are drawn inside returns.
+        .aftermath_steps = 150,
+        .return_steps = 4,
+        .return_window_share = 0.25,
+        // THE TEACHER: 32 planners, the first 32 characters - one or more on each of the 24 clips - each running 16
+        // candidates ahead through the physics, a replan every 8 decisions over a plan of 8. 512 candidate worlds
+        // beside the characters; a decision leaves them out, and only the replans step them. Estimated on the
+        // device's line (22 ms and 0.097 ms a world), a decision then takes about 193 ms against 121 without a
+        // teacher; a replan every 4 would take 265, and 8 planners, 156 - but 8 would leave 16 of the clips without
+        // a planner of their own.
+        // THE ONE CHANGE: no planners.
+        .teacher = .{
+            .planners = 0,
+            .lookaheads_kept = 4,
+            // From phase 2 the plans are offsets around the policy, and the 8 characters in most trouble plan, chosen
+            // again at each replan - a third of the physics in phase 1 (32 x 16 x 8 / 8 candidate decisions a decision
+            // beside 1,024 characters), a tenth after.
+            .planning = .{
+                .candidates_per_planner = 16,
+                .replan_interval = 8,
+                .plan_following_share = 0.5,
+                .trouble_planners = 8,
+                // The flow learns from the plans that beat the policy by the most: the top 40% of the last 256 by
+                // their advantage over the policy's own candidate, in the same physics.
+                .teach_share = 0.4,
+                .teach_window = 256,
+            },
+        },
+        // THE TWO PHASES: the teacher's labels alone until the world model's gate opens - measured every half minute
+        // and passed twice in a row; no time bound opens it (the dry run's bound of 10 minutes opened phase 2 on a
+        // world model that failed every bar) - then the rollouts through the world model ramped in over 3 minutes, a
+        // tenth of the policy's updates kept on the labels.
+        // The labels: in phase 1 the plans' recorded actions, the fastest start - the flow learning the plans in the
+        // same updates; from phase 2 the flow's main mode around the policy's average - the flow run from its
+        // noise's centre, the side more of the plans took - not the squared distance to every plan, which lands on
+        // their average.
+        // No teacher, no labels: no phases - every policy update a rollout's through the world model, from the start.
+        .phases = .{
+            .enabled = false,
+            .phase_one_labels = .recorded_actions,
+            // The flow's mode needs a flow; the setting is idle with the phases off, and the lab reads it all the same.
+            .phase_two_labels = .recorded_actions,
+            .phase_one_minutes = 1000,
+            .ramp_minutes = 3,
+            .label_share_after_ramp = 0.1,
+        },
+    } },
+    .controls = .{
+        // An hour of training; the schedules are laid out for 8 hours, so an hour runs at nearly full strength.
+        .stop_after_hours = 1,
+        // Judged and probed at 20, 40 and 60 minutes (the servo at the start); saved every 5 minutes; a policy kept
+        // every 10 - the lab's timeline of the run - and no state checkpoints.
+        .judge_minutes = 20,
+        .checkpoint_minutes = 10,
+        .kept_state_checkpoints = 0,
+        .save_minutes = 5,
+    },
+}

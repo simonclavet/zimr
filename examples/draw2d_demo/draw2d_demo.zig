@@ -14,8 +14,8 @@ const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const Color = zm.Color;
 const c = Color;
 
-const screen_w = 800;
-const screen_h = 450;
+const screen_w: u32 = 800;
+const screen_h: u32 = 450;
 
 const State = struct {
     sprite: z.Sprite,

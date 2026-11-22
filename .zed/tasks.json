@@ -1782,6 +1782,29 @@
         "use_new_terminal": false
     },
     {
+        "label": "zig: build geno-mirror",
+        "command": "zig",
+        "args": [
+            "build",
+            "geno-mirror",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release geno-mirror",
+        "command": "zig",
+        "args": [
+            "build",
+            "geno-mirror",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
         "label": "zig: build geno-ppo",
         "command": "zig",
         "args": [
@@ -2143,6 +2166,29 @@
         "args": [
             "build",
             "hello-world",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build hello-world-owned-main",
+        "command": "zig",
+        "args": [
+            "build",
+            "hello-world-owned-main",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release hello-world-owned-main",
+        "command": "zig",
+        "args": [
+            "build",
+            "hello-world-owned-main",
             "-Dplatform=web",
             "-Dmode=release"
         ],
@@ -8425,6 +8471,17 @@
         "use_new_terminal": false
     },
     {
+        "label": "zig: build geno-mirror (windows)",
+        "command": "zig",
+        "args": [
+            "build",
+            "geno-mirror",
+            "-Dplatform=windows"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
         "label": "zig: build geno-ppo (windows)",
         "command": "zig",
         "args": [
@@ -8595,6 +8652,17 @@
         "args": [
             "build",
             "hello-world",
+            "-Dplatform=windows"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build hello-world-owned-main (windows)",
+        "command": "zig",
+        "args": [
+            "build",
+            "hello-world-owned-main",
             "-Dplatform=windows"
         ],
         "reveal": "no_focus",

@@ -19,8 +19,8 @@ const Vec2 = zm.Vec2;
 const Color = zm.Color;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
-const bar_count = 5;
-const corner_segments = 24;
+const bar_count: usize = 5;
+const corner_segments: i32 = 24;
 
 const State = struct {
     font: z.Font,

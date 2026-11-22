@@ -384,6 +384,10 @@ pub const ComputeCapabilities = struct {
     /// nanoseconds one tick of the timestamp clock lasts (`timestampPeriod`) - what turns two timestamps into a time.
     timestamps_in_compute: bool = false,
     timestamp_period_ns: f32 = 0,
+    /// How many bits of a timestamp the host's queue family keeps (`VkQueueFamilyProperties::timestampValidBits`):
+    /// 36 to 64 where the family writes timestamps, 0 where it writes none. A clock of fewer than 64 bits wraps, and
+    /// the difference of two timestamps is taken within these bits (`compute_host.ticksBetween`).
+    timestamp_valid_bits: u32 = 0,
     /// THE MEMORY ENVELOPE: the most bytes one storage-buffer binding may span (`maxStorageBufferRange`) - what one
     /// arena of a simulation may hold - and the largest heap of device-local memory, the GPU's own, which the arenas
     /// together must fit.
@@ -984,11 +988,12 @@ fn hasDeviceExtension(
     return hasExtensionNamed(extensions[0..count], name);
 }
 
-/// A device's compute capabilities (`ComputeCapabilities`), from three sources:
+/// A device's compute capabilities (`ComputeCapabilities`), from four sources:
 ///
 ///     the core limits             shared memory, push constants, workgroups   (`limits`, already read)
 ///     Vulkan 1.1's properties     the subgroup: size, stages, operations      (vkGetPhysicalDeviceProperties2)
 ///     VK_EXT_shader_atomic_float  float atomic add on storage buffers         (vkGetPhysicalDeviceFeatures2)
+///     the host's queue family     the bits its timestamps keep                (`queue_family`'s properties)
 ///
 /// Vulkan extends a query with a `p_next` CHAIN: the outer structure points at a further structure the driver fills
 /// in the same call - here `PhysicalDeviceProperties2` at `PhysicalDeviceVulkan11Properties`. The atomic-float
@@ -997,7 +1002,15 @@ fn computeCapabilities(
     self: *Host,
     physical_device: vk.PhysicalDevice,
     limits: vk.PhysicalDeviceLimits,
+    queue_family: u32,
 ) !ComputeCapabilities {
+    // The queue family's timestamps, by the two-call enumeration.
+    var family_count: u32 = 0;
+    self.instance_dispatch.getPhysicalDeviceQueueFamilyProperties(physical_device, &family_count, null);
+    const families: []vk.QueueFamilyProperties = try self.gpa.alloc(vk.QueueFamilyProperties, family_count);
+    defer self.gpa.free(families);
+    self.instance_dispatch.getPhysicalDeviceQueueFamilyProperties(physical_device, &family_count, families.ptr);
+    const timestamp_valid_bits: u32 = families[queue_family].timestamp_valid_bits;
     var vulkan_11_properties: vk.PhysicalDeviceVulkan11Properties = .{};
     var properties_query: vk.PhysicalDeviceProperties2 = .{ .p_next = &vulkan_11_properties };
     self.instance_dispatch.getPhysicalDeviceProperties2(physical_device, &properties_query);
@@ -1011,7 +1024,9 @@ fn computeCapabilities(
     const subgroup_stages: vk.ShaderStageFlags = vulkan_11_properties.subgroup_supported_stages;
     const compute_uses_subgroups: bool = subgroup_stages.compute;
     const has_float_atomic_add: bool = atomic_float_features.shader_buffer_float_32_atomic_add == vk.bool_true;
-    const writes_timestamps: bool = limits.timestamp_compute_and_graphics == vk.bool_true;
+    // Timestamps in compute: the device says every queue family writes them, and the host's own keeps some bits.
+    const device_writes_timestamps: bool = limits.timestamp_compute_and_graphics == vk.bool_true;
+    const writes_timestamps: bool = device_writes_timestamps and timestamp_valid_bits > 0;
     // The largest heap of device-local memory: the GPU's own memory (on a CPU driver, the system's).
     var memory_properties: vk.PhysicalDeviceMemoryProperties = .{};
     self.instance_dispatch.getPhysicalDeviceMemoryProperties(physical_device, &memory_properties);
@@ -1033,6 +1048,7 @@ fn computeCapabilities(
         .float32_atomic_add = has_float_atomic_add,
         .timestamps_in_compute = writes_timestamps,
         .timestamp_period_ns = limits.timestamp_period,
+        .timestamp_valid_bits = timestamp_valid_bits,
         .max_storage_binding_bytes = limits.max_storage_buffer_range,
         .device_local_bytes = largest_device_local,
     };
@@ -1141,7 +1157,7 @@ fn chooseGpu(self: *Host) BringUpError!Gpu {
             .max_memory_allocations = properties.limits.max_memory_allocation_count,
             .max_bound_descriptor_sets = properties.limits.max_bound_descriptor_sets,
             .max_storage_buffer_range = properties.limits.max_storage_buffer_range,
-            .compute = try computeCapabilities(self, physical_device, properties.limits),
+            .compute = try computeCapabilities(self, physical_device, properties.limits, family),
         };
         if (choice) |wanted| {
             const index_wanted: ?usize = parseInt(usize, wanted, 10) catch null;
@@ -1180,7 +1196,11 @@ fn chooseGpu(self: *Host) BringUpError!Gpu {
         if (compute.float32_atomic_add) "yes" else "no",
     });
     const timestamps: []const u8 = if (compute.timestamps_in_compute) "yes" else "no";
-    log.info("compute: timestamps {s}, a tick every {d} ns", .{ timestamps, compute.timestamp_period_ns });
+    log.info("compute: timestamps {s}, a tick every {d} ns, {d} bits", .{
+        timestamps,
+        compute.timestamp_period_ns,
+        compute.timestamp_valid_bits,
+    });
     const megabyte: u64 = 1 << 20;
     log.info("compute: storage bindings up to {d} MB; device-local memory {d} MB", .{
         compute.max_storage_binding_bytes / megabyte,
@@ -3894,6 +3914,18 @@ pub fn queueSubmit(queue: u32, cmd_buffer: u32) void {
     };
 }
 
+/// Waits until the GPU has finished every submission made so far: the thread blocks in the driver until the timeline
+/// reaches the last submission's number (`waitTimeline`), rather than polling it in a loop of its own - the driver
+/// puts it to sleep and wakes it when the device signals. Writes still pending (`queueWriteBuffer`) are not submitted
+/// by it, and so not waited for.
+pub fn queueWaitIdle(queue: u32) void {
+    _ = queue;
+    const self: *Host = theHost();
+    waitTimeline(self, self.submitted) catch |err| {
+        panic("vulkan host: waiting for the queue failed: {s}", .{@errorName(err)});
+    };
+}
+
 /// A buffer that reads as zeros, as WebGPU promises (`createBuffer`).
 pub fn deviceCreateBuffer(
     device: u32,
@@ -4660,6 +4692,20 @@ pub fn timestampPoolDestroy(
     deferDestroy(self, .{ .query_pool = slot.pool }) catch outOfMemory();
 }
 
+/// Stops the program when the slots from `first` to `first + count` reach past a pool of `pool_count`: a device
+/// does not check a slot's number, and a write past the pool's end lands in memory that is not the pool's.
+fn requireTimestampSlots(
+    pool_count: u32,
+    first: u32,
+    count: u32,
+) void {
+    const end: u64 = @as(u64, first) + count;
+    const inside_pool: bool = end <= pool_count;
+    if (!inside_pool) {
+        panic("vulkan host: timestamps {d} to {d} of a pool of {d}", .{ first, end, pool_count });
+    }
+}
+
 /// Resets `count` slots of a timestamp pool from `first`, in the pass's command stream: a slot is reset before each
 /// new write.
 pub fn computePassResetTimestamps(
@@ -4671,6 +4717,7 @@ pub fn computePassResetTimestamps(
     const self: *Host = theHost();
     const slot: *PassSlot = self.compute_passes.get(pass, "compute pass");
     const pool: QueryPoolSlot = self.query_pools.get(pool_id, "timestamp pool").*;
+    requireTimestampSlots(pool.count, first, count);
     self.device_dispatch.cmdResetQueryPool(slot.command_buffer, pool.pool, first, count);
 }
 
@@ -4685,6 +4732,7 @@ pub fn computePassWriteTimestamp(
     const self: *Host = theHost();
     const slot: *PassSlot = self.compute_passes.get(pass, "compute pass");
     const pool: QueryPoolSlot = self.query_pools.get(pool_id, "timestamp pool").*;
+    requireTimestampSlots(pool.count, query, 1);
     const top: vk.PipelineStageFlags = .{ .top_of_pipe = true };
     const bottom: vk.PipelineStageFlags = .{ .bottom_of_pipe = true };
     const write_stage: vk.PipelineStageFlags = if (after_work) bottom else top;
@@ -4693,6 +4741,13 @@ pub fn computePassWriteTimestamp(
 
 /// Reads `count` slots from `first` into `ticks`, WAITING until the commands that write them have run. Returns
 /// whether the device answered with every slot.
+///
+/// THE WAIT IS FOR EVERY SUBMISSION MADE SO FAR, on the timeline (`waitTimeline`), before the device is asked for
+/// the slots. Asking it to wait for the slots alone is not enough for a slot that is written again and again: a
+/// slot's reset takes effect when the device runs it (the Vulkan specification, vkCmdResetQueryPool: "When executed
+/// on a queue, this command sets the status of query indices ... to unavailable"), so until then the slot is still
+/// available, with the tick of its last write - and a read arriving first would be answered at once with that old
+/// tick. Once every submission has finished, every reset and every write of the slots has run.
 pub fn timestampPoolRead(
     pool_id: u32,
     first: u32,
@@ -4701,6 +4756,10 @@ pub fn timestampPoolRead(
 ) bool {
     const self: *Host = theHost();
     const pool: QueryPoolSlot = self.query_pools.get(pool_id, "timestamp pool").*;
+    requireTimestampSlots(pool.count, first, count);
+    waitTimeline(self, self.submitted) catch |err| {
+        panic("vulkan host: waiting for the timestamps' submissions failed: {s}", .{@errorName(err)});
+    };
     const flags: vk.QueryResultFlags = .{ .@"64" = true, .wait = true };
     const bytes: usize = @as(usize, count) * @sizeOf(u64);
     const stride: vk.DeviceSize = @sizeOf(u64);

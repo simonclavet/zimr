@@ -32,7 +32,7 @@ const c = Color;
 
 const screen_w: i32 = 800;
 const screen_h: i32 = 450;
-const sample = "The quick brown fox jumps over the lazy dog 0123456789";
+const sample: []const u8 = "The quick brown fox jumps over the lazy dog 0123456789";
 
 const State = struct {
     font: z.Font,

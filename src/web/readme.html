@@ -32,11 +32,7 @@
             </p>
                 Porting code I almost understand into
                 my favorite language (and asking the AI to write a tutorial for me about it, with lots of nice diagrams)
-                makes me understand it a bit more. I have 26 years of experience and
-                published papers in physics simulation before (fluid sim, robot mocap tracking),
-                so I know a bit about these subjects, but I always felt that I did not really understand deeply enough.
-                When I port something, I ask the AI to explain the code in detail, we make plans, and we port it to zig together
-                one step at a time. I don't let the AI go for hours alone. The loop is like 5 minutes, and I stay involved at all time...
+                makes me understand it a bit more.
             </p>
                 I do most of that on my phone
                 during my commute to work, and while watching TV. This is a bit crazy. I spend 150$ per month on AI, which
@@ -1080,6 +1076,16 @@ const dw = try graph.gradOf(out.weight);      // gradients for anything reachabl
             </p>
 
             <p>
+                The <code>zimrnum_fit</code> example puts the GPU learning kit under your
+                pointer: draw a curve and a network learns it live. One toggle puts the training
+                on the CPU or the GPU, and both run the kit's own kernels &mdash; the CPU through
+                their twin, inside a job, so the frame keeps its sixty frames a second. A flip
+                hands the weights, both of Adam's moments and the step count across, so the loss
+                curve carries on. Toggled to the CPU, a breakpoint in a kernel stops inside the
+                job, in the very code the GPU runs.
+            </p>
+
+            <p>
                 Around a hundred operations have GPU kernels, each checked against its CPU twin on
                 the same input with a per-operation tolerance. Operations whose arithmetic cannot
                 drift &mdash; comparisons, counts, <code>all</code>, <code>any</code> &mdash;
@@ -1203,6 +1209,15 @@ if (try s.job.pollInto(s.result_buf)) |png_bytes| {
                 fourteen dropped frames, plainly visible. Off-thread the measured
                 worst frame gap is 18&nbsp;ms, and a dot spinning in the corner
                 does not stutter.
+            </p>
+
+            <p>
+                A job keeps nothing from one call to the next, so work that goes on
+                where the last job left off ships its state in and out with every
+                call. <code>zimrnum_fit</code> trains a network that way: the weights
+                and the optimiser's moments go out with each job, come back a few
+                training steps later, and go out again with the drawing as it is
+                then &mdash; one job in flight, collected once a frame.
             </p>
 
             <h4>the kernel wasm has no imports, and the build proves it</h4>
@@ -1867,6 +1882,7 @@ robot.solvePointCloud(&amp;model, &amp;data, samples[0..n], opts);</code></pre>
             <h3 id="machinery">Under the hood: host, WebGPU layer, rasterizer</h3>
             <p class="tut"><a href="wgpu-ports-tutorial.html">The WebGPU ports</a> &mdash; what the host layer actually had to provide, one port at a time.</p>
             <p class="tut"><a href="backends-tutorial.html">Graphics backends</a> &mdash; how zimr reaches the GPU: the browser's WebGPU, and Vulkan on Windows and Linux, each layer with the reasons for its shape.</p>
+            <p class="tut"><a href="native-bootstrap-tutorial.html">Native bootstrap</a> &mdash; everything a Windows program executes, in order, from its first instruction until the first line of its <code>update</code>, followed in a debugger with a question at every step: the loader, Zig's start code, a <code>main</code> of your own, the window, Vulkan, the font, the frame loop.</p>
 
             <p>
                 The entire browser side is one Zig file,
@@ -1926,6 +1942,7 @@ robot.solvePointCloud(&amp;model, &amp;data, samples[0..n], opts);</code></pre>
                 <li><a href="rtt-tutorial.html">Render to texture</a> &mdash; drawing into an offscreen image, then using it as a texture</li>
                 <li><a href="wgpu-ports-tutorial.html">The WebGPU ports</a> &mdash; the example programs, and what the host layer had to provide for them</li>
                 <li><a href="backends-tutorial.html">Graphics backends</a> &mdash; how zimr reaches the GPU: WebGPU in the browser, Vulkan on Windows and Linux</li>
+                <li><a href="native-bootstrap-tutorial.html">Native bootstrap</a> &mdash; a Windows program from its first instruction to the app's <code>update</code>, line by line</li>
             </ul>
             <h4>Sound</h4>
             <ul class="tut-index">

@@ -7050,7 +7050,7 @@ pub const UiContext = struct {
     hovered_id_prev_frame: Id = 0,
     /// Active ID from the previous frame. Used to compute per-widget
     /// activated/deactivated transitions (e.g. for `isItemActivated`).
-    /// Snapshotted in `endFrame`; the helper `markItem` consults it.
+    /// Taken at the start of each frame (`beginFrameRaw`); `markItemPost` consults it.
     active_id_prev_frame: Id = 0,
     /// Was the previous-frame's active widget edited at any point
     /// during its activation? Sticky during the activation; resets
@@ -7781,6 +7781,9 @@ pub const UiContext = struct {
         }
         self.hovered_id_prev_frame = self.hovered_id;
         self.hovered_id = 0;
+        // The active item as the last frame left it, for `markItemPost`'s transitions. Without it every frame an item
+        // is held reads as its press frame (`isItemActivated`), and its release is never seen (`isItemDeactivated`).
+        self.active_id_prev_frame = self.active_id;
         self.mouse_wheel_consumed = false;
         self.text_input_wish = null;
         self.mouse_wheel_x_consumed = false;
@@ -21924,6 +21927,39 @@ test "Q3 C-path: beginItem reports hovered + held + pressed across frames" {
         try expect(false);
     }
     w.close();
+}
+
+test "isItemActivated is the press frame alone, and isItemDeactivated the release frame, over real frames" {
+    // `markItemPost` compares the active item with the one the last frame left. The markItemPost tests set
+    // `active_id_prev_frame` by hand, so they passed while no frame ever set it: every frame an item was held read as
+    // its press frame, and zimrnum_fit's strokes - anchored on the press frame - started over on every frame, painting
+    // one sample each. Here every frame comes from `beginFrameRaw` alone.
+    var env = TestEnv.init(testing_allocator);
+    defer env.deinit();
+    const wopts: WindowOpts = .{ .initial_pos = .{ 0, 0 }, .initial_size = .{ 400, 400 } };
+    // Inside the 200 x 200 item, which starts near (10, 38) (see the beginItem test above).
+    const inside: Vec2 = .{ 100, 100 };
+    const hovering: InputSnapshot = .{ .mouse_pos = inside };
+    const pressing: InputSnapshot = .{ .mouse_pos = inside, .mouse_left_down = true, .mouse_left_clicked = true };
+    const holding: InputSnapshot = .{ .mouse_pos = inside, .mouse_left_down = true };
+    const releasing: InputSnapshot = .{ .mouse_pos = inside, .mouse_left_released = true };
+    const FrameCase = struct { input: InputSnapshot, active: bool, activated: bool, deactivated: bool };
+    const frame_cases = [_]FrameCase{
+        .{ .input = hovering, .active = false, .activated = false, .deactivated = false },
+        .{ .input = pressing, .active = true, .activated = true, .deactivated = false },
+        .{ .input = holding, .active = true, .activated = false, .deactivated = false },
+        .{ .input = holding, .active = true, .activated = false, .deactivated = false },
+        .{ .input = releasing, .active = false, .activated = false, .deactivated = true },
+    };
+    for (frame_cases) |frame_case| {
+        const u: Ui = env.beginFrameWith(frame_case.input);
+        const w: WindowHandle = u.window("t", wopts) orelse unreachable;
+        defer w.close();
+        _ = u.invisibleButton("hit_me", .{ 200, 200 });
+        try expectEqual(frame_case.active, u.isItemActive());
+        try expectEqual(frame_case.activated, u.isItemActivated());
+        try expectEqual(frame_case.deactivated, u.isItemDeactivated());
+    }
 }
 
 test "Q3 C-path: beginItem returns null when window is missing" {

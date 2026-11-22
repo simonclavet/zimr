@@ -4260,6 +4260,11 @@ inline fn v3Add(a: Vec, b: Vec) Vec {
     return v3FromZm(v3ToZm(a) + v3ToZm(b));
 }
 
+/// Vector difference `a - b`.
+inline fn v3Sub(a: Vec, b: Vec) Vec {
+    return v3FromZm(v3ToZm(a) - v3ToZm(b));
+}
+
 /// Scalar multiply `v * s` (`@splat` broadcast).
 inline fn v3Scale(v: Vec, s: f32) Vec {
     return v3FromZm(v3ToZm(v) * splat(s));
@@ -4473,6 +4478,75 @@ pub fn getRayCollisionSphere(
         collision.normal = v3Normalize(diff);
     }
     return collision;
+}
+
+/// Get ray-capsule intersection: the capsule round the segment from `a` to `b`, `radius` from it - the nearest place in
+/// FRONT of the ray (distance > 0) where it meets the capsule's body, a cylinder about the segment within the
+/// segment's span, or one of its two end spheres; hit=false when it meets none there.
+///
+/// The body: the ray and the axis u = (b - a) / |b - a| with their parts along u taken out - o' = o - (o.u) u for the
+/// origin's offset o from `a`, d' = d - (d.u) u - the ray meets the infinite cylinder where |o' + t d'| = radius, a
+/// quadratic in t; the nearer root counts if its point lies between the ends. A ray along the axis never meets the
+/// body: only the end spheres can stop it.
+pub fn getRayCollisionCapsule(ray: Ray, a: Vec, b: Vec, radius: f32) RayCollision {
+    var nearest: RayCollision = .{
+        .hit = false,
+        .distance = 0,
+        .point = vec(0, 0, 0),
+        .normal = vec(0, 0, 0),
+    };
+    // The end spheres, hits in front of the ray only.
+    const ends: [2]Vec = .{ a, b };
+    for (ends) |end_centre| {
+        const end_hit: RayCollision = getRayCollisionSphere(ray, end_centre, radius);
+        const in_front: bool = end_hit.hit and end_hit.distance > 0;
+        const is_nearer: bool = !nearest.hit or end_hit.distance < nearest.distance;
+        if (in_front and is_nearer) {
+            nearest = end_hit;
+        }
+    }
+    // The body, where the segment has a length.
+    const axis: Vec = v3Sub(b, a);
+    const axis_length: f32 = @sqrt(v3Dot(axis, axis));
+    const least_length: f32 = 1.0e-9;
+    if (axis_length < least_length) {
+        return nearest;
+    }
+    const along_axis: Vec = v3Scale(axis, 1.0 / axis_length);
+    const origin_offset: Vec = v3Sub(ray.position, a);
+    const origin_across: Vec = v3Sub(origin_offset, v3Scale(along_axis, v3Dot(origin_offset, along_axis)));
+    const direction_across: Vec = v3Sub(ray.direction, v3Scale(along_axis, v3Dot(ray.direction, along_axis)));
+    const quadratic_a: f32 = v3Dot(direction_across, direction_across);
+    if (quadratic_a < least_length) {
+        return nearest;
+    }
+    const quadratic_half_b: f32 = v3Dot(origin_across, direction_across);
+    const quadratic_c: f32 = v3Dot(origin_across, origin_across) - radius * radius;
+    const discriminant: f32 = quadratic_half_b * quadratic_half_b - quadratic_a * quadratic_c;
+    if (discriminant < 0) {
+        return nearest;
+    }
+    const distance: f32 = (-quadratic_half_b - @sqrt(discriminant)) / quadratic_a;
+    if (distance <= 0) {
+        return nearest;
+    }
+    const point: Vec = v3Add(ray.position, v3Scale(ray.direction, distance));
+    const point_offset: Vec = v3Sub(point, a);
+    const point_along: f32 = v3Dot(point_offset, along_axis);
+    const within_span: bool = point_along >= 0 and point_along <= axis_length;
+    const is_nearer: bool = !nearest.hit or distance < nearest.distance;
+    if (!within_span or !is_nearer) {
+        return nearest;
+    }
+    const on_axis: Vec = v3Add(a, v3Scale(along_axis, point_along));
+    const outward: Vec = v3Sub(point, on_axis);
+    nearest = .{
+        .hit = true,
+        .distance = distance,
+        .point = point,
+        .normal = v3Normalize(outward),
+    };
+    return nearest;
 }
 
 /// Get ray-AABB (axis-aligned bounding box) intersection.
@@ -7864,6 +7938,28 @@ test "getScreenToWorldRay: center pixel looks down the camera axis" {
     // And a sphere sitting at the target must be hit.
     const hit: RayCollision = getRayCollisionSphere(ray, .{ 0, 0, 0, 0 }, 0.5);
     try expect(hit.hit);
+}
+
+test "getRayCollisionCapsule: its body, its ends, and what is behind" {
+    // A capsule along y from (0, -1, 0) to (0, 1, 0), radius 0.5. A ray along +x from x = -3 meets its body at
+    // x = -0.5; one down the axis from y = 3 meets the upper end's sphere at y = 1.5; one beside it misses; one
+    // starting past the capsule and pointing away has it behind.
+    const a: Vec = vec(0, -1, 0);
+    const b: Vec = vec(0, 1, 0);
+    const radius: f32 = 0.5;
+    const across_ray: Ray = .{ .position = vec(-3, 0.3, 0), .direction = vec(1, 0, 0) };
+    const across: RayCollision = getRayCollisionCapsule(across_ray, a, b, radius);
+    try expect(across.hit);
+    try expectApproxEqAbs(@as(f32, 2.5), across.distance, 1.0e-5);
+    try expectApproxEqAbs(@as(f32, -1), across.normal[0], 1.0e-5);
+    const down_ray: Ray = .{ .position = vec(0, 3, 0), .direction = vec(0, -1, 0) };
+    const down: RayCollision = getRayCollisionCapsule(down_ray, a, b, radius);
+    try expect(down.hit);
+    try expectApproxEqAbs(@as(f32, 1.5), down.distance, 1.0e-5);
+    const beside_ray: Ray = .{ .position = vec(-3, 0, 0.6), .direction = vec(1, 0, 0) };
+    try expect(!getRayCollisionCapsule(beside_ray, a, b, radius).hit);
+    const behind_ray: Ray = .{ .position = vec(3, 0, 0), .direction = vec(1, 0, 0) };
+    try expect(!getRayCollisionCapsule(behind_ray, a, b, radius).hit);
 }
 
 test "getScreenToWorldRay: corner pixel diverges from the axis" {

@@ -36,8 +36,8 @@ const File = Io.File;
 const ArrayList = std.ArrayList;
 const bufPrint = std.fmt.bufPrint;
 
-const log_path = "/tmp/measure.log";
-const child_log_path = "/tmp/b.log";
+const log_path: []const u8 = "/tmp/measure.log";
+const child_log_path: []const u8 = "/tmp/b.log";
 
 /// Megabytes in use under `.zig-cache`, or 0 if it is not there yet.
 fn cacheMegabytes(io: Io, gpa: Allocator) usize {

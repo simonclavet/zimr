@@ -19,7 +19,7 @@ const Vec2 = zm.Vec2;
 const Color = zm.Color;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
-const max_seg = 60; // points[2*max_seg + 2] = points[122], matching the raylib sample
+const max_seg: usize = 60; // points[2*max_seg + 2] = points[122], matching the raylib sample
 
 const State = struct {
     font: z.Font,
@@ -61,7 +61,7 @@ fn update(f: *z.Frame, s: *State) void {
             const lo: f32 = w * 0.15;
             const hi: f32 = w * 0.85;
             const frac: f32 = clamp((mouse[0] - lo) / (hi - lo), 0.0, 1.0);
-            s.segments = 3.0 + frac * @as(f32, max_seg - 3);
+            s.segments = 3.0 + frac * float(max_seg - 3);
         }
     }
     if (z.isMouseButtonReleased(f.input, .left) and !s.dragged) {

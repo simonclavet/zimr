@@ -32,7 +32,7 @@ const serialize = @import("serialize.zig");
 /// Largest typed message this layer will build on the stack. Structured game
 /// messages should sit well under this; for anything bigger, call `encode` into
 /// your own buffer and hand it to `session.broadcast` directly.
-pub const max_typed = 1024;
+pub const max_typed: usize = 1024;
 
 /// Frame a typed message into `buf` as [tag][serialize(value)]. Returns the
 /// slice, or null if it doesn't fit or fails to serialize.

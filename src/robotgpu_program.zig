@@ -42,6 +42,9 @@ pub const Invocations = enum {
     /// A whole WORKGROUP per world - robotgpu's workgroup size of invocations each - for a kernel whose invocations
     /// solve one world's problem together.
     per_world_workgroup,
+    /// ONE invocation: a kernel that walks the worlds itself, in their order - what the worlds share is folded as a
+    /// sequence (the start curriculum's bins).
+    once,
 };
 
 /// One dispatch of the step program: a kernel of robotgpu's, by its entry name, and how many invocations it runs.
@@ -146,20 +149,52 @@ pub const policy_inputs_program = observe_program ++ [_]Dispatch{
     .{ .kernel = "policy_inputs", .invocations = .per_world },
 };
 
+/// THE COPIES: every world the copy table names a source for takes that world's whole state (`copy_world_state`).
+pub const copy_program = [_]Dispatch{
+    .{ .kernel = "copy_world_state", .invocations = .per_world },
+};
+
+/// THE RECORDS: each world's row for the learner's ring (`record_rows`), packed after the decision's action is given
+/// and before its physics - where a CPU fleet's `step` records. It reads the observation the inputs program wrote for
+/// this decision's acting, so it runs after acting and observes nothing itself.
+pub const record_program = [_]Dispatch{
+    .{ .kernel = "record_rows", .invocations = .per_world },
+};
+
+/// A LOOKAHEAD's SCORES BEGUN: every candidate's score zero, before its first decision (`begin_candidate_scores`).
+pub const begin_candidate_scores_program = [_]Dispatch{
+    .{ .kernel = "begin_candidate_scores", .invocations = .per_world },
+};
+
+/// A LOOKAHEAD DECISION SCORED: every candidate's reward and loss of it, after the decision (`score_candidates`).
+pub const score_candidates_program = [_]Dispatch{
+    .{ .kernel = "score_candidates", .invocations = .per_world },
+};
+
+/// THE WORLDS THAT FOLLOW THEIR PLANS (`follow_plans`), before the physics - every candidate in a lookahead, a planner
+/// by its following: with whole-action plans, after the policy's action is given, each one's action replaced by its
+/// plan's; with plans around the policy, after the policy has chosen and before the action is given
+/// (`give_program`), each one's plan's offset added to its choice.
+pub const follow_plans_program = [_]Dispatch{
+    .{ .kernel = "follow_plans", .invocations = .per_world },
+};
+
 /// THE DECISION's ACTION GIVEN, once the policy's raw output is in each world's choices (`chosen_actions`): the
-/// exploration added to the numbers that are the action (`explore_actions`), at the clock of the decision about to be
-/// stepped; then the choices blended into `actions` through the action filter at each decision (`filter_decision`) -
-/// at a share of 1, the explored choice exactly.
+/// flow's correction added where the decision has one (`add_flow_corrections`); the exploration added to the numbers
+/// that are the action (`explore_actions`), at the clock of the decision about to be stepped; then the choices
+/// blended into `actions` through the action filter at each decision (`filter_decision`) - at a share of 1, the
+/// explored choice exactly.
 pub const give_program = [_]Dispatch{
+    .{ .kernel = "add_flow_corrections", .invocations = .per_world },
     .{ .kernel = "explore_actions", .invocations = .per_world },
     .{ .kernel = "filter_decision", .invocations = .per_world },
 };
 
-/// THE RESETS, once a decision after its judgement: every world whose episode ended begins another (`begin_reset`) at
-/// its start frame's pose (`reset_pose`).
-pub const reset_program = [_]Dispatch{
-    // The decision's pushes, for the worlds still in their episode (`push_worlds`).
-    .{ .kernel = "push_worlds", .invocations = .per_world },
+/// THE NEW EPISODES: every world whose episode is marked finished begins another (`begin_reset`) at its start frame's
+/// pose (`reset_pose`), rested on the floor, with its start's noise and, for a start in trouble, its push. A run's
+/// first episodes begin by this program alone (`Sim.startEveryWorld`): no episode has ended yet, so there is nothing
+/// for the curriculum to fold.
+pub const new_episodes_program = [_]Dispatch{
     .{ .kernel = "begin_reset", .invocations = .per_world },
     .{ .kernel = "reset_pose", .invocations = .per_world_and_joint },
     // The new pose's kinematics and lowest points, then the rest on the floor (`rest_on_floor`); the observation
@@ -175,6 +210,15 @@ pub const reset_program = [_]Dispatch{
     // A start in trouble's push (`start_in_trouble`): a velocity only, after the pose is settled.
     .{ .kernel = "start_in_trouble", .invocations = .per_world },
 };
+
+/// THE RESETS, once a decision after its judgement: the decision's pushes, for the worlds still in their episode
+/// (`push_worlds`); the curriculum's round - the episodes that ended folded into their start bins, the bins
+/// refreshed (`curriculum_round`); then the new episodes (`new_episodes_program`), their starts drawn from the bins
+/// as the round left them.
+pub const reset_program = [_]Dispatch{
+    .{ .kernel = "push_worlds", .invocations = .per_world },
+    .{ .kernel = "curriculum_round", .invocations = .once },
+} ++ new_episodes_program;
 
 /// THE JUDGEMENT, once a decision, after the observation (which has brought the bodies' poses and velocities forward):
 /// each body's lowest point, then each world's tracking error against its reference and its rewards - what the CPU

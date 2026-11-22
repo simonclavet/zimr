@@ -10,21 +10,22 @@ const zm = @import("zm");
 const common = @import("example_common");
 
 const clamp = zm.clamp;
+const float = zm.float;
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
-const word = "zimr";
-const letter_step = 0.18; // seconds between letters
-const fade_hold = 0.6; // pause after the last letter before fading
-const fade_time = 1.0; // fade-out duration
-const grow_time = 0.55; // per-pair bar-grow duration
+const word: []const u8 = "zimr";
+const letter_step: f32 = 0.18; // seconds between letters
+const fade_hold: f32 = 0.6; // pause after the last letter before fading
+const fade_time: f32 = 1.0; // fade-out duration
+const grow_time: f32 = 0.55; // per-pair bar-grow duration
 
-const st_blink = 0;
-const st_grow1 = 1;
-const st_grow2 = 2;
-const st_letters = 3;
-const st_replay = 4;
+const st_blink: u8 = 0;
+const st_grow1: u8 = 1;
+const st_grow2: u8 = 2;
+const st_letters: u8 = 3;
+const st_replay: u8 = 4;
 
 const State = struct {
     font: z.Font,
@@ -155,7 +156,7 @@ fn update(f: *z.Frame, s: *State) void {
         st_letters => {
             const idx: usize = @floor(s.t / letter_step);
             s.letters = @min(idx, word.len);
-            const fade_start: f32 = @as(f32, word.len) * letter_step + fade_hold;
+            const fade_start: f32 = float(word.len) * letter_step + fade_hold;
             if (s.t > fade_start) {
                 s.alpha = clamp(1.0 - (s.t - fade_start) / fade_time, 0.0, 1.0);
                 if (s.alpha <= 0.0) {

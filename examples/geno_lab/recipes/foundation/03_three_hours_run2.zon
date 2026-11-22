@@ -1,0 +1,58 @@
+// THE THREE HOURS' RUN 2 AGAIN, beside the first check (robotgpu_plan.md 4): the same recipe, on today's code - S1's
+// normed world model and running statistics, S2's windows and starts and the ring are in it whatever the recipe says,
+// while its rates, its gradient bound (50), its batches and its replay stay run 2's; against 01 and 02 it shows what
+// the iteration, the warm-up and the rates change. Its header as it was:
+// THE THREE HOURS, RUN 2 - PLAIN SUPERTRACK: the world model and the policy through it from the first round, nothing
+// else - no teacher, no flow, no model planner, no skip head, no critic, no pushes, no returns, no curriculum - at the
+// control's batch, rates, clips and seed, for its 13 minutes. The bar: what run 1's parts add is run 1 against this
+// one.
+.{
+    .task = .{ .motion = .one_minute, .variants = .{ .mirrored = true, .speed_change = 0.2 } },
+    .learner = .{ .supertrack = .{
+        // The control's characters, decisions, replay and networks.
+        .characters = 1024,
+        .physics = .device,
+        .limb_stiffness = true,
+        .decide_every = 2,
+        .max_steps = 300,
+        .replay_steps = 64,
+        // 1,024 windows a batch; the world model learns on 8 decisions, the policy imagines 16 single decisions
+        // (0.53 s, SuperTrack's own horizon of 32 frames at 60 Hz).
+        .rows = 1024,
+        .window = 8,
+        .policy_window = 16,
+        .hidden = 680,
+        .policy_hidden = 680,
+        // The control's round: 16 decisions of every character, then 16 updates of each network.
+        .collect = 16,
+        .world_updates = 16,
+        .policy_updates = 16,
+        // The control's optimisers: SuperMimic's rates, its policy's bounds, Muon on the hidden matrices.
+        .world_rate = 2e-4,
+        .policy_rate = 2e-4,
+        .policy_beta2 = 0.95,
+        .policy_gradient_clip = 1,
+        .policy_element_clip = 0.1,
+        .world_gradient_clip = 50,
+        .policy_muon = true,
+        .rate_decay_hours = 8,
+        .rate_floor_share = 0.03,
+        // Judged as its slow average, as the control is; the control's seed.
+        .policy_average_decay = 0.995,
+        .seed = 1,
+    } },
+    .controls = .{
+        // 13 minutes of training; the schedules are laid out for 8 hours, so the run is at full strength throughout -
+        // its rates whole, its pushes' top barely opened (0.7 m/s at the end).
+        .stop_after_hours = 0.21666667,
+        // Judged once, at the end - the servo first, on the same starts - without the recovery probe: in 13 minutes
+        // the pushes never pass 0.7 m/s, and the probe's 1 to 5 m/s would find little for minutes of a run.
+        .judge_minutes = 13,
+        .probe = .{ .speeds = .{} },
+        // Saved every 2 minutes, so the lab following the run sees each newer policy soon; a policy kept every 4 - at
+        // phase 1's end, after the ramp, near the end: the lab's timeline - and no state checkpoints.
+        .save_minutes = 2,
+        .checkpoint_minutes = 4,
+        .kept_state_checkpoints = 0,
+    },
+}

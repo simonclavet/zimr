@@ -2,8 +2,10 @@
 //! example_common - shared scaffold for the wgpu example set. A cohesive palette, one caption
 //! style, a subtle backdrop, and viewport-relative layout helpers, so every example reads
 //! as part of the same family instead of ad-hoc per file. Import as `@import("example_common")`.
+const std = @import("std");
 const z = @import("zimr");
 const zm = @import("zm");
+const Allocator = std.mem.Allocator;
 const Vec2 = zm.Vec2;
 const float = zm.float;
 
@@ -78,6 +80,32 @@ pub fn backdrop(
 /// Center of the viewport.
 pub fn center(w: f32, h: f32) Vec2 {
     return .{ w * 0.5, h * 0.5 };
+}
+
+/// A cylinder CLOSED at both ends, for drawing a solid cylinder geom. It spans y in [0, height] around zimr's y axis,
+/// exactly like `genMeshCylinder`, so the transform that places one places the other.
+///
+/// ** `genMeshCylinder` ALONE IS AN OPEN TUBE. Under a capsule that is invisible - its end balls cover the rims - but a
+/// cylinder geom drawn with it is hollow, and the 3D pipeline culls nothing, so its inside wall shows through each
+/// end as a ring (the Go1's hip guards). The caps are `genMeshDisk`s merged on, as `mesh_builder` shows.
+pub fn genMeshCylinderCapped(
+    gpa: Allocator,
+    radius: f32,
+    height: f32,
+    slices: i32,
+) Allocator.Error!z.Mesh {
+    const tube: z.Mesh = try z.genMeshCylinder(gpa, radius, height, slices, 2);
+    defer z.unloadMesh(gpa, tube);
+    // A disk faces up (+Y): the top one only slides up, the bottom one turns to face down where it already sits.
+    var top: z.Mesh = try z.genMeshDisk(gpa, radius, slices);
+    defer z.unloadMesh(gpa, top);
+    z.meshTranslate(&top, 0, height, 0);
+    var bottom: z.Mesh = try z.genMeshDisk(gpa, radius, slices);
+    defer z.unloadMesh(gpa, bottom);
+    z.meshInvert(&bottom);
+    const tube_and_top: z.Mesh = try z.meshMerge(gpa, tube, top);
+    defer z.unloadMesh(gpa, tube_and_top);
+    return z.meshMerge(gpa, tube_and_top, bottom);
 }
 
 /// A panic handler that says what happened, for examples to install in one line.

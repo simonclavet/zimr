@@ -730,6 +730,14 @@ pub extern "kernel32" fn OpenProcess(
 pub extern "kernel32" fn TerminateProcess(hProcess: HANDLE, uExitCode: UINT) callconv(.winapi) BOOL;
 /// The id of the process `Process` is a handle to.
 pub extern "kernel32" fn GetProcessId(Process: HANDLE) callconv(.winapi) DWORD;
+/// A handle to the calling process itself - a fixed stand-in value, valid only inside it, never closed.
+pub extern "kernel32" fn GetCurrentProcess() callconv(.winapi) HANDLE;
+/// Sets the priority class of the process `hProcess`: the base priority of each of its threads, which the scheduler
+/// runs before any thread of a lower one that also wants a core. Nonzero when it was set.
+pub extern "kernel32" fn SetPriorityClass(hProcess: HANDLE, dwPriorityClass: DWORD) callconv(.winapi) BOOL;
+/// The priority class between the normal one, every program's by default, and the idle one: the process's threads
+/// run when no normal thread wants their core.
+pub const BELOW_NORMAL_PRIORITY_CLASS: DWORD = 0x00004000;
 /// `OpenProcess`'s right to end the process.
 pub const PROCESS_TERMINATE: DWORD = 0x0001;
 /// Opens or creates a file; answers INVALID_HANDLE_VALUE (all bits set) on failure.

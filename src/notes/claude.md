@@ -434,6 +434,20 @@ tests by default since Oct 31 - one learning test took 167 of its 204 s and is a
     zig build test -Dtest-shards=1                   the robot family in one process (default: one per CPU)
     zig build test -Dslow-tests -Dparked-tests       also the PARKED tests (`grep -n "report.parked()" src`)
 
+★★★ **WHERE A ROBOT CHECK's TIME WENT, AND WHAT CAME OF IT (Nov 22).** Three things, measured with
+`-Dtest-timing`, took a check of the robot work from 431 s to 106 s on two CPUs:
+* **The shards ran one after the other.** The build runner runs at most CPUs - 1 steps at once (`std.Io.Threaded`'s
+  default), and the robot family runs one shard per CPU, so one shard always waited - on two CPUs, the second waited
+  for the whole first. `zbuild` now passes `-j<CPUs>` unless the arguments name a count (`jobCountPlace`). A plain
+  `zig build` still has the default: give it `-j<CPUs>` by hand.
+* **Other roots' tests rode along.** A test binary holds the tests of every file its root reaches by path: the robot
+  family ran 131 of codecs' tests (27 s), all of which `test-codecs` runs. build.zig's `tests_run_elsewhere` names
+  such a root and its tests' prefix, and every other fast root's run is given `--skip-prefix` with it.
+* **One suite holds the others.** `test-robot_track_resident_tests` holds every test of robot_lab,
+  robot_latent_kit_tests, robot_latent and the files they reach (634 tests): running `test-robot_lab` and
+  `test-robot_latent_kit_tests` beside it ran 195 s of tests a second time. Run it alone.
+And eight slow learner tests shrunk to what their checks need (fewer decisions, starts or rounds): 51 s to 23 s.
+
 ★★★ **THE ROBOT FAMILY'S BINARY RUNS AS `-Dtest-shards` PROCESSES (Oct 11).** The robot family is one
 binary of ~760 tests and Zig runs a binary's tests one after another, so `zig build test` used to
 sit on one core for the whole family after everything else had finished. `src/test_runner.zig`
@@ -507,14 +521,36 @@ steps in this file. Name a new plan here when work on it begins; finished plans 
 
 **ACTIVE**
 
-Work in hand (Oct 11): `platforms_plan.md`, step C5, sound. Every other plan here, active or paused, resumes only
-when Simon names it.
+THE TWO CURRENT PLANS (Simon, Nov 22): the mocap tracking plan, `robotgpu_plan.md` (v4), and the flow-matching
+character plan, `flowmatching_kinematic_character_plan.md` (v1). Both were made FINAL on Nov 22, and NEITHER IS
+STARTED: work on either begins only when Simon says go. Every other plan here, active or paused, resumes only when
+Simon names it.
+
+- `robotgpu_plan.md` - **ONE OF THE TWO CURRENT PLANS: the mocap tracking plan (v4, FINAL Nov 22; not started).** The
+  SuperMimic foundation on the GPU simulator: MuJoCo Warp's simulator in zimr, native and web, its CPU twin robot.zig
+  to the bit, and the tracker trained on it; v1-v3 in `archive/`, with the tracking plan it absorbed
+  (`rl_track_plan_v6.md`, Nov 2) and that plan's day-by-day `rl_track_journal.md`. Its goal, scoreboard and gates
+  (section 0), v3 summarised (1), the rules in force (2), where the work stands - the first check of the foundation's
+  world model, data and iteration (4) - and what remains, in order (5): S4 in five turns and the second check, S5-S9,
+  the foundation's runs and ablations against BlinkMimic's curve, then our ideas on top as "+X" runs, T1-T11. Its
+  decisions (10) and journal (11) are in the plan.
+
+- `flowmatching_kinematic_character_plan.md` - **ONE OF THE TWO CURRENT PLANS: the flow-matching character (v1, FINAL
+  Nov 22; not started).** The Control Operators paper's flow-matching kinematic character in zimr, built on geno_lab's
+  examples and zimrnum's GPU learning kit, everything on the GPU: navigation first, and in the end its output tracked
+  in physics by the mocap tracking plan's tracker. Its stages start at F0, on Simon's go; its decisions, stages and
+  journal are in the plan.
+
+- `zimrnum_fit_plan.md` - **written, being verified (S0-S4 written Nov 22; in the launcher).** `examples/zimrnum_fit`:
+  draw y = f(x) and an MLP on the GPU learning kit fits it live, with a CPU/GPU toggle - and THE worker tutorial: the
+  CPU trains the GPU's own kernels, through their CPU twin, in a jobs.zig job (a Web Worker, or a thread natively), at
+  60 fps. What remains is the plan's "WHAT REMAINS" list, under its status line.
 
 - `linux_port_plan.md` - **being implemented (since Nov 1, Simon: "implement carefully").** `platforms_plan.md`'s
   Phase D in detail: zimr on Linux through X11 (Xlib) and Vulkan, built and checked from Windows, run in WSL first.
   Stages L1-L11; where the implementation stands, and what each stage left to check, is the plan's journal.
 
-- `platforms_plan.md` - **THE CURRENT PLAN (since Oct 7).** The backends and sound plan: zimr on every
+- `platforms_plan.md` - **The current plan from Oct 7 to Nov 22.** The backends and sound plan: zimr on every
   platform from the same app code - the web and Windows first, then Linux, macOS, Android and iOS - with the API every
   platform implements decided in `platform_api.md`. Phase C, Windows complete, is under way, and its step C5 is
   sound: the mixer's two sides, outputs that pull, and the browser's audio worklet. Where C5 stands and its next
@@ -527,15 +563,6 @@ when Simon names it.
   running the Zig compiler's own SPIR-V: the stages S0-S8, each written and cross-compiled for Windows in the
   sandbox, GPU runs on Simon's laptop. Its status line and journal say what is done and what is next.
 
-- `rl_track_plan.md` - **THE TRACKING PLAN (v6, Nov 2): SuperMimic, EfficientTDMPC and FlowDPG in one system.**
-  Runs beside `robotgpu_plan.md`, whose stages S3-S6 (constraints, collision, the tracker on the device) it depends
-  on; v1-v5 are in `archive/`. Its gates GT1-GT5, its tracks (E the worlds, S SuperMimic, T EfficientTDMPC, F the
-  flow, R the way back, M measurement), its next ten steps and its decisions D1-D5 are in the plan; the day-by-day
-  account is `rl_track_journal.md`.
-- `robotgpu_plan.md` - **The GPU simulator and the night (v3, Nov 6): MuJoCo Warp's simulator in zimr,** native and
-  web, its CPU twin robot.zig to the bit, and the training night built on it; v1 and v2 in `archive/`. Its components,
-  gates G1-G6, the additions that raise the night's odds (section 4b, with the order of the work from there) and its
-  journal are in the plan.
 - `ragdoll_compare_plan.md` - **PAUSED (it was the current plan at 2163).** A `ragdoll_compare`
   example: the MJCF humanoid dropped twice, once in reduced coordinates (`robot.zig` +
   `robot_physics.Bridge`) and once in maximal coordinates (`zimrphysics`, 13 bodies, 12 joints),
@@ -638,6 +665,25 @@ change, and nothing else will touch the file until the next fix - and write in t
 fixes are style slips. (Until Oct 18 every build ran `--fix` first: one reformatted a file between
 reading it and an exact-text edit of it, another deleted a declaration whose first use had not been written yet.)
 
+**THE EDIT LOOP (Nov 13): every finding in one round, never one per rebuild.** After a round of edits:
+
+    tools/zig-out/bin/zbuild lint-fix                                   # layout + autofixes applied, diff printed
+    tools/zig-out/bin/zbuild --complete lint <compile/test steps>       # every remaining finding, all steps
+
+The first applies every fmt and autofixable finding (read its diff; re-read a file it touched before an exact-text
+edit of it). The second reports the rest together - compile errors, lint findings, test failures - so they are fixed
+together before the next build. Without `--complete`, several steps in one call stop at the FIRST finding and kill
+the rest mid-run (a test step cut off that way prints its stderr and a "failed command" that is not a failure).
+Lint alone takes seconds: when only style is in doubt, `zbuild lint-fix` then `zbuild lint` before any compile.
+
+**WHICH STEPS A ROBOTGPU CHANGE NEEDS (Nov 13).** Zig compiles only what a step's root reaches, so a step that never
+imports a file says nothing about it. For robotgpu's kernels and host: `robotgpu-wgsl test-robotgpu_tests
+vk-host-test`. A change to a world LAYOUT (an array added, renamed, removed) also needs `test-robot_latent_kit_tests`:
+it classifies every world array against the CPU fleet at compile time (`WorldArrayClasses`), and nothing else
+compiles it - a renamed array once left it failing for several turns unseen. A change to the learner's kit or the
+trainer (`robot_latent_kit.zig`, `robot_track_resident.zig`): `test-robot_latent_kit_tests
+test-robot_track_resident_tests test-robot_track test-robot_latent`. The gate, before a snapshot that ends a piece.
+
 `zbuild --complete <step> [args]` (first argument only) runs the build to its end instead. Use it for:
 
 - the gate, or any run whose job is to report everything;
@@ -738,9 +784,10 @@ piece does and WHY it is shaped that way. Tool calls do not count: a Python patc
 buried in the transcript is not "shown". Print the final regions (`sed -n`) before writing the reply;
 doing so caught two stale doc references in the same turn this rule was written.
 
-★★★ **NEW CODE, NOT DIFFS, IN ```zig BLOCKS (Simon, Oct 11, superseding the diff rule).** Every code change appears
+★★★ **NEW CODE, NOT DIFFS, IN FENCED BLOCKS (Simon, Oct 11, superseding the diff rule).** Every code change appears
 in the reply as the new code itself - the whole new or changed function or region as it stands in the tree, in a
-fenced block tagged with its language (```zig, ```js) so the chat highlights it - with the file and line above each.
+fenced block tagged with a language the chat highlights - with the file and line above each. The chat does not
+highlight `zig`: tag Zig as ```rust (```js for JavaScript). Dedent each snippet to its own left margin.
 No `diff` blocks, no `+`/`-` prefixes. On the Windows machine, also a Zed button for each key location: After the diffs, for each
 location Simon should look at, one fenced `bash` block holding one command:
 
@@ -764,6 +811,11 @@ type takes that type. If the obstacle is an import edge, fix the structure (a sh
 module, a new file) - that is what turned `ppoTaskOptions(base: anytype)` into `robot_track.Task`. When
 `anytype` IS right (real genericity), add a comptime test pinning which types it accepts.
 
+★★ **A TUTORIAL IS SENT STYLED (Nov 14).** A tutorial's source (`src/notes/tutorials/*.html`) has no style: one
+shared stylesheet and the Zig highlighting are injected at build time by `tools/docfmt.zig`. Opened directly, the
+source is black on white with plain code - so whenever a tutorial changes, run `zbuild doc-pages` and send the styled
+page, `zig-out/web/<page>.html`, not the source.
+
 **ALL new or changed code appears in the chat, in full.** This is a hard rule and
 the most common way to fail Simon. Concretely:
 - A new file: its COMPLETE source must be visible in the conversation. A
@@ -782,6 +834,40 @@ non-obvious, and `present_files` any standalone built. If the work is visual,
 Simon opens the standalone and sends a screenshot — there is no GPU or browser in
 this sandbox, so the visual verdict is always his. Inline code + visual proof,
 both, every time, even on multi-example turns.
+
+## ★★ A CHECK MUST NOT TAKE ITS ANSWER FROM THE VALUE IT CHECKS (Nov 15)
+The resident trainer's starting-action test computed what each window's starting action should be from the very flag
+the drawer had staged (`start.continues_segment`), so it confirmed the gather obeyed the flag and could never see that
+the flag's rule was wrong (the segment, where the episode was meant: a push carried the action applied, and windows
+just after a push were gathered from rest). Its expectation now comes from the replay's own records, by the reference
+learner's rule. Before trusting a check, ask where its expected value comes from: from the system's source of truth
+or the reference's rule - never from an output of the code under test. And a rule is tested on hand-built cases where
+each branch is met for certain (`windowStartInRing`), not only by draws that may or may not reach a branch.
+
+## ★★ A MUTATION COUNTS ONLY WHEN THE TEST ITSELF FAILS (Nov 15)
+A seen-to-fail run (R1) must show the TEST's failure line - `error: '<test name>' failed` and `N tests passed (1
+failed)` - not just a failed step. A mutation that does not compile fails the step the same way and proves nothing:
+the device's kit check "failed" twice that way (`Build Summary: 17/20 steps succeeded (1 failed)`, no test line)
+because the mutation's one extra field read pushed the function past the default comptime budget. Grep a mutation
+run for the test's own line; when it is missing, read the build's error first.
+
+## ★★ A FILTERED TEST STEP CAN HIDE COMPILE ERRORS (Nov 14)
+`-Dtest-filter` reaches every test step of the command, and Zig prunes non-matching test declarations BEFORE
+analysis: code only an unmatched test reaches is never compiled, so its errors never show. A command that filters for
+the device suite (`vk-host-test`) must not also carry the kit's or the trainer's test steps - run those unfiltered,
+in their own command, before trusting them.
+
+## ★★★ TWO CPU PIPES OF ONE MODULE ARE ONE SET OF BUFFERS (Nov 14)
+`compute_host`'s `.cpu` backend runs a module's kernels on the module's STATIC arrays (`M.g.B`): every `.initCpu()`
+pipe of that module reads and writes the same buffers, and `readLatest` returns slices of them. A check that builds
+two kits or two learners on two CPU pipes and compares what each "holds" compares one buffer with itself - the
+world-model-window check passed that way, its two kits' losses and weights read from the same arrays, and so can a
+resume check (save, load into a second learner, compare slices). Across CPU pipes, compare only (1) runs made one at
+a time, each re-establishing every buffer it reads, over activations filled with NaN so anything it did not write
+poisons its result (`worldUpdateInARunOfItsOwn` in robot_latent_kit_tests), and (2) COPIES taken before the next run
+touches the buffers - never `readLatest` slices kept across runs. A resume check onto a second CPU pipe poisons the
+resumed learner's buffers between its `init` and its load (`poisonLearnerBuffers` in robot_track_resident_tests).
+(A `.worker` pipe owns a mirror of its own, but ships it whole at every run.)
 
 ## ★★★ WHEN A USER SAYS "IT WAS BETTER BEFORE", BISECT YOUR OWN CHANGES
 
@@ -1093,6 +1179,7 @@ Ground rules for every call:
 - **NEVER the full `zig build test` inside a turn (Sep 25):** it outlasts a turn - one died mid-run, its finished work
   unreported. Run the modules touched (`test-<stem>`), or the main module's tests with `-Dfocus=<example>
   -Dtest-filter=<name>` (113 s for the timer tests), DETACHED if long. The full suite is Simon's, or a detached run.
+  Since Nov 22 the gate holds all of `test` (test_build_everything_plan.md, D2), so the same goes for `gate`.
 - **`whole-init-first` (lint):** after `x = ...create(T)` or in `init*(self: *T)`, the FIRST write through the pointer is
   `x.* = .{ ... }` - `create`d memory and `= undefined` ignore field defaults. Name a field `= undefined` in the literal
   if it is filled later. A function that resets or links an already-valid struct is a false positive: say so in a
@@ -1137,7 +1224,7 @@ The steps, **one tool call each**:
    (first run may also time out while the smoke wasm builds — same retry rule).
    Green includes the per-frame call profile AND the ClobberScan.
 4. **Gate**: `timeout 250 $ZIG build tripwires -j1` → green =
-   `✓ WGSL corpus: no regressions` + `✓ wgpu_smoke PASSED`.
+   `ok WGSL corpus: no regressions` + `✓ wgpu_smoke PASSED`.
 5. **If a shader's interface or spv2wgsl's output changed on purpose** (the corpus says
    which, and says so): `timeout 250 $ZIG build corpus-refresh -j1`, then commit
    `tests/fixtures/wgsl_corpus.txt`. A new shader, an edited shader body or a new Zig is a
@@ -1729,7 +1816,8 @@ never gated on style.)
 name, which is how it came out that `zimrmath.zig` and `zimrnum.zig` were each listed TWICE
 in `fast_test_roots` - `test-fast` had been building and running both of them twice over.
 
-Run `zig build test-fast` before calling something done; it is the step the gate runs.
+Run `zig build test-fast` before calling something done. The gate runs it inside `test`, which it holds whole since
+Nov 22 (test_build_everything_plan.md, D2).
 
 ★ **`@TypeOf(map).GetOrPutResult` over the spelled-out map type.** An annotation that
 repeats a declaration can drift from it, and did: a `u64` annotation sat over a `u32`
@@ -2687,6 +2775,9 @@ the emitted JS of one string-handling function for a bare `0` where a length
 belongs.
 
 ### ★★★ SWEEP THE WHOLE C SURFACE AT ONCE — DON'T LET `c2js-diff` DRIP-FEED IT
+
+(HISTORY, Nov 22: `differential.sh` is gone. Its replacement, `tools/c2js_diff.zig`, reports every failing case in
+one run, a c2js refusal included, so the gate itself is now the sweep. The sweep below still works by hand.)
 
 The 1857 bump broke c2js five ways and every one was silent. `c2js-diff` finds
 them ONE PER RUN and each run is ~2 minutes, because `differential.sh` runs

@@ -157,51 +157,6 @@ pub fn measureClipNormalizer(
     return moments.normalizer(owned);
 }
 
-/// THE CHANGE OF THE FEATURES IN ONE STEP, measured from the reference as the normaliser is (`measureClipNormalizer`):
-/// every pair of consecutive frames of every clip, each posed as the fleet poses a reference, the change of their
-/// features in `normalizer`'s units - (raw at t - raw at t-1) / spread - its mean and its spread for every feature,
-/// each spread at least `spread_floor`. What the world model predicts each step is such a change; these say how large
-/// each feature's change typically is, so a prediction can be made, and judged, in those units (`IncrementScale`).
-/// Frame 0 has no velocity (`resetToFrame` starts at 1), so the first pair is frames 1 and 2. The caller owns the two
-/// slices.
-pub fn measureClipIncrements(
-    owned: Allocator,
-    m: *rbt.Model,
-    clips: []const *const dance.Clip,
-    normalizer: Normalizer,
-    spread_floor: f64,
-) !Normalizer {
-    var data: rbt.Data = try .init(owned, m);
-    defer data.deinit();
-    var state: track.State = try .init(owned, m.body_count);
-    defer state.deinit(owned);
-    const f: usize = track.localSize(m.body_count);
-    const raw: []f32 = try owned.alloc(f32, f);
-    defer owned.free(raw);
-    const previous_raw: []f32 = try owned.alloc(f32, f);
-    defer owned.free(previous_raw);
-    const change: []f32 = try owned.alloc(f32, f);
-    defer owned.free(change);
-    var moments: Moments = try .init(owned, f);
-    defer moments.deinit(owned);
-    const root: usize = track.rootBody(m);
-    for (clips) |clip| {
-        for (1..clip.frame_count) |frame| {
-            track.resetToFrame(m, &data, clip, frame);
-            track.stateOf(m, &data, &state);
-            track.local(state, root, raw);
-            if (frame >= 2) {
-                for (change, raw, previous_raw, normalizer.spread) |*delta, now, before, spread| {
-                    delta.* = (now - before) / spread;
-                }
-                moments.add(change);
-            }
-            @memcpy(previous_raw, raw);
-        }
-    }
-    return moments.normalizerFloored(owned, spread_floor);
-}
-
 /// Mean and spread of every feature over everything the replay holds, spreads floored so a feature
 /// that never moves does not divide by nothing. The caller owns the two slices it comes back with.
 ///

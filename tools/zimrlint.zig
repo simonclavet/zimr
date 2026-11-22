@@ -8221,7 +8221,7 @@ fn scanArrayMult(
 
 /// Where the per-file clean stamps live unless `--cache-dir` says otherwise:
 /// zimr's own tools cache, which survives `rm -rf .zig-cache` at the root.
-const default_stamp_dir = "tools/.zig-cache/lint-stamps";
+const default_stamp_dir: []const u8 = "tools/.zig-cache/lint-stamps";
 
 const Args = struct {
     files: ArrayList([]const u8),

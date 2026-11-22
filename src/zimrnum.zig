@@ -7053,12 +7053,12 @@ pub fn mish(comptime T: type, out: Tensor(T), a: Tensor(T)) Error!void {
     }.apply);
 }
 
-/// `out = a * sigmoid(a)`, elementwise - SiLU, also called swish.
+/// `out = a * sigmoid(a)`, elementwise - SiLU, also called swish (`zm.silu`).
 pub fn silu(comptime T: type, out: Tensor(T), a: Tensor(T)) Error!void {
     comptime requireFloat(T);
     return map(T, out, a, struct {
         fn apply(x: T) T {
-            return x * zm.sigmoid(x);
+            return zm.silu(x);
         }
     }.apply);
 }
@@ -7108,6 +7108,8 @@ pub const Activation = union(enum) {
     relu,
     /// TD-MPC2's choice inside every layer.
     mish,
+    /// x times its sigmoid (`zm.silu`): the hidden layers' activation in SuperMimic's reproductions' world models.
+    silu,
     /// SimNorm with this group size - how TD-MPC2's encoder and dynamics end (`simNormRows`).
     sim_norm: usize,
 };
@@ -12230,6 +12232,7 @@ pub fn Graph(comptime T: type) type {
                 .none => x,
                 .relu => try self.relu(x),
                 .mish => try self.mish(x),
+                .silu => try self.silu(x),
                 .sim_norm => |group| try self.simNorm(x, group),
             };
         }
@@ -14587,6 +14590,28 @@ pub fn initHe(comptime T: type, w: Tensor(T), rng: Rng, fan_in: usize) Error!voi
     }
 }
 
+/// Fill `w` with uniform values on +/-1/sqrt(fan_in): PyTorch's default for a linear layer's weights. `nn.Linear`
+/// resets them with `kaiming_uniform_` at a = sqrt(5), whose bound is gain x sqrt(3 / fan_in) with gain
+/// sqrt(2 / (1 + a^2)) = sqrt(1/3) - exactly 1/sqrt(fan_in) - so their variance is 1 / (3 fan_in), a third of
+/// LeCun's. A network whose code leaves its layers' starting values alone starts so (`InitScheme.fan_in_uniform`).
+pub fn initFanInUniform(
+    comptime T: type,
+    w: Tensor(T),
+    rng: Rng,
+    fan_in: usize,
+) Error!void {
+    comptime requireFloat(T);
+    if (fan_in == 0) {
+        return Error.DomainError;
+    }
+    const inputs: T = @floatFromInt(fan_in);
+    const limit: T = 1.0 / @sqrt(inputs);
+    var i: usize = 0;
+    while (i < w.size()) : (i += 1) {
+        w.data[w.base + i] = rng.uniform(T, @intCast(i), -limit, limit);
+    }
+}
+
 /// Fill `w` with normal values of the given standard deviation - the scale chosen outright rather than from the
 /// widths (`InitScheme.small_normal`).
 pub fn initNormal(comptime T: type, w: Tensor(T), rng: Rng, deviation: T) Error!void {
@@ -14625,7 +14650,16 @@ pub const InitScheme = enum {
     /// code calls it a truncated normal; PyTorch's truncation bounds are +-2 ABSOLUTE, a hundred deviations at this
     /// std, so nothing is ever truncated.)
     small_normal,
+    /// Uniform +/-1/sqrt(fan_in) - PyTorch's own default for a linear layer (`initFanInUniform`), which a network
+    /// starts with when its code leaves its layers alone: SuperMimic's world model's hidden layers. The biases too, as
+    /// PyTorch draws them: from the same range, on a stream of their own (`fan_in_bias_stream`). Every other scheme
+    /// starts its biases at zero.
+    fan_in_uniform,
 };
+
+/// The label of the stream `InitScheme.fan_in_uniform` draws a layer's biases from (`Rng.split`), apart from its
+/// weights' - so a bias is never a copy of the weight drawn at the same index.
+const fan_in_bias_stream: u32 = 1;
 
 /// The deviation `InitScheme.small_normal` uses.
 pub const small_normal_deviation: comptime_float = 0.02;
@@ -14670,8 +14704,12 @@ pub fn Conv2d(comptime T: type) type {
                 .xavier => try initXavier(T, kernel, rng, fan_in, fan_in),
                 .he => try initHe(T, kernel, rng, fan_in),
                 .small_normal => try initNormal(T, kernel, rng, small_normal_deviation),
+                .fan_in_uniform => try initFanInUniform(T, kernel, rng, fan_in),
             }
             bias.fill(0);
+            if (scheme == .fan_in_uniform) {
+                try initFanInUniform(T, bias, rng.split(fan_in_bias_stream), fan_in);
+            }
             return .{ .kernel = kernel, .bias = bias, .stride = stride, .pad = pad };
         }
 
@@ -14869,10 +14907,15 @@ pub fn Dense(comptime T: type) type {
                 .xavier => try initXavier(T, weight, rng, fan_in, fan_out),
                 .he => try initHe(T, weight, rng, fan_in),
                 .small_normal => try initNormal(T, weight, rng, small_normal_deviation),
+                .fan_in_uniform => try initFanInUniform(T, weight, rng, fan_in),
             }
             // Biases start at zero. A random bias adds nothing a random weight does not already
-            // provide, and a non-zero one shifts every unit's activation before any data is seen.
+            // provide, and a non-zero one shifts every unit's activation before any data is seen -
+            // except under PyTorch's own default, which draws them as it draws the weights.
             bias.fill(0);
+            if (scheme == .fan_in_uniform) {
+                try initFanInUniform(T, bias, rng.split(fan_in_bias_stream), fan_in);
+            }
             return .{ .weight = weight, .bias = bias };
         }
 
@@ -30432,6 +30475,20 @@ test "zn init and Dense: the variance is the claim, and a deep net trains" {
     try expect((try maxAll(f64, w)) <= limit);
     try expect((try minAll(f64, w)) >= -limit);
     try expectError(Error.DomainError, initHe(f64, w, ctx.rng, 0));
+
+    // PyTorch's default: uniform on +/-1/sqrt(fan_in), so variance 1/(3 fan_in) - whatever fan_out is.
+    try initFanInUniform(f64, w, ctx.rng.split(6), fan_in);
+    const fan_in_limit: f64 = 1.0 / @sqrt(float64(fan_in));
+    const fan_in_target: f64 = 1.0 / (3.0 * float64(fan_in));
+    try expect(approxEqAbs(
+        f64,
+        fan_in_target,
+        try variance(f64, w, .population),
+        fan_in_target * 0.05,
+    ));
+    try expect((try maxAll(f64, w)) <= fan_in_limit);
+    try expect((try minAll(f64, w)) >= -fan_in_limit);
+    try expectError(Error.DomainError, initFanInUniform(f64, w, ctx.rng, 0));
 
     // A THREE-LAYER RECTIFIER NETWORK, which is where initialisation starts to matter: the
     // variance factor compounds once per layer, so a scheme that is wrong by a constant is wrong

@@ -11,6 +11,8 @@
 //!   5. No id used twice in a page: an anchor two headings share sends every link to the first.
 //!   6. The landing page reaches every page: readme.html links every other published page, and no `.html` page that
 //!      is not published - so a new page cannot go unlisted, and a moved one cannot leave a dead link behind.
+//!   7. Every `<pre>` closes before the next one opens: a block left open makes the rest of the page one
+//!      preformatted block - its prose unwrapped, its headings and figures inside it.
 //!
 //! One more property - every code block carries a language class - is not checked, because it cannot be decided
 //! mechanically: shell transcripts, MJCF and ASCII diagrams also live in bare `<pre><code>` blocks, and a diagram
@@ -31,12 +33,13 @@ const indexOf = std.mem.indexOf;
 const endsWith = std.mem.endsWith;
 const indexOfPos = std.mem.indexOfPos;
 const indexOfScalar = std.mem.indexOfScalar;
+const startsWith = std.mem.startsWith;
 const eql = std.mem.eql;
 const bufPrint = std.fmt.bufPrint;
 const ArrayList = std.ArrayList;
 const basename = std.fs.path.basename;
 
-const marker = "<!--docfmt:style-->";
+const marker: []const u8 = "<!--docfmt:style-->";
 
 /// index.html's <script> is the gallery's manifest-driven filter and search -
 /// application code that happens to live in a page this gate covers.  Named
@@ -162,6 +165,36 @@ fn firstDuplicateId(gpa: Allocator, src: []const u8) !?[]const u8 {
     return null;
 }
 
+/// The 1-based line of byte `at` in `src`.
+fn lineOf(src: []const u8, at: usize) usize {
+    return countOf(src[0..at], "\n") + 1;
+}
+
+/// The line of THE FIRST `<pre>` THAT DOES NOT CLOSE before the next one opens, or before the page ends - null when
+/// every block closes. Only tags count: a `<pre>` written inside a code block is escaped (`&lt;pre&gt;`).
+fn firstUnclosedPre(src: []const u8) ?usize {
+    var open_at: ?usize = null;
+    var at: usize = 0;
+    while (indexOfScalarPos(u8, src, at, '<')) |tag_at| {
+        at = tag_at + 1;
+        const rest: []const u8 = src[tag_at..];
+        if (startsWith(u8, rest, "</pre>")) {
+            open_at = null;
+            continue;
+        }
+        const opens_pre: bool = startsWith(u8, rest, "<pre>") or startsWith(u8, rest, "<pre ");
+        if (!opens_pre) {
+            continue;
+        }
+        if (open_at) |still_open| {
+            return lineOf(src, still_open);
+        }
+        open_at = tag_at;
+    }
+    const left_open: usize = open_at orelse return null;
+    return lineOf(src, left_open);
+}
+
 pub fn main(init: std.process.Init) !void {
     var arena: ArenaAllocator = .init(init.gpa);
     defer arena.deinit();
@@ -222,6 +255,14 @@ pub fn main(init: std.process.Init) !void {
             );
             failures += 1;
         }
+        if (firstUnclosedPre(src)) |line| {
+            try w.print(
+                "doc-gate: {s}:{d}: a <pre> that does not close before the next one opens - " ++
+                    "the rest of the page is inside it\n",
+                .{ path, line },
+            );
+            failures += 1;
+        }
         if (indexOf(u8, src, "fonts.googleapis") != null or
             indexOf(u8, src, "fonts.gstatic") != null)
         {
@@ -254,7 +295,8 @@ pub fn main(init: std.process.Init) !void {
     }
 
     if (failures == 0) {
-        const summary: []const u8 = "one stylesheet, no script, no network, no id twice, every page reached";
+        const summary: []const u8 = "one stylesheet, no script, no network, no id twice, every page reached, " ++
+            "every <pre> closed";
         try w.print("doc-gate: {d} pages, {s}.\n", .{ checked, summary });
         try File.stdout().writeStreamingAll(io, aw.written());
         return;
@@ -295,4 +337,12 @@ test "doc_gate: a duplicate id is found; ids in text, or once each, are not" {
     try expect((try firstDuplicateId(gpa, "<h3 id=\"a\">x</h3><h3 id=\"b\">y</h3>")) == null);
     // In a code sample the text is not an attribute.
     try expect((try firstDuplicateId(gpa, "<h3 id=\"a\">x</h3><pre>f( id=\"a\")</pre>")) == null);
+}
+
+test "doc_gate: a <pre> left open is found at its line; closed ones, and one written in code, are not" {
+    try expect(firstUnclosedPre("<pre>a</pre>\n<pre class=\"sketch\"><code>b</code></pre>") == null);
+    try expect(firstUnclosedPre("<p>&lt;pre&gt; in prose</p><pre>a</pre>") == null);
+    try expect(firstUnclosedPre("<pre>a\n<pre>b</pre>").? == 1);
+    try expect(firstUnclosedPre("x\n<pre><code>left open").? == 2);
+    try expect(firstUnclosedPre("<prefix>not a block</prefix>") == null);
 }

@@ -17,11 +17,12 @@ const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const Color = zm.Color;
 const c = Color;
+const float = zm.float;
 
-const screen_w = 800;
-const screen_h = 450;
-const img_w = 360;
-const img_h = 240;
+const screen_w: u32 = 800;
+const screen_h: u32 = 450;
+const img_w: i32 = 360;
+const img_h: i32 = 240;
 
 const State = struct {
     tex: z.WgpuTexture,
@@ -60,10 +61,10 @@ fn deinit(gpa: Allocator, s: *State) void {
 fn update(f: *z.Frame, s: *State) void {
     // Draw the baked texture scaled up + centered.
     const scale: f32 = 1.6;
-    const dw: f32 = @as(f32, img_w) * scale;
-    const dh: f32 = @as(f32, img_h) * scale;
-    const dx: f32 = (@as(f32, screen_w) - dw) / 2.0;
-    const dy: f32 = (@as(f32, screen_h) - dh) / 2.0 + 14.0;
+    const dw: f32 = float(img_w) * scale;
+    const dh: f32 = float(img_h) * scale;
+    const dx: f32 = (float(screen_w) - dw) / 2.0;
+    const dy: f32 = (float(screen_h) - dh) / 2.0 + 14.0;
     f.gl.texture(.{ .x = dx, .y = dy, .width = dw, .height = dh }, s.tex, .{ .tint = c.white });
 
     f.gl.text(

@@ -71,7 +71,7 @@ closed fold opens with a click; the prose reads straight through without opening
         <li><a href="#requests">Reading back without waiting</a></li>
         <li><a href="#capabilities">Device capabilities</a></li>
         <li><a href="#pushconstants">Push constants</a></li>
-        <li><a href="#timings">Timing kernels</a></li>
+        <li><a href="#timings">Timings</a></li>
         <li><a href="#lending">Sharing buffers between pipes</a></li></ol></li>
   <li><a href="#precision">Precision and determinism</a>
     <ol>
@@ -841,6 +841,17 @@ when the program creates it, behind the same calls:</p>
 <p>The three are interchangeable in the program's code, not in their cost: a device without a GPU can still run the
 fluid, on a worker, without freezing its frames.</p>
 
+<p>The first two run the module's <em>CPU twin</em>: its kernels compiled for the CPU, and its buffers as static
+arrays in the program - <code>g.B</code>, the storage <code>bind</code> points into. A program whose kernels run on a
+device alone can leave the twin out: a module that declares <code>cpu_twin = false</code> (the headless trainer's, in
+its sizes files) has the <code>.cpu</code> and <code>.worker</code> backends compiled out, so nothing reaches for
+<code>g.B</code> and the program does not hold it - a trainer with gigabytes of device buffers is a program of a few
+megabytes. <code>initCpu</code> on such a module is a compile error. A fourth backend runs nothing at all:</p>
+
+<pre class="sketch"><code>   .measure   no buffers and no work: every upload and dispatch ignored, a range read zeros, the latest
+              readback none - what a program without a twin or a device builds a learner on, to measure
+              the buffers it needs (geno_trainer --layout)</code></pre>
+
 <h3 id="dispatch">7.1 Dispatch</h3>
 
 <p>Starting a kernel over <code>n</code> elements is a <em>dispatch</em>. On <code>.cpu</code> and
@@ -870,12 +881,18 @@ pub fn run(self: *Self, comptime name: []const u8, n: u32) void {
 eleven kernels; submitted one kernel at a time, the fixed costs would outweigh the work. A <em>batch</em> collects every dispatch of the frame into one recording, submitted once: between
 <code>beginBatch</code> and <code>endBatch</code>, each <code>run</code> only records its dispatch.</p>
 
-<pre data-src="src/compute_host.zig" data-decl="pub fn beginBatch(self: *Self, params: Params) void {"><code class="zig">pub fn beginBatch(self: *Self, params: Params) void {
+<pre data-src="src/compute_host.zig" data-decl="pub fn beginBatch(self: *Self, params: Params) void {"><code class="zig">/// A BATCH INSIDE A RECORDING IS PART OF THE RECORDING: its dispatches are recorded with the others, each with
+/// its own params slot, and `endBatch` submits nothing - so a caller that batches (a simulator's decision)
+/// can be recorded whole by whoever calls it, one submission in all.
+pub fn beginBatch(self: *Self, params: Params) void {
     self.params = params;
     if (self.backend != .gpu) {
         return;
     }
     const gp: *Gpu = &amp;self.gpu.?;
+    if (gp.rec_enc != .invalid) {
+        return;
+    }
     assertf(gp.batch_enc == .invalid, @src(), "beginBatch: a batch is already open", .{});
     gp.batch_params = params;
     self.syncParamsUniform(gp);
@@ -889,6 +906,10 @@ pub fn endBatch(self: *Self) void {
         return;
     }
     const gp: *Gpu = &amp;self.gpu.?;
+    // A batch begun inside a recording opened nothing (`beginBatch`): the recording holds its dispatches.
+    if (gp.rec_enc != .invalid) {
+        return;
+    }
     assertf(gp.batch_enc != .invalid, @src(), "endBatch: no batch is open", .{});
     // The uniform was written once at beginBatch; if params changed since,
     // those changes never reached the GPU (batched dispatches don't
@@ -900,6 +921,7 @@ pub fn endBatch(self: *Self) void {
             "not after (a post-beginBatch change is silently ignored on-device)",
         .{},
     );
+    timeSubmissionEnd(gp, gp.batch_pass);
     compute_pass.end(gp.batch_pass);
     const cmd: wgpu.CommandBufferHandle = wgpu.finishCommandEncoder(gp.batch_enc);
     submitDispatch(gp, cmd);
@@ -938,17 +960,21 @@ further would return the next field's data.</p>
     // slice to THEIR OWN array length, never the particle count - else
     // grid_counts (grid_cells long) overruns the next field. Clamp to the
     // lesser of the two.
-    const arr_len: usize = @field(M.g.B, @tagName(field)).len;
+    const arr_len: usize = comptime fieldLength(field);
     const n: usize = @min(self.element_count, arr_len);
     switch (self.backend) {
-        .cpu =&gt; {
+        .cpu =&gt; if (comptime has_cpu_twin) {
             return @field(M.g.B, @tagName(field))[0..n];
+        } else {
+            unreachable;
         },
+        // Nothing reads back.
+        .measure =&gt; return null,
         // Same contract as the GPU arm: null until it lands, then the data -
         // out of our OWN mirror, never out of `M.g.B`, so a `.cpu` pipe on the
         // same module keeps its answer.
         .worker =&gt; {
-            if (comptime @hasDecl(M, "kernels")) {
+            if (comptime has_cpu_twin and @hasDecl(M, "kernels")) {
                 const wk: *Worker = &amp;(self.worker orelse return null);
                 if (wk.job.poll()) |maybe_bytes| {
                     if (maybe_bytes) |bytes| {
@@ -1010,6 +1036,7 @@ further would return the next field's data.</p>
                 // weights. The data a caller sees is unchanged: it was always sliced to
                 // `element_count`.
                 const count: usize = self.element_count;
+                ensureMirrorStaging(gp, packedPrefixBytes(count));
                 const enc: wgpu.CommandEncoderHandle = wgpu.createCommandEncoder(gp.dev);
                 // In MEMORY order, which `unpackPrefixes` relies on (`fields_by_offset`).
                 var packed_at: u32 = 0;
@@ -1054,6 +1081,13 @@ the grid's width:</p>
    row 2    workgroups 0 .. k        the rest; past the count, the kernel's guard returns
 
    index = row x (workgroups in a row x 64) + position along the row</code></pre>
+
+<p>A dispatch is also bounded by the module's own count: <code>run</code> refuses more invocations than the
+module's buffers are long (<code>config.max</code>) - a guard against a count that could only index past their end.
+A module whose kernels range over a buffer longer than its <code>max</code>-long ones says how far
+(<code>dispatch_max</code>). The kit of zimrnum is one: its <code>max</code> is its parameters' length, while a
+kernel over a batch's windows ranges over its activations - the gather of 1,024 windows of 11 steps, each row over a
+thousand numbers wide, is about 12 million invocations, past the parameters' 8 million.</p>
 
 <details class="src-fold" data-src="src/kompute.zig" data-decl="inline fn linearInvocationId("><summary><code>linearInvocationId</code></summary><pre><code class="zig">/// This invocation's index in the dispatch. A one-row grid's is its x. A LARGE dispatch (`Config.large_dispatch`) lays
 /// its workgroups out in rows of up to 65,535, and the index counts the whole rows before this one - each row holds
@@ -1118,7 +1152,7 @@ pub fn readRange(
     destination: []ElemOf(field),
 ) void {
     const Element: type = ElemOf(field);
-    const field_length: usize = @field(M.g.B, @tagName(field)).len;
+    const field_length: usize = comptime fieldLength(field);
     const end: usize = @as(usize, first) + destination.len;
     assertf(end &lt;= field_length, @src(), "readRange: elements {d}..{d} of a field of {d}", .{
         first,
@@ -1126,10 +1160,14 @@ pub fn readRange(
         field_length,
     });
     switch (self.backend) {
-        .cpu =&gt; {
+        .cpu =&gt; if (comptime has_cpu_twin) {
             const source: []const Element = @field(M.g.B, @tagName(field))[first..end];
             @memcpy(destination, source);
+        } else {
+            unreachable;
         },
+        // Nothing was kept: zeros.
+        .measure =&gt; @memset(destination, zeroes(Element)),
         .worker =&gt; {
             assertUnreachable(@src(), "readRange: a worker pipe reads through readLatest", .{});
         },
@@ -1211,7 +1249,7 @@ pub fn requestRange(
 ) Allocator.Error!RangeRequest(field) {
     const Element: type = ElemOf(field);
     const Request: type = RangeRequest(field);
-    const field_length: usize = @field(M.g.B, @tagName(field)).len;
+    const field_length: usize = comptime fieldLength(field);
     const end: usize = @as(usize, first) + count;
     assertf(count &gt; 0 and end &lt;= field_length, @src(), "requestRange: elements {d}..{d} of a field of {d}", .{
         first,
@@ -1219,9 +1257,18 @@ pub fn requestRange(
         field_length,
     });
     switch (self.backend) {
-        .cpu =&gt; {
+        .cpu =&gt; if (comptime has_cpu_twin) {
             const snapshot: []Element = try gpa.alloc(Element, count);
             @memcpy(snapshot, @field(M.g.B, @tagName(field))[first..end]);
+            const request: Request = .{ .count = count, .snapshot = snapshot, .snapshot_owner = gpa };
+            return request;
+        } else {
+            unreachable;
+        },
+        // Nothing was kept: a snapshot of zeros.
+        .measure =&gt; {
+            const snapshot: []Element = try gpa.alloc(Element, count);
+            @memset(snapshot, zeroes(Element));
             const request: Request = .{ .count = count, .snapshot = snapshot, .snapshot_owner = gpa };
             return request;
         },
@@ -1286,6 +1333,10 @@ pub const ComputeCapabilities = struct {
     /// nanoseconds one tick of the timestamp clock lasts (`timestampPeriod`) - what turns two timestamps into a time.
     timestamps_in_compute: bool = false,
     timestamp_period_ns: f32 = 0,
+    /// How many bits of a timestamp the host's queue family keeps (`VkQueueFamilyProperties::timestampValidBits`):
+    /// 36 to 64 where the family writes timestamps, 0 where it writes none. A clock of fewer than 64 bits wraps, and
+    /// the difference of two timestamps is taken within these bits (`compute_host.ticksBetween`).
+    timestamp_valid_bits: u32 = 0,
     /// THE MEMORY ENVELOPE: the most bytes one storage-buffer binding may span (`maxStorageBufferRange`) - what one
     /// arena of a simulation may hold - and the largest heap of device-local memory, the GPU's own, which the arenas
     /// together must fit.
@@ -1390,93 +1441,286 @@ pub fn runPushed(
 }</code></pre></details>
 
 
-<h3 id="timings">7.10 Timing kernels</h3>
+<h3 id="timings">7.10 Timings</h3>
 
 <p>A kernel's speed is best measured where it runs. The GPU keeps a clock of its own, and a command in the stream can
-write its value into a slot of a timestamp pool: at the top of the pipeline before a dispatch, and at its bottom after
-it. The difference of the two, in ticks, times the length of a tick the device reports, is the time the dispatch
-took on the GPU - free of the CPU's scheduling and of the time spent waiting in the queue.</p>
+write the clock's value into a slot of a timestamp pool. A pipe that times its work writes such commands between its
+dispatches. Each is a <em>mark</em>, and the dispatches between two marks are a <em>segment</em>. The difference of
+a segment's two marks, in ticks, times the length of a tick the device reports, is the time its dispatches took on
+the GPU - free of the CPU's scheduling and of the time spent waiting in the queue.</p>
 
-<pre class="sketch"><code>   kernel k's two slots: 2k (start) and 2k + 1 (end)
+<pre class="sketch"><code>   one submission:   mark | dispatches of phase A | mark | dispatches of phase B | mark
+                            a segment under A            a segment under B
 
-   [ reset 2k, 2k + 1 ] [ write 2k at the top ] [ dispatch ] [ write 2k + 1 at the bottom ]
+   a segment's time = (ticks at its last mark - ticks at its first mark) x tick length</code></pre>
 
-   duration = (ticks[2k + 1] - ticks[2k]) x tick length</code></pre>
+<p>A segment begins at a submission's first dispatch and wherever the <em>phase</em> changes. The phase is a number
+the caller sets with <code>setPhase</code> and gives a meaning of its own - the parts of a training round, say. Every
+dispatch after it is timed under it. The last segment ends with the submission.</p>
 
-<p>A pipe asks once, with <code>enableTimings</code>; from then on every dispatch is bracketed this way, and
-<code>kernelTimings</code> reads each kernel's last duration in microseconds, waiting until the dispatches have run.
-Timings are a native feature: WebGPU's timestamps cover render passes only.</p>
+<p>Every mark is taken at the bottom of the pipeline: once the work before it has finished. Two segments that follow
+each other therefore share one mark, and their times add up with nothing counted twice. A mark taken at the top of
+the pipeline could be written while the dispatch before it still ran, and the two segments would overlap.</p>
 
-<details class="src-fold" data-src="src/compute_host.zig" data-decl="pub fn enableTimings("><summary><code>enableTimings</code></summary><pre><code class="zig">/// TIME THIS PIPE'S KERNELS ON THE GPU. From now on every dispatch is bracketed by two timestamps - the GPU's
-/// clock at the top of the pipeline before it and at the bottom after it, in the kernel's two slots of a pool -
-/// and `kernelTimings` reads each kernel's last duration:
+<p>The time between two submissions is in no segment. A device that has finished what it was given waits for the
+host, and that wait is what the segments leave out:</p>
+
+<pre class="sketch"><code>   the device's clock ----&gt;
+
+   | segment | segment |          | segment |        | segment | segment |
+   first mark                                                   last mark
+   |&lt;------------------------------- span ------------------------------&gt;|
+
+   busy = the segments' times added          idle = span - busy</code></pre>
+
+<p>A worked example: three submissions on a clock that ticks once a nanosecond, the phase changing inside the first.</p>
+
+<pre class="sketch"><code>   submission          first                  second             third
+   marks (ticks)       1,000   4,000   9,000  12,000   15,000    21,000   22,000
+   phase                   A       B              A                  B
+
+   A     (4,000 - 1,000) + (15,000 - 12,000)  =  6,000 ns in 2 segments
+   B     (9,000 - 4,000) + (22,000 - 21,000)  =  6,000 ns in 2 segments
+   busy  12,000 ns      span  22,000 - 1,000 = 21,000 ns      idle  9,000 ns</code></pre>
+
+<p>A pipe asks once, with <code>enableTimings</code>, and says how many marks it may write between two reads.
+<code>readTimings</code> waits until the device has finished everything submitted to it so far, adds each segment's
+time to its phase's sum and starts the marks over. It is called when the caller is ready to wait - at the end of a
+training round, not inside it. The sums are added to, so the pipes of one device fill the same sums one read after
+another, and <code>timingsSpanMicroseconds</code> gives the span of their reads together.</p>
+
+<p>The read waits for the whole queue because a mark's slot is used again after every read. A slot keeps its last
+tick until the device runs the reset recorded before its next write, so a read that arrived before that reset would
+be given the old tick.</p>
+
+<details class="src-fold" data-src="src/compute_host.zig" data-decl="pub const TimingOptions = struct {"><summary><code>TimingOptions</code></summary><pre><code class="zig">/// HOW A PIPE's TIME ON THE GPU IS MEASURED (`Compute.enableTimings`).
+pub const TimingOptions = struct {
+    /// The marks a pipe may write between two reads (`Compute.readTimings`): the timestamps its pool holds. The
+    /// segments of one submission share the marks between them, so n segments in a submission are n + 1 marks.
+    mark_capacity: u32 = 8192,
+    /// A segment per dispatch, so that a read tells each kernel's time: a mark between every two dispatches. Off, a
+    /// segment runs for as long as the phase stays the same within a submission.
+    per_dispatch: bool = false,
+};</code></pre></details>
+<details class="src-fold" data-src="src/compute_host.zig" data-decl="pub fn enableTimings("><summary><code>enableTimings</code></summary><pre><code class="zig">/// TIME THIS PIPE's WORK ON THE GPU. From now on the pipe writes MARKS into its command stream - the device's
+/// clock, taken once the work before the mark has finished - and the dispatches between two marks are a
+/// SEGMENT, timed by the marks' difference:
 ///
-///     kernel k's slots:   2k = start, 2k + 1 = end
-///     a dispatch:         [ reset 2k, 2k + 1 ] [ write 2k at the top ] [ dispatch ]
-///                         [ write 2k + 1 at the bottom ]
+///     one submission:   mark | dispatches of phase A | mark | dispatches of phase B | mark
+///                              a segment under A            a segment under B
 ///
-/// Native only - Vulkan's timestamps; WebGPU's cover render passes alone - and a pipe on the CPU has nothing to
-/// time. The device must write timestamps in compute (`ComputeCapabilities.timestamps_in_compute`).
-pub fn enableTimings(self: *Self) Allocator.Error!void {
+/// A segment begins at a submission's first dispatch and wherever the PHASE changes (`setPhase`: what the
+/// caller says its dispatches are for), and the last ends with the submission. The time between two
+/// submissions, while the device waits for the host, is in no segment. With `per_dispatch` every dispatch
+/// is a segment of its own, and a read tells each kernel's time. `readTimings` waits for the device, sums
+/// the segments by phase and by kernel, and starts the marks over.
+///
+/// BOTH ENDS OF A SEGMENT ARE TAKEN AT THE BOTTOM OF THE PIPELINE - when the work before the mark has
+/// finished, not when the device reaches the mark. Two segments that follow each other therefore share one
+/// mark, and the segments' times add up with nothing counted twice: a mark at the top of the pipeline could
+/// be taken while the dispatch before it still ran.
+///
+/// Native only - Vulkan's timestamps; WebGPU's cover render passes alone - and a pipe on the CPU has nothing
+/// to time. Returns whether the pipe is now timed: false on the CPU, and on a device whose compute queue
+/// writes no timestamps (`ComputeCapabilities.timestamps_in_compute`), where every read reports nothing.
+/// Memory: the segments' list and the ticks' scratch, the pipe's, freed with it.
+pub fn enableTimings(self: *Self, options: TimingOptions) Allocator.Error!bool {
     if (comptime host.is_browser) {
         @compileError("enableTimings: GPU timestamps for compute are native only");
     }
     if (self.backend != .gpu) {
-        return;
+        return false;
     }
     const gp: *Gpu = &amp;self.gpu.?;
-    if (gp.timestamp_pool != 0) {
-        return;
+    if (gp.timing != null) {
+        return true;
     }
     const capabilities: wgpu.vulkan_host.ComputeCapabilities = wgpu.computeCapabilities();
-    const no_timestamps: []const u8 = "enableTimings: this device writes no compute timestamps";
-    assertf(capabilities.timestamps_in_compute, @src(), no_timestamps, .{});
-    const kernel_count: usize = gp.kernel_names.len;
-    gp.kernel_timed = try gp.gpa.alloc(bool, kernel_count);
-    @memset(gp.kernel_timed, false);
-    const slot_count: u32 = @intCast(2 * kernel_count);
-    gp.timestamp_pool = wgpu.vulkan_host.createTimestampPool(slot_count);
-}</code></pre></details>
-
-<details class="src-fold" data-src="src/compute_host.zig" data-decl="pub fn kernelTimings("><summary><code>kernelTimings</code></summary><pre><code class="zig">/// Each kernel's last duration on the GPU, in microseconds, into `timings` in the pipe's kernel order - zero
-/// for a kernel not dispatched since the last read, and for every kernel of a pipe without timings. A duration
-/// is the difference of the kernel's two timestamps, in ticks, times the device's tick in nanoseconds. It waits
-/// until the dispatches have run, so not inside an open batch or recording, whose commands are not yet
-/// submitted.
-pub fn kernelTimings(self: *Self, timings: *[M.kernels.len]KernelTiming) void {
-    if (comptime host.is_browser) {
-        @compileError("kernelTimings: GPU timestamps for compute are native only");
+    if (!capabilities.timestamps_in_compute) {
+        return false;
     }
-    for (timings) |*timing| {
-        timing.* = .{ .name = "", .microseconds = 0 };
+    // A segment needs two marks: its start, and the one kept back for its end.
+    assertf(options.mark_capacity &gt;= 2, @src(), "enableTimings: {d} marks, a segment needs two", .{
+        options.mark_capacity,
+    });
+    const segments: []Segment = try gp.gpa.alloc(Segment, options.mark_capacity);
+    errdefer gp.gpa.free(segments);
+    const ticks: []u64 = try gp.gpa.alloc(u64, options.mark_capacity);
+    const pool: u32 = wgpu.vulkan_host.createTimestampPool(options.mark_capacity);
+    gp.timing = .{
+        .pool = pool,
+        .per_dispatch = options.per_dispatch,
+        .mark_capacity = options.mark_capacity,
+        .segments = segments,
+        .ticks = ticks,
+    };
+    return true;
+}</code></pre></details>
+<details class="src-fold" data-src="src/compute_host.zig" data-decl="pub fn setPhase("><summary><code>setPhase</code></summary><pre><code class="zig">/// The phase the pipe's next dispatches are timed under (`enableTimings`): a number of the caller's own
+/// meaning - a training round's parts, say. Kept on every backend and on a pipe that times nothing, so a
+/// caller sets it without asking.
+pub fn setPhase(self: *Self, phase: u32) void {
+    self.phase = phase;
+}</code></pre></details>
+<details class="src-fold" data-src="src/compute_host.zig" data-decl="pub fn readTimings("><summary><code>readTimings</code></summary><pre><code class="zig">/// THE TIME SINCE THE LAST READ, BY PHASE AND BY KERNEL. Each closed segment's time on the GPU, in
+/// microseconds, is ADDED to its phase's entry of `phase_microseconds` and counted in `phase_segments` -
+/// added, so the pipes of one device fill the same sums, one read after another. On a pipe timing per
+/// dispatch each segment is also added to its kernel's entry of `kernel_microseconds` and counted in
+/// `kernel_dispatches`, in the pipe's kernel order (`kernelNames`); a caller that wants no kernels passes
+/// empty slices. Then the marks start over.
+///
+/// IT WAITS until the device has finished everything submitted to it so far - this pipe's work and every
+/// other's - so that every mark holds this read's tick, and none an earlier read's. So it is called outside
+/// a batch or recording, whose commands are not yet submitted, and when the caller is ready to wait: a
+/// round's end. A segment's time is its two marks' difference in the clock's ticks (`ticksBetween`) times
+/// the tick's nanoseconds. A pipe that times nothing reports nothing and adds nothing.
+pub fn readTimings(
+    self: *Self,
+    phase_microseconds: []f64,
+    phase_segments: []u32,
+    kernel_microseconds: []f64,
+    kernel_dispatches: []u64,
+) TimingsRead {
+    if (comptime host.is_browser) {
+        @compileError("readTimings: GPU timestamps for compute are native only");
     }
     if (self.backend != .gpu) {
-        return;
+        return .{};
     }
     const gp: *Gpu = &amp;self.gpu.?;
-    if (gp.timestamp_pool == 0) {
-        return;
+    if (gp.timing == null) {
+        return .{};
     }
+    const timing: *Timing = &amp;gp.timing.?;
     const outside_batch: bool = gp.batch_enc == .invalid and gp.rec_enc == .invalid;
-    assertf(outside_batch, @src(), "kernelTimings inside an open batch or recording", .{});
-    const tick_nanoseconds: f64 = wgpu.computeCapabilities().timestamp_period_ns;
-    for (gp.kernel_names, gp.kernel_timed, timings, 0..) |name, *was_timed, *timing, kernel_index| {
-        timing.name = name;
-        if (!was_timed.*) {
+    assertf(outside_batch, @src(), "readTimings inside an open batch or recording", .{});
+    // Every submission closes its last segment, so none is open here.
+    assertf(timing.open == null, @src(), "readTimings with a segment open", .{});
+    const capabilities: wgpu.vulkan_host.ComputeCapabilities = wgpu.computeCapabilities();
+    var read: TimingsRead = .{
+        .untimed_dispatches = timing.untimed_dispatches,
+        .tick_nanoseconds = capabilities.timestamp_period_ns,
+        .valid_bits = capabilities.timestamp_valid_bits,
+    };
+    const marks_used: u32 = timing.marks_used;
+    const segment_count: u32 = timing.segment_count;
+    // The marks start over whatever the device answers.
+    timing.marks_used = 0;
+    timing.segment_count = 0;
+    timing.untimed_dispatches = 0;
+    if (segment_count == 0) {
+        return read;
+    }
+    const ticks: []u64 = timing.ticks[0..marks_used];
+    const answered: bool = wgpu.vulkan_host.timestampPoolRead(timing.pool, 0, marks_used, ticks.ptr);
+    if (!answered) {
+        return read;
+    }
+    const wants_kernels: bool = timing.per_dispatch and kernel_microseconds.len &gt; 0;
+    for (timing.segments[0..segment_count]) |segment| {
+        const first_tick: u64 = ticks[segment.first_mark];
+        const last_tick: u64 = ticks[segment.last_mark];
+        const elapsed_ticks: u64 = ticksBetween(first_tick, last_tick, read.valid_bits);
+        const microseconds: f64 = float64(elapsed_ticks) * read.tick_nanoseconds / 1000.0;
+        phase_microseconds[segment.phase] += microseconds;
+        phase_segments[segment.phase] += 1;
+        if (!wants_kernels) {
             continue;
         }
-        var ticks: [2]u64 = undefined;
-        const first_slot: u32 = @intCast(2 * kernel_index);
-        const answered: bool = wgpu.vulkan_host.timestampPoolRead(gp.timestamp_pool, first_slot, 2, &amp;ticks);
-        if (answered) {
-            // A clock with fewer than 64 valid bits wraps: the difference wraps with it.
-            const elapsed_ticks: u64 = ticks[1] -% ticks[0];
-            const elapsed_nanoseconds: f64 = float64(elapsed_ticks) * tick_nanoseconds;
-            timing.microseconds = elapsed_nanoseconds / 1000.0;
-        }
-        was_timed.* = false;
+        const kernel: u32 = segment.kernel orelse continue;
+        kernel_microseconds[kernel] += microseconds;
+        kernel_dispatches[kernel] += 1;
     }
+    // The marks were written in the order the device ran them: the first and the last bound the read.
+    read.segments = segment_count;
+    read.first_tick = ticks[0];
+    read.last_tick = ticks[marks_used - 1];
+    return read;
 }</code></pre></details>
+<details class="src-fold" data-src="src/compute_host.zig" data-decl="pub const TimingsRead = struct {"><summary><code>TimingsRead</code></summary><pre><code class="zig">/// WHAT ONE READ OF A PIPE's TIMINGS COVERED (`Compute.readTimings`).
+pub const TimingsRead = struct {
+    /// The segments timed, and the dispatches no segment covered - the marks had run out.
+    segments: u32 = 0,
+    untimed_dispatches: u32 = 0,
+    /// The device's clock at the read's first mark and at its last, in ticks, with what turns ticks into time: a
+    /// tick's nanoseconds and how many of a tick count's bits the clock keeps before it wraps. Every pipe of one
+    /// device reads the same clock.
+    first_tick: u64 = 0,
+    last_tick: u64 = 0,
+    tick_nanoseconds: f64 = 0,
+    valid_bits: u32 = 0,
+};</code></pre></details>
+<details class="src-fold" data-src="src/compute_host.zig" data-decl="pub fn timingsSpanMicroseconds("><summary><code>timingsSpanMicroseconds</code></summary><pre><code class="zig">/// THE SPAN OF SEVERAL PIPES' TIMINGS ON ONE DEVICE's CLOCK, in microseconds: from the earliest first mark among
+/// `reads` to the latest last mark - zero when none of them timed a segment. Every segment of every read lies inside
+/// it, and no two segments overlap - one queue runs its submissions one after another - so the reads' segment times
+/// add up to at most this span: what is left of it is the time the device spent between segments, waiting for the
+/// host. The reads cover less than half the clock's wrap, as a training round does on any device.
+pub fn timingsSpanMicroseconds(reads: []const TimingsRead) f64 {
+    // The first read that timed anything gives the origin; every other mark is placed after or before it.
+    const origin: TimingsRead = for (reads) |read| {
+        if (read.segments &gt; 0) {
+            break read;
+        }
+    } else return 0;
+    const valid_bits: u32 = origin.valid_bits;
+    const half_wrap: u64 = ticksBetween(0, zm.maxInt(u64), valid_bits) / 2;
+    // Ticks before the origin's first mark, and ticks after it, over every read.
+    var ticks_before: u64 = 0;
+    var ticks_after: u64 = 0;
+    for (reads) |read| {
+        if (read.segments == 0) {
+            continue;
+        }
+        const first_after_origin: u64 = ticksBetween(origin.first_tick, read.first_tick, valid_bits);
+        const starts_before_origin: bool = first_after_origin &gt; half_wrap;
+        if (starts_before_origin) {
+            const first_before_origin: u64 = ticksBetween(read.first_tick, origin.first_tick, valid_bits);
+            ticks_before = @max(ticks_before, first_before_origin);
+        }
+        const last_after_origin: u64 = ticksBetween(origin.first_tick, read.last_tick, valid_bits);
+        const ends_after_origin: bool = last_after_origin &lt;= half_wrap;
+        if (ends_after_origin) {
+            ticks_after = @max(ticks_after, last_after_origin);
+        }
+    }
+    const span_ticks: f64 = float64(ticks_before) + float64(ticks_after);
+    return span_ticks * origin.tick_nanoseconds / 1000.0;
+}</code></pre></details>
+
+<p>With <code>per_dispatch</code> every dispatch is a segment of its own, and a read also tells each kernel's time and
+how many of its dispatches were timed: a profile, at the price of a mark for every dispatch. A dispatch that finds no
+mark left is counted as untimed, and the read reports the count.</p>
+
+<p>A device's clock may keep fewer than 64 bits of its count, and then it wraps. The difference of two marks is taken
+within the bits the clock keeps, so a wrap between two marks leaves the ticks between them unchanged:</p>
+
+<pre class="sketch"><code>   a clock of 36 bits wraps at 2^36 = 68,719,476,736
+
+   first mark   68,719,476,636      100 ticks before the wrap
+   last mark               150      150 ticks after it
+
+   last - first, in 64 bits     a number near 2^64
+   kept to the low 36 bits      250 ticks</code></pre>
+
+<details class="src-fold" data-src="src/compute_host.zig" data-decl="pub fn ticksBetween("><summary><code>ticksBetween</code></summary><pre><code class="zig">/// The ticks from `earlier` to `later` on a clock that keeps `valid_bits` bits of its count (`TimingsRead`): their
+/// difference within those bits, so a clock that wrapped once between the two still gives the ticks between them.
+pub fn ticksBetween(
+    earlier: u64,
+    later: u64,
+    valid_bits: u32,
+) u64 {
+    const difference: u64 = later -% earlier;
+    const keeps_every_bit: bool = valid_bits &gt;= 64;
+    if (keeps_every_bit) {
+        return difference;
+    }
+    const kept_bits: u6 = @intCast(valid_bits);
+    const kept_mask: u64 = (@as(u64, 1) &lt;&lt; kept_bits) - 1;
+    return difference &amp; kept_mask;
+}</code></pre></details>
+
+<p>Timings are a native feature: WebGPU's timestamps cover render passes only. On a device whose compute queue writes
+no timestamps <code>enableTimings</code> returns false, and every read reports nothing.</p>
 
 
 <h3 id="lending">7.11 Sharing buffers between pipes</h3>

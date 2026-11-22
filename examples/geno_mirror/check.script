@@ -1,0 +1,24 @@
+// Geno's clips, mirrored: the dance's mirror pair a second in; the same reflected back; then the walk's pair. The
+// panel's radio buttons by their place in the 1100 x 640 window, each click given a frame to land.
+.{ .advance = 60 }
+.{ .capture_to = "geno_mirror_pair.png" }
+.{ .move = .{ .x = 153, .y = 216 } }
+.{ .advance = 1 }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 10 }
+.{ .capture_to = "geno_mirror_reflected_back.png" }
+.{ .move = .{ .x = 23, .y = 216 } }
+.{ .advance = 1 }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 1 }
+.{ .move = .{ .x = 191, .y = 52 } }
+.{ .advance = 1 }
+.{ .press = .left }
+.{ .advance = 1 }
+.{ .release = .left }
+.{ .advance = 90 }
+.{ .capture_to = "geno_mirror_walk.png" }

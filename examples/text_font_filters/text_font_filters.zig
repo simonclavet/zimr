@@ -39,7 +39,7 @@ const c = Color;
 const float = zm.float;
 
 const bake_size: i32 = 20; // deliberately SMALL, so magnifying it exposes the filter
-const sample = "Aa1 Bb2";
+const sample: []const u8 = "Aa1 Bb2";
 
 const State = struct {
     ui_host: z.UiHost,

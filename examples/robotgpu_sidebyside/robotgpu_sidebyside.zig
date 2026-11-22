@@ -24,6 +24,7 @@
 const std = @import("std");
 const z = @import("zimr");
 const zm = @import("zm");
+const common = @import("example_common");
 const codecs = z.codecs;
 const rbt = z.robot;
 const mjcf = z.mjcf;
@@ -311,7 +312,9 @@ const State = struct {
     cam: z.OrbitCamera,
     cube: z.Mesh,
     sphere: z.Mesh,
+    /// The open tube under a capsule's end balls; the capped one for a cylinder geom, whose ends nothing covers.
     cylinder: z.Mesh,
+    cylinder_capped: z.Mesh,
     transform: [1]Mat,
     scene: Scene,
 };
@@ -668,6 +671,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .cube = try z.genMeshCube(gpa, 1.0, 1.0, 1.0),
         .sphere = try z.genMeshSphere(gpa, 1.0, 10, 8),
         .cylinder = try z.genMeshCylinder(gpa, 1.0, 1.0, 16, 2),
+        .cylinder_capped = try common.genMeshCylinderCapped(gpa, 1.0, 1.0, 16),
         .transform = .{zm.identity()},
         .scene = undefined,
     };
@@ -677,6 +681,10 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
 fn deinit(gpa: Allocator, s: *State) void {
     unloadScene(gpa, &s.scene);
+    z.unloadMesh(gpa, s.cube);
+    z.unloadMesh(gpa, s.sphere);
+    z.unloadMesh(gpa, s.cylinder);
+    z.unloadMesh(gpa, s.cylinder_capped);
 }
 
 /// The next scene shown in place of this one.
@@ -702,10 +710,12 @@ fn drawBall(
     z.drawMeshInstanced(gl, &s.sphere, &s.transform, colour);
 }
 
-/// A cylinder between two points: the mesh runs up its own y from 0 to 1.
+/// A cylinder between two points: `mesh` runs up its own y from 0 to 1 - the open tube under a capsule's balls, the
+/// capped one for a cylinder geom.
 fn drawCylinder(
     s: *State,
     gl: *z.WgpuGl,
+    mesh: *z.Mesh,
     a: Vec,
     b: Vec,
     radius: f32,
@@ -715,7 +725,7 @@ fn drawCylinder(
     const span: f32 = length3(along);
     const upright: Quat = if (span > 1.0e-6) quatFromTo(vec(0, 1, 0), along * splat(1.0 / span)) else zm.qidentity();
     s.transform[0] = mulMat(mulMat(translation(a[0], a[1], a[2]), quatToMat(upright)), scaling(radius, span, radius));
-    z.drawMeshInstanced(gl, &s.cylinder, &s.transform, colour);
+    z.drawMeshInstanced(gl, mesh, &s.transform, colour);
 }
 
 /// A capsule: a cylinder between two points, and a ball on each end.
@@ -727,7 +737,7 @@ fn drawCapsule(
     radius: f32,
     colour: Color,
 ) void {
-    drawCylinder(s, gl, a, b, radius, colour);
+    drawCylinder(s, gl, &s.cylinder, a, b, radius, colour);
     drawBall(s, gl, a, radius, colour);
     drawBall(s, gl, b, radius, colour);
 }
@@ -764,7 +774,7 @@ fn drawRobot(
             },
             .cylinder => |cylinder| {
                 const half: Vec = rotate(turn, vec(0, cylinder.half_height, 0));
-                drawCylinder(s, gl, at - half, at + half, cylinder.radius, colours.round);
+                drawCylinder(s, gl, &s.cylinder_capped, at - half, at + half, cylinder.radius, colours.round);
             },
             .sphere => |sphere| drawBall(s, gl, at, sphere.radius, colours.round),
             .box => |box| {

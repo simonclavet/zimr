@@ -48,6 +48,7 @@ const inf = zm.inf;
 const log10 = zm.log10;
 const clamp = zm.clamp;
 const exp10 = zm.exp10;
+const maxInt = zm.maxInt;
 const assertf = zm.assertf;
 const assertUnreachable = zm.assertUnreachable;
 const isFinite = zm.isFinite;
@@ -811,7 +812,7 @@ pub const Tick = struct {
 };
 
 /// Headroom for majors + their minor subdivisions.
-pub const max_ticks = 64;
+pub const max_ticks: usize = 64;
 /// Minor subdivisions per major interval (ImPlot's Locator uses 10; 5 reads
 /// cleaner). `minor_per_major - 1` minor ticks sit between each major.
 const minor_per_major: u32 = 5;
@@ -1001,7 +1002,9 @@ pub const Ticker = struct {
         while (e <= exp_max) : (e += step) {
             const base: f64 = exp10(float64(e));
             if (range.contains(base) and self.count < max_ticks) {
-                const decimals: u8 = if (e < 0) @intCast(-e) else 0;
+                // A range reaching zero or below starts the decades at 1e-300 (`lo`), and a label asking 300 decimals
+                // of a u8 panicked (zimrnum_fit's loss chart, Nov 22): such a label is cut to what a u8 holds.
+                const decimals: u8 = if (e < 0) @intCast(@min(-e, maxInt(u8))) else 0;
                 const label: []const u8 = self.writeLabel(base, decimals);
                 const px: f32 = axis.plotToPixel(base);
                 self.ticks[self.count] = .{ .value = base, .px = px, .label = label, .major = true };
@@ -2602,6 +2605,15 @@ test "plot.decimalsFor" {
     try testing.expectEqual(@as(u8, 0), decimalsFor(10));
     try testing.expectEqual(@as(u8, 1), decimalsFor(0.5));
     try testing.expectEqual(@as(u8, 2), decimalsFor(0.02));
+}
+
+test "plot.Ticker: a log axis whose range reaches below zero gets its ticks without a panic" {
+    // A log axis has no zero, and such a range - a linear fit's padding reached it in zimrnum_fit's loss chart (Nov 22)
+    // - starts its decades at 1e-300: the label of 1e-300 asked 300 decimals of a u8.
+    const ax: Axis = .{ .range = .{ .min = -0.02, .max = 0.4 }, .px_min = 0, .px_max = 300, .scale = .log10 };
+    var tk: Ticker = .{};
+    tk.generate(ax, 300, true);
+    try expect(tk.slice().len > 0);
 }
 
 test "plot.Axis: log10 transform + power-of-ten ticks" {

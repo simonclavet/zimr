@@ -1138,62 +1138,62 @@ inline fn hex(r: u8, g: u8, b: u8) Color {
 }
 
 // --- Greys ------------------------------------------------------------
-pub const white = Color.init(255, 255, 255, 255);
-pub const black = Color.init(0, 0, 0, 255);
+pub const white: Color = .init(255, 255, 255, 255);
+pub const black: Color = .init(0, 0, 0, 255);
 
-pub const slate_50 = hex(248, 250, 252);
-pub const slate_100 = hex(241, 245, 249);
-pub const slate_200 = hex(226, 232, 240);
-pub const slate_300 = hex(203, 213, 225);
-pub const slate_400 = hex(148, 163, 184);
-pub const slate_500 = hex(100, 116, 139);
-pub const slate_600 = hex(71, 85, 105);
-pub const slate_700 = hex(51, 65, 85);
-pub const slate_800 = hex(30, 41, 59);
-pub const slate_900 = hex(15, 23, 42);
-pub const slate_950 = hex(2, 6, 23);
+pub const slate_50: Color = hex(248, 250, 252);
+pub const slate_100: Color = hex(241, 245, 249);
+pub const slate_200: Color = hex(226, 232, 240);
+pub const slate_300: Color = hex(203, 213, 225);
+pub const slate_400: Color = hex(148, 163, 184);
+pub const slate_500: Color = hex(100, 116, 139);
+pub const slate_600: Color = hex(71, 85, 105);
+pub const slate_700: Color = hex(51, 65, 85);
+pub const slate_800: Color = hex(30, 41, 59);
+pub const slate_900: Color = hex(15, 23, 42);
+pub const slate_950: Color = hex(2, 6, 23);
 
 // --- Blue / sky -------------------------------------------------------
-pub const sky_50 = hex(240, 249, 255);
-pub const sky_100 = hex(224, 242, 254);
-pub const sky_200 = hex(186, 230, 253);
-pub const sky_300 = hex(125, 211, 252);
-pub const sky_400 = hex(56, 189, 248);
-pub const sky_500 = hex(14, 165, 233);
-pub const sky_600 = hex(2, 132, 199);
-pub const sky_700 = hex(3, 105, 161);
-pub const sky_800 = hex(7, 89, 133);
-pub const sky_900 = hex(12, 74, 110);
+pub const sky_50: Color = hex(240, 249, 255);
+pub const sky_100: Color = hex(224, 242, 254);
+pub const sky_200: Color = hex(186, 230, 253);
+pub const sky_300: Color = hex(125, 211, 252);
+pub const sky_400: Color = hex(56, 189, 248);
+pub const sky_500: Color = hex(14, 165, 233);
+pub const sky_600: Color = hex(2, 132, 199);
+pub const sky_700: Color = hex(3, 105, 161);
+pub const sky_800: Color = hex(7, 89, 133);
+pub const sky_900: Color = hex(12, 74, 110);
 
 // --- Amber / gold -----------------------------------------------------
-pub const amber_400 = hex(251, 191, 36);
-pub const amber_500 = hex(245, 158, 11);
-pub const gold = hex(255, 203, 0); // raylib gold
+pub const amber_400: Color = hex(251, 191, 36);
+pub const amber_500: Color = hex(245, 158, 11);
+pub const gold: Color = hex(255, 203, 0); // raylib gold
 
 // --- Reds / pinks -----------------------------------------------------
-pub const red_400 = hex(248, 113, 113);
-pub const red_500 = hex(239, 68, 68);
-pub const red_600 = hex(220, 38, 38);
-pub const pink_400 = hex(244, 114, 182);
-pub const pink_500 = hex(236, 72, 153);
-pub const pink_600 = hex(219, 39, 119);
+pub const red_400: Color = hex(248, 113, 113);
+pub const red_500: Color = hex(239, 68, 68);
+pub const red_600: Color = hex(220, 38, 38);
+pub const pink_400: Color = hex(244, 114, 182);
+pub const pink_500: Color = hex(236, 72, 153);
+pub const pink_600: Color = hex(219, 39, 119);
 
 // --- Greens -----------------------------------------------------------
-pub const green_400 = hex(74, 222, 128);
-pub const green_500 = hex(34, 197, 94);
-pub const emerald_500 = hex(16, 185, 129);
+pub const green_400: Color = hex(74, 222, 128);
+pub const green_500: Color = hex(34, 197, 94);
+pub const emerald_500: Color = hex(16, 185, 129);
 
 // Additional Tailwind shades used by examples (added Session N+29 for models3d).
-pub const amber_200 = hex(253, 230, 138);
-pub const amber_300 = hex(252, 211, 77);
-pub const emerald_200 = hex(167, 243, 208);
-pub const emerald_400 = hex(52, 211, 153);
-pub const sky_950 = hex(8, 47, 73);
-pub const rose_200 = hex(254, 205, 211);
-pub const rose_400 = hex(251, 113, 133);
-pub const rose_500 = hex(244, 63, 94);
-pub const violet_400 = hex(167, 139, 250);
-pub const violet_500 = hex(139, 92, 246);
+pub const amber_200: Color = hex(253, 230, 138);
+pub const amber_300: Color = hex(252, 211, 77);
+pub const emerald_200: Color = hex(167, 243, 208);
+pub const emerald_400: Color = hex(52, 211, 153);
+pub const sky_950: Color = hex(8, 47, 73);
+pub const rose_200: Color = hex(254, 205, 211);
+pub const rose_400: Color = hex(251, 113, 133);
+pub const rose_500: Color = hex(244, 63, 94);
+pub const violet_400: Color = hex(167, 139, 250);
+pub const violet_500: Color = hex(139, 92, 246);
 
 // ============================================================================
 // Tests for Vec2 / Color / Rectangle method APIs (formerly types_test.zig).

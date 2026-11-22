@@ -6,7 +6,14 @@
 //! shown: Geno on the floor following the dance, each decision the policy's mean action through DReCon's filter
 //! (`robot_lab.PolicyShow`), with the reference beside him. No learner is loaded to watch a run, so every learner's
 //! run is watched this one way. A click on the learning curves shows the policy checkpoint nearest that minute; while
-//! the trainer runs, "reload" puts its newest policy in place of the one shown, and the character goes on.
+//! the trainer runs, "reload" puts its newest policy in place of the one shown, and the character goes on - and with
+//! "follow the newest policy" on, the lab does so itself each time the run's status says it has saved since
+//! (`followNewestPolicy`): training watched as it happens.
+//!
+//! The character can be taken by hand: a press on one of his bodies grabs it, and dragging pulls it through a spring
+//! (`rbt.Pull`, MuJoCo's perturbation) in the plane facing the camera - a press anywhere else turns the camera.
+//! Episodes restart when they end, or, with "reset episodes automatically" off, only on "reset" or the space bar: the
+//! character lives on after a fall, to show what the policy does there.
 //!
 //! The lab starts trainers too, beside its own executable: on a new run from its form, or again on a run that ended -
 //! "resume", the trainer carrying on from the folder's weights and log - and asks one to stop through its `stop` file.
@@ -39,8 +46,14 @@ const Mat = zm.Mat;
 const Quat = zm.Quat;
 const Color = zm.Color;
 const Camera3D = zm.Camera3D;
+const Ray = zm.Ray;
+const RayCollision = zm.RayCollision;
+const Vec2 = zm.Vec2;
 const vec = zm.vec;
 const qmul = zm.qmul;
+const dot3 = zm.dot3;
+const rotate = zm.rotate;
+const conjugate = zm.conjugate;
 const quatToMat = zm.quatToMat;
 const mulMat = zm.mulMat;
 const translation = zm.translation;
@@ -48,6 +61,7 @@ const scaling = zm.scaling;
 const splat = zm.splat;
 const clamp = zm.clamp;
 const log10 = zm.log10;
+const normalize3 = zm.normalize3;
 const bufPrint = std.fmt.bufPrint;
 const lessThan = std.mem.lessThan;
 const sortSlice = std.mem.sort;
@@ -67,6 +81,8 @@ const Look = struct {
     character: Color = .{ .r = 120, .g = 170, .b = 225, .a = 255 },
     reference: Color = .{ .r = 86, .g = 92, .b = 104, .a = 255 },
     floor: Color = .{ .r = 74, .g = 80, .b = 92, .a = 255 },
+    /// The hand pulling the character: the line from the grabbed point to where the pointer is, and its end.
+    hand: Color = .{ .r = 240, .g = 200, .b = 90, .a = 255 },
     /// What stops a new run from starting, in its form.
     problem: Color = .{ .r = 235, .g = 120, .b = 110, .a = 255 },
     /// The runs' colours on the curves, in the list's order, round again after the last.
@@ -107,6 +123,57 @@ const Floor = struct {
     side: f32 = 16,
     thickness: f32 = 0.2,
     top: f32 = -0.005,
+};
+
+/// How the camera follows the character: the gap between its orbit's centre and his root closed at this rate, per
+/// second - each frame of dt seconds leaves exp(-rate dt) of it, so that the camera moves alike at any frame rate:
+/// near enough locked to him while he dances (a tenth of a second closes 63% of a gap), and gliding back to him, not
+/// jumping, after a hand let him go somewhere else.
+const CameraFollow = struct {
+    rate_per_second: f32 = 10,
+
+    /// The share of the gap a frame of `dt` seconds closes: 1 - exp(-rate dt).
+    fn shareClosedIn(follow: CameraFollow, dt: f32) f32 {
+        return 1.0 - @exp(-follow.rate_per_second * dt);
+    }
+};
+
+/// The camera the lab looks through: an orbit about the character, never nearer than 1.5 m nor farther than 10 m.
+fn labOrbitOptions() z.OrbitOptions {
+    const options: z.OrbitOptions = .{ .min_distance = 1.5, .max_distance = 10.0 };
+    return options;
+}
+
+/// A HAND ON THE CHARACTER (`State.hold`): the body the pointer grabbed and the point on it, in the body's own frame;
+/// the mass the pull is set for (`rbt.pointMass`, measured as the hand took hold); and the plane the hand moves in -
+/// through the grabbed point, facing the camera as it was then - which the pointer's ray meets at the pull's target.
+/// All in the robot's world, where z is up.
+const Hold = struct {
+    body: u32,
+    point_local: Vec,
+    mass: f32,
+    plane_point: Vec,
+    plane_normal: Vec,
+    target: Vec,
+
+    /// The spring the hand pulls with (`rbt.Pull`).
+    fn pull(hold: Hold) rbt.Pull {
+        const spring: rbt.Pull = .{
+            .body = hold.body,
+            .point_local = hold.point_local,
+            .target = hold.target,
+            .mass = hold.mass,
+        };
+        return spring;
+    }
+};
+
+/// Where the pointer's ray meets one of the character's bodies (`pickCharacter`): the body, the point, and how far
+/// along the ray.
+const Pick = struct {
+    body: u32,
+    point: Vec,
+    distance: f32,
 };
 
 /// The new training's form (`drawNewRunWindow`): the run's parameters as its `run.zon` will hold them, the name of
@@ -367,9 +434,11 @@ const RunWatch = struct {
     }
 };
 
-/// Reads the run in `run_folder` again: its log's new lines into its curve, the plot's points from the curve, its
-/// judgements, and its status. A file that cannot be read leaves what was read before. Memory: every file's text is
-/// read with `gpa` and freed before it returns; the curve's and the plot's points grow with `gpa`, as `watch`'s.
+/// Reads the run in `run_folder` again: its parameters once, its log's new lines into its curve - its steps counted
+/// as its learner counts them (`lab.GenoRun.logStepsPerSecond`: a SuperTrack log's are decisions) - the plot's points
+/// from the curve, its judgements, and its status. A folder whose `run.zon` cannot be read is read no further: without
+/// its learner its log has no unit. A file that cannot be read leaves what was read before. Memory: every file's text
+/// is read with `gpa` and freed before it returns; the curve's and the plot's points grow with `gpa`, as `watch`'s.
 fn readRunWatch(
     gpa: Allocator,
     io: Io,
@@ -378,12 +447,16 @@ fn readRunWatch(
     plot: CurvePlot,
     watch: *RunWatch,
 ) !void {
+    if (watch.parameters == null) {
+        watch.parameters = readRunParameters(gpa, io, run_folder) catch null;
+    }
+    const run: lab.GenoRun = watch.parameters orelse return;
     var path_buffer: [1200]u8 = undefined;
     const log_name: []const u8 = lab.RunFile.log.fileName();
     const log_path: []const u8 = pathIn(run_folder, log_name, &path_buffer) orelse return;
     if (try native_os.readWhole(gpa, io, log_path, lab.RunFile.most_bytes)) |log_text| {
         defer gpa.free(log_text);
-        try watch.curve.readMore(gpa, log_text, physics_steps_per_second);
+        try watch.curve.readMore(gpa, log_text, run.logStepsPerSecond(physics_steps_per_second));
     }
     watch.xs.clearRetainingCapacity();
     watch.ys.clearRetainingCapacity();
@@ -410,9 +483,6 @@ fn readRunWatch(
     if (lab.RunStatus.parse(gpa, arena, terminated_status)) |status| {
         watch.status = status;
     }
-    if (watch.parameters == null) {
-        watch.parameters = readRunParameters(gpa, io, run_folder) catch null;
-    }
 }
 
 // ---- The run shown ----
@@ -437,6 +507,9 @@ const ShownRun = struct {
     policy_name_length: usize,
     name_buffer: [256]u8,
     name_length: usize,
+    /// The run's training minutes, as its status said, when its newest policy was read (`followNewestPolicy`): null
+    /// for a checkpoint, or before the run's status was read.
+    policy_minutes: ?f32 = null,
 
     fn name(self: *const ShownRun) []const u8 {
         return self.name_buffer[0..self.name_length];
@@ -513,6 +586,104 @@ const Meshes = struct {
 /// `zm.zUpToYUp` makes, (x, y, z) to (x, z, -y).
 fn yUpOf(z_up_point: Vec) Vec {
     return vec(z_up_point[0], z_up_point[2], -z_up_point[1]);
+}
+
+/// A point of the drawing, where y is up, in the robot's world, where z is up: `yUpOf` undone, (x, y, z) to (x, -z, y).
+fn zUpOf(y_up_point: Vec) Vec {
+    return vec(y_up_point[0], -y_up_point[2], y_up_point[1]);
+}
+
+/// The ray from the camera through the pointer, in the robot's world (`z.getScreenToWorldRay`, then `zUpOf`).
+fn pointerRay(f: *z.Frame, camera: Camera3D) Ray {
+    const pointer: Vec2 = z.getMousePosition(f.input);
+    const screen_width: f32 = @max(f.window.widthf(), 1);
+    const screen_height: f32 = @max(f.window.heightf(), 1);
+    const drawn_ray: Ray = z.getScreenToWorldRay(pointer, camera, screen_width, screen_height);
+    const ray: Ray = .{
+        .position = zUpOf(drawn_ray.position),
+        .direction = zUpOf(drawn_ray.direction),
+    };
+    return ray;
+}
+
+/// How far along `ray` it meets a box turned by `rotation` about `centre`, `half_extent` each way - in the box's own
+/// frame, where it is an axis-aligned box (`z.getRayCollisionBox`) and the ray keeps its lengths - or null when it
+/// meets none in front of it.
+fn rayDistanceToBox(ray: Ray, centre: Vec, rotation: Quat, half_extent: Vec) ?f32 {
+    const turned_back: Quat = conjugate(rotation);
+    const local_ray: Ray = .{
+        .position = rotate(turned_back, ray.position - centre),
+        .direction = rotate(turned_back, ray.direction),
+    };
+    const box: z.BoundingBox = .{ .min = -half_extent, .max = half_extent };
+    const collision: RayCollision = z.getRayCollisionBox(local_ray, box);
+    const in_front: bool = collision.hit and collision.distance > 0;
+    return if (in_front) collision.distance else null;
+}
+
+/// How far along `ray` it first meets geom `geom` of the robot in `data` - a sphere, a box or a capsule, as
+/// `drawRobot` draws them - or null when it meets none in front of it.
+fn rayDistanceToGeom(
+    model: *const rbt.Model,
+    data: *const rbt.Data,
+    geom: usize,
+    ray: Ray,
+) ?f32 {
+    const body: u32 = model.geom_body[geom];
+    const body_rotation: Quat = data.body_orientations[body];
+    const centre: Vec = data.body_positions[body] + rotate(body_rotation, model.geom_local_position[geom]);
+    const geom_rotation: Quat = qmul(body_rotation, model.geom_local_rotation[geom]);
+    switch (model.geom_shape[geom]) {
+        .sphere => |sphere| {
+            const collision: RayCollision = z.getRayCollisionSphere(ray, centre, sphere.radius);
+            const in_front: bool = collision.hit and collision.distance > 0;
+            return if (in_front) collision.distance else null;
+        },
+        .box => |box| return rayDistanceToBox(ray, centre, geom_rotation, box.half_extent),
+        .capsule => |capsule| {
+            // The capsule runs along its geom's local y (`drawRobot`).
+            const half_axis: Vec = rotate(geom_rotation, vec(0, capsule.half_height, 0));
+            const collision: RayCollision =
+                z.getRayCollisionCapsule(ray, centre - half_axis, centre + half_axis, capsule.radius);
+            return if (collision.hit) collision.distance else null;
+        },
+        else => return null,
+    }
+}
+
+/// THE CHARACTER's BODY UNDER THE POINTER: of every geom of the robot in `data` - the world's own left out - the one
+/// `ray` meets first, its body and the point met; null when the ray passes him by.
+fn pickCharacter(model: *const rbt.Model, data: *const rbt.Data, ray: Ray) ?Pick {
+    const world_body: u32 = 0;
+    var nearest: ?Pick = null;
+    for (0..model.geom_count) |geom| {
+        const body: u32 = model.geom_body[geom];
+        if (body == world_body) {
+            continue;
+        }
+        const distance: f32 = rayDistanceToGeom(model, data, geom, ray) orelse continue;
+        const is_nearer: bool = if (nearest) |found| distance < found.distance else true;
+        if (!is_nearer) {
+            continue;
+        }
+        nearest = .{
+            .body = body,
+            .point = ray.position + ray.direction * splat(distance),
+            .distance = distance,
+        };
+    }
+    return nearest;
+}
+
+/// Where `ray` meets the hand's plane (`Hold`), or null when it runs along it.
+fn holdPlaneTarget(ray: Ray, hold: Hold) ?Vec {
+    const facing: f32 = dot3(ray.direction, hold.plane_normal);
+    const least_facing: f32 = 1.0e-4;
+    if (@abs(facing) < least_facing) {
+        return null;
+    }
+    const distance: f32 = dot3(hold.plane_point - ray.position, hold.plane_normal) / facing;
+    return ray.position + ray.direction * splat(distance);
 }
 
 /// The robot in `data`, every geom at its body's place, tinted `tint`.
@@ -629,6 +800,20 @@ const State = struct {
     floor: Floor,
     new_run: NewRunForm,
     started: [StartedTrainer.most]StartedTrainer,
+    /// The camera's orbit (`labOrbitOptions`), and how it follows the character.
+    orbit_options: z.OrbitOptions,
+    camera_follow: CameraFollow,
+    /// A hand on the character, while the pointer holds one of his bodies (`updateHold`); null otherwise.
+    hold: ?Hold,
+    /// Scratch for a hand's mass (`rbt.pointMass`): a point's Jacobian and a column, a dof's each.
+    hold_jacobian: []Vec,
+    hold_column: []f32,
+    /// Whether an episode that ends restarts the character at once - the show's fleet told at every frame
+    /// (`robot_track.Fleet.Options.restarts_episodes`) - or only on "reset" and the space bar.
+    resets_automatically: bool,
+    /// Whether the shown run's newest policy takes the shown one's place as soon as its trainer saves it
+    /// (`followNewestPolicy`): training watched as it happens.
+    follows_newest_policy: bool,
 };
 
 fn runsFolderOf(s: *const State) []const u8 {
@@ -691,36 +876,15 @@ fn refreshRuns(s: *State, io: Io) void {
     s.selected_run = runIndexNamed(s.runs, shown.name());
 }
 
-/// Shows the run at `index` of the list with the policy file `policy_name`, in place of the one shown.
-fn showRunWith(
-    s: *State,
-    io: Io,
-    index: usize,
-    policy_name: []const u8,
-) void {
-    if (s.shown) |*previous| {
-        unloadRun(s.gpa, previous);
-        s.shown = null;
+/// The training minutes the run at `index` had saved at, as its status last said, when `policy_name` is its newest
+/// policy - which the trainer writes before its status (`geno_trainer`'s saves) - and null for a checkpoint.
+fn newestPolicyMinutes(s: *const State, index: usize, policy_name: []const u8) ?f32 {
+    const is_newest: bool = eql(u8, policy_name, lab.RunFile.policy_name);
+    if (!is_newest) {
+        return null;
     }
-    s.selected_run = index;
-    var path_buffer: [1200]u8 = undefined;
-    const name: []const u8 = s.runs[index].name;
-    const run_folder: []const u8 = pathIn(runsFolderOf(s), name, &path_buffer) orelse return;
-    const shown: ShownRun = loadRun(s.gpa, io, &s.imported, &s.clip, run_folder, policy_name) catch |err| {
-        if (err == error.NoPolicyFile) {
-            tell(s, .warn, "{s}: no policy file - a run from before them, or one not saved yet", .{name});
-        } else {
-            tell(s, .warn, "{s}: cannot show it: {s}", .{ name, @errorName(err) });
-        }
-        return;
-    };
-    s.shown = shown;
-    tell(s, .info, "showing {s}: {s}", .{ name, policy_name });
-}
-
-/// Shows the run at `index` of the list with its newest policy, in place of the one shown.
-fn showRun(s: *State, io: Io, index: usize) void {
-    showRunWith(s, io, index, lab.RunFile.policy_name);
+    const status: lab.RunStatus = s.watches[index].status orelse return null;
+    return status.training_minutes;
 }
 
 /// Reads the shown run's newest policy again and puts it in place of the one shown: the character goes on, now
@@ -739,7 +903,69 @@ fn reloadShownRun(s: *State, io: Io) void {
     shown.policy = newer_policy;
     shown.policy_name_length = newest_name.len;
     @memcpy(shown.policy_name_buffer[0..newest_name.len], newest_name);
-    tell(s, .info, "reloaded {s}: its newest policy", .{name});
+    if (s.selected_run) |index| {
+        shown.policy_minutes = newestPolicyMinutes(s, index, newest_name);
+    }
+    tell(s, .info, "reloaded {s}: its newest policy, at {d:.1} minutes", .{ name, shown.policy_minutes orelse 0 });
+}
+
+/// THE NEWEST POLICY FOLLOWED (`State.follows_newest_policy`), each time the runs are read: when the shown run's
+/// status says other minutes than those the shown policy was saved at - a newer save, or a run started over from
+/// nothing - its newest policy takes the shown one's place (`reloadShownRun`) and the character goes on. A status
+/// rewritten without a policy (a run the watchdog stopped) costs one reading of the same file. The status's minutes
+/// are taken before the reading, so a file that cannot be read is tried again at the next save, not at every read
+/// of the runs. A checkpoint picked on the curves stays: it was asked for.
+fn followNewestPolicy(s: *State, io: Io) void {
+    if (!s.follows_newest_policy) {
+        return;
+    }
+    const shown: *ShownRun = if (s.shown) |*loaded| loaded else return;
+    const index: usize = s.selected_run orelse return;
+    const is_newest: bool = eql(u8, shown.policyName(), lab.RunFile.policy_name);
+    if (!is_newest) {
+        return;
+    }
+    const status: lab.RunStatus = s.watches[index].status orelse return;
+    const saved_since: bool = if (shown.policy_minutes) |minutes| status.training_minutes != minutes else true;
+    if (!saved_since) {
+        return;
+    }
+    shown.policy_minutes = status.training_minutes;
+    reloadShownRun(s, io);
+}
+
+/// Shows the run at `index` of the list with the policy file `policy_name`, in place of the one shown.
+fn showRunWith(
+    s: *State,
+    io: Io,
+    index: usize,
+    policy_name: []const u8,
+) void {
+    if (s.shown) |*previous| {
+        unloadRun(s.gpa, previous);
+        s.shown = null;
+    }
+    s.hold = null;
+    s.selected_run = index;
+    var path_buffer: [1200]u8 = undefined;
+    const name: []const u8 = s.runs[index].name;
+    const run_folder: []const u8 = pathIn(runsFolderOf(s), name, &path_buffer) orelse return;
+    const shown: ShownRun = loadRun(s.gpa, io, &s.imported, &s.clip, run_folder, policy_name) catch |err| {
+        if (err == error.NoPolicyFile) {
+            tell(s, .warn, "{s}: no policy file - a run from before them, or one not saved yet", .{name});
+        } else {
+            tell(s, .warn, "{s}: cannot show it: {s}", .{ name, @errorName(err) });
+        }
+        return;
+    };
+    s.shown = shown;
+    s.shown.?.policy_minutes = newestPolicyMinutes(s, index, policy_name);
+    tell(s, .info, "showing {s}: {s}", .{ name, policy_name });
+}
+
+/// Shows the run at `index` of the list with its newest policy, in place of the one shown.
+fn showRun(s: *State, io: Io, index: usize) void {
+    showRunWith(s, io, index, lab.RunFile.policy_name);
 }
 
 // ---- Starting and stopping runs ----
@@ -1051,6 +1277,8 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.font = try z.loadFont(f, gpa, roboto_mono_ttf, 16);
     s.ui_host = z.UiHost.init(gpa, s.font);
     s.cam = z.OrbitCamera.init(vec(0.0, 0.7, 0), 4.0);
+    s.orbit_options = labOrbitOptions();
+    s.camera_follow = .{};
     s.meshes = .{
         .sphere = try z.genMeshSphere(gpa, 1.0, 10, 8),
         .cube = try z.genMeshCube(gpa, 1.0, 1.0, 1.0),
@@ -1069,6 +1297,11 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.imported = try rmj.build(gpa, &s.robot, physics_options);
     s.clip = try dance.Clip.fromBytes(gpa, dance_zclip);
     s.ghost = try rbt.Data.init(gpa, &s.imported.model);
+    s.hold = null;
+    s.hold_jacobian = try gpa.alloc(Vec, s.imported.model.dof_count);
+    s.hold_column = try gpa.alloc(f32, s.imported.model.dof_count);
+    s.resets_automatically = true;
+    s.follows_newest_policy = true;
     z.profiler.freeze();
 
     s.runs = &.{};
@@ -1117,6 +1350,8 @@ fn deinit(gpa: Allocator, s: *State) void {
     }
     gpa.free(s.watches);
     native_os.freeFolderEntries(gpa, s.runs);
+    gpa.free(s.hold_column);
+    gpa.free(s.hold_jacobian);
     s.ghost.deinit();
     s.clip.deinit();
     s.imported.deinit();
@@ -1288,15 +1523,30 @@ fn showPickedPoint(s: *State, io: Io, pick: CurvePick) void {
     showRunWith(s, io, pick.run_index, policy_name);
 }
 
-/// The panel: the runs, the shown run's batch, and reloading. Whether the mouse is the panel's.
-fn drawPanel(s: *State, f: *z.Frame) bool {
+/// What the panel keeps for itself this frame: the pointer - over a window, or a widget in use - and the keyboard - a
+/// text field being typed in.
+const PanelCapture = struct {
+    pointer: bool,
+    keyboard: bool,
+};
+
+/// Starts the shown character's episode again (`lab.PolicyShow.restart`): "reset" and the space bar.
+fn resetShownCharacter(s: *State) void {
+    const shown: *ShownRun = if (s.shown) |*loaded| loaded else return;
+    const character: usize = 0;
+    shown.show.restart(character);
+}
+
+/// The panel: the runs, the shown run's batch, reloading, and the shown character's episodes. What the panel keeps
+/// for itself this frame (`PanelCapture`).
+fn drawPanel(s: *State, f: *z.Frame) PanelCapture {
     const u: ui.Ui = s.ui_host.begin(f);
-    const captured: bool = u.wantCaptureMouse();
-    if (u.window("lab", .{ .initial_pos = .{ 4, 4 }, .initial_size = .{ 380, 470 } })) |window| {
+    const pointer_captured: bool = u.wantCaptureMouse();
+    if (u.window("lab", .{ .initial_pos = .{ 4, 4 }, .initial_size = .{ 380, 500 } })) |window| {
         defer window.close();
         if (comptime is_browser) {
             u.text("run folders are listed natively", .{});
-            return captured;
+            return .{ .pointer = pointer_captured, .keyboard = u.wantCaptureKeyboard() };
         }
         const io: Io = native_os.servicesIo();
         const now_seconds: i64 = native_os.wallClockSeconds(io);
@@ -1348,15 +1598,75 @@ fn drawPanel(s: *State, f: *z.Frame) bool {
         if (u.button("reload policy", .{})) {
             reloadShownRun(s, io);
         }
+        _ = u.checkbox("follow the newest policy", &s.follows_newest_policy);
         if (s.shown) |*shown| {
             u.text("{s}, {s}", .{ shown.parameters.task.motion.label(), shown.policyName() });
+            // The episodes: restarted as they end, or only when asked.
+            _ = u.checkbox("reset episodes automatically", &s.resets_automatically);
+            if (u.button("reset", .{})) {
+                resetShownCharacter(s);
+            }
+            u.sameLine(.{});
+            u.text("or space; drag him to pull", .{});
         }
         u.text("{s}", .{s.status.slice()});
     }
     if (comptime !is_browser) {
         drawNewRunWindow(s, u, native_os.servicesIo());
     }
-    return captured;
+    return .{ .pointer = pointer_captured, .keyboard = u.wantCaptureKeyboard() };
+}
+
+/// THE HAND, each frame before the camera moves (`Hold`): a press of the pointer on the character - one finger, the
+/// panel not under it - takes hold of the body under it, measuring the point's mass there (`rbt.pointMass`); while
+/// held, the pointer's ray through the hand's plane is the pull's target, given to the show's fleet
+/// (`robot_track.Fleet.pulls`), which pulls at every physics step; the pointer up or a second finger down lets go.
+/// `camera` is the one the frame's picture was drawn with, the pointer's ray its own.
+fn updateHold(s: *State, f: *z.Frame, camera: Camera3D, panel_has_pointer: bool) void {
+    const shown: *ShownRun = if (s.shown) |*loaded| loaded else {
+        s.hold = null;
+        return;
+    };
+    const character: usize = 0;
+    const fleet: *track.Fleet = shown.show.fleet;
+    const touches: i32 = z.getTouchPointCount(f.input);
+    const one_pointer: bool = touches <= 1;
+    const pointer_down: bool = z.isMouseButtonDown(f.input, .left) and one_pointer;
+    if (s.hold != null and !pointer_down) {
+        s.hold = null;
+        fleet.pulls[character] = null;
+        return;
+    }
+    const ray: Ray = pointerRay(f, camera);
+    if (s.hold) |*hold| {
+        hold.target = holdPlaneTarget(ray, hold.*) orelse hold.target;
+        fleet.pulls[character] = hold.pull();
+        return;
+    }
+    const pressed: bool = z.isMouseButtonPressed(f.input, .left) and one_pointer and !panel_has_pointer;
+    if (!pressed) {
+        return;
+    }
+    // The character as he stands now, every derived quantity current - a reset may have left them stale.
+    const model: *const rbt.Model = &s.imported.model;
+    const data: *rbt.Data = &fleet.data[character];
+    rbt.forward(model, data);
+    const pick: Pick = pickCharacter(model, data, ray) orelse return;
+    const body_rotation: Quat = data.body_orientations[pick.body];
+    const point_local: Vec = rotate(conjugate(body_rotation), pick.point - data.body_positions[pick.body]);
+    const point_mass: f32 = rbt.pointMass(model, data, pick.body, pick.point, s.hold_jacobian, s.hold_column);
+    // The hand's plane faces the camera: its normal the camera's line of sight, in the robot's world.
+    const line_of_sight: Vec = normalize3(zUpOf(camera.target - camera.position));
+    const hold: Hold = .{
+        .body = pick.body,
+        .point_local = point_local,
+        .mass = point_mass,
+        .plane_point = pick.point,
+        .plane_normal = line_of_sight,
+        .target = pick.point,
+    };
+    s.hold = hold;
+    fleet.pulls[character] = hold.pull();
 }
 
 fn update(f: *z.Frame, s: *State) void {
@@ -1369,26 +1679,41 @@ fn update(f: *z.Frame, s: *State) void {
         const is_read_due: bool = s.since_runs_read_seconds >= s.curves_refresh.interval_seconds;
         if (is_read_due) {
             readRuns(s, native_os.servicesIo());
+            followNewestPolicy(s, native_os.servicesIo());
         }
         watchStartedTrainers(s);
     }
-    // The character moves at real time whatever the frame rate, and never faster (`stepShowForFrame`).
+    // The character moves at real time whatever the frame rate, and never faster (`stepShowForFrame`) - his episodes
+    // restarted as they end, or only when asked (`State.resets_automatically`).
     if (s.shown) |*shown| {
+        shown.show.fleet.options.restarts_episodes = s.resets_automatically;
         const timestep: f32 = model.opt.timestep;
         stepShowForFrame(&shown.show, &shown.policy, &shown.clock, timestep, dt);
     }
 
     z.clearViewport(f, s.look.background);
     defer s.ui_host.render(f);
-    const captured: bool = drawPanel(s, f);
-    // The camera follows the character, whom the dance carries around the room: it orbits his root.
+    const panel: PanelCapture = drawPanel(s, f);
+    // The space bar resets the character, when no text field is being typed in.
+    if (!panel.keyboard and z.isKeyPressed(f.input, .space)) {
+        resetShownCharacter(s);
+    }
+    // The hand, before the camera (`updateHold`): a press on the character is the hand's, anywhere else the camera's.
+    const camera_before: Camera3D = s.cam.camera(s.orbit_options);
+    updateHold(s, f, camera_before, panel.pointer);
+    // The camera follows the character, whom the dance carries around the room: it orbits his root, eased toward it
+    // (`CameraFollow`) - but stays put while a hand holds him, so the hand's plane stays where the pointer sees it.
     if (s.shown) |*shown| {
         const root_body: usize = 1;
         const character: *const rbt.Data = &shown.show.fleet.data[0];
-        const root_position: Vec = character.body_positions[root_body];
-        s.cam.target = yUpOf(root_position);
+        const root_drawn: Vec = yUpOf(character.body_positions[root_body]);
+        if (s.hold == null) {
+            const eased_share: f32 = s.camera_follow.shareClosedIn(dt);
+            s.cam.target += (root_drawn - s.cam.target) * splat(eased_share);
+        }
     }
-    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.5, .max_distance = 10.0 });
+    const camera_blocked: bool = panel.pointer or s.hold != null;
+    const cam: Camera3D = s.cam.update(f, camera_blocked, s.orbit_options);
     z.beginMode3D(gl, cam);
     z.drawGrid(gl, 20, 0.5);
     drawFloor(gl, &s.meshes.cube, &s.transform, s.floor, s.look.floor);
@@ -1403,6 +1728,13 @@ fn update(f: *z.Frame, s: *State) void {
         rbt.kinematics(model, &s.ghost);
         drawRobot(gl, model, &s.meshes, &s.transform, &s.ghost, s.look.reference);
         drawRobot(gl, model, &s.meshes, &s.transform, &fleet.data[0], s.look.character);
+        // The hand: a line from the grabbed point to where the pointer has it, and a bead at the end.
+        if (s.hold) |hold| {
+            const grabbed_point: Vec = hold.pull().point(&fleet.data[0]);
+            const bead: z.SphereDesc = .{ .radius = 0.03, .rings = 8, .slices = 8, .color = s.look.hand };
+            z.drawLine3D(gl, yUpOf(grabbed_point), yUpOf(hold.target), s.look.hand);
+            z.drawSphere(gl, yUpOf(hold.target), bead);
+        }
     }
     z.endMode3D(gl);
 }

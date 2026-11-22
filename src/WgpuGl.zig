@@ -94,7 +94,7 @@ const GroupVertex = struct {
     color: [4]u8,
 };
 
-const max_matrix_depth = 32;
+const max_matrix_depth: usize = 32;
 
 // ============================================================================
 // Matrix helpers (column-major [4]Vec, matching zm.Mat / glFrustum)

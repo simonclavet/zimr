@@ -29,11 +29,11 @@ const Vec2 = zm.Vec2;
 const Color = zm.Color;
 const clamp01 = zm.clamp01;
 
-const chan_cursor = 0; // unreliable, unordered
-const chan_click = 1; // reliable, ordered
-const ripple_life = 0.8; // seconds
-const ripple_max_r = 46.0; // px at end of life
-const max_ripples = 24;
+const chan_cursor: u8 = 0; // unreliable, unordered
+const chan_click: u8 = 1; // reliable, ordered
+const ripple_life: f32 = 0.8; // seconds
+const ripple_max_r: f32 = 46.0; // px at end of life
+const max_ripples: usize = 24;
 
 // A peer's latest cursor position (normalized), tracked from their messages.
 const PeerView = struct {

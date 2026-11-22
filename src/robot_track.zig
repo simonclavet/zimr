@@ -154,8 +154,6 @@ fn bodyIndexByName(body_names: []const []const u8, wanted: []const u8) ?usize {
     return null;
 }
 
-/// Read the state out of a forward-current `Data` - the simulator's, or a clip frame's after
-/// `rbt.forward`.
 /// Which bodies are exempt from `unexpected_contact`: `exempt` names resolved against `body_names` (indexed like the
 /// model's bodies). A name that is not a body is an ERROR - a typo in a robot's exempt list would otherwise
 /// silently exempt nothing, and its feet would end every stance's swing. The empty name never matches (it is the
@@ -199,6 +197,8 @@ pub fn exemptFromContact(state: *State, exempt: []const bool) void {
     }
 }
 
+/// Read the state out of a forward-current `Data` - the simulator's, or a clip frame's after
+/// `rbt.forward`.
 pub fn stateOf(m: *const rbt.Model, d: *const rbt.Data, out: *State) void {
     // The state is read from the bodies' poses and velocities: refused if they are not current (a velocity written
     // behind the simulator's back with nothing recomputed), rather than read from before the change.
@@ -233,6 +233,109 @@ pub fn localUpColumn(bodies: usize) usize {
     return (bodies - 1) * (3 + 6 + 3 + 3 + 1);
 }
 
+/// Where body `body`'s position's first number sits in `local`'s output (`localHeightColumn`'s blocks): the first
+/// block.
+pub fn localPositionColumn(bodies: usize, body: usize) usize {
+    assertf(body > 0 and body < bodies, @src(), "body {d} of {d}: a character body", .{ body, bodies });
+    return (body - 1) * 3;
+}
+
+/// Where body `body`'s rotation's two axes begin (`localHeightColumn`'s blocks): after every body's position.
+pub fn localRotationColumn(bodies: usize, body: usize) usize {
+    return (bodies - 1) * 3 + (body - 1) * 6;
+}
+
+/// Where body `body`'s velocity's first number sits in `local`'s output (`localHeightColumn`'s blocks): after every
+/// body's position and two axes. In the root's frame, as every block is - for the root itself, its own velocity in its
+/// own frame, which the root in imagination integrates (robot_latent_kit's `ImaginedRoot`).
+pub fn localVelocityColumn(bodies: usize, body: usize) usize {
+    return (bodies - 1) * (3 + 6) + (body - 1) * 3;
+}
+
+/// Where body `body`'s angular velocity's first number sits (`localVelocityColumn`): after every body's velocity.
+pub fn localAngularColumn(bodies: usize, body: usize) usize {
+    return (bodies - 1) * (3 + 6 + 3) + (body - 1) * 3;
+}
+
+/// How the ROOT's COST in the policy's loss weighs against the bodies' features, each a share of the bodies' weight:
+/// the root's position against the bodies' positions, its rotation against theirs.
+pub const RootCostShares = extern struct {
+    /// SuperMimic's reward weighs its root's two terms at half its body terms (`rbt.SuperMimicScales`: a root weight
+    /// of 0.5 against a body weight of 1, at the same scales, 0.3 m and 0.4 rad).
+    position: f32 = 0.5,
+    rotation: f32 = 0.5,
+};
+
+/// The root's cost's two weights (`rootCostWeights`): per m^2 of the roots' squared distance, and per unit of the
+/// squared change of the root's two axes.
+pub const RootCostWeights = struct {
+    position: f32,
+    rotation: f32,
+};
+
+/// THE ROOT's COST's WEIGHTS (robot_latent_kit's `ImaginedRoot`): the weight on the squared distance between the
+/// imagined root and the reference's (per m^2), and on the squared change of the root's two axes (`zm.poseSeenFrom`'s
+/// last six numbers), set so that the root weighs against the bodies in the policy's loss as SuperMimic's reward
+/// weighs its root against its bodies (`RootCostShares`).
+///
+/// SuperMimic's terms are w exp(-e / s^2), so near the reference each costs w / s^2 for each unit of its squared error
+/// e: the bodies' positions 1 / 0.3^2 per m^2 of their mean squared distance, the root's 0.5 / 0.3^2 per m^2 - a half.
+/// Our loss is a mean over the F normalised features, (1 / F) sum (dx / spread)^2, and the bodies' positions are 3 of
+/// them a body. With each number's error in proportion to its spread - errors as large as the motion the number shows
+/// - the N character bodies other than the root cost (N / F) / v per m^2 of their mean squared distance, v the mean
+/// variance (spread^2) of their position numbers. So the root's position costs `shares.position` of that:
+///
+///     w_position = share x (N / F) / mean variance of the bodies' position numbers
+///
+/// The rotations alike: a small turn of angle t about an axis at random moves a rotation's two axes by 4/3 t^2 on
+/// average (squared and summed), so the bodies' rotations cost (4/3)(N / F) / v per rad^2, the root's six numbers
+/// 4/3 t^2 w_rotation, and
+///
+///     w_rotation = share x (N / F) / mean variance of the bodies' rotation numbers
+///
+/// The root's own position and two axes are left out: in its own frame they never move, their spreads floored. A
+/// mean of variances, not of their inverses, so the bodies whose numbers move least - near the root - do not decide
+/// it. `spreads` is a feature normaliser's (`localSize(bodies)` of them).
+pub fn rootCostWeights(
+    spreads: []const f32,
+    bodies: usize,
+    root: usize,
+    shares: RootCostShares,
+) RootCostWeights {
+    assertf(spreads.len == localSize(bodies), @src(), "{d} spreads for {d} features", .{
+        spreads.len,
+        localSize(bodies),
+    });
+    var position_variance_sum: f64 = 0;
+    var rotation_variance_sum: f64 = 0;
+    var measured_bodies: usize = 0;
+    for (1..bodies) |body| {
+        if (body == root) {
+            continue;
+        }
+        const position_at: usize = localPositionColumn(bodies, body);
+        const rotation_at: usize = localRotationColumn(bodies, body);
+        for (spreads[position_at..][0..3]) |spread| {
+            position_variance_sum += @as(f64, spread) * @as(f64, spread);
+        }
+        for (spreads[rotation_at..][0..6]) |spread| {
+            rotation_variance_sum += @as(f64, spread) * @as(f64, spread);
+        }
+        measured_bodies += 1;
+    }
+    assertf(measured_bodies > 0, @src(), "a model of {d} bodies: none beside the root to weigh it against", .{bodies});
+    const body_count: f64 = @floatFromInt(measured_bodies);
+    const feature_count: f64 = @floatFromInt(spreads.len);
+    const position_variance: f64 = position_variance_sum / (3.0 * body_count);
+    const rotation_variance: f64 = rotation_variance_sum / (6.0 * body_count);
+    const bodies_per_feature: f64 = body_count / feature_count;
+    const weights: RootCostWeights = .{
+        .position = @floatCast(shares.position * bodies_per_feature / position_variance),
+        .rotation = @floatCast(shares.rotation * bodies_per_feature / rotation_variance),
+    };
+    return weights;
+}
+
 fn writeVec(out: []f32, at: *usize, v: Vec) void {
     out[at.*] = v[0];
     out[at.* + 1] = v[1];
@@ -247,8 +350,8 @@ fn writeVecAt(out: []f32, at: usize, v: Vec) void {
     out[at + 2] = v[2];
 }
 
-/// A rotation as two axes (`rbt.twoAxis`, in robot.zig so the device's observation shares it).
-pub const twoAxis = rbt.twoAxis;
+/// A rotation as two axes (`zm.twoAxis`, where the device's observation and the kit's kernels share it).
+pub const twoAxis = zm.twoAxis;
 
 /// The state as a network sees it: everything in the root's frame, heights and up kept in world - each body's
 /// features by `rbt.localBody`, laid out by kind, every body's position first, then every body's rotation, velocity,
@@ -272,14 +375,14 @@ pub fn local(state: State, root: usize, out: []f32) void {
     // Body 0 is the world. Rooting at it would leave every position in world space - the
     // representation would look fine and quietly carry the character's absolute position.
     assertf(root > 0 and root < state.bodies(), @src(), "root body {d} is not a character body", .{root});
-    const character_bodies: usize = state.bodies() - 1;
     const to_local: Quat = conjugate(state.rotations[root]);
     const origin: Vec = state.positions[root];
-    const rotations_at: usize = 3 * character_bodies;
-    const velocities_at: usize = 9 * character_bodies;
-    const angular_at: usize = 12 * character_bodies;
-    const heights_at: usize = 15 * character_bodies;
-    const up_at: usize = 16 * character_bodies;
+    const layout: rbt.LocalLayout = .of(@intCast(state.bodies()));
+    const rotations_at: usize = layout.rotations_at;
+    const velocities_at: usize = layout.velocities_at;
+    const angular_at: usize = layout.angular_at;
+    const heights_at: usize = layout.heights_at;
+    const up_at: usize = layout.up_at;
     for (1..state.bodies()) |b| {
         const features: rbt.LocalBody = rbt.localBody(
             to_local,
@@ -301,52 +404,8 @@ pub fn local(state: State, root: usize, out: []f32) void {
     writeVecAt(out, up_at, rotate(to_local, vec(0, 0, 1)));
 }
 
-/// Some unit vector perpendicular to `a` - whichever axis `a` leans on least, crossed with it.
-fn orthogonalTo(a: Vec) Vec {
-    const axis: Vec = if (@abs(a[0]) < 0.9) vec(1, 0, 0) else vec(0, 1, 0);
-    return cross(a, axis);
-}
-
-/// The quaternion of the rotation whose matrix has these columns. Shepperd's method: build it from
-/// whichever diagonal term is largest, so the square root is never taken of something near zero.
-fn quatFromColumns(x: Vec, y: Vec, z: Vec) Quat {
-    const trace: f32 = x[0] + y[1] + z[2];
-    var q: Quat = undefined;
-    if (trace > 0.0) {
-        const s: f32 = @sqrt(trace + 1.0) * 2.0;
-        q = .{ (y[2] - z[1]) / s, (z[0] - x[2]) / s, (x[1] - y[0]) / s, 0.25 * s };
-    } else if (x[0] > y[1] and x[0] > z[2]) {
-        const s: f32 = @sqrt(1.0 + x[0] - y[1] - z[2]) * 2.0;
-        q = .{ 0.25 * s, (y[0] + x[1]) / s, (z[0] + x[2]) / s, (y[2] - z[1]) / s };
-    } else if (y[1] > z[2]) {
-        const s: f32 = @sqrt(1.0 + y[1] - x[0] - z[2]) * 2.0;
-        q = .{ (y[0] + x[1]) / s, 0.25 * s, (z[1] + y[2]) / s, (z[0] - x[2]) / s };
-    } else {
-        const s: f32 = @sqrt(1.0 + z[2] - x[0] - y[1]) * 2.0;
-        q = .{ (z[0] + x[2]) / s, (z[1] + y[2]) / s, 0.25 * s, (x[1] - y[0]) / s };
-    }
-    return normalize4(q);
-}
-
-/// Two axes back to a rotation. They needn't be unit or perpendicular - whatever a network hands
-/// over gets orthonormalised: the first axis is taken as it is, the second is straightened against
-/// it, and the third follows from the cross product.
-pub fn fromTwoAxis(axes: [6]f32) Quat {
-    // Total, on purpose. The axes come from a network, and early in training a network happily
-    // outputs two near-zero vectors, or two parallel ones - either of which would divide by zero
-    // here and hand NaN to everything downstream, where it is very hard to trace back. So a
-    // degenerate axis falls back to a fixed one, which is wrong but finite, and training moves on.
-    const first: Vec = vec(axes[0], axes[1], axes[2]);
-    const a: Vec = if (length3(first) > 1.0e-6) normalize3(first) else vec(1, 0, 0);
-    const raw: Vec = vec(axes[3], axes[4], axes[5]);
-    const across: Vec = raw - a * splat(dot3(raw, a));
-    const b: Vec = if (length3(across) > 1.0e-6)
-        normalize3(across)
-    else
-        normalize3(orthogonalTo(a));
-    const c: Vec = cross(a, b);
-    return quatFromColumns(a, b, c);
-}
+/// Two axes back to a rotation (`zm.fromTwoAxis`): one definition for the learners and the device.
+pub const fromTwoAxis = zm.fromTwoAxis;
 
 /// The rotation an angular velocity produces over `dt` (exact for a constant `w`).
 fn rotationOver(w: Vec, dt: f32) Quat {
@@ -635,6 +694,185 @@ pub fn superMimicTracking(
     return rbt.superMimicTrackingOver(rbt.BodySlices, bodiesOf(sim), bodiesOf(reference), root, scales);
 }
 
+/// HOW TRACKING QUALITY IS JUDGED - BlinkMimic's measures (its `tools/eval_metrics.py`), on our robot's geometry.
+/// BlinkMimic counts its robot's ankle link as touching the floor when the link's origin is within 12 mm of its
+/// flat-foot height; we read each foot body's own lowest point (`State.lowest`), so the same 12 mm is measured from
+/// the floor itself, whatever the robot's feet.
+pub const QualityRule = struct {
+    /// A foot body touches the floor while its lowest point is below this height, in m.
+    contact_height: f32 = 0.012,
+};
+
+/// ONE DECISION's TRACKING QUALITY for one character (`measureQuality`), the character and its reference after the
+/// decision. The feet are the task's floor-touching bodies (`Task.contact_exempt`).
+pub const QualityStep = struct {
+    /// SuperMimic's errors: the bodies' re-anchored positions (m^2) and rotations (rad^2), the mean over the bodies;
+    /// the root's distance from the reference's (m), drift and all.
+    body_position_error: f32 = 0,
+    body_rotation_error: f32 = 0,
+    root_distance: f32 = 0,
+    /// The joints' mean error, in radians: a hinge's angle difference, a ball's angle between the two rotations.
+    joint_error: f32 = 0,
+    /// The foot bodies looked at, and those whose contact - touching the floor, or not - is the reference's.
+    feet: u32 = 0,
+    contacts_agreeing: u32 = 0,
+    /// The feet touching the floor, and their horizontal speeds summed (m/s): a foot that slides while it stands.
+    /// The same for the reference, whose own slip - from its capture and retargeting - is the floor no policy can
+    /// be asked to go below.
+    contacts: u32 = 0,
+    slip_speed_sum: f32 = 0,
+    reference_contacts: u32 = 0,
+    reference_slip_speed_sum: f32 = 0,
+    /// How deep the feet are below the floor, in m: the mean over the feet of each one's depth, 0 above it.
+    penetration: f32 = 0,
+};
+
+/// THE QUALITY OF ONE DECISION (`QualityStep`) but its joints' (`jointError`): `sim` and `reference` whole-body
+/// states after it - `sim` read before any body is exempted from contact, so its feet's lowest points are their own -
+/// the feet as the task's floor-touching bodies (`feet`, one flag a body), and the rule.
+pub fn measureQuality(
+    sim: State,
+    reference: State,
+    root: usize,
+    feet: []const bool,
+    rule: QualityRule,
+) QualityStep {
+    const scales: SuperMimicScales = .{};
+    const tracking: SuperMimicTracking = superMimicTracking(sim, reference, root, scales);
+    var step: QualityStep = .{
+        .body_position_error = tracking.body_position_error,
+        .body_rotation_error = tracking.body_rotation_error,
+        .root_distance = @sqrt(tracking.root_position_error),
+    };
+    // The feet.
+    var penetration_sum: f32 = 0;
+    for (feet, 0..) |is_foot, body| {
+        if (!is_foot) {
+            continue;
+        }
+        step.feet += 1;
+        const touches: bool = sim.lowest[body] < rule.contact_height;
+        const reference_touches: bool = reference.lowest[body] < rule.contact_height;
+        step.contacts_agreeing += @intFromBool(touches == reference_touches);
+        if (touches) {
+            const velocity: Vec = sim.velocities[body];
+            step.contacts += 1;
+            step.slip_speed_sum += @sqrt(velocity[0] * velocity[0] + velocity[1] * velocity[1]);
+        }
+        if (reference_touches) {
+            const reference_velocity: Vec = reference.velocities[body];
+            step.reference_contacts += 1;
+            const reference_speed_squared: f32 =
+                reference_velocity[0] * reference_velocity[0] + reference_velocity[1] * reference_velocity[1];
+            step.reference_slip_speed_sum += @sqrt(reference_speed_squared);
+        }
+        penetration_sum += @max(-sim.lowest[body], 0);
+    }
+    step.penetration = penetration_sum / float(@max(step.feet, 1));
+    return step;
+}
+
+/// THE JOINTS' MEAN ERROR, in radians, over every joint but the free root: a hinge's angle difference (a slide's
+/// distance, in m), a ball's angle between its rotation and the reference's.
+pub fn jointError(
+    m: *const rbt.Model,
+    joint_positions: []const f32,
+    reference_joint_positions: []const f32,
+) f32 {
+    var joint_error_sum: f32 = 0;
+    var joints_measured: u32 = 0;
+    for (0..m.joint_count) |joint| {
+        const first: usize = m.joint_first_coordinate[joint];
+        const joint_error: f32 = switch (m.joint_type[joint]) {
+            .free => continue,
+            .ball => ball: {
+                const own: Quat = joint_positions[first..][0..4].*;
+                const wanted: Quat = reference_joint_positions[first..][0..4].*;
+                break :ball angleBetween(own, wanted);
+            },
+            .hinge, .slide => @abs(joint_positions[first] - reference_joint_positions[first]),
+        };
+        joint_error_sum += joint_error;
+        joints_measured += 1;
+    }
+    return joint_error_sum / float(@max(joints_measured, 1));
+}
+
+/// Degrees in a radian, for the quality's reports.
+const degrees_per_radian: f64 = 180.0 / pi;
+
+/// A JUDGEMENT's TRACKING QUALITY: its decisions' `QualityStep`s summed, over every start's first episode while it
+/// lasted - and the means BlinkMimic reports, in its units.
+pub const QualitySums = struct {
+    steps: usize = 0,
+    body_position_error_sum: f64 = 0,
+    body_rotation_error_sum: f64 = 0,
+    root_distance_sum: f64 = 0,
+    joint_error_sum: f64 = 0,
+    foot_steps: usize = 0,
+    contacts_agreeing: usize = 0,
+    contacts: usize = 0,
+    slip_speed_sum: f64 = 0,
+    reference_contacts: usize = 0,
+    reference_slip_speed_sum: f64 = 0,
+    penetration_sum: f64 = 0,
+
+    pub fn add(sums: *QualitySums, step: QualityStep) void {
+        sums.steps += 1;
+        sums.body_position_error_sum += step.body_position_error;
+        sums.body_rotation_error_sum += step.body_rotation_error;
+        sums.root_distance_sum += step.root_distance;
+        sums.joint_error_sum += step.joint_error;
+        sums.foot_steps += step.feet;
+        sums.contacts_agreeing += step.contacts_agreeing;
+        sums.contacts += step.contacts;
+        sums.slip_speed_sum += step.slip_speed_sum;
+        sums.reference_contacts += step.reference_contacts;
+        sums.reference_slip_speed_sum += step.reference_slip_speed_sum;
+        sums.penetration_sum += step.penetration;
+    }
+
+    /// The bodies' position error, the root mean square over the decisions, in cm.
+    pub fn bodyPositionCm(sums: QualitySums) f32 {
+        return @floatCast(100 * @sqrt(sums.body_position_error_sum / float64(@max(sums.steps, 1))));
+    }
+
+    /// The bodies' rotation error, the root mean square over the decisions, in degrees.
+    pub fn bodyRotationDegrees(sums: QualitySums) f32 {
+        return @floatCast(degrees_per_radian * @sqrt(sums.body_rotation_error_sum / float64(@max(sums.steps, 1))));
+    }
+
+    /// The root's mean distance from the reference's, in cm.
+    pub fn rootDistanceCm(sums: QualitySums) f32 {
+        return @floatCast(100 * sums.root_distance_sum / float64(@max(sums.steps, 1)));
+    }
+
+    /// The joints' mean error, in degrees.
+    pub fn jointDegrees(sums: QualitySums) f32 {
+        return @floatCast(degrees_per_radian * sums.joint_error_sum / float64(@max(sums.steps, 1)));
+    }
+
+    /// The feet's mean horizontal speed while touching the floor, in cm/s.
+    pub fn footSlipCmPerSecond(sums: QualitySums) f32 {
+        return @floatCast(100 * sums.slip_speed_sum / float64(@max(sums.contacts, 1)));
+    }
+
+    /// The reference's own foot slip, in cm/s.
+    pub fn referenceFootSlipCmPerSecond(sums: QualitySums) f32 {
+        return @floatCast(100 * sums.reference_slip_speed_sum / float64(@max(sums.reference_contacts, 1)));
+    }
+
+    /// The share of feet, decision by decision, touching the floor exactly when the reference's do.
+    pub fn contactAgreement(sums: QualitySums) f32 {
+        return float(sums.contacts_agreeing) / float(@max(sums.foot_steps, 1));
+    }
+
+    /// The feet's mean depth below the floor, in mm.
+    pub fn penetrationMm(sums: QualitySums) f32 {
+        return @floatCast(1000 * sums.penetration_sum / float64(@max(sums.steps, 1)));
+    }
+};
+
 /// Measure one against the other. Both states are whole-body states in world space (`stateOf`);
 /// `root` is the character's root body.
 pub fn trackingError(sim: State, reference: State, root: usize) TrackingError {
@@ -753,6 +991,10 @@ pub const WindowStart = enum {
     after_loss,
 };
 
+/// WHAT WAS APPLIED JUST BEFORE A RECORD (`Replay.Books.appliedBeforeAt`): rest - every episode opens from it - or the
+/// action recorded one step earlier.
+pub const AppliedBefore = enum { rest, previous_record };
+
 /// Experience, kept per environment in a ring: what the simulator was, what was done to it, and
 /// which stretch of unbroken motion it belongs to.
 ///
@@ -862,7 +1104,210 @@ pub const Replay = struct {
     }
 
     fn slot(self: Replay, env: usize, index: u64) usize {
-        return env * self.capacity + @as(usize, @intCast(index % self.capacity));
+        return self.books().slot(env, index);
+    }
+
+    /// THE REPLAY's BOOKS: what drawing a window reads of the rings - per record its segment, its step in its episode
+    /// and whether that step came after the loss, per environment how many records it has written - as a view of
+    /// slices, owning nothing. A replay's books are its own fields (`books`). A learner whose records are kept on a
+    /// device keeps the same arrays on the host, advanced from what the device reports at each decision, and draws
+    /// its windows by this same rule (`sampleWindowStarting`), so the two cannot draw differently.
+    pub const Books = struct {
+        envs: usize,
+        capacity: usize,
+        segments: []const u32,
+        episode_steps: []const ?u32,
+        after_loss: []const bool,
+        written: []const u64,
+        /// Per record, the reference frame it tracks and its clip - and each clip's frames, which the learner drawing
+        /// starts gives (`sampleStart`): how much of its clip follows a record. Empty: no start can be drawn.
+        frames: []const u32 = &.{},
+        clips: []const u16 = &.{},
+        clip_frames: []const u32 = &.{},
+
+        /// Where environment `env`'s record `index` sits: its ring, then the record's place in it.
+        pub fn slot(view: Books, env: usize, index: u64) usize {
+            const place_in_ring: usize = @intCast(index % view.capacity);
+            return env * view.capacity + place_in_ring;
+        }
+
+        pub fn segmentAt(view: Books, env: usize, index: u64) u32 {
+            return view.segments[view.slot(env, index)];
+        }
+
+        /// WHETHER environment `env`'s record `index` CONTINUES THE RECORD BEFORE IT: the two in one segment - no
+        /// restart and no push between them - so the step from one to the other is one transition of the simulation
+        /// alone, which a world model can be taught. False for an environment's first record, and when the books no
+        /// longer hold the record before.
+        pub fn continuesAt(view: Books, env: usize, index: u64) bool {
+            if (index == 0) {
+                return false;
+            }
+            const ring_capacity: u64 = @intCast(view.capacity);
+            const oldest_held: u64 = view.written[env] -| ring_capacity;
+            const previous_index: u64 = index - 1;
+            if (previous_index < oldest_held) {
+                return false;
+            }
+            return view.segmentAt(env, previous_index) == view.segmentAt(env, index);
+        }
+
+        /// Whether the record's step came after its episode lost the reference.
+        pub fn afterLossAt(view: Books, env: usize, index: u64) bool {
+            return view.after_loss[view.slot(env, index)];
+        }
+
+        /// WHAT WAS APPLIED JUST BEFORE environment `env`'s record `index` - what a window starting there blends its
+        /// first decision into, and what a policy that sees its applied action reads first:
+        ///
+        ///     rest              the record is its episode's first step: every episode opens from rest
+        ///     previous_record   any later step: the action recorded one step earlier - ACROSS A PUSH TOO, which
+        ///                       ends a segment but never an episode, so what the controller applies carries
+        ///                       straight through it
+        ///     null              the books cannot say: the record is no step of a rollout (`Replay.append`), or the
+        ///                       record before it has left the ring
+        ///
+        /// The CPU learner's rule (robot_latent's `Learner.appliedBefore`), on the books. Where a window's records
+        /// live in a ring of their own - a learner's on a device - that ring must hold the record before as well.
+        pub fn appliedBeforeAt(view: Books, env: usize, index: u64) ?AppliedBefore {
+            const episode_step: u32 = view.episode_steps[view.slot(env, index)] orelse return null;
+            if (episode_step == 0) {
+                return .rest;
+            }
+            const ring_capacity: u64 = @intCast(view.capacity);
+            const oldest_held: u64 = view.written[env] -| ring_capacity;
+            const previous_held: bool = index > oldest_held;
+            if (!previous_held) {
+                return null;
+            }
+            return .previous_record;
+        }
+
+        /// A window of `steps` transitions, its first record chosen as `start` says: anywhere in a segment, or only
+        /// on a step taken before (or after) its episode lost the reference - or null.
+        ///
+        /// REJECTION SAMPLING. A candidate is drawn - a character uniformly, then a first record uniformly among
+        /// those its ring still holds - and kept only if it is a window at all (every record in one segment) and
+        /// starts where `start` allows; otherwise another is drawn. Keeping only the draws that pass a test, from a
+        /// uniform draw, gives a uniform draw over the candidates that pass it: every acceptable window of a
+        /// character stays equally likely. It also makes the rules agree exactly when no record follows a loss (a
+        /// fleet with no aftermath): no draw is ever rejected for where it starts, so all consume the random stream
+        /// identically and return the same windows. After 64 rejected draws the books are taken to have no window to
+        /// give (null), which happens only while the rings are nearly empty.
+        pub fn sampleWindowStarting(
+            view: Books,
+            random: Random,
+            steps: usize,
+            start: WindowStart,
+        ) ?Window {
+            assertf(steps > 0, @src(), "a window of no transitions is not a window", .{});
+            // A window of `steps` transitions spans steps + 1 records: each step's state, and the one it led to.
+            const records_per_window: usize = steps + 1;
+            const most_draws: usize = 64;
+            for (0..most_draws) |_| {
+                const env: usize = random.uintLessThan(usize, view.envs);
+                const records_written: u64 = view.written[env];
+                if (records_written < records_per_window) {
+                    continue;
+                }
+                // The ring holds the newest `capacity` records; a window must start late enough to lie inside it
+                // and early enough to end at the newest record or before.
+                const ring_capacity: u64 = @intCast(view.capacity);
+                const oldest_held: u64 = records_written -| ring_capacity;
+                const newest_start: u64 = records_written - records_per_window;
+                if (newest_start < oldest_held) {
+                    continue;
+                }
+                const start_choices: u64 = newest_start - oldest_held + 1;
+                const first_record: u64 = oldest_held + random.uintLessThan(u64, start_choices);
+                const last_record: u64 = first_record + records_per_window - 1;
+                // One segment from the first record to the last: no reset and no push inside the window.
+                const is_unbroken: bool = view.segmentAt(env, first_record) == view.segmentAt(env, last_record);
+                if (!is_unbroken) {
+                    continue;
+                }
+                const starts_after_loss: bool = view.afterLossAt(env, first_record);
+                if (start == .before_loss and starts_after_loss) {
+                    continue;
+                }
+                if (start == .after_loss and !starts_after_loss) {
+                    continue;
+                }
+                return .{ .env = env, .first = first_record, .steps = steps };
+            }
+            return null;
+        }
+
+        /// THE FRAMES OF ITS CLIP AFTER environment `env`'s record `index` - its clip's last frame less its own - or
+        /// null where the books hold no frames or clips (`frames`, `clip_frames`).
+        pub fn framesLeftAt(view: Books, env: usize, index: u64) ?u32 {
+            const knows_frames: bool = view.frames.len > 0 and view.clips.len > 0 and view.clip_frames.len > 0;
+            if (!knows_frames) {
+                return null;
+            }
+            const record_slot: usize = view.slot(env, index);
+            const clip: usize = view.clips[record_slot];
+            const frame: u32 = view.frames[record_slot];
+            const last_frame: u32 = view.clip_frames[clip] - 1;
+            return last_frame -| frame;
+        }
+
+        /// A POLICY's START: one record, its first state - the rollout from it is imagined, its references read from
+        /// the clip's tables - chosen as `start` says (`WindowStart`: before a loss, or inside a return), or null.
+        /// Any record the books hold whose clip has at least `frames_needed` frames after its own - the policy's
+        /// horizon in its clip's frames - so no start runs past its clip; a record a decision before a fall is a start
+        /// like any other, where a window had to end before it (XMimic's `sample_valid_starts`). REJECTION SAMPLING
+        /// as `sampleWindowStarting`: a character uniformly, then one of the records its ring holds uniformly, kept
+        /// when it passes - so every acceptable start is equally likely; null after 64 rejected draws.
+        pub fn sampleStart(
+            view: Books,
+            random: Random,
+            frames_needed: u32,
+            start: WindowStart,
+        ) ?Window {
+            const knows_frames: bool = view.clip_frames.len > 0;
+            assertf(knows_frames, @src(), "a start is drawn from books that know their records' frames", .{});
+            const most_draws: usize = 64;
+            for (0..most_draws) |_| {
+                const env: usize = random.uintLessThan(usize, view.envs);
+                const records_written: u64 = view.written[env];
+                if (records_written == 0) {
+                    continue;
+                }
+                const ring_capacity: u64 = @intCast(view.capacity);
+                const oldest_held: u64 = records_written -| ring_capacity;
+                const record_choices: u64 = records_written - oldest_held;
+                const record: u64 = oldest_held + random.uintLessThan(u64, record_choices);
+                const frames_left: u32 = view.framesLeftAt(env, record) orelse continue;
+                if (frames_left < frames_needed) {
+                    continue;
+                }
+                const is_after_loss: bool = view.afterLossAt(env, record);
+                if (start == .before_loss and is_after_loss) {
+                    continue;
+                }
+                if (start == .after_loss and !is_after_loss) {
+                    continue;
+                }
+                return .{ .env = env, .first = record, .steps = 0 };
+            }
+            return null;
+        }
+    };
+
+    /// This replay's books (`Books`): a view of its own fields - its records' frames and clips among them; the clips'
+    /// lengths are its fleet's, given by whoever draws starts.
+    pub fn books(self: Replay) Books {
+        return .{
+            .envs = self.envs,
+            .capacity = self.capacity,
+            .segments = self.segments,
+            .episode_steps = self.episode_steps,
+            .after_loss = self.after_loss,
+            .written = self.written,
+            .frames = self.frames,
+            .clips = self.clips,
+        };
     }
 
     /// Append one frame of experience for `env` that is NOT a step of a rollout - a teacher's label, a probe's
@@ -937,12 +1382,12 @@ pub const Replay = struct {
     }
 
     pub fn segmentAt(self: Replay, env: usize, index: u64) u32 {
-        return self.segments[self.slot(env, index)];
+        return self.books().segmentAt(env, index);
     }
 
     /// Whether the record's step came after its episode lost the reference (`after_loss`).
     pub fn afterLossAt(self: Replay, env: usize, index: u64) bool {
-        return self.after_loss[self.slot(env, index)];
+        return self.books().afterLossAt(env, index);
     }
 
     /// How far into its episode the record's step was (0 on an episode's first step), or null when the record is
@@ -979,59 +1424,427 @@ pub const Replay = struct {
         return self.sampleWindowStarting(random, steps, .anywhere);
     }
 
-    /// `sampleWindow`, its first record chosen as `start` says: anywhere in a segment, or only on a step taken
-    /// before its episode lost the reference.
-    ///
-    /// REJECTION SAMPLING. A candidate is drawn - a character uniformly, then a first record uniformly among those its
-    /// ring still holds - and kept only if it is a window at all (every record in one segment) and starts where
-    /// `start` allows; otherwise another is drawn. Keeping only the draws that pass a test, from a uniform draw, gives
-    /// a uniform draw over the candidates that pass it: every acceptable window of a character stays equally likely.
-    /// It also makes the two rules agree exactly when no record follows a loss (a fleet with no aftermath): no draw is
-    /// ever rejected for where it starts, so both consume the random stream identically and return the same windows.
-    /// After 64 rejected draws the replay is taken to have no window to give (null), which happens only while it is
-    /// nearly empty.
+    /// `sampleWindow`, its first record chosen as `start` says - by the replay's books' rule
+    /// (`Books.sampleWindowStarting`), on this replay's own books.
     pub fn sampleWindowStarting(
         self: Replay,
         random: Random,
         steps: usize,
         start: WindowStart,
     ) ?Window {
-        assertf(steps > 0, @src(), "a window of no transitions is not a window", .{});
-        // A window of `steps` transitions spans steps + 1 records: each step's state, and the one it led to.
-        const records_per_window: usize = steps + 1;
-        const most_draws: usize = 64;
-        for (0..most_draws) |_| {
-            const env: usize = random.uintLessThan(usize, self.envs);
-            const records_written: u64 = self.written[env];
-            if (records_written < records_per_window) {
-                continue;
+        return self.books().sampleWindowStarting(random, steps, start);
+    }
+};
+
+/// A LABEL: a record whose action was a planner's, kept for the policy to learn from (`LabelBooks`) - its world, and
+/// the record's index in the world's books.
+pub const Label = struct {
+    env: u32,
+    index: u64,
+};
+
+/// THE LABELS A POLICY MAY LEARN FROM: records whose action was a planner's (`rbt.RecordMoment.labelled`), kept once
+/// the stretch of plan they belong to has ended well. A STRETCH is a run of one world's labelled records from its
+/// plan's first decision on (`rbt.RecordMoment.begins_plan`) - the plan followed decision after decision - until the
+/// world stops following it: at the next replan, where a new plan begins, or where its policy acts again. A plan
+/// followed is a plan lived exactly - the planner's lookahead ran the same physics from the same state with the same
+/// actions - so every label of a stretch is the planner's answer for a state that really happened.
+///
+/// A stretch is SETTLED when the record after its last arrives, whose moment says how that last decision went:
+///
+///     a decision of the stretch failed        the plan failed: every label of it is dropped
+///       (it lost the reference, or ended
+///       its episode at a loss)
+///     a decision of it came after a loss      dropped too: its states are a fall's, far from the reference, and its
+///       (its episode living on through an     plan the best of a few drawn from a falling or fallen body
+///       aftermath, `after_loss`)
+///     the episode ended after the stretch     kept but for its last record, whose goal - read from the record after
+///       (the next record opens another)       it, as the gather reads every goal - would be another episode's frame
+///     otherwise                               kept whole: at a replan, after a push, or where the policy acts again
+///
+/// The labels teach the policy to keep the reference from states near it, as the policy's own windows mostly do (they
+/// are drawn before a loss). A planner lives through an aftermath as every character does, and replans there as
+/// anywhere: in a run whose characters live on after a loss, its stretches there would otherwise be a large share of
+/// the labels.
+///
+/// A push ends a world's following on the device (`robotgpu.push_worlds`): the stretch before it is kept whole, its
+/// plan having answered every state of it, and the record after it - the same episode's - still holding its last goal.
+///
+/// The kept labels live as long as the learner's ring holds their records: the newest `capacity` records of each world.
+/// Each step forgets the labels whose records the ring is letting go, so at most `envs x capacity` are ever kept. The
+/// books own their arrays: `init` allocates them from `gpa`, `deinit` frees them.
+pub const LabelBooks = struct {
+    envs: usize,
+    capacity: usize,
+    /// Each world's open stretch: its first record, how many records it holds (0: none open), whether a decision
+    /// of it has failed, and whether one was taken after its episode lost the reference.
+    stretch_first: []u64,
+    stretch_length: []u32,
+    stretch_failed: []bool,
+    stretch_after_loss: []bool,
+    /// The kept labels, in the order they were settled: the first `kept_count`.
+    kept: []Label,
+    kept_count: usize,
+    /// Counts since the books began, for the log: the labels kept, and those dropped - with a failed plan, as a
+    /// stretch's decisions after a loss, or as a stretch's last record where its episode ended.
+    labels_kept: u64,
+    labels_dropped_with_failed_plans: u64,
+    labels_dropped_after_losses: u64,
+    labels_dropped_at_episode_ends: u64,
+
+    pub fn init(gpa: Allocator, envs: usize, capacity: usize) !LabelBooks {
+        const stretch_first: []u64 = try gpa.alloc(u64, envs);
+        errdefer gpa.free(stretch_first);
+        const stretch_length: []u32 = try gpa.alloc(u32, envs);
+        errdefer gpa.free(stretch_length);
+        const stretch_failed: []bool = try gpa.alloc(bool, envs);
+        errdefer gpa.free(stretch_failed);
+        const stretch_after_loss: []bool = try gpa.alloc(bool, envs);
+        errdefer gpa.free(stretch_after_loss);
+        const most_kept: usize = envs * capacity;
+        const kept: []Label = try gpa.alloc(Label, most_kept);
+        @memset(stretch_first, 0);
+        @memset(stretch_length, 0);
+        @memset(stretch_failed, false);
+        @memset(stretch_after_loss, false);
+        return .{
+            .envs = envs,
+            .capacity = capacity,
+            .stretch_first = stretch_first,
+            .stretch_length = stretch_length,
+            .stretch_failed = stretch_failed,
+            .stretch_after_loss = stretch_after_loss,
+            .kept = kept,
+            .kept_count = 0,
+            .labels_kept = 0,
+            .labels_dropped_with_failed_plans = 0,
+            .labels_dropped_after_losses = 0,
+            .labels_dropped_at_episode_ends = 0,
+        };
+    }
+
+    pub fn deinit(labels: LabelBooks, gpa: Allocator) void {
+        gpa.free(labels.stretch_first);
+        gpa.free(labels.stretch_length);
+        gpa.free(labels.stretch_failed);
+        gpa.free(labels.stretch_after_loss);
+        gpa.free(labels.kept);
+    }
+
+    /// ONE STEP's RECORDS - record `record_index` of every world - with their moments, one a world (`moments[env]`, as
+    /// the simulator stood when the record was packed): the labels whose records the ring is letting go forgotten,
+    /// then each world's open stretch extended by its plan's next decision, or settled by anything else, and a new
+    /// stretch opened at each label that does not extend one.
+    pub fn appendStep(
+        labels: *LabelBooks,
+        moments: []const rbt.RecordMoment,
+        record_index: u64,
+    ) void {
+        assertf(moments.len == labels.envs, @src(), "{d} moments for {d} worlds", .{ moments.len, labels.envs });
+        // Once this step's records are in, the ring holds each world's newest `capacity`: from `oldest_held` on.
+        const records_after_step: u64 = record_index + 1;
+        const ring_capacity: u64 = @intCast(labels.capacity);
+        const oldest_held: u64 = records_after_step -| ring_capacity;
+        labels.forgetBefore(oldest_held);
+        for (moments, 0..) |moment, env| {
+            const plan_goes_on: bool = moment.labelled and !moment.begins_plan;
+            // A push and a new episode end a world's following on the device: no plan goes on across them.
+            const across_a_break: bool = plan_goes_on and moment.starts_segment;
+            assertf(!across_a_break, @src(), "world {d}'s record {d} goes on with a plan across a push or a new " ++
+                "episode", .{ env, record_index });
+            const has_stretch: bool = labels.stretch_length[env] > 0;
+            if (has_stretch) {
+                // How the stretch's last decision went - this record's moment says.
+                if (moment.previous_decision_failed) {
+                    labels.stretch_failed[env] = true;
+                }
+                if (plan_goes_on) {
+                    labels.stretch_length[env] += 1;
+                    // This record's decision joins the stretch: taken after a loss, it drops the stretch.
+                    if (moment.after_loss) {
+                        labels.stretch_after_loss[env] = true;
+                    }
+                    continue;
+                }
+                const episode_ended: bool = moment.episode_step == 0;
+                labels.settle(env, episode_ended, oldest_held);
             }
-            // The ring holds the newest `capacity` records; a window must start late enough to lie inside it and
-            // early enough to end at the newest record or before.
-            const ring_capacity: u64 = @intCast(self.capacity);
-            const oldest_held: u64 = records_written -| ring_capacity;
-            const newest_start: u64 = records_written - records_per_window;
-            if (newest_start < oldest_held) {
-                continue;
+            // A label that does not extend a stretch opens one: a plan's first decision - or a later one where these
+            // books began in the middle of its stretch, a plan lived exactly all the same.
+            if (moment.labelled) {
+                labels.stretch_first[env] = record_index;
+                labels.stretch_length[env] = 1;
+                labels.stretch_failed[env] = false;
+                labels.stretch_after_loss[env] = moment.after_loss;
             }
-            const start_choices: u64 = newest_start - oldest_held + 1;
-            const first_record: u64 = oldest_held + random.uintLessThan(u64, start_choices);
-            const last_record: u64 = first_record + records_per_window - 1;
-            // One segment from the first record to the last: no reset and no push inside the window.
-            const is_unbroken: bool = self.segmentAt(env, first_record) == self.segmentAt(env, last_record);
-            if (!is_unbroken) {
-                continue;
-            }
-            const starts_after_loss: bool = self.afterLossAt(env, first_record);
-            if (start == .before_loss and starts_after_loss) {
-                continue;
-            }
-            if (start == .after_loss and !starts_after_loss) {
-                continue;
-            }
-            return .{ .env = env, .first = first_record, .steps = steps };
         }
-        return null;
+    }
+
+    /// THE OPEN STRETCH OF WORLD `env`, SETTLED: dropped whole where a decision of it failed, or was taken after a
+    /// loss; otherwise kept - all but its last record where its episode ended after it (`episode_ended`) - each label
+    /// whose record the ring still holds (from `oldest_held` on; a stretch is far shorter than the ring, so all of them
+    /// in practice).
+    fn settle(
+        labels: *LabelBooks,
+        env: usize,
+        episode_ended: bool,
+        oldest_held: u64,
+    ) void {
+        const first: u64 = labels.stretch_first[env];
+        const stretch_records: u32 = labels.stretch_length[env];
+        labels.stretch_length[env] = 0;
+        if (labels.stretch_failed[env]) {
+            labels.labels_dropped_with_failed_plans += stretch_records;
+            return;
+        }
+        if (labels.stretch_after_loss[env]) {
+            labels.labels_dropped_after_losses += stretch_records;
+            return;
+        }
+        var kept_length: u32 = stretch_records;
+        if (episode_ended) {
+            kept_length -= 1;
+            labels.labels_dropped_at_episode_ends += 1;
+        }
+        var offset: u32 = 0;
+        while (offset < kept_length) : (offset += 1) {
+            const index: u64 = first + offset;
+            if (index < oldest_held) {
+                continue;
+            }
+            labels.keep(env, index);
+        }
+    }
+
+    fn keep(labels: *LabelBooks, env: usize, index: u64) void {
+        const room_left: bool = labels.kept_count < labels.kept.len;
+        assertf(room_left, @src(), "{d} labels kept already, one a record the ring holds", .{labels.kept_count});
+        labels.kept[labels.kept_count] = .{ .env = @intCast(env), .index = index };
+        labels.kept_count += 1;
+        labels.labels_kept += 1;
+    }
+
+    /// The labels whose records the ring no longer holds - those before `oldest_held` - forgotten, the rest kept in
+    /// their order.
+    fn forgetBefore(labels: *LabelBooks, oldest_held: u64) void {
+        var still_kept: usize = 0;
+        for (labels.kept[0..labels.kept_count]) |label| {
+            if (label.index < oldest_held) {
+                continue;
+            }
+            labels.kept[still_kept] = label;
+            still_kept += 1;
+        }
+        labels.kept_count = still_kept;
+    }
+
+    /// THESE LABELS' BOOKS MADE A COPY OF `source`, of the same shape: every open stretch, every kept label in its
+    /// order, every count - so the copy settles, forgets and draws exactly as its source would.
+    pub fn copyFrom(labels: *LabelBooks, source: LabelBooks) void {
+        const same_shape: bool = labels.envs == source.envs and labels.capacity == source.capacity;
+        assertf(same_shape, @src(), "labels of {d} worlds x {d} records copied into {d} x {d}", .{
+            source.envs,
+            source.capacity,
+            labels.envs,
+            labels.capacity,
+        });
+        @memcpy(labels.stretch_first, source.stretch_first);
+        @memcpy(labels.stretch_length, source.stretch_length);
+        @memcpy(labels.stretch_failed, source.stretch_failed);
+        @memcpy(labels.stretch_after_loss, source.stretch_after_loss);
+        @memcpy(labels.kept[0..source.kept_count], source.keptLabels());
+        labels.kept_count = source.kept_count;
+        labels.labels_kept = source.labels_kept;
+        labels.labels_dropped_with_failed_plans = source.labels_dropped_with_failed_plans;
+        labels.labels_dropped_after_losses = source.labels_dropped_after_losses;
+        labels.labels_dropped_at_episode_ends = source.labels_dropped_at_episode_ends;
+    }
+
+    /// The labels kept now, in the order they were settled.
+    pub fn keptLabels(labels: LabelBooks) []const Label {
+        return labels.kept[0..labels.kept_count];
+    }
+
+    /// A kept label drawn uniformly - each as likely - or null while none is kept.
+    pub fn drawLabel(labels: LabelBooks, random: Random) ?Label {
+        if (labels.kept_count == 0) {
+            return null;
+        }
+        const drawn: usize = random.uintLessThan(usize, labels.kept_count);
+        return labels.kept[drawn];
+    }
+};
+
+/// BOOKS KEPT FOR RECORDS STORED ELSEWHERE - a learner's ring on a device, filled there by one copy a step - in the
+/// layout of a replay's (`Replay.Books`), so windows are drawn from them by the same rule. Each step the host gives one
+/// `rbt.RecordMoment` a world, read from the simulator after the decision before (`robotgpu.recordMomentOf`), and the
+/// books advance by one record a world, in lockstep:
+///
+///     moment      starts_segment   episode_step   after_loss   labelled
+///     record          segment          step       after_loss   labelled     a new segment id where a stretch starts
+///
+/// A world's first record starts its first stretch whatever its moment says. Segment ids only grow and are shared by
+/// no two stretches, so two records are in one stretch exactly when their ids are equal - the property the rule reads.
+/// The labels a policy may learn from are kept beside, settled from the same moments (`LabelBooks`). The books own
+/// their arrays: `init` allocates them from `gpa`, `deinit` frees them.
+pub const KeptBooks = struct {
+    envs: usize,
+    capacity: usize,
+    /// Per record, as a replay keeps them: [env][slot]. Every record here is a step of a rollout, so every episode
+    /// step is known; it is kept optional as a replay keeps it, so the two hand out one view (`Replay.Books`).
+    segments: []u32,
+    episode_steps: []?u32,
+    after_loss: []bool,
+    /// Whether the record's action was a planner's (`rbt.RecordMoment.labelled`): a label for the policy.
+    labelled: []bool,
+    /// The reference frame each record tracks, and its clip (`rbt.RecordMoment.frame`, `.clip`).
+    frames: []u32,
+    clips: []u16,
+    /// How many records each world has ever written. The rings hold the last `capacity`.
+    written: []u64,
+    /// Each world's current stretch, and the next unused id.
+    current_segment: []u32,
+    next_segment: u32,
+    /// The labels kept from the planners' stretches of plan that ended well.
+    labels: LabelBooks,
+
+    pub fn init(gpa: Allocator, envs: usize, capacity: usize) !KeptBooks {
+        const record_count: usize = envs * capacity;
+        const segments: []u32 = try gpa.alloc(u32, record_count);
+        errdefer gpa.free(segments);
+        const episode_steps: []?u32 = try gpa.alloc(?u32, record_count);
+        errdefer gpa.free(episode_steps);
+        const after_loss: []bool = try gpa.alloc(bool, record_count);
+        errdefer gpa.free(after_loss);
+        const labelled: []bool = try gpa.alloc(bool, record_count);
+        errdefer gpa.free(labelled);
+        const frames: []u32 = try gpa.alloc(u32, record_count);
+        errdefer gpa.free(frames);
+        const clips: []u16 = try gpa.alloc(u16, record_count);
+        errdefer gpa.free(clips);
+        const written: []u64 = try gpa.alloc(u64, envs);
+        errdefer gpa.free(written);
+        const current_segment: []u32 = try gpa.alloc(u32, envs);
+        errdefer gpa.free(current_segment);
+        const labels: LabelBooks = try .init(gpa, envs, capacity);
+        @memset(segments, 0);
+        @memset(episode_steps, null);
+        @memset(after_loss, false);
+        @memset(labelled, false);
+        @memset(frames, 0);
+        @memset(clips, 0);
+        @memset(written, 0);
+        // Every world in a stretch of its own: ids 0 to envs - 1, the next one after them.
+        for (current_segment, 0..) |*segment, env| {
+            segment.* = @intCast(env);
+        }
+        return .{
+            .envs = envs,
+            .capacity = capacity,
+            .segments = segments,
+            .episode_steps = episode_steps,
+            .after_loss = after_loss,
+            .labelled = labelled,
+            .frames = frames,
+            .clips = clips,
+            .written = written,
+            .current_segment = current_segment,
+            .next_segment = @intCast(envs),
+            .labels = labels,
+        };
+    }
+
+    pub fn deinit(books: KeptBooks, gpa: Allocator) void {
+        gpa.free(books.segments);
+        gpa.free(books.episode_steps);
+        gpa.free(books.after_loss);
+        gpa.free(books.labelled);
+        gpa.free(books.frames);
+        gpa.free(books.clips);
+        gpa.free(books.written);
+        gpa.free(books.current_segment);
+        books.labels.deinit(gpa);
+    }
+
+    /// One step's records, one a world: `moments[env]` is world `env`'s, as the simulator stood when the record was
+    /// packed. Every world records every step, so every world's record has the same index; the labels' books advance
+    /// with them (`LabelBooks.appendStep`).
+    pub fn appendStep(books: *KeptBooks, moments: []const rbt.RecordMoment) void {
+        assertf(moments.len == books.envs, @src(), "{d} moments for {d} worlds", .{ moments.len, books.envs });
+        const step_index: u64 = books.written[0];
+        for (moments, 0..) |moment, world| {
+            const records_written: u64 = books.written[world];
+            const in_lockstep: bool = records_written == step_index;
+            assertf(in_lockstep, @src(), "world {d} has {d} records, world 0 {d}", .{
+                world,
+                records_written,
+                step_index,
+            });
+            // A world's first record already has its segment (`init`): only a later record can begin a new one.
+            const world_has_records: bool = records_written > 0;
+            const starts_new_segment: bool = world_has_records and moment.starts_segment;
+            if (starts_new_segment) {
+                books.current_segment[world] = books.next_segment;
+                books.next_segment += 1;
+            }
+            const record_index: u64 = records_written;
+            const record_slot: usize = books.view().slot(world, record_index);
+            books.segments[record_slot] = books.current_segment[world];
+            books.episode_steps[record_slot] = moment.episode_step;
+            books.after_loss[record_slot] = moment.after_loss;
+            books.labelled[record_slot] = moment.labelled;
+            books.frames[record_slot] = moment.frame;
+            books.clips[record_slot] = moment.clip;
+            books.written[world] = records_written + 1;
+        }
+        books.labels.appendStep(moments, step_index);
+    }
+
+    /// THESE BOOKS MADE A COPY OF `source`, of the same shape: every record's entries, every world's count and stretch,
+    /// the labels' books with them - so the copy draws windows and labels exactly as its source would.
+    pub fn copyFrom(books: *KeptBooks, source: KeptBooks) void {
+        const same_shape: bool = books.envs == source.envs and books.capacity == source.capacity;
+        assertf(same_shape, @src(), "books of {d} worlds x {d} records copied into {d} x {d}", .{
+            source.envs,
+            source.capacity,
+            books.envs,
+            books.capacity,
+        });
+        @memcpy(books.segments, source.segments);
+        @memcpy(books.episode_steps, source.episode_steps);
+        @memcpy(books.after_loss, source.after_loss);
+        @memcpy(books.labelled, source.labelled);
+        @memcpy(books.frames, source.frames);
+        @memcpy(books.clips, source.clips);
+        @memcpy(books.written, source.written);
+        @memcpy(books.current_segment, source.current_segment);
+        books.next_segment = source.next_segment;
+        books.labels.copyFrom(source.labels);
+    }
+
+    /// How far into its episode a record's step was (0 on an episode's first step); null for a slot never written.
+    pub fn episodeStepAt(books: KeptBooks, env: usize, index: u64) ?u32 {
+        return books.episode_steps[books.view().slot(env, index)];
+    }
+
+    /// Whether a record's action was a planner's: a label for the policy.
+    pub fn labelledAt(books: KeptBooks, env: usize, index: u64) bool {
+        return books.labelled[books.view().slot(env, index)];
+    }
+
+    /// The books as a replay's (`Replay.Books`): what windows are drawn from - and, with the clips' lengths the learner
+    /// gives, starts.
+    pub fn view(books: KeptBooks) Replay.Books {
+        return .{
+            .envs = books.envs,
+            .capacity = books.capacity,
+            .segments = books.segments,
+            .episode_steps = books.episode_steps,
+            .after_loss = books.after_loss,
+            .written = books.written,
+            .frames = books.frames,
+            .clips = books.clips,
+        };
     }
 };
 
@@ -1082,10 +1895,16 @@ pub const Task = struct {
     /// character a few frames behind still has it down - that is lag, not a fall. Named per ROBOT, never per
     /// motion; a fleet resolves them through `Fleet.Options.body_names`. Empty by default.
     contact_exempt: []const []const u8 = &.{},
-    /// The body that is the robot's HEAD, for `TrackingError.head_height` (SuperTrack's failure rule, plan F3b).
+    /// The body that is the robot's HEAD, for `TrackingError.head_height` (SuperTrack's failure rule).
     /// Named per robot, resolved like `contact_exempt`. Empty: no head term.
     head_body: []const u8 = "",
 };
+
+/// `seconds` in steps of `step_seconds`, rounded to the nearest.
+fn stepsIn(seconds: f32, step_seconds: f32) u32 {
+    const steps: u32 = @round(seconds / step_seconds);
+    return steps;
+}
 
 /// How a fleet pushes its characters from outside - the perturbations a policy must come back from.
 ///
@@ -1096,48 +1915,46 @@ pub const Task = struct {
 ///
 /// Pushes come on a fixed schedule (`every` steps, for measuring robustness at a known rhythm), at random moments
 /// (`rate_per_second`: each step a push with probability rate x dt - a Poisson process, the training's), or both.
-/// Each push's speed is drawn uniformly from [speed_min, speed_max]: a small push is taken in stride, a large one
-/// needs a step, a larger one is a fall - a range teaches all three.
+/// Each push's speed is drawn uniformly between `speed_min` and the range's TOP: a small push is taken in stride, a
+/// large one needs a step, a larger one is a fall - a range teaches all three.
 ///
-/// THE SCHEDULE, in training hours (`Fleet.training_hours`, told by the program that trains, so it holds whatever the
-/// machine's speed and across a resume): none before `start_hours`, so characters learn to track before anything
-/// knocks them; from there to `full_hours` the random pushes' rate and the speed range's top both rise in a straight
-/// line - the rate from nothing, the top from `speed_min` - to their full values; full from then on, for as long as the
-/// run goes. A run of eight hours starting its pushes at the first hour and reaching full strength at the seventh:
+/// THE RAMP (`rbt.PushTop`), in training hours (told by the program that trains - `Fleet.tellTrainingHours` - so it
+/// holds whatever the machine's speed and across a resume). The RATE is full from the first minute: early pushes are
+/// small, not rare, so the characters are carried off their reference from the start. The TOP opens along a straight
+/// line from `speed_min` at the start to `speed_max` at `full_hours`, and holds wherever the characters stop coming
+/// back from the pushes near it (`brake`, `rbt.PushBrake`). A run of eight hours, its line full at the sixth -
+/// three quarters of the run, while the learning rates are still well above their floor:
 ///
-///     hours          0      1      2      3      4      5      6      7      8 and on
-///     share          0      0      1/6    2/6    3/6    4/6    5/6    1      1
-///     rate (1/s)     0      0      0.08   0.17   0.25   0.33   0.42   0.5    0.5      (full 0.5)
-///     speeds (m/s)   -      -      0.5-1.0 ...                        0.5-3.5          (full 0.5 to 3.5)
+///     hours          0        1        2        3        4        5        6      7, 8
+///     rate (1/s)     0.5      0.5      0.5      0.5      0.5      0.5      0.5    0.5
+///     speeds (m/s)   0.5   0.5-1.25  0.5-2.0  0.5-2.75 0.5-3.5  0.5-4.25  0.5-5  0.5-5     (full 0.5 to 5)
 pub const Pushes = struct {
     /// Steps between scheduled pushes; 0 schedules none.
     every: u32 = 0,
-    /// Pushes per second at random moments at full strength; 0 gives none.
+    /// Pushes per second at random moments, from the first minute on; 0 gives none.
     rate_per_second: f32 = 0,
-    /// The range each push's speed is drawn from at full strength, in m/s.
+    /// The range each push's speed is drawn from when fully open, in m/s.
     speed_min: f32 = 0.6,
     speed_max: f32 = 0.6,
-    /// The schedule's hours: the first with pushes, and the first at full strength. Both 0 - or a full hour not after
-    /// the start - is full strength from the start hour on.
-    start_hours: f32 = 0,
+    /// The training hours at which the top's line reaches `speed_max`. 0: the full range from the start.
     full_hours: f32 = 0,
-    /// STARTS IN TROUBLE: the share of new episodes that begin with a push at the top of the speed range the schedule
-    /// has opened - as far as the schedule has come, so none before its start and a growing share of ever harder
-    /// starts after it. A character starting in trouble must recover before it can track at all. 0: none.
+    /// The brake on the top (`rbt.PushBrake`): off unless it is given a bar.
+    brake: rbt.PushBrake = .{},
+    /// STARTS IN TROUBLE: the share of new episodes that begin with a push at the top of the range - as far as the
+    /// top has opened, so a growing share of ever harder starts. A character starting in trouble must recover
+    /// before it can track at all. 0: none.
     start_share: f32 = 0,
 
-    /// How far the schedule has come at `hours` of training: 0 before the start, 1 from the full hour, a straight line
-    /// between - and 1 throughout with no schedule, so such a fleet draws what it always drew.
-    pub fn scheduleShare(pushes: Pushes, hours: f32) f32 {
-        if (hours < pushes.start_hours) {
-            return 0;
-        }
-        const ramp_hours: f32 = pushes.full_hours - pushes.start_hours;
-        if (ramp_hours <= 0) {
-            return 1;
-        }
-        const hours_into_ramp: f32 = hours - pushes.start_hours;
-        return @min(1.0, hours_into_ramp / ramp_hours);
+    /// The decisions a watched push that loses nothing is watched (`rbt.PushBrake.watch_seconds`), one at least, in
+    /// decisions of `decision_seconds`.
+    pub fn watchDecisions(pushes: Pushes, decision_seconds: f32) u32 {
+        const decisions: u32 = stepsIn(pushes.brake.watch_seconds, decision_seconds);
+        return @max(decisions, 1);
+    }
+
+    /// The top share of the open range whose pushes are watched: the brake's, and none without a brake.
+    pub fn watchedShare(pushes: Pushes) f32 {
+        return if (pushes.brake.isOn()) pushes.brake.watched_share else 0;
     }
 };
 
@@ -1157,6 +1974,12 @@ pub const ResetCurriculum = struct {
     /// The largest reward one decision can earn - SuperMimic's tracking terms' weights summed (four of 1, two of 0.5):
     /// over 1 - `discount`, the largest return, the scale the softmax compares returns at.
     largest_step_reward: f32 = 5.0,
+
+    /// The largest return: the largest step reward over 1 - the discount, the scale the softmax compares returns at
+    /// (`rbt.startBinSoftmax`).
+    pub fn returnScale(curriculum: ResetCurriculum) f32 {
+        return curriculum.largest_step_reward / (1 - curriculum.discount);
+    }
 };
 
 /// A curriculum bin's length on `clip`, in whole frames: `bin_seconds` over the frame time, rounded, at least one -
@@ -1204,6 +2027,8 @@ pub const DriveScratch = struct {
     dense: []f32,
     full: []f32,
     torque: []f32,
+    /// A pull's point Jacobian (`rbt.addPullForce`), a column per dof.
+    pull_jacobian: []Vec,
 
     /// Scratch for model `m`. Memory: `owned`, the fleet's.
     pub fn init(owned: Allocator, m: *const rbt.Model) !DriveScratch {
@@ -1215,6 +2040,7 @@ pub const DriveScratch = struct {
             .dense = try owned.alloc(f32, m.dof_count * m.dof_count),
             .full = try owned.alloc(f32, m.dof_count),
             .torque = try owned.alloc(f32, m.dof_count),
+            .pull_jacobian = try owned.alloc(Vec, m.dof_count),
         };
         return drive;
     }
@@ -1276,6 +2102,9 @@ pub const Fleet = struct {
         rotation_box_margin: f32 = 0.1745,
         /// What the characters are asked to do and when they have failed - see `Task`.
         task: Task = .{},
+        /// Whether each decision's TRACKING QUALITY is measured (`quality`, `measureQuality`): the judge's fleets
+        /// (`judgeOptions`) - a training fleet has no use for it.
+        measures_quality: bool = false,
         /// Which clip each new episode is on (`ClipAssignment`).
         clip_assignment: ClipAssignment = .random,
         /// THE PHYSICS' TASKS: how many parts the characters are split into for their physics steps, each part on a
@@ -1296,6 +2125,12 @@ pub const Fleet = struct {
         /// Episodes end here even when tracking is fine, so no environment sits in one stretch of
         /// clip forever.
         max_steps: u32 = 600,
+        /// WHETHER AN ENDED EPISODE RESTARTS its character (`restartEnded`): every learner's and judge's fleet does.
+        /// Off - a viewer that restarts a character only when asked (`restart`) - an episode never ends: a lost
+        /// reference is still judged and counted (`failures`) at every step it stays lost, the character lives on
+        /// wherever it is, and the reference holds its clip's last frame once it gets there
+        /// (`advanceReferenceFrame`). Read at every step, so a viewer may turn it on and off as it runs.
+        restarts_episodes: bool = true,
         /// THE CLOCK: physics steps per DECISION. One `step` is one decision: the targets it is given are held for this
         /// many physics steps, the reference advancing by a frame each, and the record, the reward, the termination
         /// and the episode's end come once, at the decision's end. Every count of steps in these options
@@ -1379,14 +2214,20 @@ pub const Fleet = struct {
     segment: []u32,
     steps: []u32,
     next_segment: u32,
-    /// The hours this fleet's training has run, told each round by the program that trains (the trainer's clock,
-    /// saved with its run): the clock the pushes' schedule follows (`Pushes.scheduleShare`). 0 for a fleet nobody
-    /// trains with - full pushes, or none before a schedule's start.
+    /// The hours this fleet's training has run, told each round by the program that trains (`tellTrainingHours`:
+    /// the trainer's clock, saved with its run). 0 for a fleet nobody trains with.
     training_hours: f32 = 0,
+    /// THE PUSHES' TOP (`rbt.PushTop`): how far the range of push speeds has opened - along the training clock,
+    /// held by the brake. Fully open for a fleet whose pushes have no line (`Pushes.full_hours` 0).
+    push_top: rbt.PushTop = .{},
     /// The pushes given at random or on the schedule, and their speeds' sum - what a run's log reads the
     /// perturbations it met from.
     pushes_given: u64,
     push_speed_sum: f64,
+    /// The watched pushes ended so far - kept, returned or failed - and those of them the characters came back from
+    /// (`rbt.PushBrake`): the fleet's own, or a device's as its host reports them (`noteWatchedPush`).
+    watched_pushes_settled: u64 = 0,
+    watched_pushes_came_back: u64 = 0,
     rng: Random.DefaultPrng,
     replay: Replay,
     /// Per-environment scratch, allocated once.
@@ -1403,6 +2244,10 @@ pub const Fleet = struct {
     /// collision world that failed in its step - raised on whichever thread, reported after they all finish.
     drive_scratches: []DriveScratch,
     drive_failed: []bool,
+    /// A HAND ON EACH CHARACTER (`rbt.Pull`), or null: set by a viewer between steps - a mouse that has grabbed one
+    /// of the character's bodies - and added to its joints' forces at each physics step, after the servo's
+    /// (`driveOnce`). The fleet never sets one itself; every learner's fleet leaves them null.
+    pulls: []?rbt.Pull,
     /// The threads the physics' tasks run on, given by the program that owns them (`Options.physics_threads`); null:
     /// every character's step on the calling thread.
     physics_io: ?Io = null,
@@ -1412,6 +2257,9 @@ pub const Fleet = struct {
     /// Each environment's SUPERMIMIC REWARD for the step just taken (`SuperMimicScales`): the tracking terms' total
     /// and the two penalties - beside `rewards`, for the judge's measure of a run on SuperMimic's scale.
     super_mimic_rewards: []f32,
+    /// Each environment's tracking quality after the step just taken (`QualityStep`), when the fleet measures it
+    /// (`Options.measures_quality`).
+    quality: []QualityStep,
     /// How many numbers each environment's action has (`actionWidth`): the joints' offsets, then each limb's
     /// stiffness where `Options.limb_stiffness` is on.
     action_width: usize,
@@ -1461,6 +2309,9 @@ pub const Fleet = struct {
     return_streaks: []u32,
     steps_since_loss: []u32,
     returned: []bool,
+    /// The decisions left of each character's watched push (`rbt.PushBrake`), 0 for none: while it lasts the
+    /// character takes no other push.
+    watched_push_left: []u32,
     /// Every return since the fleet was made, and their lengths' sum in steps.
     returns: u64 = 0,
     return_steps_sum: u64 = 0,
@@ -1540,9 +2391,11 @@ pub const Fleet = struct {
             .head = undefined,
             .drive_scratches = undefined,
             .drive_failed = undefined,
+            .pulls = undefined,
             .scratch = undefined,
             .rewards = undefined,
             .super_mimic_rewards = undefined,
+            .quality = undefined,
             .action_width = action_width,
             .previous_actions = undefined,
             .applied_actions = undefined,
@@ -1563,6 +2416,7 @@ pub const Fleet = struct {
             .return_streaks = undefined,
             .steps_since_loss = undefined,
             .returned = undefined,
+            .watched_push_left = undefined,
         };
         fleet.arena = ArenaAllocator.init(gpa);
         errdefer fleet.arena.deinit();
@@ -1594,6 +2448,7 @@ pub const Fleet = struct {
             .steps = try owned.alloc(u32, options.envs),
             .rewards = try owned.alloc(f32, options.envs),
             .super_mimic_rewards = try owned.alloc(f32, options.envs),
+            .quality = try owned.alloc(QualityStep, options.envs),
             .action_width = action_width,
             .previous_actions = try owned.alloc(f32, options.envs * action_width),
             .applied_actions = try owned.alloc(f32, options.envs * action_width),
@@ -1615,7 +2470,9 @@ pub const Fleet = struct {
             .return_streaks = try owned.alloc(u32, options.envs),
             .steps_since_loss = try owned.alloc(u32, options.envs),
             .returned = try owned.alloc(bool, options.envs),
+            .watched_push_left = try owned.alloc(u32, options.envs),
             .next_segment = 0,
+            .push_top = .startingWith(options.pushes.full_hours),
             .pushes_given = 0,
             .push_speed_sum = 0,
             .rng = Random.DefaultPrng.init(options.seed),
@@ -1633,7 +2490,9 @@ pub const Fleet = struct {
             .scratch = try owned.alloc(f32, m.dof_count),
             .drive_scratches = try owned.alloc(DriveScratch, @max(options.physics_threads, 1)),
             .drive_failed = try owned.alloc(bool, options.envs),
+            .pulls = try owned.alloc(?rbt.Pull, options.envs),
         };
+        @memset(fleet.pulls, null);
         @memset(fleet.episode_numbers, 0);
         @memset(fleet.ended_this_decision, false);
         // Each ball's rotation box over every frame of every clip (`rbt.rotationBoxes`).
@@ -1701,6 +2560,7 @@ pub const Fleet = struct {
         @memset(fleet.return_streaks, 0);
         @memset(fleet.steps_since_loss, 0);
         @memset(fleet.returned, false);
+        @memset(fleet.watched_push_left, 0);
         // The curriculum's first round, before the first starts read it (`refreshStartBins`) - its long-run averages
         // first set uniform within each clip, so a mixture never divides by an empty history.
         if (fleet.bins_start.len > 0) {
@@ -1754,11 +2614,11 @@ pub const Fleet = struct {
         // consumes its random stream as it always has.
         const pushes: Pushes = self.options.pushes;
         if (pushes.start_share > 0) {
-            const schedule_share: f32 = self.pushScheduleShare();
+            const top_share: f32 = self.pushTopShare();
             const trouble_draw: f32 = rbt.drawUniform(self.draw_seed, world, episode, .start_in_trouble, 0);
-            const starts_in_trouble: bool = trouble_draw < pushes.start_share * schedule_share;
+            const starts_in_trouble: bool = trouble_draw < pushes.start_share * top_share;
             if (starts_in_trouble) {
-                const top_speed: f32 = pushes.speed_min + (pushes.speed_max - pushes.speed_min) * schedule_share;
+                const top_speed: f32 = self.pushTopSpeed();
                 const direction_draw: f32 = rbt.drawUniform(self.draw_seed, world, episode, .start_push_direction, 0);
                 const push_direction_rad: f32 = 2.0 * pi * direction_draw;
                 self.push(env, top_speed, push_direction_rad);
@@ -1781,24 +2641,20 @@ pub const Fleet = struct {
         return clip.frame_count - 1 - decision_frames;
     }
 
-    /// A FINISHED EPISODE INTO ITS START BIN (`rbt.updateStartBinReturn`): its discounted return, its mean reward and
-    /// its length; `ended_by_failure` false for an episode cut short, whose remaining return is then estimated.
+    /// A FINISHED EPISODE INTO ITS START BIN (`rbt.foldEndedEpisode`): what the character's arrays hold of it - its
+    /// start bin, its discounted return, its rewards' sum and its decisions; `ended_by_failure` false for an episode
+    /// cut short, whose remaining return is then estimated. A device's host folds a device's episodes by the same
+    /// function, from what the device kept of each.
     fn foldEpisodeIntoStartBin(self: *Fleet, env: usize, ended_by_failure: bool) void {
         const curriculum: ResetCurriculum = self.options.curriculum;
-        const decisions: f32 = float(@max(self.episode_decisions[env], 1));
-        const mean_reward: f32 = self.episode_reward_sums[env] / decisions;
-        const bin_return: *f32 = &self.bin_returns[self.start_bins[env]];
-        const discounted: f32 = self.episode_discounted_returns[env];
-        const discount: f32 = curriculum.discount;
-        rbt.updateStartBinReturn(
-            curriculum.rule,
-            bin_return,
-            discounted,
-            mean_reward,
-            decisions,
-            discount,
-            ended_by_failure,
-        );
+        const ended: rbt.EndedEpisode = .{
+            .start_bin = @intCast(self.start_bins[env]),
+            .discounted_return = self.episode_discounted_returns[env],
+            .reward_sum = self.episode_reward_sums[env],
+            .decisions = self.episode_decisions[env],
+            .ended_by_failure = ended_by_failure,
+        };
+        rbt.foldEndedEpisode(curriculum.rule, curriculum.discount, self.bin_returns, ended);
     }
 
     /// The frame a new episode on clip `clip_index` starts at: uniform over the clip without a curriculum - one draw
@@ -1911,7 +2767,7 @@ pub const Fleet = struct {
     /// reads both, unchanged, through `rbt.startBinMixture`.
     pub fn refreshStartBins(self: *Fleet) void {
         const curriculum: ResetCurriculum = self.options.curriculum;
-        const return_scale: f32 = curriculum.largest_step_reward / (1 - curriculum.discount);
+        const return_scale: f32 = curriculum.returnScale();
         for (0..self.clips.len) |clip_index| {
             const bins_first: usize = self.bins_start[clip_index];
             const bins_end: usize = self.bins_start[clip_index + 1];
@@ -1920,6 +2776,32 @@ pub const Fleet = struct {
             const long_run: []f32 = self.bin_history_weights[bins_first..bins_end];
             rbt.startBinSoftmax(curriculum.rule, returns, return_scale, softmax);
             rbt.foldStartBinHistory(curriculum.rule, long_run, softmax);
+        }
+    }
+
+    /// EVERY CLIP's MIXTURE AS RUNNING SUMS, into `out_sums`, one per bin of every clip: within each clip the bins'
+    /// probabilities as they stand now (`rbt.startBinMixture` of the clip's softmax and long-run weights), summed in
+    /// order - the first bin's probability, the first two's, up to 1 at the clip's last - restarting at each clip. A
+    /// start's bin is the first whose sum passes its draw (`drawStartFrame`); a device draws against these sums
+    /// (robotgpu's `begin_reset`), and is given them with the bins before its first decision.
+    pub fn startBinRunningSums(self: *const Fleet, out_sums: []f32) void {
+        // A fleet without a curriculum has no bins, and no sums.
+        if (self.bins_start.len == 0) {
+            return;
+        }
+        const rule: rbt.StartCurriculumRule = self.options.curriculum.rule;
+        for (0..self.clips.len) |clip_index| {
+            const bins_first: usize = self.bins_start[clip_index];
+            const bins_end: usize = self.bins_start[clip_index + 1];
+            const softmax: []const f32 = self.bin_softmax[bins_first..bins_end];
+            const long_run: []const f32 = self.bin_history_weights[bins_first..bins_end];
+            const clip_sums: []f32 = out_sums[bins_first..bins_end];
+            rbt.startBinMixture(rule, softmax, long_run, clip_sums);
+            var running_sum: f32 = 0;
+            for (clip_sums) |*probability_then_sum| {
+                running_sum += probability_then_sum.*;
+                probability_then_sum.* = running_sum;
+            }
         }
     }
 
@@ -1963,6 +2845,8 @@ pub const Fleet = struct {
         // that ends an aftermath is one of its steps, even though the episode it ended is replaced here.
         self.aftermath_steps_left[env] = 0;
         self.return_streaks[env] = 0;
+        // Nor a watched push: one that was pending ended with the episode before (`rbt.settleWatchedPush`).
+        self.watched_push_left[env] = 0;
         const action_size: usize = self.action_width;
         @memset(self.previous_actions[env * action_size ..][0..action_size], 0);
         // The filter starts at rest: the servo aims at the reference until the policy has spoken.
@@ -2147,6 +3031,7 @@ pub const Fleet = struct {
         applied: []f32,
         effort: *rbt.EffortSums,
         drive: *DriveScratch,
+        pull: ?rbt.Pull,
     ) !void {
         const root_len: usize = clip.nq - self.m.coordinate_count;
         // The servo aims where the reference is GOING: during the step from frame i to i+1 it drives
@@ -2221,6 +3106,10 @@ pub const Fleet = struct {
             drive.torque,
         );
         @memcpy(d.applied_joint_forces, drive.torque);
+        // A hand pulling the character, when someone holds one (`pulls`): its force at this state, on the servo's.
+        if (pull) |held| {
+            _ = rbt.addPullForce(self.m, d, held, drive.pull_jacobian, d.applied_joint_forces);
+        }
         // The servo's effort this physics step, dof after dof (`rbt.addDofEffort`): its torques, at the velocities they
         // act through.
         for (rbt.rootDofCount(self.m)..self.m.dof_count) |dof| {
@@ -2287,7 +3176,8 @@ pub const Fleet = struct {
             const world: *zimrphysics.World = &self.worlds[env];
             const bridge: *robot_physics.Bridge = &self.bridges[env];
             const effort: *rbt.EffortSums = &self.effort_sums[env];
-            self.driveOnce(character, world, bridge, clip, at, action, applied, effort, drive) catch {
+            const pull: ?rbt.Pull = self.pulls[env];
+            self.driveOnce(character, world, bridge, clip, at, action, applied, effort, drive, pull) catch {
                 self.drive_failed[env] = true;
             };
         }
@@ -2349,6 +3239,7 @@ pub const Fleet = struct {
                 living_on += 1;
             }
         }
+        const curriculum: ResetCurriculum = self.options.curriculum;
         const settings: rbt.TrackingSettings = .{
             .floor = .{ .friction = task.floor_friction },
             .law = task.gains.law(),
@@ -2387,12 +3278,73 @@ pub const Fleet = struct {
             .push_speed_min = self.options.pushes.speed_min,
             .push_speed_max = self.options.pushes.speed_max,
             .push_start_share = self.options.pushes.start_share,
+            .push_watched_share = self.options.pushes.watchedShare(),
+            .push_watch_decisions = self.options.pushes.watchDecisions(self.decisionSeconds()),
             .decision_seconds = self.decisionSeconds(),
-            .curriculum = if (self.options.curriculum.bin_seconds > 0) .enabled else .disabled,
-            .curriculum_discount = self.options.curriculum.discount,
+            .curriculum = if (curriculum.bin_seconds > 0) .enabled else .disabled,
+            .curriculum_discount = curriculum.discount,
+            .curriculum_rule = curriculum.rule,
+            .curriculum_return_scale = curriculum.returnScale(),
             .rotation_boxes = self.rotation_boxes,
         };
         return settings;
+    }
+
+    /// THE TRAINING HOURS TOLD (`training_hours`), and the pushes' top advanced to them (`rbt.PushTop.advanceTo`):
+    /// along the clock's line, where the last window's watched pushes allow it.
+    pub fn tellTrainingHours(self: *Fleet, hours: f32) void {
+        self.training_hours = hours;
+        const pushes: Pushes = self.options.pushes;
+        self.push_top.advanceTo(pushes.brake, pushes.full_hours, hours);
+    }
+
+    /// How far the range of push speeds has opened, from 0 to 1 (`rbt.PushTop`).
+    pub fn pushTopShare(self: *const Fleet) f32 {
+        return self.push_top.share;
+    }
+
+    /// The top of the range open now, in m/s: the speed the hardest push drawn can have, and a start in trouble's.
+    pub fn pushTopSpeed(self: *const Fleet) f32 {
+        const pushes: Pushes = self.options.pushes;
+        return rbt.pushSpeed(pushes.speed_min, pushes.speed_max, self.push_top.share, 1.0);
+    }
+
+    /// The top's speed where the clock's line stands at the hours told - what the top would be had no window held
+    /// it.
+    pub fn pushLineSpeed(self: *const Fleet) f32 {
+        const pushes: Pushes = self.options.pushes;
+        const line_share: f32 = rbt.PushTop.lineShare(pushes.full_hours, self.training_hours);
+        return rbt.pushSpeed(pushes.speed_min, pushes.speed_max, line_share, 1.0);
+    }
+
+    /// A WATCHED PUSH ENDED - kept, returned or failed - counted for the brake's window and the run's log. The
+    /// fleet's step calls it for its own characters; a device's host for the worlds it reads back
+    /// (`robotgpu_host.countTrainerDecisions`).
+    pub fn noteWatchedPush(self: *Fleet, came_back: bool) void {
+        self.watched_pushes_settled += 1;
+        if (came_back) {
+            self.watched_pushes_came_back += 1;
+        }
+        self.push_top.noteSettled(came_back);
+    }
+
+    /// The pushes as a decision draws them (`rbt.drawPush`): the settings, the top as far as it has opened, and the
+    /// brake's watch in decisions.
+    pub fn pushRule(self: *const Fleet) rbt.PushRule {
+        const pushes: Pushes = self.options.pushes;
+        const decision_seconds: f32 = self.decisionSeconds();
+        const rule: rbt.PushRule = .{
+            .every = pushes.every,
+            .rate_per_second = pushes.rate_per_second,
+            .speed_min = pushes.speed_min,
+            .speed_max = pushes.speed_max,
+            .top_share = self.push_top.share,
+            .watched_share = pushes.watchedShare(),
+            .watch_decisions = pushes.watchDecisions(decision_seconds),
+            .decision_seconds = decision_seconds,
+            .grace_steps = self.options.task.termination.grace_steps,
+        };
+        return rule;
     }
 
     /// Push character `env` (`Pushes`): its whole body's velocity changed by `speed` m/s in the horizontal direction
@@ -2408,11 +3360,6 @@ pub const Fleet = struct {
     /// WHY A NEW SEGMENT. The replay's windows must be unbroken stretches of motion that a world model can predict
     /// from the state alone. A push comes from outside the state - nothing in the step before it could have seen it
     /// coming - so the stretch before it and the stretch after it are two segments, and no window spans the push.
-    /// How far the pushes' schedule has come (`Pushes.scheduleShare`) at the training hours the fleet was told.
-    pub fn pushScheduleShare(self: *const Fleet) f32 {
-        return self.options.pushes.scheduleShare(self.training_hours);
-    }
-
     pub fn push(self: *Fleet, env: usize, speed: f32, direction_rad: f32) void {
         const character_data: *rbt.Data = &self.data[env];
         const velocity_change_x: f32 = speed * @cos(direction_rad);
@@ -2425,6 +3372,19 @@ pub const Fleet = struct {
         rbt.forward(self.m, character_data);
         self.segment[env] = self.next_segment;
         self.next_segment += 1;
+    }
+
+    /// Character `env`'s reference a frame on - except, where episodes do not restart (`Options.restarts_episodes`),
+    /// at its clip's last frame with a goal after it: there the reference holds still and the character goes on
+    /// tracking its last pose, until someone restarts it.
+    fn advanceReferenceFrame(self: *Fleet, env: usize) void {
+        const clip: *const dance.Clip = self.clips[self.clip_of[env]];
+        const last_held_frame: usize = clip.frame_count - 2;
+        const holds: bool = !self.options.restarts_episodes and self.frame[env] >= last_held_frame;
+        if (holds) {
+            return;
+        }
+        self.frame[env] += 1;
     }
 
     /// One PHYSICS STEP for every character, in tasks when the fleet has threads (`Options.physics_threads`) - each
@@ -2441,13 +3401,15 @@ pub const Fleet = struct {
     }
 
     /// One DECISION for every environment: record, drive the physics (`Options.decide_every` physics steps, the targets
-    /// held), measure, and start again where needed. `actions` is `envs * actionSize(m)` long, each in [-1, 1].
+    /// held), measure, and start again where needed. `actions` is `envs * action_width` long, each in [-1, 1].
     /// Returns the mean reward.
     pub fn step(self: *Fleet, actions: []const f32) f32 {
         const size: usize = self.action_width;
         // This decision's number: the counter of its pushes' draws (`rbt.drawWord`).
         self.decision_number +%= 1;
         const decision: u32 = self.decision_number;
+        // The pushes as this decision draws them: the top where the training clock and the brake have brought it.
+        const push_rule: rbt.PushRule = self.pushRule();
         assertf(actions.len == self.options.envs * size, @src(), "actions are {d} long, want {d}", .{
             actions.len,
             self.options.envs * size,
@@ -2484,20 +3446,29 @@ pub const Fleet = struct {
         var physics_step: u32 = 1;
         while (physics_step < physics_steps) : (physics_step += 1) {
             self.physicsStep(actions);
-            for (self.frame[0..self.options.envs]) |*frame| {
-                frame.* += 1;
+            for (0..self.options.envs) |env| {
+                self.advanceReferenceFrame(env);
             }
         }
         self.physicsStep(actions);
         for (0..self.options.envs) |env| {
             const clip: *const dance.Clip = self.clips[self.clip_of[env]];
             const d: *rbt.Data = &self.data[env];
-            self.frame[env] += 1;
+            self.advanceReferenceFrame(env);
             self.steps[env] += 1;
             self.steps_total += 1;
             stateOf(self.m, d, &self.sim_state);
-            exemptFromContact(&self.sim_state, self.contact_exempt);
             self.referenceStateAt(clip, self.frame[env]);
+            // The quality before the feet are exempted from contact: their lowest points are what it reads.
+            self.quality[env] = .{};
+            if (self.options.measures_quality) {
+                const quality_rule: QualityRule = .{};
+                var quality: QualityStep =
+                    measureQuality(self.sim_state, self.reference_state, self.root, self.contact_exempt, quality_rule);
+                quality.joint_error = jointError(self.m, d.joint_positions, self.reference_data.joint_positions);
+                self.quality[env] = quality;
+            }
+            exemptFromContact(&self.sim_state, self.contact_exempt);
             const sim: State = self.sim_state;
             const err: TrackingError = trackingErrorWithHead(sim, self.reference_state, self.root, self.head);
             const earned: f32 = reward(err, self.options.task.weights);
@@ -2534,8 +3505,15 @@ pub const Fleet = struct {
                 self.returns += 1;
                 self.return_steps_sum += verdict.return_length;
             }
+            // A watched push, after the judgement (`rbt.settleWatchedPush`): one that ends counted is the brake's.
+            const watched_end: rbt.WatchedPushEnd = rbt.settleWatchedPush(&self.watched_push_left[env], verdict);
+            if (watched_end.isCounted()) {
+                self.noteWatchedPush(watched_end.cameBack());
+            }
             const lost: bool = verdict.lost;
-            const finished: bool = verdict.finished;
+            // An episode ends only where ended episodes restart (`Options.restarts_episodes`): a viewer's character
+            // lives on, its losses still counted.
+            const finished: bool = verdict.finished and self.options.restarts_episodes;
             const was_in_aftermath: bool = verdict.in_aftermath;
             const aftermath_begins: bool = verdict.aftermath_begins;
             const ends_at_loss: bool = verdict.ends_at_loss;
@@ -2573,42 +3551,36 @@ pub const Fleet = struct {
                 self.terminal_clip[env] = self.clip_of[env];
                 // The finished episode into its start bin: a failure, unless it was cut short at the cap.
                 if (self.bins_start.len > 0) {
-                    const ended_by_failure: bool = !capped and (ends_at_loss or was_in_aftermath);
+                    const ended_by_failure: bool = rbt.episodeEndedByFailure(capped, ends_at_loss, was_in_aftermath);
                     self.foldEpisodeIntoStartBin(env, ended_by_failure);
                 }
                 self.ended_this_decision[env] = true;
                 continue;
             }
-            // A push from outside (`Pushes`): on the schedule, or at a random moment.
+            // A push from outside (`Pushes`): on the schedule, or at a random moment - robot.zig's one rule
+            // (`rbt.drawPush`), the device's too.
             //
             // The random moments are a POISSON PROCESS of `rate_per_second`, made one step at a time: each step pushes
             // with probability rate x dt, independently of every other step. Over a second that is about `rate`
             // pushes, with the gaps between them exponentially distributed - no rhythm a policy could learn to expect.
             // (A Bernoulli draw per step is the Poisson process exactly in the limit of small rate x dt; at 60 Hz and a
             // push every few seconds, rate x dt is below 0.01, and two pushes in one step never matter.)
-            const push_settings: Pushes = self.options.pushes;
-            const is_scheduled_push: bool = push_settings.every > 0 and self.steps[env] % push_settings.every == 0;
-            // A decision lasts its physics steps: the chance of a push in it is the rate over that time.
-            const step_seconds: f32 = self.decisionSeconds();
-            // The random pushes' rate and the speeds' range as far as the schedule has opened them.
-            const schedule_share: f32 = self.pushScheduleShare();
-            const push_probability_this_step: f32 = push_settings.rate_per_second * schedule_share * step_seconds;
-            const pushes_at_random: bool = push_settings.rate_per_second > 0;
             const push_world: u32 = @intCast(env);
-            const chance_draw: f32 = rbt.drawUniform(self.draw_seed, push_world, decision, .push_chance, 0);
-            const is_random_push: bool = pushes_at_random and chance_draw < push_probability_this_step;
-            if (is_scheduled_push or is_random_push) {
-                // The speed uniform in its range, the direction uniform round the vertical.
-                const full_range: f32 = push_settings.speed_max - push_settings.speed_min;
-                const push_speed_range: f32 = full_range * schedule_share;
-                const speed_draw: f32 = rbt.drawUniform(self.draw_seed, push_world, decision, .push_speed, 0);
-                const direction_of_push: f32 =
-                    rbt.drawUniform(self.draw_seed, push_world, decision, .push_direction, 0);
-                const push_speed: f32 = push_settings.speed_min + push_speed_range * speed_draw;
-                const push_direction_rad: f32 = 2.0 * pi * direction_of_push;
-                self.push(env, push_speed, push_direction_rad);
+            const still_in_aftermath: bool = self.aftermath_steps_left[env] > 0;
+            const drawn: rbt.DrawnPush = rbt.drawPush(
+                push_rule,
+                self.draw_seed,
+                push_world,
+                decision,
+                self.steps[env],
+                self.watched_push_left[env],
+                still_in_aftermath,
+            );
+            if (drawn.is_pushed) {
+                self.push(env, drawn.speed, drawn.direction_rad);
                 self.pushes_given += 1;
-                self.push_speed_sum += push_speed;
+                self.push_speed_sum += drawn.speed;
+                self.watched_push_left[env] = drawn.watch_decisions;
             }
         }
         // EVERY ENDED EPISODE RESTARTS TOGETHER, once all are folded into their start bins (`restartEnded`).
@@ -2963,7 +3935,7 @@ const Rig = struct {
     }
 };
 
-// ==== THE JUDGE (plan F1) ====
+// ==== THE JUDGE ====
 //
 // One way to say how good a controller is, used for every learner: fixed starts spread over a clip, the controller's
 // MEAN action (no exploration), each start run until the task's rule loses the reference or the clip ends - and the
@@ -3007,6 +3979,8 @@ pub const Judgement = struct {
     /// (1 when it reached the end): their sum, and the sum of their squares (`meanTrackedShare`).
     tracked_share_sum: f64 = 0.0,
     tracked_share_squares: f64 = 0.0,
+    /// The tracking quality over every start's first episode (`QualitySums`, BlinkMimic's measures).
+    quality: QualitySums = .{},
 
     /// Mean time to failure (seconds): the time watched per failure - the number that says how long a character
     /// keeps the reference. With no failure at all it is the whole time watched: a lower bound.
@@ -3065,7 +4039,7 @@ pub const Judgement = struct {
     /// step from each start's frame to the clip's end. 1 for a character that coincides with its reference all the
     /// way; a start that loses the reference stops earning, so its unearned steps count against it.
     pub fn superMimicNormalisedReturn(self: Judgement, scales: SuperMimicScales) f32 {
-        const step_maximum: f64 = float64(scales.maxStepTracking());
+        const step_maximum: f64 = scales.maxStepTracking();
         const most_earnable: f64 = step_maximum * float64(@max(self.super_mimic_available_steps, 1));
         return @floatCast(self.super_mimic_return_sum / most_earnable);
     }
@@ -3097,6 +4071,7 @@ pub fn judgeOptions(
     judged.pushes = .{};
     judged.max_steps = @intCast(clip.frame_count);
     judged.task.termination.grace_steps = 0;
+    judged.measures_quality = true;
     return judged;
 }
 
@@ -3128,7 +4103,9 @@ pub const Judging = struct {
         for (starts, 0..) |frame, env| {
             fleet.startAt(env, 0, frame);
         }
-        const actions: []f32 = try gpa.alloc(f32, starts.len * actionSize(m));
+        // An action of the fleet's own width per start: the joints' offsets, and the limbs' stiffnesses where the
+        // judged fleet's action carries them (`Fleet.Options.limb_stiffness`).
+        const actions: []f32 = try gpa.alloc(f32, starts.len * fleet.action_width);
         errdefer gpa.free(actions);
         @memset(actions, 0.0);
         const finished: []bool = try gpa.alloc(bool, starts.len);
@@ -3193,6 +4170,7 @@ pub const Judging = struct {
                 self.first_episode_steps[env] += 1;
                 self.result.reward_sum += self.fleet.rewards[env];
                 self.result.super_mimic_return_sum += self.fleet.super_mimic_rewards[env];
+                self.result.quality.add(self.fleet.quality[env]);
                 if (!self.fleet.dones[env]) {
                     continue;
                 }
@@ -3253,12 +4231,6 @@ pub const ProbeSteps = struct {
     return_hold: u32,
 };
 
-/// `seconds` in steps of `step_seconds`, rounded to the nearest.
-fn stepsIn(seconds: f32, step_seconds: f32) u32 {
-    const steps: u32 = @round(seconds / step_seconds);
-    return steps;
-}
-
 /// How the recovery probe pushes and watches (`probeRecovery`).
 pub const RecoveryProbe = struct {
     /// The push speeds probed, one band each, in m/s: a nudge, a push that needs a step, harder ones.
@@ -3318,6 +4290,13 @@ pub const RecoveryBand = struct {
     returned: usize = 0,
     return_steps_sum: usize = 0,
     not_returned: usize = 0,
+    /// HOW THE RETURNS MOVED - fluid, or snapping back - over the decisions from each loss to its return, for the
+    /// losses that returned: how many decisions were measured, the action's rate of change summed over them
+    /// (`actionChangeRate`), and the root's jerk summed (`rootJerk`). A decision is measured once two decisions have
+    /// passed since the push, so that the push itself - a jump of velocity from outside - is in no jerk.
+    return_fluid_steps: usize = 0,
+    return_action_rate_sum: f32 = 0,
+    return_jerk_sum: f32 = 0,
 
     /// The share of pushes survived.
     pub fn survivalRate(band: RecoveryBand) f32 {
@@ -3345,6 +4324,89 @@ pub const RecoveryBand = struct {
     pub fn meanReturnSeconds(band: RecoveryBand) f32 {
         const mean_steps: f32 = float(band.return_steps_sum) / float(@max(band.returned, 1));
         return mean_steps * band.step_seconds;
+    }
+
+    /// The action's mean rate of change during the returns, in action units per second.
+    pub fn meanReturnActionRate(band: RecoveryBand) f32 {
+        return band.return_action_rate_sum / float(@max(band.return_fluid_steps, 1));
+    }
+
+    /// The root's mean jerk during the returns, in m/s^3.
+    pub fn meanReturnJerk(band: RecoveryBand) f32 {
+        return band.return_jerk_sum / float(@max(band.return_fluid_steps, 1));
+    }
+};
+
+/// THE ACTION's RATE OF CHANGE from one decision to the next, in action units per second: the root mean square of
+/// the change over the action's numbers, over the decision's seconds. A policy that holds its action scores 0; one
+/// that flips every number by 0.2 each decision at 30 decisions a second scores 6.
+pub fn actionChangeRate(
+    previous_action: []const f32,
+    action: []const f32,
+    decision_seconds: f32,
+) f32 {
+    assertf(previous_action.len == action.len and action.len > 0, @src(), "actions of {d} and {d} numbers", .{
+        previous_action.len,
+        action.len,
+    });
+    var square_sum: f32 = 0;
+    for (previous_action, action) |before, now| {
+        const change: f32 = now - before;
+        square_sum += change * change;
+    }
+    const root_mean_square: f32 = @sqrt(square_sum / float(action.len));
+    return root_mean_square / decision_seconds;
+}
+
+/// THE ROOT's JERK, in m/s^3: the length of the second difference of three successive decisions' root velocities,
+/// over the decision's seconds squared - the rate at which the root's acceleration changes. Steady motion and steady
+/// acceleration score 0; a body yanked about scores high.
+///
+///     jerk  =  | v_now - 2 v_last + v_before_last |  /  dt^2
+pub fn rootJerk(
+    velocity_before_last: Vec,
+    velocity_last: Vec,
+    velocity_now: Vec,
+    decision_seconds: f32,
+) f32 {
+    const second_difference: Vec = velocity_now - velocity_last - velocity_last + velocity_before_last;
+    return length3(second_difference) / (decision_seconds * decision_seconds);
+}
+
+/// HOW ONE START's RETURN MOVES (`RecoveryBand`'s fluid numbers): its root's velocity at the last two decisions, and
+/// the sums over the decisions measured so far.
+pub const ReturnMotion = struct {
+    velocity_before_last: Vec = @splat(0),
+    velocity_last: Vec = @splat(0),
+    measured_steps: usize = 0,
+    action_rate_sum: f32 = 0,
+    jerk_sum: f32 = 0,
+
+    /// Whether a decision is measured: while the reference is lost, and once two decisions since the push stand
+    /// behind it - the push, a jump of velocity from outside, then lies in no jerk. `decisions_since_push` is 1 at
+    /// the decision the push begins.
+    pub fn isMeasured(is_lost: bool, decisions_since_push: usize) bool {
+        return is_lost and decisions_since_push >= 3;
+    }
+
+    /// One decision: its root `velocity` kept for the next two jerks - and, when `is_measured`, the decision measured:
+    /// the action's rate from `action_before` to `action`, and the root's jerk over the three velocities.
+    pub fn note(
+        motion: *ReturnMotion,
+        velocity: Vec,
+        action_before: []const f32,
+        action: []const f32,
+        decision_seconds: f32,
+        is_measured: bool,
+    ) void {
+        if (is_measured) {
+            motion.measured_steps += 1;
+            motion.action_rate_sum += actionChangeRate(action_before, action, decision_seconds);
+            const jerk: f32 = rootJerk(motion.velocity_before_last, motion.velocity_last, velocity, decision_seconds);
+            motion.jerk_sum += jerk;
+        }
+        motion.velocity_before_last = motion.velocity_last;
+        motion.velocity_last = velocity;
     }
 };
 
@@ -3393,8 +4455,9 @@ fn probeBand(
     for (starts, 0..) |start_frame, env| {
         probe_fleet.startAt(env, 0, start_frame);
     }
-    // With no actor every action stays zero: the servo alone, tracking the reference by PD.
-    const actions: []f32 = try gpa.alloc(f32, start_count * actionSize(m));
+    // With no actor every action stays zero: the servo alone, tracking the reference by PD. Each action is of the
+    // probed fleet's own width - the limbs' stiffnesses after the offsets where its action carries them.
+    const actions: []f32 = try gpa.alloc(f32, start_count * probe_fleet.action_width);
     defer gpa.free(actions);
     @memset(actions, 0.0);
     // Per start: whether it still counts, its reward summed over the settle, the ring of its latest rewards, and
@@ -3420,6 +4483,14 @@ fn probeBand(
     const was_lost: []bool = try gpa.alloc(bool, start_count);
     defer gpa.free(was_lost);
     @memset(was_lost, false);
+    // THE RETURN's FLUIDITY, measured while a start is lost and kept until it returns (`RecoveryBand`): the actions
+    // given the decision before, each start's root velocity at the last two decisions, and its sums so far.
+    const previous_actions: []f32 = try gpa.alloc(f32, actions.len);
+    defer gpa.free(previous_actions);
+    const motions: []ReturnMotion = try gpa.alloc(ReturnMotion, start_count);
+    defer gpa.free(motions);
+    @memset(motions, .{});
+    const action_width: usize = probe_fleet.action_width;
     // The push directions: one generator per band, from the probe's seed, so every controller probed with the same
     // seed is pushed in the same directions.
     var direction_generator: Random.DefaultPrng = .init(probe.seed +% band_index);
@@ -3438,6 +4509,7 @@ fn probeBand(
                 band.pushes += 1;
             }
         }
+        @memcpy(previous_actions, actions);
         if (actor) |controller| {
             controller.act(controller.context, probe_fleet, actions);
         }
@@ -3465,10 +4537,20 @@ fn probeBand(
                 was_lost[env] = true;
                 band.lost += 1;
             }
-            // Back with the reference after its loss: the return and its time, and the start is done.
+            // How it moves: measured while lost, once two decisions since the push stand behind this one.
+            const root_velocity: []const f32 = probe_fleet.data[env].joint_velocities[0..3];
+            const velocity: Vec = vec(root_velocity[0], root_velocity[1], root_velocity[2]);
+            const action_now: []const f32 = actions[env * action_width ..][0..action_width];
+            const action_before: []const f32 = previous_actions[env * action_width ..][0..action_width];
+            const is_measured: bool = ReturnMotion.isMeasured(was_lost[env], steps_since_push);
+            motions[env].note(velocity, action_before, action_now, decision_seconds, is_measured);
+            // Back with the reference after its loss: the return, its time and how it moved, and the start is done.
             if (probe_fleet.returned[env] and was_lost[env]) {
                 band.returned += 1;
                 band.return_steps_sum += probe_fleet.steps_since_loss[env];
+                band.return_fluid_steps += motions[env].measured_steps;
+                band.return_action_rate_sum += motions[env].action_rate_sum;
+                band.return_jerk_sum += motions[env].jerk_sum;
                 is_counted.* = false;
                 continue;
             }
@@ -3711,6 +4793,119 @@ pub fn liftPerFrame(
     return largest;
 }
 
+test "robot_track: a planner's labels are kept once its stretch of plan ends well - dropped where it failed" {
+    // FIVE WORLDS, twelve records each, into a ring of eight - so the labels of records 0 to 3 are forgotten by the
+    // end. Each world's records, one character a record, and what each record's moment says of the decision before:
+    //
+    //     B   a plan's first decision            F   that decision failed: it lost the reference
+    //     L   a plan's later decision            E   it ended the episode, capped: this record opens another
+    //     .   the policy's                       P   it pushed the world: a new stretch of motion, the same episode
+    //
+    //              record   0 1 2 3 4 5 6 7 8 9 10 11
+    //     world 0           B L L L B L L L B L L  L       follows every plan whole
+    //     world 1           B . . . B . . . B . .  .       takes each plan's first action alone
+    //     world 2           B L L L B L L L B L L  L       its decision 5 fails (F at record 6)
+    //     world 3           B L L . B L L . B L L  L       its episode ends after 2 (E at 3); pushed after 6 (P at 7)
+    //     world 4           B L L L B L L L B L L  L       its decision 1 fails (F at record 2), and the world lives on
+    //                                                      in its aftermath: every record from 2 on is after the loss
+    //
+    // SETTLED, step by step:
+    //     step 1   world 1's [0] kept                 step 7   world 3's [4 5 6] kept whole: the push ends it well
+    //     step 3   world 3's [0 1] kept, 2 dropped:   step 8   world 0's [4 5 6 7] kept; world 2's [4 5 6 7]
+    //              its goal is the next episode's              dropped with its failed plan; world 4's [4 5 6 7]
+    //     step 4   worlds 0 and 2's [0 1 2 3] kept;            dropped, every decision of it after the loss
+    //              world 4's [0 1 2 3] dropped        step 9   world 1's [8] kept
+    //              with its failed plan
+    //     step 5   world 1's [4] kept
+    // and the stretches begun at 8 still open at the end. After record 11 the ring holds 4 to 11.
+    const gpa: Allocator = testing_allocator;
+    const world_count: usize = 5;
+    const record_count: usize = 12;
+    const ring_capacity: usize = 8;
+    const actions = [world_count]*const [record_count]u8{
+        "BLLLBLLLBLLL",
+        "B...B...B...",
+        "BLLLBLLLBLLL",
+        "BLL.BLL.BLLL",
+        "BLLLBLLLBLLL",
+    };
+    const events = [world_count]*const [record_count]u8{
+        "............",
+        "............",
+        "......F.....",
+        "...E...P....",
+        "..F.........",
+    };
+    // The first record after a loss in each world that lives on after one, or none.
+    const aftermath_from = [world_count]?usize{ null, null, null, null, 2 };
+    var labels: LabelBooks = try .init(gpa, world_count, ring_capacity);
+    defer labels.deinit(gpa);
+    var episode_steps: [world_count]u32 = @splat(10);
+    var moments: [world_count]rbt.RecordMoment = undefined;
+    for (0..record_count) |record| {
+        for (0..world_count) |world| {
+            const event: u8 = events[world][record];
+            const action: u8 = actions[world][record];
+            const opens_episode: bool = event == 'E';
+            if (opens_episode) {
+                episode_steps[world] = 0;
+            }
+            const after_loss: bool = if (aftermath_from[world]) |first| record >= first else false;
+            moments[world] = .{
+                .starts_segment = opens_episode or event == 'P',
+                .episode_step = episode_steps[world],
+                .after_loss = after_loss,
+                .labelled = action != '.',
+                .begins_plan = action == 'B',
+                .previous_decision_failed = event == 'F',
+            };
+            episode_steps[world] += 1;
+        }
+        labels.appendStep(&moments, record);
+    }
+    // KEPT, in the order settled, records 0 to 3 forgotten.
+    const expected = [_]Label{
+        .{ .env = 1, .index = 4 },
+        .{ .env = 3, .index = 4 },
+        .{ .env = 3, .index = 5 },
+        .{ .env = 3, .index = 6 },
+        .{ .env = 0, .index = 4 },
+        .{ .env = 0, .index = 5 },
+        .{ .env = 0, .index = 6 },
+        .{ .env = 0, .index = 7 },
+        .{ .env = 1, .index = 8 },
+    };
+    try expectEqualSlices(Label, &expected, labels.keptLabels());
+    // The counts since the beginning: 8 + 3 + 4 + 5 kept, forgotten ones among them; world 2's four and world 4's
+    // first four dropped with their failed plans, world 4's next four for their decisions after its loss; world 3's
+    // record 2 dropped where its episode ended.
+    try expectEqual(@as(u64, 20), labels.labels_kept);
+    try expectEqual(@as(u64, 8), labels.labels_dropped_with_failed_plans);
+    try expectEqual(@as(u64, 4), labels.labels_dropped_after_losses);
+    try expectEqual(@as(u64, 1), labels.labels_dropped_at_episode_ends);
+    // The stretches begun at record 8 still open - world 1 took its plan's first action alone, and that one is kept.
+    const open_lengths = [world_count]u32{ 4, 0, 4, 4, 4 };
+    try expectEqualSlices(u32, &open_lengths, labels.stretch_length);
+    // DRAWN UNIFORMLY: every kept label drawn, each about as often as the others.
+    var prng: Random.DefaultPrng = .init(5);
+    const random: Random = prng.random();
+    var draws_of: [expected.len]u32 = @splat(0);
+    const draw_count: u32 = 9000;
+    for (0..draw_count) |_| {
+        const drawn: Label = labels.drawLabel(random) orelse return error.NothingKept;
+        const at: usize = for (expected, 0..) |label, place| {
+            if (label.env == drawn.env and label.index == drawn.index) {
+                break place;
+            }
+        } else return error.DrawnLabelNotKept;
+        draws_of[at] += 1;
+    }
+    const mean_draws: f32 = float(draw_count) / float(expected.len);
+    for (draws_of) |draws| {
+        try expect(@abs(float(draws) - mean_draws) < 0.2 * mean_draws);
+    }
+}
+
 test "robot_track: a judgement's standard errors are the per-start formulas, worked from its sums" {
     // Four starts: their first episodes lasted 100, 50, 200 and 30 steps, the third reaching the clip's end and the
     // others losing the reference, with 200, 100, 200 and 300 steps of the clip before them. The judgement keeps only
@@ -3833,6 +5028,30 @@ test "robot_track: two axes and back" {
         worst = @max(worst, length3(vec(back[0] - q[0], back[1] - q[1], back[2] - q[2])) + @abs(back[3] - q[3]));
     }
     try expect(worst < 1.0e-6);
+}
+
+test "robot_track: the root's cost weighs against the bodies as SuperMimic's root against its bodies" {
+    // A world and three character bodies, the first the root: 51 features. The two bodies beside the root move their
+    // positions' numbers by 0.2 and their axes' by 0.5; the root's never move - floored at 0.001, and left out, else
+    // they alone would decide. Half the bodies' weight: 0.5 x (2 / 51) / 0.2^2 per m^2 and 0.5 x (2 / 51) / 0.5^2.
+    const gpa: Allocator = testing_allocator;
+    const bodies: usize = 4;
+    const root: usize = 1;
+    const spreads: []f32 = try gpa.alloc(f32, localSize(bodies));
+    defer gpa.free(spreads);
+    @memset(spreads, 1.0);
+    for (1..bodies) |body| {
+        const is_root: bool = body == root;
+        @memset(spreads[localPositionColumn(bodies, body)..][0..3], if (is_root) 1.0e-3 else 0.2);
+        @memset(spreads[localRotationColumn(bodies, body)..][0..6], if (is_root) 1.0e-3 else 0.5);
+    }
+    const weights: RootCostWeights = rootCostWeights(spreads, bodies, root, .{});
+    try expectApproxEqRel(0.5 * (2.0 / 51.0) / (0.2 * 0.2), weights.position, 1.0e-5);
+    try expectApproxEqRel(0.5 * (2.0 / 51.0) / (0.5 * 0.5), weights.rotation, 1.0e-5);
+    // The shares scale the weights, and a share of 0 turns a term off.
+    const position_only: RootCostWeights = rootCostWeights(spreads, bodies, root, .{ .position = 1.0, .rotation = 0 });
+    try expectApproxEqRel(2.0 * weights.position, position_only.position, 1.0e-5);
+    try expect(position_only.rotation == 0);
 }
 
 test "robot_track: local is blind to where you stand and which way you face - and to nothing else" {
@@ -5221,6 +6440,68 @@ test "robot_track: the recovery probe - a nudge survived more often than a hard 
     }
 }
 
+test "robot_track: a fleet that restarts nothing lives on after its losses, and a hand lifts a character" {
+    // The servo alone loses the walk within a second. A fleet told not to restart its episodes
+    // (`Options.restarts_episodes` off) ends none in 700 decisions - past the ten-second clip's end - while its losses
+    // are still judged; its reference holds the clip's last frame with a goal after it. Beside it, a fleet that
+    // restarts ends many. A third character, pulled by a hand at his root toward a point two metres above where he
+    // started (`pulls`), stands higher after a second than his twin left alone.
+    const options = @import("build_options");
+    const slow: bool = comptime @hasDecl(options, "slow_tests") and options.slow_tests;
+    if (!slow) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    var walk: dance.Clip = loadClip(gpa, threaded.io(), "assets/lafan1/walk1_subject2.bvh", 10.0) catch
+        return error.SkipZigTest;
+    defer walk.deinit();
+    var rig: Rig = undefined;
+    try rig.init(gpa, 1.0 / 60.0);
+    defer rig.deinit();
+    const m: *rbt.Model = rig.model();
+    const clips = [_]*const dance.Clip{&walk};
+    const lives_on: *Fleet = try .init(gpa, m, &clips, .{ .envs = 1, .capacity = 16, .restarts_episodes = false });
+    defer lives_on.deinit();
+    const restarting: *Fleet = try .init(gpa, m, &clips, .{ .envs = 1, .capacity = 16 });
+    defer restarting.deinit();
+    const actions: []f32 = try gpa.alloc(f32, actionSize(m));
+    defer gpa.free(actions);
+    @memset(actions, 0.0);
+    var losses_judged: usize = 0;
+    for (0..700) |_| {
+        _ = lives_on.step(actions);
+        _ = restarting.step(actions);
+        try expect(!lives_on.dones[0]);
+        losses_judged += @intFromBool(lives_on.failures[0]);
+    }
+    try expectEqual(@as(usize, 0), lives_on.episodes);
+    try expect(losses_judged > 0);
+    try expectEqual(walk.frame_count - 2, @as(usize, lives_on.frame[0]));
+    try expect(restarting.episodes > 3);
+    // The hand: two characters from the same start, one pulled at his root.
+    const pulled: *Fleet = try .init(gpa, m, &clips, .{ .envs = 1, .capacity = 16, .restarts_episodes = false });
+    defer pulled.deinit();
+    const alone: *Fleet = try .init(gpa, m, &clips, .{ .envs = 1, .capacity = 16, .restarts_episodes = false });
+    defer alone.deinit();
+    const root_body: u32 = 1;
+    const start_root: Vec = pulled.data[0].body_positions[root_body];
+    pulled.pulls[0] = .{
+        .body = root_body,
+        .point_local = vec(0, 0, 0),
+        .target = start_root + vec(0, 0, 2),
+        .mass = m.body_subtree_mass[root_body],
+    };
+    for (0..60) |_| {
+        _ = pulled.step(actions);
+        _ = alone.step(actions);
+    }
+    const pulled_height: f32 = pulled.data[0].body_positions[root_body][2];
+    const alone_height: f32 = alone.data[0].body_positions[root_body][2];
+    try expect(pulled_height > alone_height + 0.5);
+}
+
 test "robot_track: rows after a loss are flagged, policy windows never start on one; no aftermath changes nothing" {
     // The servo alone (every action zero) loses the walk within a second, so losses are certain. A fleet whose first
     // half lives on 30 steps after a loss (`aftermath_share` 0.5): only that half records rows after a loss, and a
@@ -5313,6 +6594,99 @@ fn superMimicTestReference(gpa: Allocator) !State {
         reference.angular[body] = vec(0.0, 0.3 * index, 0.1);
     }
     return reference;
+}
+
+/// A check of a measured number against its value by hand, within `tolerance`, named for the failure's line.
+fn holdsNear(
+    checks: *report.Checks,
+    name: []const u8,
+    found: f32,
+    expected: f32,
+    tolerance: f32,
+) void {
+    checks.holds(@abs(found - expected) <= tolerance, "{s}: {d}, {d} expected\n", .{ name, found, expected });
+}
+
+/// A check of a count against its value by hand, named for the failure's line.
+fn holdsCount(
+    checks: *report.Checks,
+    name: []const u8,
+    found: u32,
+    expected: u32,
+) void {
+    checks.holds(found == expected, "{s}: {d}, {d} expected\n", .{ name, found, expected });
+}
+
+test "tracking quality by hand: re-anchored errors, the feet's contacts, slip and depth, and the means' units" {
+    // The test reference's six bodies, bodies 4 and 5 the feet: foot 4 on the floor (5 mm), foot 5 in the air.
+    //   step 1  the character is the reference lifted 5 cm and still: every body 5 cm off (re-anchoring keeps the
+    //           height),
+    //           the root 5 cm off; foot 4 now in the air - one foot of two agrees - and nothing touches, so
+    //           nothing slips; the reference's foot 4 slips at |(0.8, 0.1)| = 0.806 m/s.
+    //   step 2  the character is the reference, but foot 5 sinks 4 mm into the floor: both its feet touch, one
+    //           agrees; both slip, at 0.806 and |(1.0, 0.1)| = 1.005 m/s; the depth 4 mm over two feet.
+    const gpa: Allocator = testing_allocator;
+    var reference: State = try superMimicTestReference(gpa);
+    defer reference.deinit(gpa);
+    reference.lowest[4] = 0.005;
+    reference.lowest[5] = 0.3;
+    var lifted: State = try superMimicTestReference(gpa);
+    defer lifted.deinit(gpa);
+    for (lifted.positions, lifted.lowest, reference.lowest) |*position, *lowest, reference_lowest| {
+        position.* += vec(0, 0, 0.05);
+        lowest.* = reference_lowest + 0.05;
+    }
+    // Lifted and still: the reference's slip is its own velocity's, never the character's.
+    @memset(lifted.velocities, @splat(0));
+    var sinking: State = try superMimicTestReference(gpa);
+    defer sinking.deinit(gpa);
+    @memcpy(sinking.lowest, reference.lowest);
+    sinking.lowest[5] = -0.004;
+    const feet = [6]bool{ false, false, false, false, true, true };
+    const root: usize = 1;
+    const rule: QualityRule = .{};
+    const first: QualityStep = measureQuality(lifted, reference, root, &feet, rule);
+    const second: QualityStep = measureQuality(sinking, reference, root, &feet, rule);
+    const tolerance: f32 = 1e-5;
+    var checks: report.Checks = .{};
+    holdsNear(&checks, "first.body_position_error", first.body_position_error, @as(f32, 0.0025), tolerance);
+    holdsNear(&checks, "first.body_rotation_error", first.body_rotation_error, @as(f32, 0), tolerance);
+    holdsNear(&checks, "first.root_distance", first.root_distance, @as(f32, 0.05), tolerance);
+    holdsCount(&checks, "first.feet", first.feet, 2);
+    holdsCount(&checks, "first.contacts_agreeing", first.contacts_agreeing, 1);
+    holdsCount(&checks, "first.contacts", first.contacts, 0);
+    holdsCount(&checks, "first.reference_contacts", first.reference_contacts, 1);
+    const foot_4_speed: f32 = @sqrt(0.8 * 0.8 + 0.1 * 0.1);
+    const foot_5_speed: f32 = @sqrt(1.0 * 1.0 + 0.1 * 0.1);
+    holdsNear(&checks, "first.reference_slip_speed_sum", first.reference_slip_speed_sum, foot_4_speed, tolerance);
+    holdsNear(&checks, "first.penetration", first.penetration, @as(f32, 0), tolerance);
+    holdsCount(&checks, "second.contacts", second.contacts, 2);
+    holdsCount(&checks, "second.contacts_agreeing", second.contacts_agreeing, 1);
+    holdsNear(&checks, "second.slip_speed_sum", second.slip_speed_sum, foot_4_speed + foot_5_speed, tolerance);
+    holdsNear(&checks, "second.penetration", second.penetration, @as(f32, 0.002), tolerance);
+    // The means, in BlinkMimic's units.
+    var sums: QualitySums = .{};
+    sums.add(first);
+    sums.add(second);
+    holdsNear(&checks, "sums.bodyPositionCm()", sums.bodyPositionCm(), @as(f32, 100 * @sqrt(0.0025 / 2.0)), 1e-3);
+    holdsNear(&checks, "sums.rootDistanceCm()", sums.rootDistanceCm(), @as(f32, 2.5), 1e-3);
+    holdsNear(
+        &checks,
+        "sums.footSlipCmPerSecond()",
+        sums.footSlipCmPerSecond(),
+        100 * (foot_4_speed + foot_5_speed) / 2,
+        1e-2,
+    );
+    holdsNear(
+        &checks,
+        "sums.referenceFootSlipCmPerSecond()",
+        sums.referenceFootSlipCmPerSecond(),
+        100 * foot_4_speed,
+        1e-2,
+    );
+    holdsNear(&checks, "sums.contactAgreement()", sums.contactAgreement(), @as(f32, 0.5), 1e-6);
+    holdsNear(&checks, "sums.penetrationMm()", sums.penetrationMm(), @as(f32, 1.0), 1e-3);
+    try checks.finish();
 }
 
 test "SuperMimic's tracking: the reference itself earns every term, 5 in all" {

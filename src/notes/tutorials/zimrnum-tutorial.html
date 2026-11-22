@@ -896,6 +896,7 @@ pub fn linspace(
                 .xavier =&gt; try initXavier(T, weight, rng, fan_in, fan_out),
                 .he =&gt; try initHe(T, weight, rng, fan_in),
                 .small_normal =&gt; try initNormal(T, weight, rng, small_normal_deviation),
+                .fan_in_uniform =&gt; try initFanInUniform(T, weight, rng, fan_in),
             }
             // Biases start at zero. A random bias adds nothing a random weight does not already
             // provide, and a non-zero one shifts every unit's activation before any data is seen.
@@ -1453,6 +1454,7 @@ pub fn Graph(comptime T: type) type {
                 .none =&gt; x,
                 .relu =&gt; try self.relu(x),
                 .mish =&gt; try self.mish(x),
+                .silu =&gt; try self.silu(x),
                 .sim_norm =&gt; |group| try self.simNorm(x, group),
             };
         }
@@ -8135,12 +8137,12 @@ pub fn softplus(comptime T: type, out: Tensor(T), a: Tensor(T)) Error!void {
     }.apply);
 }
 </code></pre></details>
-<details class="src-fold"><summary><code>silu</code></summary><pre><code class="zig">/// `out = a * sigmoid(a)`, elementwise - SiLU, also called swish.
+<details class="src-fold"><summary><code>silu</code></summary><pre><code class="zig">/// `out = a * sigmoid(a)`, elementwise - SiLU, also called swish (`zm.silu`).
 pub fn silu(comptime T: type, out: Tensor(T), a: Tensor(T)) Error!void {
     comptime requireFloat(T);
     return map(T, out, a, struct {
         fn apply(x: T) T {
-            return x * zm.sigmoid(x);
+            return zm.silu(x);
         }
     }.apply);
 }
@@ -9390,7 +9392,7 @@ pub fn argminAll(comptime T: type, a: Tensor(T)) Error!usize {
     const shape: []const usize = a.shape[0..a.rank];
     for (0..n) |i| {
         const x: T = try a.at(walker[0..a.rank]);
-        if (x &lt; best_value or (comptime isFloat(T)) and zm.isNan(best_value)) {
+        if (x &lt; best_value or ((comptime isFloat(T)) and zm.isNan(best_value))) {
             best_value = x;
             best = i;
         }
@@ -12172,7 +12174,7 @@ pub fn argmaxRows(comptime T: type, out: []usize, a: Tensor(T)) Error!void {
         var col: usize = 1;
         while (col &lt; cols) : (col += 1) {
             const x: T = a.at2(row, col);
-            if (x &gt; best or (comptime isFloat(T)) and zm.isNan(best)) {
+            if (x &gt; best or ((comptime isFloat(T)) and zm.isNan(best))) {
                 best = x;
                 best_at = col;
             }
@@ -12199,7 +12201,7 @@ pub fn argmaxAll(comptime T: type, a: Tensor(T)) Error!usize {
     var i: usize = 0;
     while (i &lt; n) : (i += 1) {
         const x: T = a.data[a.offsetOf(walker[0..a.rank])];
-        if (x &gt; best or (comptime isFloat(T)) and zm.isNan(best)) {
+        if (x &gt; best or ((comptime isFloat(T)) and zm.isNan(best))) {
             best = x;
             best_at = i;
         }
@@ -12345,7 +12347,7 @@ pub fn accuracy(
         var col: usize = 1;
         while (col &lt; logits.shape[1]) : (col += 1) {
             const x: T = logits.at2(row, col);
-            if (x &gt; best or (comptime isFloat(T)) and zm.isNan(best)) {
+            if (x &gt; best or ((comptime isFloat(T)) and zm.isNan(best))) {
                 best = x;
                 best_at = col;
             }
@@ -13368,6 +13370,7 @@ pub fn Chain(comptime T: type, comptime Layers: type) type {
                 .xavier =&gt; try initXavier(T, weight, rng, fan_in, fan_out),
                 .he =&gt; try initHe(T, weight, rng, fan_in),
                 .small_normal =&gt; try initNormal(T, weight, rng, small_normal_deviation),
+                .fan_in_uniform =&gt; try initFanInUniform(T, weight, rng, fan_in),
             }
             // Biases start at zero. A random bias adds nothing a random weight does not already
             // provide, and a non-zero one shifts every unit's activation before any data is seen.
@@ -18967,7 +18970,7 @@ pub fn dft(
         var re: CompensatedSum(T) = .{};
         var im: CompensatedSum(T) = .{};
         for (input, 0..) |x, sample| {
-            const angle: T = exponent_sign * @as(T, tau) * @as(T, @floatFromInt(bin * sample % n)) /
+            const angle: T = exponent_sign * @as(T, tau) * @as(T, @floatFromInt((bin * sample) % n)) /
                 @as(T, @floatFromInt(n));
             const c: T = scalarCos(angle);
             const s: T = scalarSin(angle);
@@ -19879,6 +19882,7 @@ pub fn Conv2d(comptime T: type) type {
                 .xavier =&gt; try initXavier(T, kernel, rng, fan_in, fan_in),
                 .he =&gt; try initHe(T, kernel, rng, fan_in),
                 .small_normal =&gt; try initNormal(T, kernel, rng, small_normal_deviation),
+                .fan_in_uniform =&gt; try initFanInUniform(T, kernel, rng, fan_in),
             }
             bias.fill(0);
             return .{ .kernel = kernel, .bias = bias, .stride = stride, .pad = pad };
@@ -19967,6 +19971,7 @@ backward rule was written for attention itself.</p>
 
 <pre><code class="zig">try zn.initXavier(f64, w, rng, fan_in, fan_out);   // uniform &plusmn;&radic;(6/(in+out))
 try zn.initHe(f64, w, rng, fan_in);                 // normal, deviation &radic;(2/in)
+try zn.initFanInUniform(f64, w, rng, fan_in);       // uniform &plusmn;1/&radic;in, PyTorch's default
 
 const layer: zn.Dense(f64) = try .init(a, rng, 2, 16, .he);
 const attached = try layer.attach(&amp;graph, input);
@@ -20022,6 +20027,28 @@ pub fn initHe(comptime T: type, w: Tensor(T), rng: Rng, fan_in: usize) Error!voi
     }
 }
 </code></pre></details>
+<details class="src-fold"><summary><code>initFanInUniform</code></summary><pre><code class="zig">/// Fill `w` with uniform values on +/-1/sqrt(fan_in): PyTorch's default for a linear layer's weights. `nn.Linear`
+/// resets them with `kaiming_uniform_` at a = sqrt(5), whose bound is gain x sqrt(3 / fan_in) with gain
+/// sqrt(2 / (1 + a^2)) = sqrt(1/3) - exactly 1/sqrt(fan_in) - so their variance is 1 / (3 fan_in), a third of
+/// LeCun's. A network whose code leaves its layers' starting values alone starts so (`InitScheme.fan_in_uniform`).
+pub fn initFanInUniform(
+    comptime T: type,
+    w: Tensor(T),
+    rng: Rng,
+    fan_in: usize,
+) Error!void {
+    comptime requireFloat(T);
+    if (fan_in == 0) {
+        return Error.DomainError;
+    }
+    const inputs: T = @floatFromInt(fan_in);
+    const limit: T = 1.0 / @sqrt(inputs);
+    var i: usize = 0;
+    while (i &lt; w.size()) : (i += 1) {
+        w.data[w.base + i] = rng.uniform(T, @intCast(i), -limit, limit);
+    }
+}
+</code></pre></details>
 <details class="src-fold"><summary><code>Dense</code></summary><pre><code class="zig">pub fn Dense(comptime T: type) type {
     comptime requireFloat(T);
     return struct {
@@ -20045,6 +20072,7 @@ pub fn initHe(comptime T: type, w: Tensor(T), rng: Rng, fan_in: usize) Error!voi
                 .xavier =&gt; try initXavier(T, weight, rng, fan_in, fan_out),
                 .he =&gt; try initHe(T, weight, rng, fan_in),
                 .small_normal =&gt; try initNormal(T, weight, rng, small_normal_deviation),
+                .fan_in_uniform =&gt; try initFanInUniform(T, weight, rng, fan_in),
             }
             // Biases start at zero. A random bias adds nothing a random weight does not already
             // provide, and a non-zero one shifts every unit's activation before any data is seen.
@@ -20119,6 +20147,15 @@ symmetric about zero.</p>
 <p><strong>He</strong> doubles that variance because <code>relu</code> discards its negative half,
 halving what reaches the next layer. Using Xavier with a rectifier loses a factor of two per
 layer &mdash; a factor of a thousand over ten.</p>
+
+<p><strong>PyTorch's default</strong> (<code>.fan_in_uniform</code>) is what a linear layer starts as
+when its code says nothing: uniform within <code>&plusmn;1/&radic;fan_in</code>, so a variance of
+<code>1/(3&nbsp;fan_in)</code>, a third of LeCun's - its biases drawn from the same range, as PyTorch
+draws them, where every other scheme starts its biases at zero. A network built after published PyTorch code
+starts as that code does by choosing it. Behind a layer norm, as in TD-MPC2's and SuperMimic's layers, the
+scale of a linear layer's weights no longer sets the scale of its outputs &mdash; the norm undoes it
+&mdash; but it still sets how far one optimiser step moves them, relative to their size. Next to it,
+<code>.small_normal</code> is TD-MPC2's fixed deviation of 0.02 for every layer.</p>
 
 <p><code>Dense</code> owns its weights as ordinary tensors and holds no <code>Var</code>. A
 <code>Var</code> is meaningful to one graph, so storing one would tie a layer to the first graph
@@ -20431,6 +20468,24 @@ exponential forward and one backward, in one tape node, where the composition to
 evaluations. It is the same function, accurate in both tails: for very negative x the ratio is formed directly, with
 nothing cancelling, and above about 19 (in f64), where the ratio rounds to exactly 1, mish returns x itself, with slope
 1 (<code>zm.mish</code>, <code>zm.mishSlope</code>).</p>
+
+<p><strong>SiLU in a layer.</strong> SiLU, <code>x&nbsp;&middot;&nbsp;sigmoid(x)</code>, also called swish, is the
+hidden layers' activation in the world models of SuperMimic's reproductions. It has Mish's shape: smooth, unbounded above, and a
+little below zero before it returns to it. Its slope takes one sigmoid, by the product rule and the sigmoid's own
+slope s&nbsp;(1&nbsp;&minus;&nbsp;s):</p>
+
+<pre><code>silu(x)  = x s,                                 s = sigmoid(x)
+silu'(x) = s + x s (1 - s) = s (1 + x (1 - s))
+
+x           -20        -1         0      1         20
+silu(x)     -4.1e-8    -0.2689    0      0.7311    19.9999999588
+silu'(x)                          1/2</code></pre>
+
+<p>Its least value, &minus;0.2785, is at x&nbsp;=&nbsp;&minus;1.2785, where the slope crosses zero; the slope then
+rises a little past 1 (1.0998 at x&nbsp;=&nbsp;2.3994) before it settles on 1. Far above zero the sigmoid rounds to 1
+and SiLU is x itself; far below it rounds to 0 and SiLU to a zero, with nothing overflowing either way
+(<code>zm.silu</code>, <code>zm.siluSlope</code>). A layer ends in it with <code>.silu</code>, as it ends in Mish with
+<code>.mish</code>; on the tape it is the product of two nodes that already exist.</p>
 
 <p>GELU is written <code>x * sigmoid(2u)</code> rather than <code>0.5x * (1 + tanh(u))</code>.
 They are the same function:</p>
@@ -21499,7 +21554,7 @@ design; for an elementwise or row-wise operation it means a kernel has not been 
 <tr><td><code>silu</code></td><td><code>silu(comptime T: type, out: Tensor(T), a: Tensor(T)) Error!void</code></td><td><span class="host">host</span></td><td>x&middot;sigmoid(x), also called swish.</td></tr>
 <tr><td><code>leakyRelu</code></td><td><code>leakyRelu(comptime T: type, out: Tensor(T), a: Tensor(T), slope: T) Error!void</code></td><td><span class="host">host</span></td><td>The slope has no default.</td></tr>
 <tr><td><code>elu</code></td><td><code>elu(comptime T: type, out: Tensor(T), a: Tensor(T), alpha: T) Error!void</code></td><td><span class="host">host</span></td><td>Continuous at zero for any alpha.</td></tr>
-<tr><td><code>Activation</code></td><td><code>Activation = union(enum)</code></td><td><span class="host">host</span></td><td>What a layer ends in: none, relu, mish, or SimNorm with a group size.</td></tr>
+<tr><td><code>Activation</code></td><td><code>Activation = union(enum)</code></td><td><span class="host">host</span></td><td>What a layer ends in: none, relu, mish, silu, or SimNorm with a group size.</td></tr>
 <tr><td><code>softmaxRows</code></td><td><code>softmaxRows(comptime T: type, out: Tensor(T), a: Tensor(T)) Error!void</code></td><td><span class="host">host</span></td><td>Rank 2. The row maximum is subtracted.</td></tr>
 <tr><td><code>simNormRows</code></td><td><code>simNormRows(comptime T: type, out: Tensor(T), input: Tensor(T), group: usize) Error!void</code></td><td><span class="host">host</span></td><td>SimNorm: every group of features softmaxed into a probability vector.</td></tr>
 <tr><td><code>simNormRowsGrad</code></td><td><code>simNormRowsGrad(comptime T: type, out: Tensor(T), output: Tensor(T), output_gradient: Tensor(T), group: usize) Error!void</code></td><td><span class="host">host</span></td><td>SimNorm's backward: per group, p (g - the p-weighted mean of g).</td></tr>
@@ -21696,8 +21751,9 @@ design; for an elementwise or row-wise operation it means a kernel has not been 
 <tr><td><code>follow</code></td><td><code>follow(self: Self, online: Self, fraction: T) Error!void</code></td><td><span class="host">method</span></td><td>Move a Params a fraction of the way toward another (Polyak); exact at 0 and 1.</td></tr>
 <tr><td><code>initXavier</code></td><td><code>initXavier(comptime T: type, w: Tensor(T), rng: Rng, fan_in: usize, fan_out: usize) Error!void</code></td><td><span class="host">host</span></td><td>Uniform &plusmn;&radic;(6/(in+out)). For tanh and sigmoid.</td></tr>
 <tr><td><code>initHe</code></td><td><code>initHe(comptime T: type, w: Tensor(T), rng: Rng, fan_in: usize) Error!void</code></td><td><span class="host">host</span></td><td>Normal, deviation &radic;(2/in). The 2 is relu's discarded half.</td></tr>
+<tr><td><code>initFanInUniform</code></td><td><code>initFanInUniform(comptime T: type, w: Tensor(T), rng: Rng, fan_in: usize) Error!void</code></td><td><span class="host">host</span></td><td>Uniform within 1/sqrt(fan_in): PyTorch's default for a linear layer (InitScheme.fan_in_uniform).</td></tr>
 <tr><td><code>initNormal</code></td><td><code>initNormal(comptime T: type, w: Tensor(T), rng: Rng, deviation: T) Error!void</code></td><td><span class="host">host</span></td><td>Normal weights of a chosen deviation (InitScheme.small_normal).</td></tr>
-<tr><td><code>InitScheme</code></td><td><code>InitScheme = enum</code></td><td><span class="host">host</span></td><td>xavier or he. Named once, used by every layer.</td></tr>
+<tr><td><code>InitScheme</code></td><td><code>InitScheme = enum</code></td><td><span class="host">host</span></td><td>xavier, he, small_normal or fan_in_uniform. Named once, used by every layer.</td></tr>
 <tr><td><code>small_normal_deviation</code></td><td><code>small_normal_deviation: comptime_float = 0.02;</code></td><td><span class="host">host</span></td><td>0.02: TD-MPC2's weight deviation.</td></tr>
 <tr><td><code>Conv2d</code></td><td><code>Conv2d(comptime T: type) type</code></td><td><span class="host">host</span></td><td>Learned kernel and scalar bias. Dense's template.</td></tr>
 <tr><td><code>Attached</code></td><td><code>Attached = struct</code></td><td><span class="host">method</span></td><td>What attach returns: the output plus both parameter handles.</td></tr>

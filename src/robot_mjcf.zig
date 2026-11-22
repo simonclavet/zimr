@@ -863,7 +863,9 @@ test "mjcf import: a keyframe loads, and one of the wrong length is refused" {
 }
 
 const build_options = @import("build_options");
-const report = @import("test_report.zig");
+/// The tests' report (`test_report.zig`), public so the files that import this module report through the same
+/// one: a file belongs to one module, so they cannot import it again by its path.
+pub const report = @import("test_report.zig");
 
 /// -- *** THE THREE HEAVY RETARGET DIAGNOSTICS, OFF BY DEFAULT --
 ///

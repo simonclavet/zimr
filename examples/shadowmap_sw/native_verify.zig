@@ -34,11 +34,13 @@ fn luminance(c0: u8, c1: u8, c2: u8) f32 {
     return 0.299 * float(c0) + 0.587 * float(c1) + 0.114 * float(c2);
 }
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     const gpa: Allocator = std.heap.page_allocator;
-    var io_threaded: Io.Threaded = .init(gpa, .{});
-    defer io_threaded.deinit();
-    const io: Io = io_threaded.io();
+    const io: Io = init.io;
+    // The pictures go where the build says (`ZIMR_CAPTURE_DIR`, zig-out/verify) - by hand, the working directory.
+    const capture_path: []const u8 = init.environ_map.get("ZIMR_CAPTURE_DIR") orelse ".";
+    const capture_dir: Io.Dir = try Io.Dir.cwd().createDirPathOpen(io, capture_path, .{});
+    defer capture_dir.close(io);
 
     // ---- runtime evaluation of the SAME bake function ----
     const live: scene.CornerBake(sm_res, img_w, img_h) = scene.bakeCorner(sm_res, img_w, img_h);
@@ -78,38 +80,41 @@ pub fn main() !void {
         }
     }
 
-    std.debug.print("shadowmap_sw corner: comptime bake vs runtime render of scene.bakeCorner\n", .{});
-    std.debug.print("  proxy {d} verts / {d} tris; shadow map {d}x{d}; image {d}x{d}\n", .{
-        bunny_proxy.vertex_count,
-        bunny_proxy.indices.len / 3,
-        sm_res,
-        sm_res,
-        img_w,
-        img_h,
-    });
-    std.debug.print("  differential: shadow-map bytes differing {d}, image bytes differing {d}\n", .{
-        sm_diff,
-        img_diff,
-    });
-    std.debug.print("  shadow-map min red {d} (want <240); lit-band {d} px, shadow-band {d} px (want >0)\n", .{
-        min_red,
-        lit_px,
-        shadow_px,
-    });
-
     const lit_png: []u8 = try z.codecs.png.encode(gpa, &baked.image, img_w, img_h);
     defer gpa.free(lit_png);
     const sm_png: []u8 = try z.codecs.png.encode(gpa, &baked.shadow_map, sm_res, sm_res);
     defer gpa.free(sm_png);
-    try Io.Dir.cwd().writeFile(io, .{ .sub_path = "corner_lit.png", .data = lit_png });
-    try Io.Dir.cwd().writeFile(io, .{ .sub_path = "corner_shadowmap.png", .data = sm_png });
-    std.debug.print("  wrote corner_lit.png + corner_shadowmap.png\n", .{});
+    try capture_dir.writeFile(io, .{ .sub_path = "corner_lit.png", .data = lit_png });
+    try capture_dir.writeFile(io, .{ .sub_path = "corner_shadowmap.png", .data = sm_png });
 
-    if (sm_diff != 0 or img_diff != 0) {
+    // Silent when the corner holds (a passing check prints nothing); every number, and the pictures' place, when not.
+    const bake_matches_render: bool = sm_diff == 0 and img_diff == 0;
+    const corner_looks_right: bool = min_red < 240 and shadow_px > 0 and lit_px > 0;
+    if (!bake_matches_render or !corner_looks_right) {
+        std.debug.print("shadowmap_sw corner: comptime bake vs runtime render of scene.bakeCorner\n", .{});
+        std.debug.print("  proxy {d} verts / {d} tris; shadow map {d}x{d}; image {d}x{d}\n", .{
+            bunny_proxy.vertex_count,
+            bunny_proxy.indices.len / 3,
+            sm_res,
+            sm_res,
+            img_w,
+            img_h,
+        });
+        std.debug.print("  differential: shadow-map bytes differing {d}, image bytes differing {d}\n", .{
+            sm_diff,
+            img_diff,
+        });
+        std.debug.print("  shadow-map min red {d} (want <240); lit-band {d} px, shadow-band {d} px (want >0)\n", .{
+            min_red,
+            lit_px,
+            shadow_px,
+        });
+        std.debug.print("  pictures: {s}/corner_lit.png, {s}/corner_shadowmap.png\n", .{ capture_path, capture_path });
+    }
+    if (!bake_matches_render) {
         return error.ComptimeRuntimeMismatch;
     }
-    if (min_red >= 240 or shadow_px == 0 or lit_px == 0) {
+    if (!corner_looks_right) {
         return error.CornerLooksWrong;
     }
-    std.debug.print("  OK\n", .{});
 }

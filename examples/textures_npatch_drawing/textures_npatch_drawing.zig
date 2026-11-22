@@ -22,8 +22,8 @@ const Vec2 = zm.Vec2;
 const c = Color;
 const clamp = zm.clamp;
 
-const screen_w = 800;
-const screen_h = 450;
+const screen_w: u32 = 800;
+const screen_h: u32 = 450;
 const patch_px: usize = 64;
 const border_px: f32 = 16.0;
 

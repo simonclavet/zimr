@@ -1,6 +1,6 @@
 //! examples/launcher/kernels.zig - ONE kernel wasm for a page that bundles many examples.
 //!
-//! A page carries exactly one `ZIMR_KERNEL_WASM`. The launcher carries dozens of examples, three
+//! A page carries exactly one `ZIMR_KERNEL_WASM`. The launcher carries dozens of examples, four
 //! of which have job kernels - so its kernel wasm has to serve all of them at once.
 //!
 //! It can, and cheaply, because the wasm exports are keyed by NAME (`zimr_job_encodePng`,
@@ -33,6 +33,10 @@ const jobs = z.jobs;
 const png = @import("k_worker_png");
 const four = @import("k_four_ways");
 const goban = @import("k_goban");
+/// `zimrnum_fit`'s job trains a network on the GPU learning kit's CPU twin. It works in the kit's buffers, which
+/// natively its own registry lends to one job at a time (`jobs.Globals.lent_to_one_job`) - the page submits through
+/// that registry, so this table only names the kernel for the kernel wasm, where every worker has buffers of its own.
+const fit = @import("k_zimrnum_fit");
 
 /// The merged table.
 ///
@@ -44,6 +48,7 @@ pub const job_kernels = .{
     .{ "encodePng", png.encodePng },
     .{ "mandel", z.komputeKernel(four.module, "mandel") },
     .{ "searchGoban", goban.job_kernels[0][1] },
+    .{ "trainSteps", fit.trainSteps },
 };
 
 /// The bounds are the MAX over the members: one buffer serves every kernel on the page, so it
@@ -51,6 +56,16 @@ pub const job_kernels = .{
 /// that is too small does not fail loudly at build time - it fails as `Error.InputTooLarge` on
 /// a phone, which is exactly the kind of thing this should not be guessing at.
 pub const registry = jobs.Registry(job_kernels, .{
-    .max_input = @max(png.registry.max_input, four.registry.max_input, goban.registry.max_input),
-    .max_output = @max(png.registry.max_output, four.registry.max_output, goban.registry.max_output),
+    .max_input = @max(
+        png.registry.max_input,
+        four.registry.max_input,
+        goban.registry.max_input,
+        fit.registry.max_input,
+    ),
+    .max_output = @max(
+        png.registry.max_output,
+        four.registry.max_output,
+        goban.registry.max_output,
+        fit.registry.max_output,
+    ),
 });

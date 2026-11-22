@@ -4750,14 +4750,24 @@ pub fn PolicyDistillationLoss(comptime T: type) type {
 /// Its tag is a fixed width so a learner's saved settings (an `extern struct`) can hold it.
 pub const PlanObjective = enum(u32) { final, mean_over_depths };
 
-/// The weights `objective` puts on a plan's rewards and values: `reward_weights[u]` on the reward at step u, and
-/// `value_weights[h - 1]` on the value at depth h, for a plan of `reward_weights.len` actions. The discounts are
-/// formed by repeated multiplication - 1, gamma, gamma^2, ... - so `final` gives exactly the numbers a plain
-/// discounted sum would.
-pub fn planObjectiveWeights(
+/// THE OBJECTIVE's WEIGHTS FOR A PLAN WHOSE STEPS SPAN SEVERAL DECISIONS: step u lasts `spans[u]` decisions (a model
+/// that jumps - a skip head's steps), and its one reward stands for the reward of each of them, so its weight is the
+/// discount summed over the decisions it covers; a depth's value is discounted by the decisions before it. With the
+/// step starting at decision t_u and lasting d_u:
+///
+///                        reward at step u                                   value at depth h
+///     final              gamma^t_u (1 + gamma + ... + gamma^(d_u - 1))      gamma^(t_H + d_H) at h = H, 0 elsewhere
+///     mean_over_depths   the same x (H - u) / H                             gamma^(t_h + d_h) / H
+///
+///     spans 1, 1, 4, gamma = 0.9:   final rewards 1, 0.9, 0.81 x 3.439 = 2.78559    value 0.9^6 = 0.531441
+///
+/// The prefixes are counted in steps, as the planner's depths are. Null spans: every step one decision, the plain
+/// objective. Discounts formed by repeated multiplication, as `planObjectiveWeights` forms them.
+pub fn planObjectiveWeightsOver(
     comptime T: type,
     objective: PlanObjective,
     discount: T,
+    spans: ?[]const u32,
     reward_weights: []T,
     value_weights: []T,
 ) Error!void {
@@ -4766,24 +4776,51 @@ pub fn planObjectiveWeights(
     if (horizon == 0 or value_weights.len != horizon) {
         return Error.ShapeMismatch;
     }
+    if (spans) |step_spans| {
+        if (step_spans.len != horizon) {
+            return Error.ShapeMismatch;
+        }
+    }
     const plan_length: T = @floatFromInt(horizon);
+    // gamma^t: the discount at the decision the step starts at.
     var step_discount: T = 1;
     for (reward_weights, value_weights, 0..) |*reward_weight, *value_weight, step| {
+        const span: u32 = if (spans) |step_spans| step_spans[step] else 1;
+        // The discount summed over the step's decisions, and the discount after them.
+        var summed_discount: T = 0;
+        var decision: u32 = 0;
+        while (decision < span) : (decision += 1) {
+            summed_discount += step_discount;
+            step_discount *= discount;
+        }
         switch (objective) {
-            .final => reward_weight.* = step_discount,
+            .final => reward_weight.* = summed_discount,
             .mean_over_depths => {
                 const prefixes_containing_step: T = @floatFromInt(horizon - step);
-                reward_weight.* = step_discount * prefixes_containing_step / plan_length;
+                reward_weight.* = summed_discount * prefixes_containing_step / plan_length;
             },
         }
-        // gamma^(step + 1): the discount at depth step + 1, where this step's action leads.
-        step_discount *= discount;
+        // The discount at depth step + 1, where this step's action leads.
         const depth: usize = step + 1;
         value_weight.* = switch (objective) {
             .final => if (depth == horizon) step_discount else 0,
             .mean_over_depths => step_discount / plan_length,
         };
     }
+}
+
+/// The weights `objective` puts on a plan's rewards and values: `reward_weights[u]` on the reward at step u, and
+/// `value_weights[h - 1]` on the value at depth h, for a plan of `reward_weights.len` actions. The discounts are
+/// formed by repeated multiplication - 1, gamma, gamma^2, ... - so `final` gives exactly the numbers a plain
+/// discounted sum would. Every step one decision long: `planObjectiveWeightsOver` with no spans.
+pub fn planObjectiveWeights(
+    comptime T: type,
+    objective: PlanObjective,
+    discount: T,
+    reward_weights: []T,
+    value_weights: []T,
+) Error!void {
+    return planObjectiveWeightsOver(T, objective, discount, null, reward_weights, value_weights);
 }
 
 /// SCORING CANDIDATE PLANS BY IMAGINATION - the objective a model-predictive planner maximises in the TD-MPC family
@@ -7524,6 +7561,40 @@ test "zrl planObjectiveWeights: each objective's weights by hand, and at H = 1 t
     const no_rewards: []f64 = reward_weights[0..0];
     const no_values: []f64 = value_weights[0..0];
     try expectError(Error.ShapeMismatch, planObjectiveWeights(f64, .final, 0.9, no_rewards, no_values));
+}
+
+test "zrl planObjectiveWeightsOver: a step of several decisions weighs its discounts summed, the value after them" {
+    // Spans 1, 1, 4 at gamma 0.9 - the worked example: the third step's reward stands for decisions 2 to 5.
+    var reward_weights: [3]f64 = undefined;
+    var value_weights: [3]f64 = undefined;
+    const spans = [_]u32{ 1, 1, 4 };
+    try planObjectiveWeightsOver(f64, .final, 0.9, &spans, &reward_weights, &value_weights);
+    const third: f64 = 0.81 * (1 + 0.9 + 0.81 + 0.729);
+    for ([3]f64{ 1, 0.9, third }, reward_weights) |expected, weight| {
+        try expectApproxEqAbs(expected, weight, 1e-12);
+    }
+    for ([3]f64{ 0, 0, 0.531441 }, value_weights) |expected, weight| {
+        try expectApproxEqAbs(expected, weight, 1e-12);
+    }
+    // The mean over depths: each reward times the prefixes containing it, each value after its step's decisions.
+    try planObjectiveWeightsOver(f64, .mean_over_depths, 0.9, &spans, &reward_weights, &value_weights);
+    for ([3]f64{ 1, 0.6, third / 3 }, reward_weights) |expected, weight| {
+        try expectApproxEqAbs(expected, weight, 1e-12);
+    }
+    for ([3]f64{ 0.3, 0.27, 0.531441 / 3.0 }, value_weights) |expected, weight| {
+        try expectApproxEqAbs(expected, weight, 1e-12);
+    }
+    // Spans of 1 are the plain objective, to the bit; spans of another length are refused.
+    var plain_rewards: [3]f64 = undefined;
+    var plain_values: [3]f64 = undefined;
+    try planObjectiveWeights(f64, .mean_over_depths, 0.9, &plain_rewards, &plain_values);
+    const single_spans = [_]u32{ 1, 1, 1 };
+    try planObjectiveWeightsOver(f64, .mean_over_depths, 0.9, &single_spans, &reward_weights, &value_weights);
+    try expectEqualSlices(f64, &plain_rewards, &reward_weights);
+    try expectEqualSlices(f64, &plain_values, &value_weights);
+    const two_spans: []const u32 = single_spans[0..2];
+    const refused = planObjectiveWeightsOver(f64, .final, 0.9, two_spans, &reward_weights, &value_weights);
+    try expectError(Error.ShapeMismatch, refused);
 }
 
 test "zrl PlanObjective: two plans the objectives rank in opposite order" {

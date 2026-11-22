@@ -14,8 +14,8 @@ const Vec2 = zm.Vec2;
 const Color = zm.Color;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
-const point_count = 5;
-const grab_radius = 16.0;
+const point_count: usize = 5;
+const grab_radius: f32 = 16.0;
 const type_names = [_][]const u8{ "LINEAR", "B-SPLINE", "CATMULL-ROM", "BEZIER" };
 
 const State = struct {

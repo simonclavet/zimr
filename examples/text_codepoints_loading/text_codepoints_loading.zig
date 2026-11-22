@@ -68,9 +68,9 @@ const cp_set: [n_ascii + n_latin1 + n_greek_u + n_greek_l + n_cyril]u21 = blk: {
 };
 
 // Every character below lives inside the baked ranges above.
-const line_latin = "Grüße! Ñoño, Åland, Çà et là";
-const line_greek = "ΑΒΓΔΕΖΗΘΙΚΛΜ αβγδεζηθικλμ";
-const line_cyril = "Привет, мир! Здравствуй";
+const line_latin: []const u8 = "Grüße! Ñoño, Åland, Çà et là";
+const line_greek: []const u8 = "ΑΒΓΔΕΖΗΘΙΚΛΜ αβγδεζηθικλμ";
+const line_cyril: []const u8 = "Привет, мир! Здравствуй";
 
 const State = struct {
     ascii_font: z.Font, // loadFont   - ASCII 32..126 only

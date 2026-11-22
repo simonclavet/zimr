@@ -33,8 +33,8 @@ const startsWith = std.mem.startsWith;
 const Writer = Io.Writer;
 const File = Io.File;
 
-const in_path = "src/notes/files.md";
-const out_path = "src/notes/files.html";
+const in_path: []const u8 = "src/notes/files.md";
+const out_path: []const u8 = "src/notes/files.html";
 
 const head =
     \\<!doctype html>

@@ -28,8 +28,8 @@ const seg_vert = [7]bool{ false, true, true, false, true, true, false };
 // native digit x-positions and colon-dot centres inside the HH:MM:SS block
 const digit_x = [6]f32{ 0, 120, 260, 380, 520, 640 };
 const colon_x = [2]f32{ 240, 500 };
-const block_w = 740.0;
-const block_h = 216.0;
+const block_w: f32 = 740.0;
+const block_h: f32 = 216.0;
 
 const on_col: Color = .{ .r = 236, .g = 72, .b = 60, .a = 255 };
 const off_col: Color = .{ .r = 54, .g = 58, .b = 70, .a = 255 };

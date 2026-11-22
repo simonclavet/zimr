@@ -104,6 +104,10 @@ const notes = [_]Note{
     .{ .name = "HeadTerms", .text = "One dynamics head's logits and its reward and value terms, in WorldModelLoss." },
     .{ .name = "not_a_candidate", .text = "Mppi.chosen_rows' entry for a choice that is no candidate (the mean)." },
     .{ .name = "PlanObjective", .text = "A plan's score: final (BMPC) or the mean over prefixes (EfficientTDMPC)." },
+    .{
+        .name = "planObjectiveWeightsOver",
+        .text = "The same weights for steps that span several decisions each; null spans give planObjectiveWeights.",
+    },
     .{ .name = "planObjectiveWeights", .text = "The weights an objective puts on each step's reward and value." },
     .{ .name = "cartpoleBalanceReward", .text = "DMC's dense cartpole balance reward, on this cartpole's state." },
     .{ .name = "CartpoleState", .text = "Four NAMED fields, not four positions in a tensor." },
@@ -706,7 +710,10 @@ const notes = [_]Note{
     .{ .name = "avgPool2d", .text = "" },
     .{ .name = "gatherRows", .text = "out[i] = table[rows[i]]." },
     .{ .name = "scatterAddRows", .text = "table[rows[i]] += source[i]. Repeats accumulate." },
-    .{ .name = "InitScheme", .text = "xavier or he. Named once, used by every layer." },
+    .{
+        .name = "InitScheme",
+        .text = "xavier, he, small_normal or fan_in_uniform. Named once, used by every layer.",
+    },
     .{ .name = "Conv2d", .text = "Learned kernel and scalar bias. Dense's template." },
     .{ .name = "Embedding", .text = "A table of learned rows, indexed by whole numbers." },
     .{ .name = "Graph.conv2d", .text = "On the graph. Both gradients from one loop nest." },
@@ -1588,6 +1595,11 @@ const notes = [_]Note{
     },
     .{ .name = "softCrossEntropyRowsGrad", .text = "Its gradient: (softmax(logits) - target) / rows." },
     .{ .name = "initNormal", .text = "Normal weights of a chosen deviation (InitScheme.small_normal)." },
+    .{
+        .name = "initFanInUniform",
+        .text = "Uniform within 1/sqrt(fan_in): PyTorch's default for a linear layer's weights and biases " ++
+            "(InitScheme.fan_in_uniform).",
+    },
     .{ .name = "small_normal_deviation", .text = "0.02: TD-MPC2's weight deviation." },
     .{
         .name = "attachAs",
@@ -1598,7 +1610,7 @@ const notes = [_]Note{
         .text = "A layer's arithmetic over handles already bound: bind once, apply at every step.",
     },
     .{ .name = "LayerNorm", .text = "Row normalisation with a learned gain and bias, on Dense's template." },
-    .{ .name = "Activation", .text = "What a layer ends in: none, relu, mish, or SimNorm with a group size." },
+    .{ .name = "Activation", .text = "What a layer ends in: none, relu, mish, silu, or SimNorm with a group size." },
     .{ .name = "NormedDense", .text = "BMPC's NormedLinear: Dense, dropout, LayerNorm, an activation." },
     .{ .name = "tensors", .text = "A normed layer's four tensors, in binding order." },
     .{ .name = "Mlp", .text = "TD-MPC2's MLP from a Spec: normed hidden layers, a plain or normed last layer." },

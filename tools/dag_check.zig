@@ -6,11 +6,12 @@
 //!
 //!   - No whitelist: the graph must be FULLY acyclic.  Prints each offending
 //!     SCC and exits 1 on any cycle.
-//!   - On success: module/edge counts, out-degree hubs, and the auto-computed
-//!     DAG layering (longest-path levels = a suggested bottom-up reading
-//!     order).  Exit 0.
+//!   - On success: nothing, as a passing check prints nothing (it runs in
+//!     `tripwires`). With `--report`: module/edge counts, out-degree hubs, and
+//!     the auto-computed DAG layering (longest-path levels = a suggested
+//!     bottom-up reading order) - `zig build dag-report`.  Exit 0.
 //!
-//! Usage: `dag_check [src_dir]`  (src_dir defaults to "src").
+//! Usage: `dag_check [src_dir] [--report]`  (src_dir defaults to "src").
 
 const std = @import("std");
 const cli = @import("cli");
@@ -29,12 +30,17 @@ fn degMore(_: void, a: Deg, b: Deg) bool {
 
 /// The command line (std's cli, `src/command_line.zig`).
 const DagArgs = struct {
+    // The cli takes every named argument before the positional ones.
+    @"--report": bool = false,
     @"src-dir": []const u8 = "src",
 };
 
 const dag_cli: cli.Config(DagArgs) = .{
     .prog = "dag_check",
     .description = "Levels and cycles of the top-level src/*.zig import graph (by basename).",
+    .args = .{
+        .@"--report" = .{ .description = "print the graph's counts, hubs and levels when it is a DAG too" },
+    },
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -62,11 +68,15 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    try out.print("Modules:  {d}\n", .{n});
-    try out.print("Edges:    {d}\n", .{g.total_edges});
-    try out.print("SCCs:     {d} non-trivial\n", .{n_nontrivial});
+    // A DAG prints nothing unless `--report` asks; a cycle always prints, counts first.
+    const is_dag: bool = n_nontrivial == 0;
+    if (!is_dag or args.@"--report") {
+        try out.print("Modules:  {d}\n", .{n});
+        try out.print("Edges:    {d}\n", .{g.total_edges});
+        try out.print("SCCs:     {d} non-trivial\n", .{n_nontrivial});
+    }
 
-    if (n_nontrivial > 0) {
+    if (!is_dag) {
         for (comps.items) |c| {
             if (c.items.len <= 1) {
                 continue;
@@ -85,6 +95,9 @@ pub fn main(init: std.process.Init) !void {
         try out.print("\nFAIL: src import graph is not a DAG.\n", .{});
         try out.flush();
         std.process.exit(1);
+    }
+    if (!args.@"--report") {
+        return;
     }
 
     // Out-degree hubs (top 8).

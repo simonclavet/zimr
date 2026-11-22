@@ -931,6 +931,18 @@ pub fn queueSubmit(queue: QueueHandle, cmd_buffer: CommandBufferHandle) void {
     gpu_host.queueSubmit(@backingInt(queue), @backingInt(cmd_buffer));
 }
 
+/// Waits until the GPU has finished every submission made so far, the thread asleep until then
+/// (`wgpu_vulkan.queueWaitIdle`) - Vulkan's `vkQueueWaitIdle`. Native only: a browser's thread cannot block on its
+/// GPU (WebGPU answers with a promise, `onSubmittedWorkDone`), and calling it there is a compile error. Without a GPU
+/// there is nothing to wait for.
+pub fn queueWaitIdle(queue: QueueHandle) void {
+    switch (host.kind) {
+        .native, .headless => vulkan_host.queueWaitIdle(@backingInt(queue)),
+        .web => @compileError("queueWaitIdle: a browser's thread cannot block on its GPU"),
+        .none => {},
+    }
+}
+
 /// Create a bind group layout from a pre-serialized entries blob.
 /// See `descriptor_encoder.encodeBindGroupLayoutEntries` for the
 /// encoder.  The caller owns `entries_blob` and must keep it alive

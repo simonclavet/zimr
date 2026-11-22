@@ -39,15 +39,15 @@ const c = z.colors;
 const zp = z.zimrphysics;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
-const num_cubes = 18;
-const eye_height = 1.5; // camera height above the capsule origin
-const cap_half_height = 0.6; // capsule cylinder half-height
-const cap_radius = 0.35;
-const move_speed = 5.0; // m/s on the ground
-const jump_speed = 6.0; // m/s launched upward
-const jump_buffer_time = 0.15; // s a jump request survives waiting for the ground
-const mouse_sens = 0.0026; // radians per pixel of mouse motion
-const drag_sens = 0.005; // radians per pixel of touch drag
+const num_cubes: usize = 18;
+const eye_height: f32 = 1.5; // camera height above the capsule origin
+const cap_half_height: f32 = 0.6; // capsule cylinder half-height
+const cap_radius: f32 = 0.35;
+const move_speed: f32 = 5.0; // m/s on the ground
+const jump_speed: f32 = 6.0; // m/s launched upward
+const jump_buffer_time: f32 = 0.15; // s a jump request survives waiting for the ground
+const mouse_sens: f32 = 0.0026; // radians per pixel of mouse motion
+const drag_sens: f32 = 0.005; // radians per pixel of touch drag
 
 const sky_col: Color = .{ .r = 30, .g = 38, .b = 52, .a = 255 };
 const btn_col: Color = .{ .r = 34, .g = 40, .b = 54, .a = 220 };
@@ -161,7 +161,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
             .shape = cap_shape,
             .position = vec(0.0, 1.2, 9.0),
         },
-        .yaw = pi, // look toward -Z, into the pile
+        .yaw = 0, // look toward -Z, into the pile
     };
 }
 

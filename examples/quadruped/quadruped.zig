@@ -394,8 +394,10 @@ const State = struct {
     next_ball: usize,
     /// Set by the panel, consumed by `update` once the camera is known.
     want_throw: bool,
-    /// Meshes for the three geom shapes the Go1 actually uses.
+    /// Meshes for the geom shapes the Go1 actually uses: the open tube under a capsule's end balls, the capped one
+    /// for a cylinder geom.
     cylinder: z.Mesh,
+    cylinder_capped: z.Mesh,
     sphere: z.Mesh,
     cube: z.Mesh,
     transform: [1]Mat,
@@ -505,6 +507,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // limb by half its own length - legs that float away from their joints. Generating it
     // pre-centred is one number here and saves a translate in every draw.
     s.cylinder = try z.genMeshCylinder(gpa, 1.0, 1.0, 16, 2);
+    s.cylinder_capped = try common.genMeshCylinderCapped(gpa, 1.0, 1.0, 16);
     s.sphere = try z.genMeshSphere(gpa, 1.0, 10, 8);
     s.cube = try z.genMeshCube(gpa, 1.0, 1.0, 1.0);
     s.transform = .{identity()};
@@ -716,6 +719,7 @@ fn deinit(gpa: Allocator, s: *State) void {
     gpa.free(s.arm_target);
     s.arm_act.deinit();
     z.unloadMesh(gpa, s.cylinder);
+    z.unloadMesh(gpa, s.cylinder_capped);
     z.unloadMesh(gpa, s.sphere);
     z.unloadMesh(gpa, s.cube);
     gpa.free(s.stance);
@@ -1646,12 +1650,13 @@ fn drawRobot(s: *State, gl: *z.WgpuGl) void {
                 }
             },
             .cylinder => |cyl| {
-                // Same axis and the same [0, h] span as the capsule above.
+                // Same axis and the same [0, h] span as the capsule above, but CAPPED: nothing covers this
+                // one's ends, and the open tube showed its inside wall through them.
                 s.transform[0] = mulMat(
                     mulMat(place, translation(0, -cyl.half_height, 0)),
                     scaling(cyl.radius, 2.0 * cyl.half_height, cyl.radius),
                 );
-                z.drawMeshInstanced(gl, &s.cylinder, &s.transform, tint);
+                z.drawMeshInstanced(gl, &s.cylinder_capped, &s.transform, tint);
             },
             .box => |box| {
                 s.transform[0] = mulMat(place, scaling(

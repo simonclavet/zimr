@@ -544,9 +544,9 @@ pub const App = struct {
     // their memory; nothing hidden). The shared glyph atlas keeping unloaded fonts'
     // glyphs was exactly that, and took an hour to pin down with one counter.
     gpa: Allocator = undefined,
-    counting: memwatch.CountingAllocator = undefined,
+    example_meter: memwatch.CountingAllocator = undefined,
     engine_gpa: Allocator = undefined,
-    engine_counting: memwatch.CountingAllocator = undefined,
+    engine_meter: memwatch.CountingAllocator = undefined,
     /// The `--leak-trace` tracer, when the smoke harness asked for one (`beginLeakTrace`).
     /// It sits UNDER both counters, so every allocation - example or engine - is recorded
     /// with its side, phase and scope. Null in every normal run.
@@ -676,10 +676,10 @@ pub const App = struct {
             return error.NoGpuHost;
         }
 
-        self.counting = .{ .backing = host.heap, .label = "example" };
-        const gpa: Allocator = self.counting.allocator();
-        self.engine_counting = .{ .backing = host.heap, .label = "engine" };
-        const engine_gpa: Allocator = self.engine_counting.allocator();
+        self.example_meter = .{ .backing = host.heap, .label = "example" };
+        const gpa: Allocator = self.example_meter.allocator();
+        self.engine_meter = .{ .backing = host.heap, .label = "engine" };
+        const engine_gpa: Allocator = self.engine_meter.allocator();
         self.config = cfg;
         self.gpa = gpa;
         self.engine_gpa = engine_gpa;
@@ -798,7 +798,7 @@ pub const App = struct {
         // The audio device starts and stops the engine's mixer (`audio_device.init`), its blocks from the engine's
         // allocator.
         self.audio_device.engine_mixer = &self.mixer;
-        self.audio_device.mixer_allocator = self.engine_counting.allocator();
+        self.audio_device.mixer_allocator = self.engine_meter.allocator();
         return .{
             .gpu = &self.gpu_frame,
             .gl = &self.gl,
@@ -869,10 +869,10 @@ pub const App = struct {
         const bookkeeping: Allocator = host.heap;
         const watch: *leakwatch.LeakWatch = bookkeeping.create(leakwatch.LeakWatch) catch return;
         watch.* = leakwatch.LeakWatch.init(host.heap, bookkeeping);
-        self.counting.backing = watch.allocator();
-        self.counting.watch = watch;
-        self.engine_counting.backing = watch.allocator();
-        self.engine_counting.watch = watch;
+        self.example_meter.backing = watch.allocator();
+        self.example_meter.watch = watch;
+        self.engine_meter.backing = watch.allocator();
+        self.engine_meter.watch = watch;
         self.leak_trace = watch;
     }
 

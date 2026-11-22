@@ -42,10 +42,10 @@ const digit_angles = [10][24]Vec2{
     .{ tl, hh, hh, tr, vv, tl, tr, vv, vv, bl, br, vv, bl, hh, tr, vv, tl, hh, br, vv, bl, hh, hh, br },
 };
 
-const face_size = 24.0;
-const face_spacing = 8.0;
-const section_spacing = 16.0;
-const move_duration = 0.5;
+const face_size: f32 = 24.0;
+const face_spacing: f32 = 8.0;
+const section_spacing: f32 = 16.0;
+const move_duration: f32 = 0.5;
 
 const hands_col: Color = .{ .r = 242, .g = 236, .b = 178, .a = 255 };
 const ring_col: Color = .{ .r = 66, .g = 72, .b = 90, .a = 255 };

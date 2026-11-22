@@ -6,6 +6,9 @@
 //!     Geno, one world       world_f about 9,600 floats   world_u about 4,700 words   efc_f about 19,600 floats
 //!     256 worlds            2.5 M                        1.2 M                       5.0 M
 //!     the arenas below      4.2 M (16 MB)                2.1 M (8 MB)                8.4 M (32 MB)
+
+/// The CPU twin kept: a page without a GPU steps its worlds on it.
+pub const cpu_twin: bool = true;
 pub const model_f: u32 = 1 << 16;
 pub const model_u: u32 = 1 << 16;
 pub const batch_f: u32 = 1 << 16;

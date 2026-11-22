@@ -8,6 +8,7 @@
 const std = @import("std");
 const report = @import("test_report.zig");
 const zm = @import("zm");
+const gapInUnits = zm.gapInUnits;
 const zn = @import("zn");
 const zrl = @import("zrl");
 const gym = @import("robot_gym.zig");
@@ -17,6 +18,7 @@ const zn_train = @import("gpu/zn_train.zig");
 const compute_host = @import("compute_host.zig");
 const bmpc_kit = @import("robot_bmpc_kit.zig");
 const latent_kit = @import("robot_latent_kit.zig");
+const rbt = @import("robot");
 const kit_mlp = @import("kit_mlp.zig");
 const bmpc = @import("robot_bmpc.zig");
 
@@ -166,15 +168,15 @@ test "gpu learn: G1 - zn_mlp's kernels train a two-layer net exactly as zimrnum'
         };
         pipe.run("adam", param_count);
         const kit_loss: f32 = (pipe.readLatest(.loss) orelse return error.NoReadback)[0];
-        worst_loss_gap = @max(worst_loss_gap, @abs(kit_loss - cpu_loss));
+        worst_loss_gap = @max(worst_loss_gap, gapInUnits(kit_loss, cpu_loss, 1.0));
     }
     const kit_params: []const f32 = pipe.readLatest(.params) orelse return error.NoReadback;
     var worst_weight_gap: f32 = 0.0;
     for (l1.w.data, 0..) |w, i| {
-        worst_weight_gap = @max(worst_weight_gap, @abs(w - kit_params[w1_off + i]));
+        worst_weight_gap = @max(worst_weight_gap, gapInUnits(w, kit_params[w1_off + i], 1.0));
     }
     for (l2.w.data, 0..) |w, i| {
-        worst_weight_gap = @max(worst_weight_gap, @abs(w - kit_params[w2_off + i]));
+        worst_weight_gap = @max(worst_weight_gap, gapInUnits(w, kit_params[w2_off + i], 1.0));
     }
     report.print("\n  G1 parity, 20 Adam steps: worst loss gap {e:.2}, worst weight gap {e:.2}\n", .{
         worst_loss_gap,
@@ -261,10 +263,10 @@ test "gpu learn: D5 step 3a - cloning on the kit is the graph's, step for step; 
     for (layers, ins, outs, 0..) |layer, in_dim, out_dim, i| {
         const at: usize = ppo.p_off[i];
         for (layer.w.data, kit[at..][0 .. in_dim * out_dim]) |a, b| {
-            worst = @max(worst, @abs(a - b));
+            worst = @max(worst, gapInUnits(a, b, 1.0));
         }
         for (layer.b.data, kit[at + in_dim * out_dim ..][0..out_dim]) |a, b| {
-            worst = @max(worst, @abs(a - b));
+            worst = @max(worst, gapInUnits(a, b, 1.0));
         }
     }
     var untouched: bool = true;
@@ -460,11 +462,11 @@ test "gpu learn: S2 - the kit's SAC update is SacAgent's, update for update" {
     try expect(gaps.critics < 1.0e-4 and gaps.targets < 1.0e-4);
     var moved_actor: f32 = 0.0;
     for (start[sac.actor[0]..][0..sac.actor_count], gpu[sac.actor[0]..][0..sac.actor_count]) |a, b| {
-        moved_actor = @max(moved_actor, @abs(a - b));
+        moved_actor = @max(moved_actor, gapInUnits(a, b, 1.0));
     }
     var moved_critics: f32 = 0.0;
     for (start[sac.q1[0]..][0..sac.critic_count], gpu[sac.q1[0]..][0..sac.critic_count]) |a, b| {
-        moved_critics = @max(moved_critics, @abs(a - b));
+        moved_critics = @max(moved_critics, gapInUnits(a, b, 1.0));
     }
     report.print("  moved: actor {d:.4}, critics {d:.4}\n", .{ moved_actor, moved_critics });
     try expect(moved_actor > 1.0e-3 and moved_critics > 1.0e-3);
@@ -534,11 +536,11 @@ fn stParity(fused: bool) !void {
     const gaps: [2]f32 = kit.gapsTo(graph, now);
     var moved_policy: f32 = 0.0;
     for (start[0..kit.pol_count], now[0..kit.pol_count]) |a, c| {
-        moved_policy = @max(moved_policy, @abs(a - c));
+        moved_policy = @max(moved_policy, gapInUnits(a, c, 1.0));
     }
     var moved_world: f32 = 0.0;
     for (start[kit.wm[0]..][0..kit.wm_count], now[kit.wm[0]..][0..kit.wm_count]) |a, c| {
-        moved_world = @max(moved_world, @abs(a - c));
+        moved_world = @max(moved_world, gapInUnits(a, c, 1.0));
     }
     report.print("\n  SuperTrack kit parity ({s}), 4 iterations: policy {e:.2}, world {e:.2}; " ++
         "moved policy {d:.4}, world {d:.4}\n", .{
@@ -886,11 +888,27 @@ const NormedRegions = struct {
     }
 };
 
+/// How a normed layer of these tests ends: an activation of each value on its own - Mish or SiLU - or SimNorm over
+/// groups of values.
+const NormedEnding = enum {
+    mish,
+    silu,
+    simnorm,
+
+    fn of(activation: zn.Activation) NormedEnding {
+        return switch (activation) {
+            .mish => .mish,
+            .silu => .silu,
+            else => .simnorm,
+        };
+    }
+};
+
 /// A normed layer's norm and activation on the kit's CPU twin, from the pre-activations already in acts.
 fn normedLayerNormAndActivation(
     pipe: *compute_host.Compute(zn_mlp),
     regions: NormedRegions,
-    is_mish: bool,
+    ending: NormedEnding,
 ) void {
     const rows: u32 = regions.rows;
     const out_dim: u32 = regions.output_width;
@@ -912,10 +930,10 @@ fn normedLayerNormAndActivation(
         .y_off = regions.output,
         .simnorm_group = regions.simnorm_group,
     };
-    if (is_mish) {
-        pipe.run("mish_fwd", rows * out_dim);
-    } else {
-        pipe.run("simnorm_fwd", rows * (out_dim / regions.simnorm_group));
+    switch (ending) {
+        .mish => pipe.run("mish_fwd", rows * out_dim),
+        .silu => pipe.run("silu_fwd", rows * out_dim),
+        .simnorm => pipe.run("simnorm_fwd", rows * (out_dim / regions.simnorm_group)),
     }
 }
 
@@ -924,7 +942,7 @@ fn normedLayerNormAndActivation(
 fn normedLayerForward(
     pipe: *compute_host.Compute(zn_mlp),
     regions: NormedRegions,
-    is_mish: bool,
+    ending: NormedEnding,
 ) void {
     pipe.params = .{
         .rows = regions.rows,
@@ -936,7 +954,7 @@ fn normedLayerForward(
         .w_off = regions.weights,
     };
     pipe.run("dense_fwd", regions.rows * regions.output_width);
-    normedLayerNormAndActivation(pipe, regions, is_mish);
+    normedLayerNormAndActivation(pipe, regions, ending);
 }
 
 /// One normed layer's backward on the kit's CPU twin, as the device runs it - the gradient at the output from the
@@ -946,7 +964,7 @@ fn normedLayerForward(
 fn normedLayerBackward(
     pipe: *compute_host.Compute(zn_mlp),
     regions: NormedRegions,
-    is_mish: bool,
+    ending: NormedEnding,
 ) void {
     const rows: u32 = regions.rows;
     const out_dim: u32 = regions.output_width;
@@ -959,25 +977,35 @@ fn normedLayerBackward(
         .dy_off = regions.output_gradient,
     };
     pipe.run("mse_bwd", block);
-    if (is_mish) {
-        pipe.params = .{
-            .rows = rows,
-            .out_dim = out_dim,
-            .x_off = regions.scaled,
-            .dy_off = regions.output_gradient,
-            .dx_off = regions.scaled_gradient,
-        };
-        pipe.run("mish_bwd", block);
-    } else {
-        pipe.params = .{
-            .rows = rows,
-            .out_dim = out_dim,
-            .y_off = regions.output,
-            .dy_off = regions.output_gradient,
-            .dx_off = regions.scaled_gradient,
-            .simnorm_group = regions.simnorm_group,
-        };
-        pipe.run("simnorm_bwd", rows * (out_dim / regions.simnorm_group));
+    // Mish's and SiLU's backward read their slope from the scaled values s, SimNorm's from its outputs.
+    const per_value_params: zn_mlp.Params = .{
+        .rows = rows,
+        .out_dim = out_dim,
+        .x_off = regions.scaled,
+        .dy_off = regions.output_gradient,
+        .dx_off = regions.scaled_gradient,
+    };
+    const per_group_params: zn_mlp.Params = .{
+        .rows = rows,
+        .out_dim = out_dim,
+        .y_off = regions.output,
+        .dy_off = regions.output_gradient,
+        .dx_off = regions.scaled_gradient,
+        .simnorm_group = regions.simnorm_group,
+    };
+    switch (ending) {
+        .mish => {
+            pipe.params = per_value_params;
+            pipe.run("mish_bwd", block);
+        },
+        .silu => {
+            pipe.params = per_value_params;
+            pipe.run("silu_bwd", block);
+        },
+        .simnorm => {
+            pipe.params = per_group_params;
+            pipe.run("simnorm_bwd", rows * (out_dim / regions.simnorm_group));
+        },
     }
     pipe.params = .{
         .rows = rows,
@@ -1019,8 +1047,9 @@ fn normedLayerBackward(
 
 test "gpu learn: the kit's normed layer forward is zimrnum's - norm and activation to the bit, layer to rounding" {
     // A NormedDense as EfficientTDMPC builds them - 6 inputs to 16 outputs, through Mish, and through SimNorm in
-    // groups of 8 - forward on the kit's CPU twin, kernel by kernel as the device runs them (`dense_fwd` linear,
-    // `norm_fwd`, then `mish_fwd` or `simnorm_fwd`), against zimrnum's graph of the same layer. The norm and the
+    // groups of 8 - and as a world model in the normed form does, through SiLU - forward on the kit's CPU twin,
+    // kernel by kernel as the device runs them (`dense_fwd` linear, `norm_fwd`, then `mish_fwd`, `silu_fwd` or
+    // `simnorm_fwd`), against zimrnum's graph of the same layer. The norm and the
     // activation are zimrmath's functions on both sides, so on the graph's OWN pre-activations the kit writes the
     // graph's output to the bit, and its normalised row and inverse spreads are zimrmath's. The whole layer, from the
     // input, differs only by the linear part's order of summation: to rounding. Gains and norm biases are set away
@@ -1038,7 +1067,7 @@ test "gpu learn: the kit's normed layer forward is zimrnum's - norm and activati
         -0.7, 0.9,  1.5,  -2.2, 0.1,  0.6,
         1.1,  0.0,  -0.3, 0.4,  -1.8, 2.5,
     };
-    const activations = [_]zn.Activation{ .mish, .{ .sim_norm = simnorm_group } };
+    const activations = [_]zn.Activation{ .mish, .silu, .{ .sim_norm = simnorm_group } };
     for (activations, 0..) |activation, layer_seed| {
         const normed: zn.NormedDense(f32) = try .init(
             arena,
@@ -1081,7 +1110,7 @@ test "gpu learn: the kit's normed layer forward is zimrnum's - norm and activati
         const acts: []f32 = try arena.alloc(f32, regions.acts_end);
         @memset(acts, 0);
         @memcpy(acts[regions.input..][0..input_values.len], &input_values);
-        const is_mish: bool = activation == .mish;
+        const ending: NormedEnding = .of(activation);
         var pipe: compute_host.Compute(zn_mlp) = .initCpu();
         defer pipe.deinit();
         // Readbacks hold this many values of each buffer: the whole of what the test wrote.
@@ -1090,7 +1119,7 @@ test "gpu learn: the kit's normed layer forward is zimrnum's - norm and activati
         // The norm and the activation, on the GRAPH's pre-activations.
         @memcpy(acts[regions.linear..][0..block], graph_linear);
         pipe.upload(.acts, acts);
-        normedLayerNormAndActivation(&pipe, regions, is_mish);
+        normedLayerNormAndActivation(&pipe, regions, ending);
         const on_graph_inputs: []const f32 = pipe.readLatest(.acts) orelse return error.NoReadback;
         try expectEqualSlices(f32, graph_output, on_graph_inputs[regions.output..][0..block]);
         // Its normalised rows and inverse spreads are zimrmath's statistics of the same rows.
@@ -1112,7 +1141,7 @@ test "gpu learn: the kit's normed layer forward is zimrnum's - norm and activati
         // The whole layer, from the input: the kit's linear part, then the same norm and activation - to rounding.
         @memset(acts[regions.linear..], 0);
         pipe.upload(.acts, acts);
-        normedLayerForward(&pipe, regions, is_mish);
+        normedLayerForward(&pipe, regions, ending);
         const from_input: []const f32 = pipe.readLatest(.acts) orelse return error.NoReadback;
         for (graph_output, from_input[regions.output..][0..block]) |expected, computed| {
             try expectApproxEqAbs(expected, computed, 1e-5);
@@ -1121,7 +1150,7 @@ test "gpu learn: the kit's normed layer forward is zimrnum's - norm and activati
 }
 
 test "gpu learn: the kit's normed layer backward is zimrnum's - every gradient, and a central difference" {
-    // The two layers of the forward's test, now trained one MSE step's worth: the graph's gradients - at the input,
+    // The three layers of the forward's test, now trained one MSE step's worth: the graph's gradients - at the input,
     // the weight, the bias, the gain and the norm bias - against the kit's, from `mse_bwd` back through the
     // activation's, `norm_params_bwd`, `norm_bwd` and the dense backward. To rounding: the dense parts sum in another
     // order. And one weight's gradient against the kit's OWN central difference of its loss, so the kit is right in
@@ -1139,9 +1168,9 @@ test "gpu learn: the kit's normed layer backward is zimrnum's - every gradient, 
         -0.7, 0.9,  1.5,  -2.2, 0.1,  0.6,
         1.1,  0.0,  -0.3, 0.4,  -1.8, 2.5,
     };
-    const activations = [_]zn.Activation{ .mish, .{ .sim_norm = simnorm_group } };
+    const activations = [_]zn.Activation{ .mish, .silu, .{ .sim_norm = simnorm_group } };
     for (activations, 0..) |activation, layer_seed| {
-        const is_mish: bool = activation == .mish;
+        const ending: NormedEnding = .of(activation);
         const normed: zn.NormedDense(f32) = try .init(
             arena,
             zn.Rng.init(@intCast(61 + layer_seed)),
@@ -1157,7 +1186,7 @@ test "gpu learn: the kit's normed layer backward is zimrnum's - every gradient, 
         }
         const targets: []f32 = try arena.alloc(f32, rows * output_width);
         for (targets, 0..) |*target, index| {
-            target.* = if (is_mish) 0.3 * @sin(float(index)) else 0.125 + 0.05 * @cos(float(index));
+            target.* = if (ending == .simnorm) 0.125 + 0.05 * @cos(float(index)) else 0.3 * @sin(float(index));
         }
         // -- zimrnum's graph: the input a parameter too, so it has a gradient.
         var graph: zn.Graph(f32) = .init(arena);
@@ -1202,8 +1231,8 @@ test "gpu learn: the kit's normed layer backward is zimrnum's - every gradient, 
         pipe.element_count = @intCast(acts.len);
         pipe.upload(.params, parameters);
         pipe.upload(.acts, acts);
-        normedLayerForward(&pipe, regions, is_mish);
-        normedLayerBackward(&pipe, regions, is_mish);
+        normedLayerForward(&pipe, regions, ending);
+        normedLayerBackward(&pipe, regions, ending);
         const kit_gradients: []const f32 = pipe.readLatest(.grads) orelse return error.NoReadback;
         const kit_dacts: []const f32 = pipe.readLatest(.dacts) orelse return error.NoReadback;
         var gradient_start: usize = 0;
@@ -1232,7 +1261,7 @@ test "gpu learn: the kit's normed layer backward is zimrnum's - every gradient, 
             shifted[moved_weight] += offset;
             pipe.upload(.params, shifted);
             pipe.upload(.acts, acts);
-            normedLayerForward(&pipe, regions, is_mish);
+            normedLayerForward(&pipe, regions, ending);
             const outputs: []const f32 = pipe.readLatest(.acts) orelse return error.NoReadback;
             var squared_error_sum: f64 = 0;
             for (outputs[regions.output..][0..targets.len], targets) |output, target| {
@@ -1392,9 +1421,11 @@ test "gpu learn: a two-hot target that is not a number stays in its row - its re
 test "gpu learn: a whole Mlp on the kit is zimrnum's - its output, every parameter's gradient and the input's" {
     // EfficientTDMPC's two shapes of network, laid out by `robot_bmpc_kit.KitNetwork` and run on the CPU twin: an
     // encoder (a normed Mish layer, then a normed SimNorm layer) and a head (two normed Mish layers, then a plain
-    // layer of 101 outputs). Each forward over 5 rows, an MSE gradient at its output, and its backward - against
-    // zimrnum's graph of the same `Mlp`: the output, the gradient of every tensor of every layer in zimrnum's order,
-    // and the input's. To rounding: each dense layer sums in its own order.
+    // layer of 101 outputs) - and a world model in the normed form (two normed SiLU layers, then a plain layer).
+    // Each forward over 5 rows, an MSE gradient at its output, and its backward - against zimrnum's graph of the same
+    // `Mlp`: the output, the gradient of every tensor of every layer in zimrnum's order, and the input's. To rounding:
+    // each dense layer sums in its own order. Then the same backward with the network held fixed
+    // (`ParameterGradients.none`): the input's gradient exactly the same, and grads untouched.
     const gpa: Allocator = testing_allocator;
     var arena_state: ArenaAllocator = .init(gpa);
     defer arena_state.deinit();
@@ -1408,7 +1439,13 @@ test "gpu learn: a whole Mlp on the kit is zimrnum's - its output, every paramet
         .output_activation = .{ .sim_norm = 8 },
     };
     const head_spec: zn.Mlp(f32).Spec = .{ .input = 16, .hidden = &.{ 16, 16 }, .output = 101 };
-    const specs = [_]zn.Mlp(f32).Spec{ encoder_spec, head_spec };
+    const world_spec: zn.Mlp(f32).Spec = .{
+        .input = 12,
+        .hidden = &.{ 16, 16 },
+        .output = 6,
+        .hidden_activation = .silu,
+    };
+    const specs = [_]zn.Mlp(f32).Spec{ encoder_spec, head_spec, world_spec };
     for (specs, 0..) |spec, network_seed| {
         const mlp: zn.Mlp(f32) = try .init(arena, zn.Rng.init(@intCast(71 + network_seed)), spec);
         const input_values: []f32 = try arena.alloc(f32, rows * spec.input);
@@ -1451,13 +1488,14 @@ test "gpu learn: a whole Mlp on the kit is zimrnum's - its output, every paramet
         pipe.upload(.params, params);
         pipe.upload(.acts, acts);
         app.forward(&pipe, input_offset, 0);
-        pipe.params = .{
+        const output_gradient_params: zn_mlp.Params = .{
             .rows = @intCast(rows),
             .out_dim = @intCast(spec.output),
             .y_off = app.outputsOffset(),
             .t_off = target_offset,
             .dy_off = output_gradient,
         };
+        pipe.params = output_gradient_params;
         pipe.run("mse_bwd", @intCast(rows * spec.output));
         app.backward(&pipe, @intCast(rows), input_offset, 0, output_gradient, .overwrite);
         const kit_acts: []const f32 = pipe.readLatest(.acts) orelse return error.NoReadback;
@@ -1480,6 +1518,28 @@ test "gpu learn: a whole Mlp on the kit is zimrnum's - its output, every paramet
         const kit_input_gradient: []const f32 = kit_dacts[app.inputsGradientOffset()..][0..graph_input_gradient.len];
         for (graph_input_gradient, kit_input_gradient) |expected, computed| {
             try expectApproxEqAbs(expected, computed, 1e-5);
+        }
+        // -- Held fixed: the same backward again from the start - grads and every gradient region filled with a mark
+        // no kernel writes, the output's gradient written anew - so the input's gradient must come from this backward
+        // alone, and grads keep their mark.
+        const trained_input_gradient: []const f32 = try arena.dupe(f32, kit_input_gradient);
+        const grads_mark: f32 = -12345.0;
+        const marked_grads: []f32 = try arena.alloc(f32, layout.params_floats);
+        @memset(marked_grads, grads_mark);
+        pipe.upload(.grads, marked_grads);
+        const marked_dacts: []f32 = try arena.alloc(f32, layout.dacts_floats);
+        @memset(marked_dacts, grads_mark);
+        pipe.upload(.dacts, marked_dacts);
+        pipe.params = output_gradient_params;
+        pipe.run("mse_bwd", @intCast(rows * spec.output));
+        app.backward(&pipe, @intCast(rows), input_offset, 0, output_gradient, .none);
+        const fixed_grads: []const f32 = pipe.readLatest(.grads) orelse return error.NoReadback;
+        const fixed_dacts: []const f32 = pipe.readLatest(.dacts) orelse return error.NoReadback;
+        const input_gradient_count: usize = graph_input_gradient.len;
+        const fixed_input_gradient: []const f32 = fixed_dacts[app.inputsGradientOffset()..][0..input_gradient_count];
+        try expectEqualSlices(f32, trained_input_gradient, fixed_input_gradient);
+        for (fixed_grads[0..layout.params_floats]) |gradient| {
+            try expectEqual(grads_mark, gradient);
         }
     }
 }
@@ -2323,6 +2383,55 @@ test "gpu learn: the running scale on the kit is RunningScale's - three batches,
     }
     // The three batches moved it: 1 -> toward 6.x, then toward the floor's 1, then toward 8.5.
     try expect(cpu_scale.value > 1.5);
+}
+
+test "gpu learn: the kit's SGD is zimrnum's sgdMomentum over five warm steps, and plain SGD at momentum 0" {
+    // `sgd` over 12 parameters on the kit's CPU twin against zimrnum's `sgdMomentum` - and at momentum 0 against its
+    // `sgdStep`, which momentum 0 must reduce to - over FIVE steps, each with gradients of its own, from a velocity
+    // that is not zero: the warm path, which a first step from rest cannot test (claude.md: an operation that keeps
+    // state is a different function on its first call). The weights and the velocity, to the bit, after every step.
+    var arena_state: ArenaAllocator = .init(testing_allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    const parameter_count: u32 = 12;
+    const rate: f32 = 0.05;
+    const momenta = [2]f32{ 0.9, 0 };
+    for (momenta) |momentum| {
+        var rng: Random.DefaultPrng = .init(41);
+        const random: Random = rng.random();
+        const weights: zn.Tensor(f32) = try .alloc(arena, &.{parameter_count});
+        const velocity: zn.Tensor(f32) = try .alloc(arena, &.{parameter_count});
+        const gradients: zn.Tensor(f32) = try .alloc(arena, &.{parameter_count});
+        for (weights.data, velocity.data) |*weight, *starting_velocity| {
+            weight.* = random.floatNorm(f32);
+            starting_velocity.* = random.floatNorm(f32);
+        }
+        var pipe: compute_host.Compute(zn_mlp) = .initCpu();
+        defer pipe.deinit();
+        pipe.element_count = parameter_count;
+        pipe.upload(.params, weights.data);
+        pipe.upload(.adam_m, velocity.data);
+        const is_plain_sgd: bool = momentum == 0;
+        for (0..5) |_| {
+            for (gradients.data) |*gradient| {
+                gradient.* = random.floatNorm(f32);
+            }
+            pipe.upload(.grads, gradients.data);
+            pipe.params = .{ .count = parameter_count, .w_off = 0, .rate = rate, .beta1 = momentum };
+            pipe.run("sgd", parameter_count);
+            if (is_plain_sgd) {
+                try zn.sgdStep(f32, weights, weights, gradients, rate);
+            } else {
+                try zn.sgdMomentum(f32, weights, weights, gradients, velocity, rate, momentum);
+            }
+            const kit_weights: []const f32 = pipe.readLatest(.params) orelse return error.NoReadback;
+            const kit_velocity: []const f32 = pipe.readLatest(.adam_m) orelse return error.NoReadback;
+            try expectEqualSlices(f32, weights.data, kit_weights);
+            // At momentum 0 the velocity is the step's gradient itself.
+            const expected_velocity: []const f32 = if (is_plain_sgd) gradients.data else velocity.data;
+            try expectEqualSlices(f32, expected_velocity, kit_velocity);
+        }
+    }
 }
 
 test "gpu learn: the policy's update on the kit is PolicyLearner's - the scale, the clip and Adam, over two updates" {
@@ -3816,7 +3925,7 @@ const KitLearnerSetup = struct {
         for (setup.pairs) |pair| {
             for ((try pair.mlp.params(arena)).tensors) |tensor| {
                 for (tensor.data, kit_params[params_start..][0..tensor.data.len]) |expected, computed| {
-                    largest_gap = @max(largest_gap, @abs(expected - computed));
+                    largest_gap = @max(largest_gap, gapInUnits(expected, computed, 1.0));
                 }
                 params_start += tensor.data.len;
             }
@@ -4234,13 +4343,19 @@ test "gpu learn: the critic's TD targets are each transition's cost plus the dis
     }
 }
 
-test "gpu learn: the critic's imagined targets are lambda-returns along the imagined states, by hand" {
+/// Which fit's lambda-returns `expectLambdaTargetsByHand` checks: the real one over the recorded states
+/// (`CriticOptions.real_lambda`), or the imagined one over the policy rollout's (`imagined_lambda`).
+const LambdaFit = enum { real, imagined };
+
+/// THE CRITIC's LAMBDA-RETURNS BY HAND, for either fit (`LambdaFit`).
+fn expectLambdaTargetsByHand(fit: LambdaFit) !void {
     // The targets check's hand-made batch as an IMAGINED rollout: one row, four steps - three transitions, 1 -> 2,
     // 2 -> 3, 3 -> 4 - of eight features, the normaliser and the barrier as there, the two target heads predicting
     // known constants (e - 1 and e^2 - 1, so every state's value is their mean). The recorded states stay zero: the
     // imagined ones are elsewhere, where `reserveImagined` says. `computeImaginedTargets` must place each goal beside
     // its IMAGINED state, charge each transition the cost where it led, and give it zimrrl's GAE return over the path
     // after it at lambda 0.8 - the last transition its one-step target, each earlier one leaning on what follows.
+    // THE REAL FIT the same on the RECORDED states: they hold the path then, and the imagined place stays zero.
     var arena_state: ArenaAllocator = .init(testing_allocator);
     defer arena_state.deinit();
     const arena: Allocator = arena_state.allocator();
@@ -4268,15 +4383,20 @@ test "gpu learn: the critic's imagined targets are lambda-returns along the imag
     var layout: kit_mlp.KitLayout = .{ .acts_floats = imagined_states_at + block_floats };
     const discount: f32 = 0.9;
     const lambda: f32 = 0.8;
+    const is_real: bool = fit == .real;
     const options: latent_kit.CriticOptions = .{
         .heads = 2,
         .hidden = 4,
         .discount = discount,
-        .imagined_share = 1.0,
-        .imagined_lambda = lambda,
+        .imagined_share = if (is_real) 0 else 1.0,
+        .imagined_lambda = if (is_real) 0.92 else lambda,
+        .real_lambda = if (is_real) lambda else 0,
     };
     var critic: Critic = try .init(arena, &layout, source, options);
-    critic.reserveImagined(&layout, imagined_states_at);
+    if (!is_real) {
+        critic.reserveImagined(imagined_states_at);
+    }
+    const path_states_at: u32 = if (is_real) source.states_at else imagined_states_at;
     // The target heads: their last layer's weights are zero, so their logits are its bias - 30 on one bin, 0 on the
     // rest. Bins sit 0.2 apart on [-10, 10]: bin 55 at 1, bin 60 at 2.
     const chosen_bins = [2]usize{ 55, 60 };
@@ -4288,7 +4408,8 @@ test "gpu learn: the critic's imagined targets are lambda-returns along the imag
     }
     const params: []f32 = try arena.alloc(f32, layout.params_floats);
     critic.writeParams(params);
-    // The imagined states and the goals after steps 1 to 4, and the normaliser; the recorded states left at zero.
+    // The path's states - recorded or imagined, as the fit reads them - the goals after steps 1 to 4, and the
+    // normaliser.
     var host_acts: []f32 = try arena.alloc(f32, layout.acts_floats);
     @memset(host_acts, 0);
     var states: [steps * features]f64 = undefined;
@@ -4296,7 +4417,7 @@ test "gpu learn: the critic's imagined targets are lambda-returns along the imag
     for (0..steps * features) |index| {
         states[index] = 0.4 * @sin(0.7 * float64(index) + 0.3);
         goals[index] = 0.3 * @cos(0.5 * float64(index));
-        host_acts[imagined_states_at + index] = @floatCast(states[index]);
+        host_acts[path_states_at + index] = @floatCast(states[index]);
         host_acts[source.goals_at + index] = @floatCast(goals[index]);
     }
     for (means, spreads, 0..) |mean, spread, column| {
@@ -4308,7 +4429,10 @@ test "gpu learn: the critic's imagined targets are lambda-returns along the imag
     pipe.element_count = layout.largestBuffer();
     pipe.upload(.params, params);
     pipe.upload(.acts, host_acts);
-    critic.computeImaginedTargets(&pipe);
+    switch (fit) {
+        .real => critic.computeTargets(&pipe),
+        .imagined => critic.computeImaginedTargets(&pipe),
+    }
     const device_acts: []const f32 = pipe.readLatest(.acts) orelse return error.NoReadback;
     // By hand: every value the heads' mean; each transition's cost where it led; the returns by zimrrl's GAE.
     const first_head_value: f64 = @exp(@as(f64, 1.0)) - 1;
@@ -4347,6 +4471,14 @@ test "gpu learn: the critic's imagined targets are lambda-returns along the imag
     for (returns, 0..) |expected, transition| {
         try expectApproxEqAbs(expected, device_acts[critic.targets_at + transition], 1e-4);
     }
+}
+
+test "gpu learn: the critic's imagined targets are lambda-returns along the imagined states, by hand" {
+    try expectLambdaTargetsByHand(.imagined);
+}
+
+test "gpu learn: the critic's real targets at a lambda are lambda-returns along the recorded states, by hand" {
+    try expectLambdaTargetsByHand(.real);
 }
 
 test "gpu learn: one update of the critic moves every head's prediction toward its target" {
@@ -4663,7 +4795,7 @@ test "gpu learn: the flow on the kit is zimrrl's - the sampler's actions, the fl
             &host_action,
         );
         for (host_action, kit_actions[row * action_width ..][0..action_width]) |host_value, kit_value| {
-            largest_host_gap = @max(largest_host_gap, @abs(host_value - kit_value));
+            largest_host_gap = @max(largest_host_gap, gapInUnits(host_value, kit_value, 1.0));
         }
     }
     try expect(largest_host_gap <= 1e-6);
@@ -5177,6 +5309,8 @@ test "gpu learn: the statistics for the log - each kernel's numbers are the host
     const new_at: u32 = layout.reserveActs(3);
     const advantages_at: u32 = layout.reserveActs(3);
     const stats_at: u32 = layout.reserveParams(6);
+    // The chunked statistics' chunks' sums (`kit_mlp.runStatistic`): one chunk each, at these sizes.
+    const partials: kit_mlp.StatisticPartials = .{ .at = layout.reserveParams(zn_mlp.stat_most_sums), .floats = 3 };
     var pipe: compute_host.Compute(zn_mlp) = .initCpu();
     defer pipe.deinit();
     pipe.element_count = layout.largestBuffer();
@@ -5201,10 +5335,15 @@ test "gpu learn: the statistics for the log - each kernel's numbers are the host
     @memset(host_dacts, 0);
     @memcpy(host_dacts[gradients_at..][0..count], &gradients);
     pipe.upload(.dacts, host_dacts);
-    pipe.params = .{ .rows = count, .x_off = gradients_at, .stat_off = stats_at };
-    pipe.run("stat_root_mean_square", 1);
-    pipe.params = .{ .rows = count, .x_off = first_at, .t_off = second_at, .stat_off = stats_at + 1 };
-    pipe.run("stat_mean_square_difference", 1);
+    const root_mean_square: zn_mlp.Params = .{ .rows = count, .x_off = gradients_at, .stat_off = stats_at };
+    kit_mlp.runStatistic(zn_mlp, &pipe, "stat_root_mean_square", root_mean_square, partials);
+    const difference: zn_mlp.Params = .{
+        .rows = count,
+        .x_off = first_at,
+        .t_off = second_at,
+        .stat_off = stats_at + 1,
+    };
+    kit_mlp.runStatistic(zn_mlp, &pipe, "stat_mean_square_difference", difference, partials);
     pipe.params = .{ .rows = count, .x_off = first_at, .stat_off = stats_at + 2 };
     pipe.run("stat_mean_and_deviation", 1);
     pipe.params = .{
@@ -5245,6 +5384,228 @@ test "gpu learn: the statistics for the log - each kernel's numbers are the host
     try expectEqual(@as(f32, 1.0 / 3.0), stats[5]);
 }
 
+test "gpu learn: the world model's loss in its own units - its eight numbers against f64 sums on the host" {
+    // Predictions and recorded states for 7 rows over 3 steps of a character of three bodies - 51 features, so every
+    // kind of feature holds numbers (9 positions, 18 rotation axes, 9 velocities, 9 angular velocities, 3 heights, the
+    // up's 3) - with loss weights not all 1 and the kinds' table as a learner writes it. 1,071 terms: two chunks, of
+    // 1,024 and 47. Each of the eight numbers against the same weighted squares summed in f64.
+    var arena_state: ArenaAllocator = .init(testing_allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    const bodies: u32 = 4;
+    const count: u32 = @intCast(rbt.localSize(bodies));
+    const rows: u32 = 7;
+    const steps: u32 = 3;
+    const numbers: u32 = steps * rows * count;
+    try expectEqual(@as(u32, 1071), numbers);
+    var layout: kit_mlp.KitLayout = .{};
+    const predictions_at: u32 = layout.reserveActs(numbers);
+    const recorded_at: u32 = layout.reserveActs(numbers);
+    const weights_at: u32 = layout.reserveActs(count);
+    const kinds_at: u32 = layout.reserveActs(count);
+    const stats_at: u32 = layout.reserveParams(zn_mlp.stat_most_sums);
+    const room_for_two_chunks: u32 = 2 * zn_mlp.stat_most_sums;
+    const partials: kit_mlp.StatisticPartials = .{
+        .at = layout.reserveParams(room_for_two_chunks),
+        .floats = room_for_two_chunks,
+    };
+    var pipe: compute_host.Compute(zn_mlp) = .initCpu();
+    defer pipe.deinit();
+    pipe.element_count = layout.largestBuffer();
+    const host_acts: []f32 = try arena.alloc(f32, layout.acts_floats);
+    @memset(host_acts, 0);
+    for (0..numbers) |index| {
+        const position: f32 = float(index);
+        host_acts[predictions_at + index] = 0.8 * @sin(0.37 * position + 0.2);
+        host_acts[recorded_at + index] = 0.6 * @cos(0.23 * position);
+    }
+    const weights: []f32 = host_acts[weights_at..][0..count];
+    for (weights, 0..) |*weight, feature| {
+        weight.* = 0.5 + 0.25 * float(feature % 7);
+    }
+    const kinds: []f32 = host_acts[kinds_at..][0..count];
+    latent_kit.writeFeatureKinds(.of(bodies), kinds);
+    pipe.upload(.acts, host_acts);
+    const inputs: zn_mlp.Params = .{
+        .rows = rows,
+        .count = count,
+        .lat_steps = steps,
+        .x_off = predictions_at,
+        .t_off = recorded_at,
+        .u_off = weights_at,
+        .z_off = kinds_at,
+        .stat_off = stats_at,
+    };
+    try expectEqual(@as(u32, 2), zn_mlp.statisticChunks(numbers, zn_mlp.statisticChunkLength(numbers, 2)));
+    kit_mlp.runStatistic(zn_mlp, &pipe, "stat_world_loss_in_units", inputs, partials);
+    const params: []const f32 = pipe.readLatest(.params) orelse return error.NoReadback;
+    const found: []const f32 = params[stats_at..][0..zn_mlp.stat_most_sums];
+    // THE HOST's SUMS, in f64: the window's, the last step's, and a kind's each, with each kind's count of numbers.
+    var window_sum: f64 = 0;
+    var last_step_sum: f64 = 0;
+    var kind_sums: [zn_mlp.world_loss_kinds]f64 = @splat(0);
+    var kind_features: [zn_mlp.world_loss_kinds]u32 = @splat(0);
+    const local_layout: rbt.LocalLayout = .of(bodies);
+    for (0..count) |feature| {
+        kind_features[latent_kit.worldLossKind(local_layout.kindOf(@intCast(feature)))] += 1;
+    }
+    for (0..steps) |step| {
+        for (0..rows) |row| {
+            for (0..count) |feature| {
+                const at: usize = (step * rows + row) * count + feature;
+                const difference: f64 = host_acts[predictions_at + at] - host_acts[recorded_at + at];
+                const weighted_square: f64 = @as(f64, weights[feature]) * difference * difference;
+                window_sum += weighted_square;
+                if (step == steps - 1) {
+                    last_step_sum += weighted_square;
+                }
+                const kind: u32 = latent_kit.worldLossKind(local_layout.kindOf(@intCast(feature)));
+                kind_sums[kind] += weighted_square;
+            }
+        }
+    }
+    const expected_kind_features = [zn_mlp.world_loss_kinds]u32{ 9, 18, 9, 9, 3, 3 };
+    try expectEqualSlices(u32, &expected_kind_features, &kind_features);
+    var expected: [zn_mlp.stat_most_sums]f64 = undefined;
+    expected[0] = window_sum / float64(numbers);
+    expected[1] = last_step_sum / float64(rows * count);
+    for (0..zn_mlp.world_loss_kinds) |kind| {
+        expected[2 + kind] = kind_sums[kind] / float64(steps * rows * kind_features[kind]);
+    }
+    // f32 sums of a thousand terms against f64: a few parts in a million. And none trivial.
+    for (expected, found) |want, got| {
+        try expect(want > 0);
+        try expectApproxEqRel(want, @as(f64, got), 1e-5);
+    }
+}
+
+test "gpu learn: the world model's gradient tally - three updates about the bound, then a restart" {
+    // Three updates' gradient lengths and clip factors as the clipped optimiser leaves them (`clip_factor`): 0.5
+    // inside the bound of 1 (factor 1), 1.5 past it (factor 1 / 1.5), 1.0 exactly on it (factor 1, not clipped). The
+    // tally restarted at the first and folded at the other two: 3 updates, a third clipped, a mean of 1.0 and a most of
+    // 1.5. Then a fourth that restarts: one update, its own length.
+    var layout: kit_mlp.KitLayout = .{};
+    const norm_at: u32 = layout.reserveActs(2);
+    const tally_at: u32 = layout.reserveParams(4);
+    var pipe: compute_host.Compute(zn_mlp) = .initCpu();
+    defer pipe.deinit();
+    pipe.element_count = layout.largestBuffer();
+    const Update = struct { length: f32, factor: f32, continues: u32 };
+    const updates = [4]Update{
+        .{ .length = 0.5, .factor = 1.0, .continues = 0 },
+        .{ .length = 1.5, .factor = 1.0 / 1.5, .continues = 1 },
+        .{ .length = 1.0, .factor = 1.0, .continues = 1 },
+        .{ .length = 0.75, .factor = 1.0, .continues = 0 },
+    };
+    var tallies: [4][4]f32 = undefined;
+    for (updates, &tallies) |update, *tally| {
+        const length_and_factor = [2]f32{ update.length, update.factor };
+        pipe.uploadAt(.acts, norm_at, &length_and_factor);
+        pipe.params = .{ .x_off = norm_at, .stat_off = tally_at, .accumulate = update.continues };
+        pipe.run("stat_gradient_tally", 1);
+        const params: []const f32 = pipe.readLatest(.params) orelse return error.NoReadback;
+        tally.* = params[tally_at..][0..4].*;
+    }
+    const after_three = [4]f32{ 3, 1.0 / 3.0, 1.0, 1.5 };
+    for (after_three, tallies[2]) |want, got| {
+        try expectApproxEqAbs(want, got, 1e-6);
+    }
+    const after_restart = [4]f32{ 1, 0, 0.75, 0.75 };
+    try expectEqualSlices(f32, &after_restart, &tallies[3]);
+}
+
+test "gpu learn: the gate's errors weighed - by the loss weights, and with weights all 1 the plain ones to the bit" {
+    // The world model's gate's two errors (`stat_mean_square_difference`, `stat_no_change_error`) on 2 steps of 3 rows
+    // of 4 features, plain and weighed (`stat_weights_on`): weighed by weights all 1 they are the plain numbers to the
+    // bit, and by weights not all 1 the host's weighted means.
+    var arena_state: ArenaAllocator = .init(testing_allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    const rows: u32 = 3;
+    const count: u32 = 4;
+    const steps: u32 = 2;
+    const width: u32 = 6;
+    const numbers: u32 = steps * rows * count;
+    var layout: kit_mlp.KitLayout = .{};
+    const predictions_at: u32 = layout.reserveActs(numbers);
+    const recorded_at: u32 = layout.reserveActs(numbers);
+    const first_rows_at: u32 = layout.reserveActs(rows * width);
+    const ones_at: u32 = layout.reserveActs(count);
+    const weights_at: u32 = layout.reserveActs(count);
+    const stats_at: u32 = layout.reserveParams(6);
+    const partials: kit_mlp.StatisticPartials = .{ .at = layout.reserveParams(3), .floats = 3 };
+    var pipe: compute_host.Compute(zn_mlp) = .initCpu();
+    defer pipe.deinit();
+    pipe.element_count = layout.largestBuffer();
+    const host_acts: []f32 = try arena.alloc(f32, layout.acts_floats);
+    @memset(host_acts, 0);
+    for (0..numbers) |index| {
+        host_acts[predictions_at + index] = 0.7 * @cos(0.6 * float(index) + 0.2);
+        host_acts[recorded_at + index] = 0.5 * @sin(1.1 * float(index) + 0.9);
+    }
+    for (0..rows * width) |index| {
+        host_acts[first_rows_at + index] = 0.6 * @sin(0.8 * float(index) + 0.4);
+    }
+    const weights = [4]f32{ 0.5, 2.0, 1.25, 4.0 };
+    @memset(host_acts[ones_at..][0..count], 1);
+    @memcpy(host_acts[weights_at..][0..count], &weights);
+    pipe.upload(.acts, host_acts);
+    // Plain, then weighed by ones, then by the weights: the world error and the no-change error each.
+    const weightings = [3]struct { on: u32, at: u32 }{
+        .{ .on = 0, .at = 0 },
+        .{ .on = 1, .at = ones_at },
+        .{ .on = 1, .at = weights_at },
+    };
+    for (weightings, 0..) |weighting, index| {
+        const world_error: zn_mlp.Params = .{
+            .rows = numbers,
+            .count = count,
+            .x_off = predictions_at,
+            .t_off = recorded_at,
+            .u_off = weighting.at,
+            .stat_weights_on = weighting.on,
+            .stat_off = stats_at + 2 * @as(u32, @intCast(index)),
+        };
+        kit_mlp.runStatistic(zn_mlp, &pipe, "stat_mean_square_difference", world_error, partials);
+        const no_change_error: zn_mlp.Params = .{
+            .rows = rows,
+            .count = count,
+            .lat_steps = steps,
+            .x_off = first_rows_at + 1,
+            .stride = width,
+            .t_off = recorded_at,
+            .u_off = weighting.at,
+            .stat_weights_on = weighting.on,
+            .stat_off = stats_at + 2 * @as(u32, @intCast(index)) + 1,
+        };
+        kit_mlp.runStatistic(zn_mlp, &pipe, "stat_no_change_error", no_change_error, partials);
+    }
+    const params: []const f32 = pipe.readLatest(.params) orelse return error.NoReadback;
+    const found: []const f32 = params[stats_at..][0..6];
+    // TO THE BIT, weighed by ones.
+    try expectEqual(found[0], found[2]);
+    try expectEqual(found[1], found[3]);
+    // The host's weighted means, in the kernels' order.
+    var world_sum: f32 = 0;
+    var no_change_sum: f32 = 0;
+    for (0..steps) |step| {
+        for (0..rows) |row| {
+            for (0..count) |feature| {
+                const at: usize = (step * rows + row) * count + feature;
+                const difference: f32 = host_acts[predictions_at + at] - host_acts[recorded_at + at];
+                world_sum += weights[feature] * difference * difference;
+                const first: f32 = host_acts[first_rows_at + row * width + 1 + feature];
+                const no_change: f32 = host_acts[recorded_at + at] - first;
+                no_change_sum += weights[feature] * no_change * no_change;
+            }
+        }
+    }
+    try expectApproxEqRel(world_sum / float(numbers), found[4], 1e-6);
+    try expectApproxEqRel(no_change_sum / float(numbers), found[5], 1e-6);
+    // The weights move both: the weighed numbers are not the plain ones.
+    try expect(found[4] != found[0] and found[5] != found[1]);
+}
+
 test "gpu learn: the clipped Adam bounds each gradient after the global factor - the first moment holds the bound" {
     // Three weights with planted gradients - far past the element-wise bound, inside it, far past it the other way -
     // the global bound out of the way. After one step Adam's first moment is exactly (1 - beta1) times each gradient
@@ -5278,6 +5639,67 @@ test "gpu learn: the clipped Adam bounds each gradient after the global factor -
     }
 }
 
+test "gpu learn: a statistic in chunks - each chunk in order, then the chunks', longer chunks when room is short" {
+    // A mean squared difference over 5,000 planted pairs, the kit's way (`kit_mlp.runStatistic`): with room for every
+    // chunk's sum, chunks of the least length - 1,024, the last 904 - and with room for two sums only, two chunks of
+    // 2,500. Each against the same grouping on the host, in f32, to the bit; and both against one running total in
+    // f64 to rounding: the grouping changes the rounding, not the statistic.
+    var arena_state: ArenaAllocator = .init(testing_allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    var layout: kit_mlp.KitLayout = .{};
+    const count: u32 = 5000;
+    const first_at: u32 = layout.reserveActs(count);
+    const second_at: u32 = layout.reserveActs(count);
+    const stat_at: u32 = layout.reserveParams(1);
+    const most_room: u32 = 8;
+    const partials_at: u32 = layout.reserveParams(most_room);
+    var pipe: compute_host.Compute(zn_mlp) = .initCpu();
+    defer pipe.deinit();
+    pipe.element_count = layout.largestBuffer();
+    const host_acts: []f32 = try arena.alloc(f32, layout.acts_floats);
+    @memset(host_acts, 0);
+    for (0..count) |index| {
+        const position: f32 = float(index);
+        host_acts[first_at + index] = @sin(0.37 * position) + 0.001 * position;
+        host_acts[second_at + index] = @cos(0.23 * position);
+    }
+    pipe.upload(.acts, host_acts);
+    const inputs: zn_mlp.Params = .{ .rows = count, .x_off = first_at, .t_off = second_at, .stat_off = stat_at };
+    // The terms, and the statistic as one running total in f64.
+    const squares: []f32 = try arena.alloc(f32, count);
+    var exact_sum: f64 = 0;
+    for (squares, 0..) |*square, index| {
+        const difference: f32 = host_acts[first_at + index] - host_acts[second_at + index];
+        square.* = difference * difference;
+        exact_sum += @as(f64, square.*);
+    }
+    const exact_mean: f64 = exact_sum / float64(count);
+    const rooms = [2]u32{ most_room, 2 };
+    const chunk_lengths = [2]u32{ zn_mlp.stat_least_chunk, 2500 };
+    for (rooms, chunk_lengths) |room, chunk_length| {
+        try expectEqual(chunk_length, zn_mlp.statisticChunkLength(count, room));
+        const partials: kit_mlp.StatisticPartials = .{ .at = partials_at, .floats = room };
+        kit_mlp.runStatistic(zn_mlp, &pipe, "stat_mean_square_difference", inputs, partials);
+        const params: []const f32 = pipe.readLatest(.params) orelse return error.NoReadback;
+        // The host's grouping: each chunk from 0 in order, then the chunks' sums in order.
+        var total: f32 = 0;
+        var chunk_start: usize = 0;
+        while (chunk_start < count) : (chunk_start += chunk_length) {
+            const chunk_end: usize = @min(chunk_start + chunk_length, count);
+            var chunk_sum: f32 = 0;
+            for (squares[chunk_start..chunk_end]) |square| {
+                chunk_sum += square;
+            }
+            total += chunk_sum;
+        }
+        try expectEqual(total / float(count), params[stat_at]);
+        // f32 sums of a few thousand terms: the rounding a few parts in a million.
+        const found: f64 = params[stat_at];
+        try expectApproxEqRel(exact_mean, found, 1e-5);
+    }
+}
+
 test "gpu learn: the critic's and the barrier's statistics - the host's arithmetic on planted values" {
     // The critic's: three heads' values on four rows and the rows' targets - the heads' mean, each row's standard
     // deviation across the heads averaged, and the root mean square error against the targets. The barrier's: two
@@ -5294,6 +5716,8 @@ test "gpu learn: the critic's and the barrier's statistics - the host's arithmet
     const goals_at: u32 = layout.reserveActs(24);
     const normaliser_at: u32 = layout.reserveActs(8);
     const stats_at: u32 = layout.reserveParams(4);
+    // Both statistics' chunks' sums (`kit_mlp.runStatistic`): one chunk each, at these sizes.
+    const partials: kit_mlp.StatisticPartials = .{ .at = layout.reserveParams(zn_mlp.stat_most_sums), .floats = 3 };
     var pipe: compute_host.Compute(zn_mlp) = .initCpu();
     defer pipe.deinit();
     pipe.element_count = layout.largestBuffer();
@@ -5315,10 +5739,16 @@ test "gpu learn: the critic's and the barrier's statistics - the host's arithmet
     @memset(host_acts[normaliser_at..][0..4], 0);
     @memset(host_acts[normaliser_at + 4 ..][0..4], 1);
     pipe.upload(.acts, host_acts);
-    pipe.params = .{ .rows = 4, .count = 3, .x_off = values_at, .t_off = targets_at, .stat_off = stats_at };
-    pipe.run("critic_value_stats", 1);
+    const critic_inputs: zn_mlp.Params = .{
+        .rows = 4,
+        .count = 3,
+        .x_off = values_at,
+        .t_off = targets_at,
+        .stat_off = stats_at,
+    };
+    kit_mlp.runStatistic(zn_mlp, &pipe, "critic_value_stats", critic_inputs, partials);
     const barrier: latent_kit.FailureBarrier = .{};
-    pipe.params = .{
+    const barrier_inputs: zn_mlp.Params = .{
         .rows = 3,
         .out_dim = 4,
         .count = 2,
@@ -5333,7 +5763,7 @@ test "gpu learn: the critic's and the barrier's statistics - the host's arithmet
         .barrier_tilt_margin = barrier.tilt_margin,
         .barrier_tilt_width = barrier.tilt_width,
     };
-    pipe.run("stat_barrier", 1);
+    kit_mlp.runStatistic(zn_mlp, &pipe, "stat_barrier", barrier_inputs, partials);
     const params: []const f32 = pipe.readLatest(.params) orelse return error.NoReadback;
     const stats: []const f32 = params[stats_at..][0..4];
     // The critic's, by hand: per row the heads are values[head * 4 + row].
@@ -5613,6 +6043,388 @@ test "gpu learn: the change in units of the typical change, and a gradient block
         try expectEqual(expected, scaled[8 + index]);
         try expectEqual(expected, scaled[index]);
     }
+}
+
+test "gpu learn: a dense layer's input affine - the layer as if fed (input - shift) x scale, forward and back" {
+    // Three rows of four inputs, strided 5 apart, into two outputs - and the same rows normalised on the host, packed:
+    // each dense kernel, tiled and not, with the affine on the raw rows against without it on the normalised ones.
+    // The forward and the weights' gradient agree to the bit; the inputs' gradient with the affine is the plain one
+    // times each column's scale, to the bit.
+    const rows: u32 = 3;
+    const inputs: u32 = 4;
+    const outputs: u32 = 2;
+    const stride: u32 = 5;
+    var pipe: compute_host.Compute(zn_mlp) = .initCpu();
+    defer pipe.deinit();
+    pipe.element_count = 64;
+    const raw = [_]f32{
+        0.3,  -1.2, 0.05,  2.0,  9, // the fifth column of each row is another reader's
+        -0.7, 0.4,  -0.02, 1.5,  9,
+        1.1,  0.9,  0.08,  -0.5, 9,
+    };
+    // Weights 4 x 2, then the bias; then the affine at 16: four shifts, four scales.
+    const weights_and_affine = [_]f32{
+        0.5, -0.25, 0.75, 0.1, -0.3, 0.2, 1.5, -1.0, 0.05, -0.05, 0, 0, 0, 0, 0, 0,
+        0.1, 0.0,   0.02, 1.0, 2.0,  1.0, 25,  0.5,
+    };
+    const affine_at: u32 = 16;
+    var normalised: [rows * inputs]f32 = undefined;
+    for (0..rows) |row| {
+        for (0..inputs) |column| {
+            const shift: f32 = weights_and_affine[affine_at + column];
+            const scale: f32 = weights_and_affine[affine_at + inputs + column];
+            normalised[row * inputs + column] = (raw[row * stride + column] - shift) * scale;
+        }
+    }
+    const raw_at: u32 = 0;
+    const normalised_at: u32 = 16;
+    const with_affine_at: u32 = 32;
+    const without_affine_at: u32 = 40;
+    pipe.uploadAt(.acts, raw_at, &raw);
+    pipe.uploadAt(.acts, normalised_at, &normalised);
+    pipe.upload(.params, &weights_and_affine);
+    const gradient_at_outputs = [_]f32{ 0.5, -1, 0.25, 2, -0.75, 1.5 };
+    pipe.upload(.dacts, &gradient_at_outputs);
+    const forms = [_][3][:0]const u8{
+        .{ "dense_fwd", "dense_bwd_w", "dense_bwd_x" },
+        .{ "dense_fwd_tiled", "dense_bwd_w_tiled", "dense_bwd_x_tiled" },
+    };
+    inline for (forms) |form| {
+        const tiled: bool = comptime form[0].len > "dense_fwd".len;
+        const forward_count: u32 = if (tiled) zn_mlp.denseTiledInvocations(rows, outputs) else rows * outputs;
+        const weight_values: u32 = inputs * outputs + outputs;
+        const weights_count: u32 = if (tiled) zn_mlp.denseTiledInvocations(inputs + 1, outputs) else weight_values;
+        const inputs_count: u32 = if (tiled) zn_mlp.denseTiledInvocations(rows, inputs) else rows * inputs;
+        // Forward: the raw rows through the affine, the normalised ones as they are.
+        pipe.params = .{ .rows = rows, .in_dim = inputs, .out_dim = outputs, .x_off = raw_at, .stride = stride };
+        pipe.params.y_off = with_affine_at;
+        pipe.params.in_affine_off = affine_at;
+        pipe.run(form[0], forward_count);
+        pipe.params = .{ .rows = rows, .in_dim = inputs, .out_dim = outputs, .x_off = normalised_at };
+        pipe.params.y_off = without_affine_at;
+        pipe.run(form[0], forward_count);
+        const outputs_read: []const f32 = pipe.readLatest(.acts) orelse return error.NoReadback;
+        for (0..rows * outputs) |value| {
+            try expectEqual(outputs_read[without_affine_at + value], outputs_read[with_affine_at + value]);
+        }
+        // The weights' gradient: into the gradients at 0 with the affine, then at 0 again without, compared.
+        pipe.params = .{ .rows = rows, .in_dim = inputs, .out_dim = outputs, .x_off = raw_at, .stride = stride };
+        pipe.params.in_affine_off = affine_at;
+        pipe.run(form[1], weights_count);
+        const with_affine_gradients: []const f32 = pipe.readLatest(.grads) orelse return error.NoReadback;
+        var weights_gradient: [inputs * outputs + outputs]f32 = undefined;
+        @memcpy(&weights_gradient, with_affine_gradients[0..weights_gradient.len]);
+        pipe.params = .{ .rows = rows, .in_dim = inputs, .out_dim = outputs, .x_off = normalised_at };
+        pipe.run(form[1], weights_count);
+        const plain_gradients: []const f32 = pipe.readLatest(.grads) orelse return error.NoReadback;
+        try expectEqualSlices(f32, plain_gradients[0..weights_gradient.len], &weights_gradient);
+        // The inputs' gradient: the plain one at 8, the affine's at 24 - its scale's multiple.
+        pipe.params = .{ .rows = rows, .in_dim = inputs, .out_dim = outputs, .dx_off = 8 };
+        pipe.run(form[2], inputs_count);
+        pipe.params = .{ .rows = rows, .in_dim = inputs, .out_dim = outputs, .dx_off = 24 };
+        pipe.params.in_affine_off = affine_at;
+        pipe.run(form[2], inputs_count);
+        const input_gradients: []const f32 = pipe.readLatest(.dacts) orelse return error.NoReadback;
+        for (0..rows) |row| {
+            for (0..inputs) |column| {
+                const scale: f32 = weights_and_affine[affine_at + inputs + column];
+                const plain: f32 = input_gradients[8 + row * inputs + column];
+                try expectEqual(plain * scale, input_gradients[24 + row * inputs + column]);
+            }
+        }
+    }
+}
+
+test "gpu learn: the blocked products over several blocks - the untiled kernels' sums to the bit, and Muon's" {
+    // A layer of 70 rows, 75 inputs and 130 outputs - two blocks of rows, two of inputs, three of outputs, every block
+    // at an edge partial - its inputs strided 77 apart: each blocked kernel against the untiled one on the CPU twin,
+    // every number of the output, to the bit (the same sums in the same order); then Muon's blocked product of the same
+    // sizes, B straight and transposed, against the sums computed here.
+    const rows: u32 = 70;
+    const inputs: u32 = 75;
+    const outputs: u32 = 130;
+    const stride: u32 = 77;
+    const gpa: Allocator = testing_allocator;
+    var pipe: compute_host.Compute(zn_mlp) = .initCpu();
+    defer pipe.deinit();
+    const input_at: u32 = 0;
+    const blocked_at: u32 = input_at + rows * stride;
+    const untiled_at: u32 = blocked_at + rows * outputs;
+    const acts_end: u32 = untiled_at + rows * outputs;
+    pipe.element_count = acts_end;
+    const acts: []f32 = try gpa.alloc(f32, acts_end);
+    defer gpa.free(acts);
+    for (acts, 0..) |*value, index| {
+        value.* = 1.1 * @sin(0.29 * float(index) + 0.3);
+    }
+    pipe.upload(.acts, acts);
+    const weight_count: u32 = inputs * outputs + outputs;
+    const weights: []f32 = try gpa.alloc(f32, weight_count);
+    defer gpa.free(weights);
+    for (weights, 0..) |*value, index| {
+        value.* = 0.2 * @cos(0.61 * float(index) + 0.1);
+    }
+    pipe.upload(.params, weights);
+    const gradient_count: u32 = rows * outputs + 2 * rows * inputs;
+    const output_gradients: []f32 = try gpa.alloc(f32, gradient_count);
+    defer gpa.free(output_gradients);
+    for (output_gradients, 0..) |*value, index| {
+        value.* = 0.7 * @sin(0.43 * float(index) + 0.8);
+    }
+    pipe.upload(.dacts, output_gradients);
+    // THE FORWARD, through tanh.
+    const tanh: u32 = @backingInt(zn_mlp.Act.tanh);
+    pipe.params = .{ .rows = rows, .in_dim = inputs, .out_dim = outputs, .act = tanh, .x_off = input_at };
+    pipe.params.stride = stride;
+    pipe.params.y_off = blocked_at;
+    pipe.run("dense_fwd_tiled", zn_mlp.denseTiledInvocations(rows, outputs));
+    pipe.params.y_off = untiled_at;
+    pipe.run("dense_fwd", rows * outputs);
+    const forward_read: []const f32 = pipe.readLatest(.acts) orelse return error.NoReadback;
+    try expectEqualSlices(f32, forward_read[untiled_at..acts_end], forward_read[blocked_at..untiled_at]);
+    // THE INPUTS' GRADIENT, from the gradient at the outputs (dacts 0) to dacts after it, blocked then untiled.
+    const blocked_dx_at: u32 = rows * outputs;
+    const untiled_dx_at: u32 = blocked_dx_at + rows * inputs;
+    pipe.params = .{ .rows = rows, .in_dim = inputs, .out_dim = outputs, .dx_off = blocked_dx_at };
+    pipe.run("dense_bwd_x_tiled", zn_mlp.denseTiledInvocations(rows, inputs));
+    pipe.params.dx_off = untiled_dx_at;
+    pipe.run("dense_bwd_x", rows * inputs);
+    const inputs_read: []const f32 = pipe.readLatest(.dacts) orelse return error.NoReadback;
+    const blocked_dx: []const f32 = inputs_read[blocked_dx_at..untiled_dx_at];
+    try expectEqualSlices(f32, inputs_read[untiled_dx_at..][0 .. rows * inputs], blocked_dx);
+    // THE WEIGHTS' GRADIENT, the bias's row with it: blocked, kept, then untiled over it.
+    pipe.params = .{ .rows = rows, .in_dim = inputs, .out_dim = outputs, .x_off = input_at, .stride = stride };
+    pipe.run("dense_bwd_w_tiled", zn_mlp.denseTiledInvocations(inputs + 1, outputs));
+    const blocked_gradients_read: []const f32 = pipe.readLatest(.grads) orelse return error.NoReadback;
+    const blocked_gradients: []f32 = try gpa.dupe(f32, blocked_gradients_read[0..weight_count]);
+    defer gpa.free(blocked_gradients);
+    pipe.run("dense_bwd_w", weight_count);
+    const untiled_gradients: []const f32 = pipe.readLatest(.grads) orelse return error.NoReadback;
+    try expectEqualSlices(f32, untiled_gradients[0..weight_count], blocked_gradients);
+    // MUON's PRODUCT: A the layer's inputs read packed (rows x inputs), B the weights (inputs x outputs, or their
+    // transpose read from outputs x inputs), D the forward's output; alpha 1.5, beta -0.5 - against the sums here.
+    const alpha: f32 = 1.5;
+    const beta: f32 = -0.5;
+    for ([_]u32{ 0, 1 }) |transposed| {
+        const muon_out_at: u32 = untiled_at;
+        pipe.upload(.acts, acts);
+        pipe.uploadAt(.acts, acts_end, weights[0 .. inputs * outputs]);
+        pipe.params = .{
+            .rows = rows,
+            .in_dim = inputs,
+            .out_dim = outputs,
+            .x_off = input_at,
+            .v_off = acts_end,
+            .u_off = blocked_at,
+            .y_off = muon_out_at,
+            .muon_alpha = alpha,
+            .muon_beta = beta,
+            .muon_b_transposed = transposed,
+        };
+        pipe.element_count = acts_end + inputs * outputs;
+        pipe.run("muon_matmul_tiled", zn_mlp.denseTiledInvocations(rows, outputs));
+        const muon_read: []const f32 = pipe.readLatest(.acts) orelse return error.NoReadback;
+        for (0..rows) |row| {
+            for (0..outputs) |column| {
+                var sum: f32 = 0;
+                for (0..inputs) |inner| {
+                    const left: f32 = acts[input_at + row * inputs + inner];
+                    const right_at: usize = if (transposed == 1) column * inputs + inner else inner * outputs + column;
+                    sum += left * weights[right_at];
+                }
+                const product_part: f32 = alpha * sum;
+                const expected: f32 = product_part + beta * acts[blocked_at + row * outputs + column];
+                try expectEqual(expected, muon_read[muon_out_at + row * outputs + column]);
+            }
+        }
+    }
+}
+
+test "gpu learn: the world model's running statistics - its inputs and its change pooled, frozen at the limit" {
+    // A ring of 5 steps of 2 characters, records of 3 features and 2 actions, a reference table of 3 rows of 2 servo
+    // targets. Two folds of two steps, the first wrapping the ring (slots 4 and 0), the second slots 1 and 2, each
+    // record flagged where it ends a transition: six transitions in all. Every input column's moments are those of
+    // what the world model reads for those six - the state and the action from each transition's first record, the
+    // servo targets from the table row of its second - and every feature's change moments those of its six changes,
+    // all pooled from XMimic's start (count 0, mean 0, variance 1). From them: the inputs' affine, the state's columns
+    // composed with the clips' normaliser; the kit's change statistics over each feature's clip spread, the loss's
+    // spread floored, the second feature's floor above its spread. A fold of no steps writes the same again; at the
+    // limit, a fold of new transitions changes nothing.
+    const features: u32 = 3;
+    const references: u32 = 2;
+    const actions: u32 = 2;
+    const inputs: u32 = features + references + actions;
+    const envs: u32 = 2;
+    const capacity: u32 = 5;
+    const table_rows: u32 = 3;
+    const input_epsilon: f32 = 1.0e-2;
+    const change_epsilon: f32 = 1.0e-4;
+    const record_width: u32 = zn_mlp.latRecordWidth(features, actions);
+    const table_width: u32 = zn_mlp.latTableWidth(features, references);
+    var pipe: compute_host.Compute(zn_mlp) = .initCpu();
+    defer pipe.deinit();
+    pipe.element_count = 512;
+    // The ring in the replay's own buffer; the acts after where it once lay: the table, the clips' normaliser, the
+    // floors, the flags, the kit's change and its weights.
+    const ring_at: u32 = 0;
+    const table_at: u32 = capacity * envs * record_width;
+    const norm_at: u32 = table_at + table_rows * table_width;
+    const floors_at: u32 = norm_at + 2 * features;
+    const flags_at: u32 = floors_at + features;
+    const increments_at: u32 = flags_at + 2 * envs;
+    const weights_at: u32 = increments_at + 2 * features;
+    try expect(weights_at + features <= pipe.element_count);
+    var ring: [capacity * envs * 16]f32 = @splat(0);
+    try expect(record_width <= 16);
+    for (0..capacity) |slot| {
+        for (0..envs) |env| {
+            const record_at: usize = (slot * envs + env) * record_width;
+            for (0..features) |feature| {
+                const step: f32 = float(slot);
+                const step_part: f32 = 0.03 * step * step + 0.05 * float(feature) * step;
+                ring[record_at + feature] = step_part - 0.2 * float(env) + float(feature);
+            }
+            for (0..actions) |number| {
+                const action_at: usize = record_at + zn_mlp.latRecordAction(features) + number;
+                ring[action_at] = 0.4 * @sin(float(3 * slot + env + number));
+            }
+            ring[record_at + zn_mlp.latRecordTableRow(features, actions)] = float((slot + env) % table_rows);
+        }
+    }
+    pipe.uploadAt(.ring, ring_at, &ring);
+    var table: [table_rows * 16]f32 = @splat(0);
+    try expect(table_width <= 16);
+    for (0..table_rows * table_width) |index| {
+        table[index] = 0.7 * @cos(0.5 * float(index) + 0.1);
+    }
+    pipe.uploadAt(.acts, table_at, table[0 .. table_rows * table_width]);
+    const clip_means = [features]f32{ 0.1, -0.4, 2.0 };
+    const clip_spreads = [features]f32{ 0.5, 2.0, 0.25 };
+    const floors = [features]f32{ 1.0e-3, 10.0, 1.0e-3 };
+    pipe.uploadAt(.acts, norm_at, &clip_means);
+    pipe.uploadAt(.acts, norm_at + features, &clip_spreads);
+    pipe.uploadAt(.acts, floors_at, &floors);
+    // The params: the inputs' moments, the affine, the change's moments - every moment XMimic's start.
+    const input_moments_at: u32 = 0;
+    const affine_at: u32 = 3 * inputs;
+    const change_moments_at: u32 = affine_at + 2 * inputs;
+    var starting: [3 * inputs + 2 * inputs + 3 * features]f32 = @splat(0);
+    @memset(starting[2 * inputs ..][0..inputs], 1);
+    @memset(starting[change_moments_at + 2 * features ..][0..features], 1);
+    pipe.upload(.params, &starting);
+    const Fold = struct { first_slot: u32, steps: u32, flags: [2 * envs]f32 };
+    const folds = [_]Fold{
+        .{ .first_slot = 4, .steps = 2, .flags = .{ 1, 0, 1, 1 } },
+        .{ .first_slot = 1, .steps = 2, .flags = .{ 0, 1, 1, 1 } },
+        .{ .first_slot = 0, .steps = 0, .flags = .{ 0, 0, 0, 0 } },
+    };
+    for (folds) |fold| {
+        pipe.uploadAt(.acts, flags_at, &fold.flags);
+        pipe.params = .{
+            .x_off = input_moments_at,
+            .w_off = change_moments_at,
+            .y_off = affine_at,
+            .z_off = increments_at,
+            .l_off = weights_at,
+            .u_off = floors_at,
+            .t_off = flags_at,
+            .norm_off = norm_at,
+            .table_off = table_at,
+            .lat_features = features,
+            .lat_references = references,
+            .lat_actions = actions,
+            .lat_envs = envs,
+            .lat_capacity = capacity,
+            .ring_off = ring_at,
+            .lat_first_slot = fold.first_slot,
+            .lat_steps = fold.steps,
+            .lat_norm_epsilon = input_epsilon,
+            .lat_change_epsilon = change_epsilon,
+            .lat_moments_limit = 1.0e9,
+        };
+        pipe.run("lat_world_moments", inputs + features);
+    }
+    // The six transitions, each a (slot before, slot, character).
+    const transitions = [_][3]usize{
+        .{ 3, 4, 0 },
+        .{ 4, 0, 0 },
+        .{ 4, 0, 1 },
+        .{ 0, 1, 1 },
+        .{ 1, 2, 0 },
+        .{ 1, 2, 1 },
+    };
+    const params_read: []const f32 = pipe.readLatest(.params) orelse return error.NoReadback;
+    const statistics: [starting.len]f32 = params_read[0..starting.len].*;
+    const acts_read: []const f32 = pipe.readLatest(.acts) orelse return error.NoReadback;
+    const count: f64 = float64(transitions.len);
+    // THE INPUTS: what the world model reads for each transition, and the affine from its moments.
+    for (0..inputs) |column| {
+        var sum: f64 = 0;
+        var squares: f64 = 0;
+        for (transitions) |transition| {
+            const first_at: usize = (transition[0] * envs + transition[2]) * record_width;
+            const second_at: usize = (transition[1] * envs + transition[2]) * record_width;
+            const value: f64 = if (column < features)
+                ring[first_at + column]
+            else if (column < features + references) value: {
+                const table_row: usize = @trunc(ring[second_at + zn_mlp.latRecordTableRow(features, actions)]);
+                break :value table[table_row * table_width + column];
+            } else ring[first_at + zn_mlp.latRecordAction(features) + column - features - references];
+            sum += value;
+            squares += value * value;
+        }
+        const mean: f64 = sum / count;
+        const variance: f64 = squares / count - mean * mean;
+        try expectEqual(@as(f32, @floatCast(count)), statistics[input_moments_at + column]);
+        try expectApproxEqAbs(@as(f32, @floatCast(mean)), statistics[input_moments_at + inputs + column], 1.0e-6);
+        const read_variance: f32 = statistics[input_moments_at + 2 * inputs + column];
+        try expectApproxEqAbs(@as(f32, @floatCast(variance)), read_variance, 1.0e-6);
+        const spread: f64 = @sqrt(variance + input_epsilon * input_epsilon);
+        var shift: f64 = mean;
+        var scale: f64 = 1.0 / spread;
+        if (column < features) {
+            shift = (mean - clip_means[column]) / clip_spreads[column];
+            scale = clip_spreads[column] / spread;
+        }
+        try expectApproxEqAbs(@as(f32, @floatCast(shift)), statistics[affine_at + column], 1.0e-5);
+        try expectApproxEqRel(@as(f32, @floatCast(scale)), statistics[affine_at + inputs + column], 1.0e-5);
+    }
+    // THE CHANGE: each feature's six changes, and the kit's statistics in the clips' units.
+    for (0..features) |feature| {
+        var sum: f64 = 0;
+        var squares: f64 = 0;
+        for (transitions) |transition| {
+            const before: f64 = ring[(transition[0] * envs + transition[2]) * record_width + feature];
+            const after: f64 = ring[(transition[1] * envs + transition[2]) * record_width + feature];
+            const change: f64 = after - before;
+            sum += change;
+            squares += change * change;
+        }
+        const mean: f64 = sum / count;
+        const variance: f64 = squares / count - mean * mean;
+        try expectEqual(@as(f32, @floatCast(count)), statistics[change_moments_at + feature]);
+        try expectApproxEqAbs(@as(f32, @floatCast(mean)), statistics[change_moments_at + features + feature], 1.0e-6);
+        const read_variance: f32 = statistics[change_moments_at + 2 * features + feature];
+        try expectApproxEqAbs(@as(f32, @floatCast(variance)), read_variance, 1.0e-6);
+        const spread: f64 = @sqrt(variance + change_epsilon * change_epsilon);
+        const loss_spread: f64 = @max(spread, floors[feature]) / clip_spreads[feature];
+        const kit_mean: f32 = @floatCast(mean / clip_spreads[feature]);
+        const kit_spread: f32 = @floatCast(spread / clip_spreads[feature]);
+        const kit_weight: f32 = @floatCast(1.0 / (loss_spread * loss_spread));
+        try expectApproxEqAbs(kit_mean, acts_read[increments_at + feature], 1.0e-6);
+        try expectApproxEqRel(kit_spread, acts_read[increments_at + features + feature], 1.0e-5);
+        try expectApproxEqRel(kit_weight, acts_read[weights_at + feature], 1.0e-5);
+    }
+    // The second feature's loss weighs it at its floor: (2 / 10)^2.
+    try expectApproxEqRel(@as(f32, 0.04), acts_read[weights_at + 1], 1.0e-6);
+    // AT THE LIMIT: the six already held, a fold of new transitions leaves every moment as it was.
+    pipe.uploadAt(.acts, flags_at, &[_]f32{ 1, 1, 1, 1 });
+    pipe.params.lat_first_slot = 2;
+    pipe.params.lat_steps = 2;
+    pipe.params.lat_moments_limit = 6;
+    pipe.run("lat_world_moments", inputs + features);
+    const params_after: []const f32 = pipe.readLatest(.params) orelse return error.NoReadback;
+    try expectEqualSlices(f32, &statistics, params_after[0..starting.len]);
 }
 
 /// The mean of `heads` values of state `state` for row `row`, from acts laid out [state][head][rows] at `offset` - the

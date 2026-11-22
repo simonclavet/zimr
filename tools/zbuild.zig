@@ -16,6 +16,8 @@
 //! Usage - in place of `zig build`, same arguments, from the repository root:
 //!     zig build zbuild                                  once: installs it into tools/zig-out/bin
 //!     tools/zig-out/bin/zbuild tripwires -j1            runs `zig build tripwires -j1`
+//!     tools/zig-out/bin/zbuild test-codecs              runs `zig build test-codecs -j<CPUs>` - a job per CPU
+//!                                                       unless the arguments name a count (`jobCountPlace`)
 //!     tools/zig-out/bin/zbuild --log=/tmp/b.log         distills a log captured earlier
 //! A project built on zimr (`zimr.Project`) has the same `zig build zbuild`, which installs it into the project's
 //! zig-out/bin instead: `zig-out/bin/zbuild check`.
@@ -56,6 +58,7 @@ const lastIndexOfScalar = std.mem.lastIndexOfScalar;
 const indexOfPos = std.mem.indexOfPos;
 const startsWith = std.mem.startsWith;
 const expect = std.testing.expect;
+const expectEqual = std.testing.expectEqual;
 const expectEqualStrings = std.testing.expectEqualStrings;
 
 const max_blocks: usize = 8; // cap surfaced error blocks (avoid a wall of dups)
@@ -385,16 +388,37 @@ pub fn distill(gpa: Allocator, input: []const u8, out: *ArrayList(u8)) !void {
 /// `-j1` or `-Dmode=release` as zbuild options and refuse them. Its own three are recognised only as the FIRST
 /// argument, where zig build takes none of them.
 const usage: []const u8 =
-    \\usage: zbuild <what zig build takes>   runs `zig build` with exactly those arguments, its output passed through
-    \\                                       as it comes, each finding also announced at once (`zbuild: found:`), and
-    \\                                       the build stopped at its first; if it fails, the output ends with only the
-    \\                                       roots (errors, lint, failing steps)
+    \\usage: zbuild <what zig build takes>   runs `zig build` with those arguments - and a job per CPU, `-j<CPUs>`,
+    \\                                       unless they name a count - its output passed through as it comes, each
+    \\                                       finding also announced at once (`zbuild: found:`), and the build stopped
+    \\                                       at its first; if it fails, the output ends with only the roots (errors,
+    \\                                       lint, failing steps)
     \\       zbuild --complete <...>        the same, the build run to its end: a report of everything
     \\       zbuild --log=<file>            the same distillation of a log captured earlier
     \\Installed by `zig build zbuild` - into tools/zig-out/bin in zimr, zig-out/bin in a project built on it; run
     \\from the project's root, like zig build.
     \\
 ;
+
+/// WHERE ZBUILD ADDS THE BUILD's JOB COUNT (`-j<CPUs>`) to its arguments: before a `--`, since the arguments after it
+/// are a run step's, or at the end. Null when the arguments name a job count themselves (`-j<N>`).
+///
+/// One step per CPU, where the build runner's own default is one fewer (`std.Io.Threaded` keeps a CPU for the thread
+/// that schedules). A build's steps spend their time waiting on the processes they start - a compiler, a test binary -
+/// so the CPU kept back sits idle while a step waits for a place. The robot family's test binary runs as one process
+/// per CPU (`-Dtest-shards`), so with the default one of those processes always waited for another to finish: on two
+/// CPUs the two ran one after the other, a 17 s run for two tests of 8 s each, and 9 s side by side.
+fn jobCountPlace(arguments: []const [:0]const u8) ?usize {
+    for (arguments, 0..) |argument, index| {
+        if (eql(u8, argument, "--")) {
+            return index;
+        }
+        if (startsWith(u8, argument, "-j")) {
+            return null;
+        }
+    }
+    return arguments.len;
+}
 
 /// `distill(log)` onto stdout.
 fn report(gpa: Allocator, io: Io, log: []const u8) !void {
@@ -460,6 +484,12 @@ pub fn main(init: std.process.Init) !u8 {
     try command.appendSlice(arena, &.{ "zig", "build" });
     for (build_arguments) |arg| {
         try command.append(arena, arg);
+    }
+    if (jobCountPlace(build_arguments)) |place| {
+        const cpu_count: usize = std.Thread.getCpuCount() catch 1;
+        const job_count: []const u8 = try allocPrint(arena, "-j{d}", .{cpu_count});
+        const words_before_arguments: usize = 2;
+        try command.insert(arena, words_before_arguments + place, job_count);
     }
     try init.environ_map.put("ZIMR_ZBUILD", "1");
     var child: std.process.Child = std.process.spawn(io, .{
@@ -730,4 +760,15 @@ test "a diff that `zig build lint-fix` prints is never a finding, though its sou
     try expect(isFinding("./src/a.zig:9:1: [line-length] 125 cols, max 120 (rule 10)"));
     try expect(isFinding(".\\src\\a.zig:1:1: [zig-fmt] not laid out as `zig fmt` lays it out"));
     try expect(isFinding("C:\\dev\\zimr\\src\\a.zig:3:5: error: expected type 'u32', found 'bool'"));
+}
+
+test "jobCountPlace: a job count at the end, before a run step's arguments, or none when one is named" {
+    const plain = [_][:0]const u8{ "test-codecs", "-Dtest-optimize=Debug" };
+    try expectEqual(@as(?usize, 2), jobCountPlace(&plain));
+    const with_run_arguments = [_][:0]const u8{ "geno-lab", "--", "-j3", "--frames=8" };
+    try expectEqual(@as(?usize, 1), jobCountPlace(&with_run_arguments));
+    const with_count = [_][:0]const u8{ "tripwires", "-j1" };
+    try expectEqual(@as(?usize, null), jobCountPlace(&with_count));
+    const nothing = [_][:0]const u8{};
+    try expectEqual(@as(?usize, 0), jobCountPlace(&nothing));
 }
