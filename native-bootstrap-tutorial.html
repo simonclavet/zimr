@@ -1,0 +1,2339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Native bootstrap — from the first instruction to update()</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\25b8\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\25be\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(300px,28%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* A row: the example's screenshot (web/shots/<name>.png, which `zig build
+   gallery-shots` saves), and beside it the name, the stars and the first
+   three lines of the description. The picture is cropped to its box, so
+   every row is the same height whatever the example's shape. scroll-margin:
+   scrolled into view, a row clears the sticky module heading. */
+.g-item{
+  display:flex;align-items:flex-start;gap:.7em;padding:.3em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-shot{
+  flex:none;display:block;width:80px;height:60px;max-width:none;object-fit:cover;
+  background:var(--panel);border:1px solid var(--rule);border-radius:2px;
+}
+.g-text{flex:1;min-width:0;line-height:1.3;}
+.g-name{display:flex;justify-content:space-between;gap:.6em;}
+.g-name span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-about{
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;line-clamp:3;
+  overflow:hidden;color:var(--faint);font-size:11px;
+}
+.g-item:hover .g-about,.g-item.on .g-about{color:var(--dim);}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+/* The code pane under the example: web/<name>/source.json, highlighted at
+   build time by this file's highlightZig. `code-open` shows it; --f is the
+   stage's share of the height below the bar, set by dragging the divider. */
+.g-main{--f:.58;}
+.code-open .g-stage{flex:0 0 calc((100% - 44px) * var(--f));}
+.g-btn.g-wide{width:auto;padding:0 .7em;font-size:.85em;}
+.g-btn.on{color:var(--fg);border-color:var(--tok-fn);}
+.g-split{
+  display:none;flex:none;height:9px;margin:-4px 0;position:relative;z-index:2;
+  cursor:row-resize;touch-action:none;
+}
+.g-split::after{content:"";position:absolute;left:0;right:0;top:4px;height:1px;background:var(--rule);}
+.g-split:hover::after,.dragging .g-split::after{top:3px;height:3px;background:var(--tok-fn);}
+.code-open .g-split{display:block;}
+.dragging{cursor:row-resize;user-select:none;}
+.dragging iframe{pointer-events:none;}
+.g-code{display:none;flex:1 1 0;min-height:0;flex-direction:column;background:var(--bg);}
+.code-open .g-code{display:flex;}
+.g-tabs{
+  flex:none;display:flex;overflow-x:auto;background:var(--panel);
+  border-bottom:1px solid var(--rule);font-size:12px;
+}
+.g-tab{
+  flex:none;padding:.45em .9em;background:none;color:var(--dim);font:inherit;cursor:pointer;white-space:nowrap;
+  border:0;border-right:1px solid var(--rule);border-bottom:2px solid transparent;
+}
+.g-tab:hover{color:var(--fg);}
+.g-tab.on{color:#fff;background:var(--bg);border-bottom-color:var(--tok-fn);}
+.g-tab .n{margin-left:.6em;color:var(--faint);font-size:.9em;}
+.g-tab.g-copy{margin-left:auto;border-left:1px solid var(--rule);border-right:0;}
+.g-src{flex:1;min-height:0;overflow:auto;}
+.g-src:focus{outline:none;}
+.g-src:focus-visible{outline:1px solid var(--tok-fn);outline-offset:-1px;}
+.g-src pre{
+  margin:0;padding:8px 0 3em;background:none;border:0;border-radius:0;overflow:visible;
+  font-size:12.5px;line-height:1.55;
+}
+/* one row per source line; the number is a CSS counter, so it is never
+   selected or copied, and it stays on the first row of a wrapped line */
+.g-src code{display:block;counter-reset:ln;padding:0;}
+.g-src .l{display:block;position:relative;min-height:1.55em;padding:0 1.2em 0 calc(4ch + 2.2em);}
+.g-src .l::before{
+  counter-increment:ln;content:counter(ln);position:absolute;left:0;top:0;bottom:0;
+  width:calc(4ch + 1em);padding-right:.9em;box-sizing:border-box;
+  text-align:right;color:var(--faint);border-right:1px solid var(--rule);
+}
+.g-src-msg{padding:1em 1.2em;color:var(--faint);}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:3;border-right:0;}
+  .g-desc{display:none;}
+  .g-src .l{white-space:pre-wrap;overflow-wrap:anywhere;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+<!--
+  Editing this page? Its code blocks are QUOTED by hand, line for line, from the files their captions name
+  (zimr's own, and the Zig toolchain's lib/std for chapter 3). A line ending in "..." is an elision. When a quoted
+  function changes, the quote here must change with it. Diagrams are marked class="sketch": they illustrate, they
+  do not quote.
+-->
+</head>
+<body>
+<h1>Native bootstrap</h1>
+<p class="sub">Everything a Windows computer executes for
+<code>examples/hello_world_owned_main/hello_world_owned_main.zig</code>, from the moment the program is started until
+the first line of its <code>update</code> runs — told in order, as one thread's journey. Nothing is skipped on purpose:
+where a step is a library or a driver doing a thousand things, the page says what those things are and moves on;
+where it is zimr's code or Zig's, the lines are shown.</p>
+
+<p>The program is a hello world that <strong>owns its <code>main</code></strong>: the file you write is the root of
+the program, the first code of yours runs as soon as Zig's start code is done, and from there it is your
+<code>main</code> that brings up the engine, hands it your functions, and starts the frames. Nothing of zimr's stands
+between Zig and you — so every step on this page is one your program asked for.</p>
+
+<p>It is meant to be read <strong>with the program paused in a debugger beside it</strong>, one step at a time.
+<a href="#breakpoint">Chapter 0</a> sets the breakpoint, on the earliest line of source the process runs; every
+chapter after it says where the debugger should be, and asks a few questions with two answers each. Read only, you
+can usually guess the answer; stepping, you can see it.</p>
+
+<nav>
+<strong>Contents</strong>
+<ol start="0">
+  <li><a href="#breakpoint">Set a breakpoint first</a></li>
+  <li><a href="#question">The question</a></li>
+  <li><a href="#loader">Before the first instruction</a></li>
+  <li><a href="#start">Zig's start code</a></li>
+  <li><a href="#main">Your main</a></li>
+  <li><a href="#run">App.run: two allocators and a seed</a></li>
+  <li><a href="#window">A window</a></li>
+  <li><a href="#gpu">A GPU</a></li>
+  <li><a href="#wiring">Caches, the frame object and the gl handle</a></li>
+  <li><a href="#state">The State, and a font</a></li>
+  <li><a href="#leaving">Leaving run</a></li>
+  <li><a href="#loop">The frame loop</a></li>
+  <li><a href="#export">The update export</a></li>
+  <li><a href="#arrival">The first line</a></li>
+  <li><a href="#open">Your first line opens the frame</a></li>
+  <li><a href="#recap">The whole path on one page</a></li>
+</ol>
+</nav>
+
+<h2 id="breakpoint">0. Set a breakpoint first</h2>
+
+<p>Everything below happens in a fraction of a second. To follow it, stop the program at its very beginning and
+walk it forward yourself. Four steps:</p>
+<ol>
+<li><strong>Build the debug program.</strong> Debug is the default mode, and it is the one this page follows:
+<pre><code>zig build hello-world-owned-main -Dplatform=windows</code></pre>
+This leaves <code>zig-out/windows/hello_world_owned_main.exe</code> and, beside it,
+<code>hello_world_owned_main.pdb</code>, the debug information that maps machine code back to source lines.</li>
+<li><strong>Open Zig's own start code.</strong> The first line of source that runs in the process is not in zimr:
+it is in the standard library that came with your Zig, <code>lib/std/start.zig</code>. <code>zig env</code> prints
+where that library is (its <code>lib_dir</code>). With the compiler this page was written against:
+<pre><code>zed C:/dev/zig-x86_64-windows-0.18.0-dev.753+1420479be/lib/std/start.zig:572</code></pre></li>
+<li><strong>Put a breakpoint on line 572</strong>, the first line of <code>WinStartup</code>:
+<pre><code class="zig">    <span class="tok-kw">if</span> (builtin.cpu.arch.<span class="tok-fn">isX86</span>() <span class="tok-kw">and</span> builtin.abi == .gnu) <span class="tok-kw">asm</span> <span class="tok-kw">volatile</span> (<span class="tok-str">"fninit"</span>);</code></pre>
+(Click in the gutter left of the line number.) Nothing earlier can take a breakpoint: before this line, only
+Windows' code has run, and Windows ships no source for it.</li>
+<li><strong>Start the debug scenario <code>Debug: hello-world-owned-main (windows)</code></strong> (Zed's debug panel, or
+VS Code's Run and Debug; both are generated into <code>.zed/debug.json</code> and <code>.vscode/launch.json</code>).
+It launches the exe under CodeLLDB with two settings that matter: the native PDB reader, without which Zig's frame
+names come out garbled, and fast stepping off, without which stepping over <code>z.loadFont</code> crashes
+LLDB.</li>
+</ol>
+
+<p>The keys, the same in Zed and VS Code:</p>
+<table>
+<tr><th>key</th><th>does</th><th>use it to</th></tr>
+<tr><td>F10</td><td>step over</td><td>run the current line, calls and all, and stop on the next line</td></tr>
+<tr><td>F11</td><td>step into</td><td>follow the next call into the function it calls</td></tr>
+<tr><td>Shift+F11</td><td>step out</td><td>finish the current function and stop in its caller</td></tr>
+<tr><td>F5</td><td>continue</td><td>run until the next breakpoint</td></tr>
+</table>
+
+<p>Three conventions for the rest of the page:</p>
+<ul>
+<li>Each chapter opens with a box, <strong>In the debugger</strong>, saying where you should be stopped and how to
+get there. Sometimes that is F10 and F11 from where the last chapter left you; sometimes it is a breakpoint to set
+and F5 — there are loops of thousands of iterations on the way, and stepping through them teaches nothing.</li>
+<li><strong>F10 runs everything a line calls.</strong> On most lines that is what you want. On a few it is the
+rest of the program — the most important one is <code>start.zig:582</code>, where F10 runs the program until its
+window is closed. The boxes warn at those lines.</li>
+<li><strong>A skipped block can flash its last line.</strong> When an <code>if</code> is false, F10 may stop for
+one step on the <em>last</em> line of the block it skips — the jump over the block is attributed to that line —
+before landing after it. The block did not run; its first lines are never reached. You will see it at
+<code>if (prev_frame_ms != 0)</code> and at the first <code>if</code> of <code>beginDrawing</code>.</li>
+<li>Each <strong>checkpoint</strong> asks one question with two answers. If you are stopped where the box says, the
+answer is on your screen — in the editor, the call stack, the variables panel or the program's console. The answer
+is folded under it.</li>
+</ul>
+<p>Line numbers are those of the tree this page was written from; when the code moves, they drift, and the quoted
+line is what to look for.</p>
+
+<div class="callout"><strong>Checkpoint 0.1.</strong> Start the scenario. Where does the program stop?<br>
+<b>(a)</b> at <code>start.zig:572</code>, on the <code>fninit</code> line, with no window on screen yet<br>
+<b>(b)</b> at <code>hello_world_owned_main.zig:46</code>, the first line of <code>update</code>, with the window
+open
+<details><summary>answer</summary><p><b>(a).</b> Your breakpoint is the first one the process reaches. There is no
+window: it is opened by zimr, which has not run a single instruction yet. A console window may already be there —
+the program is a console program, and Windows gave it one before its first instruction (chapter 2).</p></details></div>
+
+<h2 id="question">1. The question</h2>
+
+<p>The program is one file of about a hundred lines. Here is its <code>update</code>, and the line this page
+is going to:</p>
+<figure class="code"><figcaption><span class="path">examples/hello_world_owned_main/hello_world_owned_main.zig:44</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig"><span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-comment">// The frame is ours to open and close: the runner does this for a descriptor.</span>
+    z.<span class="tok-fn">beginDrawing</span>(f.gl);</code></pre></figure>
+
+<p>By the time that line runs, a great deal is already true. There is a window on the screen, 480 by 200 logical
+pixels, titled <code>zimr - hello_world_owned_main</code>. A GPU has been found, opened and given a swapchain. A
+TrueType font has been parsed, its glyphs rasterized and uploaded as a texture. <code>f.window.widthf()</code> knows
+the window's width; <code>s.font</code> holds the font. What is <em>not</em> done yet is the frame itself: that is
+what this first line does, and the last chapter follows it in.</p>
+
+<p>And here is the program's <code>main</code>, which made all of that true:</p>
+<figure class="code"><figcaption><span class="path">examples/hello_world_owned_main/hello_world_owned_main.zig:87</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig"><span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">main</span>() !void {
+    <span class="tok-kw">try</span> zimr_app.<span class="tok-fn">run</span>(.{
+        .window = .{
+            .title = <span class="tok-str">"zimr - hello_world_owned_main"</span>,
+            .width = <span class="tok-num">480</span>,
+            .height = <span class="tok-num">200</span>,
+            .scale_mode = .responsive,
+        },
+    }, State, initState, update);
+    <span class="tok-comment">// On the web `run` returns at once and the browser calls each frame through the `update` export. A native</span>
+    <span class="tok-comment">// program calls its frames itself, here, until its window closes.</span>
+    zimr_app.<span class="tok-fn">runNative</span>();
+}</code></pre></figure>
+
+<p>Two calls. <code>run</code> gets the configuration and your two functions, and builds everything;
+<code>runNative</code> runs the frames. The question this page answers is what happens between the operating system
+starting the program and the first line of <code>update</code> — through those two calls, and before them. The
+answer is a chain of about a dozen functions across Windows, Zig's standard library and zimr, short enough to read
+end to end. The page follows a single thread — the program's only one, until the GPU driver starts its own — from
+the first instruction in our process to the moment the program counter lands on <code>z.beginDrawing</code>.</p>
+
+<div class="note"><strong>The other shape.</strong> zimr's plain <code>examples/hello_world</code> draws the same
+picture but has no <code>main</code>: it is a <em>descriptor</em>, a constant listing its functions, and a runner
+of zimr's (<code>src/wgpu_runner.zig</code>) is the program's root, owns <code>main</code>, and opens and closes each
+frame around the example's <code>update</code>. That is what lets the gallery's launcher run many examples in one
+window. It also puts two more layers between Zig and the example's code — which is why this page follows the
+version that owns its <code>main</code>.</div>
+
+<div class="callout"><strong>Checkpoint 1.1.</strong> Search <code>hello_world_owned_main.zig</code> for
+<code>beginDrawing</code>. Who opens the frame?<br>
+<b>(a)</b> the example itself, on the first line of its <code>update</code><br>
+<b>(b)</b> zimr, before it calls <code>update</code>
+<details><summary>answer</summary><p><b>(a).</b> Line 46, with <code>defer z.endDrawing(f.gl);</code> right under
+it. In this program, nothing calls <code>beginDrawing</code> for you.</p></details></div>
+
+<p>The route, in one picture. Each line calls the next; the indentation is the depth of the call stack:</p>
+<pre class="sketch"><code>Windows loader               maps the .exe and its DLLs, then jumps to the entry point
+  WinStartup                   Zig's std/start.zig, exported as wWinMainCRTStartup
+    main                         your main - the program's root
+      App.run                      src/wgpu_app.zig - window, GPU, State, init
+        native_loop.openWindow       a Win32 window, handed to Vulkan
+        wgpu.initDevice ...          a Vulkan instance, device, swapchain
+        initState                    your init: loads the font
+      App.runNative
+        native_loop.run              the frame loop: messages, wait, frame
+          update (export)              the same function a browser calls each frame
+            dispatch                     one hop from the engine's types to yours
+              update                       your update  &lt;-- we are going here</code></pre>
+
+<h2 id="loader">2. Before the first instruction</h2>
+
+<div class="note"><strong>In the debugger.</strong> Stay paused on <code>start.zig:572</code> for the whole chapter.
+Everything here happened <em>before</em> that line, in Windows' code, which has no source to step through. So
+instead of stepping, this chapter runs three small experiments: one in the debugger, two in a PowerShell terminal
+opened in the repository's root.</div>
+
+<p>When you start a program, Windows does three things before any of its code runs:</p>
+<ol>
+<li>it <strong>reads the file</strong>, whose header says what the program needs;</li>
+<li>it <strong>maps</strong> the file into memory, with every DLL (library) the header names, and theirs;</li>
+<li>it <strong>starts a thread</strong>, which jumps to the address the header gives as the entry point.</li>
+</ol>
+<p>You are paused at the end of step 3. We will look at the three in reverse, starting with what is already on your
+screen.</p>
+
+<h3>Experiment 1: who called us</h3>
+
+<p>Look at the call stack panel. The frame on top is where you are. The frames under it are the code that called
+it — and that is still waiting for it to return, which, for these, will be never.</p>
+
+<div class="callout"><strong>Checkpoint 2.1.</strong> Which frame is directly below the top one?<br>
+<b>(a)</b> <code>kernel32.dll`BaseThreadInitThunk</code><br>
+<b>(b)</b> <code>main</code>
+<details><summary>answer</summary><p><b>(a).</b> The stack has exactly three frames: ours on top, then
+<code>BaseThreadInitThunk</code> in kernel32, then <code>RtlUserThreadStart</code> in ntdll. <code>main</code> has
+not been called yet — it is several calls in our future.</p></details></div>
+
+<div class="callout"><strong>Checkpoint 2.2.</strong> Which DLL holds the bottom frame — the code every thread on
+Windows starts in?<br>
+<b>(a)</b> <code>ntdll.dll</code><br>
+<b>(b)</b> <code>kernel32.dll</code>
+<details><summary>answer</summary><p><b>(a).</b> <code>ntdll.dll`RtlUserThreadStart</code>. ntdll is the one DLL
+in every process; Windows' loader, which did steps 1 and 2, lives in it too.</p></details></div>
+
+<p>That is step 3: a new thread started in <code>RtlUserThreadStart</code>, which called
+<code>BaseThreadInitThunk</code>, which called the entry point — the function you are paused in. Where did the
+address of that function come from? From the file.</p>
+
+<h3>Experiment 2: what Windows read</h3>
+
+<p>An <code>.exe</code> is a PE file (Portable Executable). Its first bytes are a header, and you can read them
+yourself. In PowerShell, from the repository's root, load the file and print its first 136 bytes in hexadecimal:</p>
+<pre><code>$exe = [IO.File]::ReadAllBytes("zig-out\windows\hello_world_owned_main.exe")
+Format-Hex -InputObject ([byte[]]$exe[0..135])</code></pre>
+<p>You should see this — left, the offset; middle, the bytes; right, the same bytes as text:</p>
+<pre class="sketch"><code>           00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F
+
+00000000   4D 5A 78 00 01 00 00 00 04 00 00 00 00 00 00 00  MZx.............
+00000010   00 00 00 00 00 00 00 00 40 00 00 00 00 00 00 00  ........@.......
+00000020   00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+00000030   00 00 00 00 00 00 00 00 00 00 00 00 78 00 00 00  ............x...
+00000040   0E 1F BA 0E 00 B4 09 CD 21 B8 01 4C CD 21 54 68  ..º..´.Í!¸.LÍ!Th
+00000050   69 73 20 70 72 6F 67 72 61 6D 20 63 61 6E 6E 6F  is program canno
+00000060   74 20 62 65 20 72 75 6E 20 69 6E 20 44 4F 53 20  t be run in DOS
+00000070   6D 6F 64 65 2E 24 00 00 50 45 00 00 64 86 07 00  mode.$..PE..d...
+00000080   BD 2B 03 6B 00 00 00 00                          ½+.k....</code></pre>
+
+<div class="callout"><strong>Checkpoint 2.3.</strong> What are the file's first two characters?<br>
+<b>(a)</b> <code>MZ</code><br>
+<b>(b)</b> <code>PE</code>
+<details><summary>answer</summary><p><b>(a).</b> Every Windows executable still begins with an MS-DOS header —
+<code>MZ</code> are the initials of Mark Zbikowski, who designed the DOS format — followed by a tiny DOS program
+whose only job is to print the sentence you can read on the right. The real header is further on.</p></details></div>
+
+<p>Where further on? The DOS header keeps the answer in the four bytes at offset <code>0x3C</code>:
+<code>78 00 00 00</code>. x86 stores numbers least significant byte first (<em>little-endian</em>), so those bytes
+are the number <code>0x00000078</code>.</p>
+
+<div class="callout"><strong>Checkpoint 2.4.</strong> Look at offset <code>0x78</code> (row <code>00000070</code>,
+column <code>08</code>). What is there?<br>
+<b>(a)</b> <code>50 45 00 00</code> — <code>PE</code> and two zero bytes<br>
+<b>(b)</b> <code>4D 5A</code> — a second <code>MZ</code>
+<details><summary>answer</summary><p><b>(a).</b> The PE signature. The two bytes after it, <code>64 86</code>,
+read backwards, are <code>0x8664</code>: the machine, x86-64. Then <code>07 00</code>: the file has 7 sections
+(code, read-only data, data, and so on).</p></details></div>
+
+<p>Counting bytes by hand gets old quickly, so let PowerShell read the fields that matter. Each line prints one:</p>
+<pre><code>$pe = [BitConverter]::ToInt32($exe, 0x3C)
+$opt = $pe + 24
+'machine     0x{0:X}' -f [BitConverter]::ToUInt16($exe, $pe + 4)
+'entry RVA   0x{0:X}' -f [BitConverter]::ToUInt32($exe, $opt + 16)
+'image base  0x{0:X}' -f [BitConverter]::ToUInt64($exe, $opt + 24)
+'subsystem   {0}' -f [BitConverter]::ToUInt16($exe, $opt + 68)
+'stack MiB   {0}' -f ([BitConverter]::ToUInt64($exe, $opt + 72) / 1MB)</code></pre>
+<p><code>$pe</code> is the <code>0x78</code> you found; the <em>optional header</em> — not optional at all in an
+executable — starts 24 bytes after it. The output, for the build this page was written from:</p>
+<pre class="sketch"><code>machine     0x8664
+entry RVA   0x124470
+image base  0x140000000
+subsystem   3
+stack MiB   16</code></pre>
+<ul>
+<li><strong>entry RVA</strong>: where to start, as a <em>relative virtual address</em> — an offset from wherever
+the image ends up in memory. This is the function you are paused in.</li>
+<li><strong>image base</strong>: where the image would like to be. (Experiment 3 shows where it actually is.)</li>
+<li><strong>stack</strong>: the main thread's stack is reserved at this size, 16 MiB, and committed a page at a
+time as it grows.</li>
+</ul>
+
+<div class="callout"><strong>Checkpoint 2.5.</strong> Windows numbers its subsystems: 2 is a GUI program, 3 a
+console program. The program says 3. What does that mean?<br>
+<b>(a)</b> Windows gives it a console — the window or terminal its log lines go to<br>
+<b>(b)</b> it can never open a window of its own
+<details><summary>answer</summary><p><b>(a).</b> A console program may open as many windows as it likes; the
+subsystem only decides whether Windows attaches a console before the first instruction. That console is where
+<code>[zimr] (vulkan) ...</code> will appear in chapter 7 (under a debugger, its output may show in the debug
+console instead).</p></details></div>
+
+<p>Last, the DLLs the program names. Their names are stored in the file as plain text, so a rough search finds
+them:</p>
+<pre><code>[Text.Encoding]::ASCII.GetString($exe) -split "\x00" | Where-Object { $_ -match '^\w+\.dll$' } | Sort-Object -Unique</code></pre>
+<pre class="sketch"><code>comdlg32.dll
+IMM32.dll
+KERNEL32.dll
+ntdll.dll
+SHELL32.dll
+USER32.dll</code></pre>
+<p>Those six are the program's <em>imports</em>: for each, the file lists the functions it uses (65 from ntdll, for
+Zig's standard library; 34 from user32, for the window; and so on), and step 2 is the loader finding every one of
+those functions and writing its address into a table in our image. From then on, a call to
+<code>CreateWindowExW</code> in our code is a jump through that table.</p>
+
+<div class="callout"><strong>Checkpoint 2.6.</strong> Is <code>vulkan-1.dll</code> in the list?<br>
+<b>(a)</b> no<br>
+<b>(b)</b> yes — the program draws with Vulkan
+<details><summary>answer</summary><p><b>(a).</b> zimr loads Vulkan by hand, at run time, in chapter 7 — so a
+machine without a Vulkan driver can still start the program and be told why it cannot draw, instead of getting a
+"DLL not found" dialog from Windows before the first instruction.</p></details></div>
+
+<h3>Experiment 3: what Windows loaded</h3>
+
+<p>Six DLLs named; how many loaded? Each of them names DLLs of its own. In Zed, the debug panel lists the process's
+modules; from a terminal, the same LLDB the debug scenario uses can start the program, stop it on your line, and list
+them (adjust the CodeLLDB version in the path to yours):</p>
+<pre><code>&amp; "$env:LOCALAPPDATA\Zed\debug_adapters\CodeLLDB\CodeLLDB_v1.12.3\extension\lldb\bin\lldb.exe" -b -o "settings set plugin.symbol-file.pdb.reader native" -o "b start.zig:572" -o "run" -o "image list" -o "process kill" zig-out\windows\hello_world_owned_main.exe</code></pre>
+<p>Among its output, the stop and the list, shortened here to the address each module was loaded at and its
+name:</p>
+<pre class="sketch"><code>frame #0: 0x00007ff6097944b2 hello_world_owned_main.exe`wWinMainCRTStartup at start.zig:572
+[  0] 0x00007ff609670000 C:\dev\zimr\zig-out\windows\hello_world_owned_main.exe
+[  1] 0x00007ffd1bcc0000 C:\Windows\System32\ntdll.dll
+[  2] 0x00007ffd1a2c0000 C:\Windows\System32\kernel32.dll
+[  3] 0x00007ffd19120000 C:\Windows\System32\KernelBase.dll
+[  4] 0x00007ffd19c90000 C:\Windows\System32\user32.dll
+...
+[  9] 0x00007ffd197b0000 C:\Windows\System32\ucrtbase.dll
+...
+[ 19] 0x00007ffd19fe0000 C:\Windows\System32\msvcrt.dll
+[ 20] 0x00007ffd1a690000 C:\Windows\System32\sechost.dll</code></pre>
+
+<div class="callout"><strong>Checkpoint 2.7.</strong> How many modules are loaded before the first instruction?<br>
+<b>(a)</b> about twenty<br>
+<b>(b)</b> seven: the program and its six imports
+<details><summary>answer</summary><p><b>(a)</b> — twenty or twenty-one. The six imports pulled in their own:
+<code>user32</code> brings <code>win32u</code> and <code>gdi32</code>, <code>kernel32</code> brings
+<code>KernelBase</code>, and so on down. Listed again in chapter 7, just after <code>LoadLibraryW</code>, the list
+has grown by about a dozen: the window brought some (themes, text input), and Vulkan's loader
+<code>vulkan-1.dll</code> is among them.</p></details></div>
+
+<div class="callout"><strong>Checkpoint 2.8.</strong> Is a C runtime — <code>ucrtbase.dll</code> or
+<code>msvcrt.dll</code> — in the process?<br>
+<b>(a)</b> yes, both<br>
+<b>(b)</b> no: Zig's programs use no C runtime
+<details><summary>answer</summary><p><b>(a)</b> — and both statements are true. The program imports no C runtime:
+zimr's Windows build does not link libc, and Zig's standard library calls ntdll itself. But Windows' own DLLs are
+written in C and C++, and they bring theirs. The C runtime is in the process; our code never calls it.</p></details></div>
+
+<div class="callout"><strong>Checkpoint 2.9.</strong> The header asked for image base <code>0x140000000</code>. Where
+did <code>hello_world_owned_main.exe</code> actually load (line <code>[  0]</code>)?<br>
+<b>(a)</b> somewhere else, chosen by Windows, like <code>0x00007ff609670000</code><br>
+<b>(b)</b> at <code>0x140000000</code>, as asked
+<details><summary>answer</summary><p><b>(a).</b> Address space layout randomization (ASLR): Windows chooses where
+images go, at random, so that an attacker cannot know where their code is. That is why the header gives the entry
+point as an RVA, an offset. Check it: the base ends in <code>0000</code>, so base + <code>0x124470</code> ends in
+<code>4470</code> — and the stop line says <code>...44b2</code>, <code>0x42</code> bytes into the entry function. (LLDB's
+very first line of output shows the same breakpoint before the program existed, at
+<code>address = 0x00000001401244b2</code>: the header's base, plus the RVA, plus <code>0x42</code>.)
+Those 66 bytes are the function's prologue, the instructions before its first line; one of them is
+<code>andq $-0x10, %rsp</code>, which realigns the stack. You will meet the reason in the next chapter, in
+<code>callconv(.withStackAlign(.c, 1))</code>.</p></details></div>
+
+<h3>What did not happen</h3>
+
+<p>One thing more ran before your line, and one thing — which a C++ programmer would expect — did not.</p>
+<p>What ran: <strong>thread-local storage</strong>. A <code>threadlocal var</code> needs a fresh copy per thread, and
+on Windows it is the loader that makes them, from a template the image describes. Zig's standard library writes
+that description itself (<code>lib/std/os/windows/tls.zig</code>, an <code>IMAGE_TLS_DIRECTORY</code> named
+<code>_tls_used</code>), since there is no C runtime of ours to do it; the loader read it in step 2.</p>
+
+<div class="note"><strong>What did not: static constructors.</strong> In a C++ program, the C runtime would now run
+every global object's constructor, in an order nobody can quite predict, before <code>main</code>. Zig has none.
+Every global in this program — <code>zimr_app</code>, the window struct, the input queue — has its initial value
+computed <em>at compile time</em> and stored as bytes in the image's <code>.data</code> section, which the loader
+simply mapped. <code>pub var zimr_app: z.App = .{};</code> is not a constructor call; it is bytes, already right. So
+the line you are paused on really is the first thing the program does.</div>
+
+<h2 id="start">3. Zig's start code</h2>
+
+<div class="note"><strong>In the debugger.</strong> Still on <code>start.zig:572</code>. In this chapter you will
+press F10 down to line 582, then — not F10 there — F11 until you arrive in <code>main</code>.</div>
+
+<p>Which function sits at that address was decided at compile time. When Zig builds an executable it always adds
+one file to the compilation, <code>lib/std/start.zig</code>, whose top-level <code>comptime</code> block looks at
+the program's root file and exports an entry point to suit it. The root here is your file,
+<code>hello_world_owned_main.zig</code>; it declares <code>main</code> and none of Windows' own entry names, and it
+does not link libc, so the block arrives at this line:</p>
+<figure class="code"><figcaption><span class="path">zig/lib/std/start.zig:38</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">        } <span class="tok-kw">else</span> <span class="tok-kw">switch</span> (native_os) {
+            .windows =&gt; {
+                <span class="tok-kw">if</span> (builtin.link_libc <span class="tok-kw">and</span> <span class="tok-builtin">@hasDecl</span>(root, <span class="tok-str">"wWinMain"</span>)) {
+...
+                } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (!<span class="tok-builtin">@hasDecl</span>(root, <span class="tok-str">"WinMain"</span>) <span class="tok-kw">and</span> !<span class="tok-builtin">@hasDecl</span>(root, <span class="tok-str">"WinMainCRTStartup"</span>) <span class="tok-kw">and</span>
+                    !<span class="tok-builtin">@hasDecl</span>(root, <span class="tok-str">"wWinMain"</span>) <span class="tok-kw">and</span> !<span class="tok-builtin">@hasDecl</span>(root, <span class="tok-str">"wWinMainCRTStartup"</span>))
+                {
+                    <span class="tok-builtin">@export</span>(&amp;WinStartup, .{ .name = <span class="tok-str">"wWinMainCRTStartup"</span> });</code></pre></figure>
+
+<p>So the function at the entry point is <code>WinStartup</code>, exported under the name the linker looks for.
+(The name says "wWinMain", the GUI convention; the image is still a console program, because the subsystem is a
+separate header field and Zig's default for an executable is console.) Here it is, all of it — the first code of
+ours, in the broad sense, that the CPU executes:</p>
+
+<div class="callout"><strong>Checkpoint 3.1.</strong> What name does the call stack give the top frame — the
+function you are stopped in?<br>
+<b>(a)</b> <code>WinStartup</code><br>
+<b>(b)</b> <code>wWinMainCRTStartup</code>
+<details><summary>answer</summary><p><b>(b).</b> The debugger names the code by its symbol in the image, and the
+<code>@export</code> above gave <code>WinStartup</code> the symbol <code>wWinMainCRTStartup</code>. The source is
+<code>WinStartup</code>; the binary only knows the exported name.</p></details></div>
+<figure class="code"><figcaption><span class="path">zig/lib/std/start.zig:570</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig"><span class="tok-kw">fn</span> <span class="tok-fn">WinStartup</span>() <span class="tok-kw">callconv</span>(.<span class="tok-fn">withStackAlign</span>(.c, <span class="tok-num">1</span>)) noreturn {
+    <span class="tok-comment">// Switch from the x87 fpu state set by windows to the state expected by the gnu abi.</span>
+    <span class="tok-kw">if</span> (builtin.cpu.arch.<span class="tok-fn">isX86</span>() <span class="tok-kw">and</span> builtin.abi == .gnu) <span class="tok-kw">asm</span> <span class="tok-kw">volatile</span> (<span class="tok-str">"fninit"</span>);
+
+    <span class="tok-kw">if</span> (!builtin.single_threaded <span class="tok-kw">and</span> !builtin.link_libc) {
+        _ = <span class="tok-builtin">@import</span>(<span class="tok-str">"os/windows/tls.zig"</span>);
+    }
+
+    std.Thread.<span class="tok-fn">maybeAttachSignalStack</span>();
+    std.debug.<span class="tok-fn">maybeEnableSegfaultHandler</span>();
+
+    std.os.windows.ntdll.<span class="tok-fn">RtlExitUserProcess</span>(
+        <span class="tok-fn">callMain</span>(std.os.windows.<span class="tok-fn">peb</span>().ProcessParameters.CommandLine.<span class="tok-fn">slice</span>(), .global),
+    );
+}</code></pre></figure>
+
+<p>Line by line:</p>
+<ol>
+<li><code>callconv(.withStackAlign(.c, 1))</code> — not a line that runs, but a promise about the stack. The
+function is told to assume its stack is aligned to only 1 byte, so the compiler realigns it on entry. An entry point
+is reached by a jump from code that owes it nothing, and the realignment makes every function after it safe to
+assume the usual 16 bytes.</li>
+<li><code>fninit</code> — one instruction. It resets the x87 floating-point unit: Windows leaves it set to 53-bit
+precision, and the GNU ABI (our <code>-gnu</code> target) expects 64-bit. zimr's math is SSE, not x87, but
+<code>f80</code> and some of compiler-rt still use the old unit, and this makes them right.</li>
+<li><code>_ = @import("os/windows/tls.zig");</code> — runs nothing. Importing the file is what puts the TLS
+directory of <a href="#loader">chapter 2</a> into the image; the line only has to exist. The program is not
+single-threaded (Zig's standard library assumes it may start threads), so it does.</li>
+<li><code>maybeAttachSignalStack()</code> — returns at once on Windows: a signal stack is a POSIX idea, and the
+function's own switch says <code>.windows =&gt; return,</code>.</li>
+<li><code>maybeEnableSegfaultHandler()</code> — in a debug or ReleaseSafe build, installs the handler that turns a
+crash into a readable stack trace:
+<pre><code class="zig">        windows_segfault_handle = windows.ntdll.<span class="tok-fn">RtlAddVectoredExceptionHandler</span>(<span class="tok-num">0</span>, handleSegfaultWindows);</code></pre>
+That is the first call this program makes into the operating system. From here on, a null-pointer read anywhere
+below prints <code>Segmentation fault at address ...</code> and the stack, instead of vanishing silently. (In
+ReleaseFast, <code>-Dmode=ship</code>, it is compiled out.)</li>
+<li><code>peb()</code> — one instruction, <code>movq %gs:0x60, ...</code>. On x86-64 Windows the <code>gs</code>
+segment points at the thread's TEB (thread environment block), and offset 0x60 of the TEB holds the PEB, the
+<em>process</em> environment block: the image's base address, its command line, its environment. Zig reads the
+command line straight from it — there is no <code>GetCommandLineW</code> call.</li>
+<li><code>RtlExitUserProcess(callMain(...))</code> — calls <code>callMain</code>, and when it returns (when the
+window has been closed, long after this page ends), exits the process with its result. <code>WinStartup</code> is
+<code>noreturn</code>: there is nothing to return to.</li>
+</ol>
+
+<div class="callout"><strong>Checkpoint 3.2.</strong> Press F10 once, from line 572. Where does it stop?<br>
+<b>(a)</b> line 575, <code>_ = @import("os/windows/tls.zig");</code><br>
+<b>(b)</b> line 578, <code>std.Thread.maybeAttachSignalStack();</code>
+<details><summary>answer</summary><p><b>(b).</b> The <code>@import</code> line generates no machine code at all —
+its effect is the TLS directory, decided at compile time — so there is nothing on line 575 to stop at. F10 twice
+more brings you to line 582.</p></details></div>
+
+<div class="warn"><strong>On line 582, press F11, not F10.</strong> F10 would run <code>callMain</code> to its end —
+that is, the whole program, until you close its window — and stop on line 581, where the process exits.</div>
+
+<div class="callout"><strong>Checkpoint 3.3.</strong> On line 582, press F11. Which function do you enter
+first?<br>
+<b>(a)</b> <code>peb</code>, in <code>os/windows.zig</code><br>
+<b>(b)</b> <code>callMain</code>, in <code>start.zig</code>
+<details><summary>answer</summary><p><b>(a).</b> A call's arguments are evaluated before the call:
+<code>peb()</code> first (you will see its one <code>movq %gs:0x60</code> as an <code>asm</code> block), then
+<code>slice()</code> on the command line, which itself calls <code>isEmpty()</code>. Keep pressing F11 (or
+Shift+F11 out of them); each returns to line 582, and only then is <code>callMain</code> entered.</p></details></div>
+
+<p><code>callMain</code> is <code>inline</code>, so it is not a frame of its own; it is pasted into
+<code>WinStartup</code>. It looks at the <em>type</em> of the root's <code>main</code> and picks a way to call
+it:</p>
+<figure class="code"><figcaption><span class="path">zig/lib/std/start.zig:798</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig"><span class="tok-kw">inline</span> <span class="tok-kw">fn</span> <span class="tok-fn">callMain</span>(args: std.process.Args.Vector, environ: std.process.Environ.Block) u8 {
+    <span class="tok-kw">const</span> fn_info = <span class="tok-builtin">@typeInfo</span>(<span class="tok-builtin">@TypeOf</span>(root.main)).@"fn";
+    <span class="tok-kw">if</span> (fn_info.param_types.len == <span class="tok-num">0</span>) <span class="tok-kw">return</span> <span class="tok-fn">wrapMain</span>(root.<span class="tok-fn">main</span>());</code></pre></figure>
+
+<p>Your <code>main</code> takes no parameters, so this third line is the whole function. The rest of
+<code>callMain</code> — about forty lines that build a general-purpose allocator, an arena, an
+<code>Io.Threaded</code>, a parsed environment map and the preopened directories, for a <code>main</code> that asks
+for them as a <code>std.process.Init</code> — is never compiled into this program: the <code>if</code> is decided at
+compile time, and Zig does not analyze the dead branch. zimr makes its own allocators, as we will see, and wants
+nothing else at this point.</p>
+
+<p><code>wrapMain</code> is inline too. Our <code>main</code> returns <code>!void</code>, an error union, so
+<code>wrapMain</code> unwraps it: on success the exit code is 0; on an error it logs the error's name, prints the
+error return trace, and returns 1. So an uncaught <code>error.NoSuitableGpu</code>, say, does not crash the program
+— it reaches this line and prints where it came from. And with that, the CPU calls <code>main</code>.</p>
+
+<div class="callout"><strong>Checkpoint 3.4.</strong> Keep pressing F11 after the arguments. Just before you land in
+<code>main</code>, where are you stopped?<br>
+<b>(a)</b> <code>start.zig:800</code>, <code>if (fn_info.param_types.len == 0) return wrapMain(root.main());</code><br>
+<b>(b)</b> on the first line of <code>wrapMain</code>, <code>start.zig:852</code>
+<details><summary>answer</summary><p><b>(a).</b> Line 800 is the only line of <code>callMain</code> this program
+has, and the call stack marks <code>callMain</code> as inlined — it shares <code>wWinMainCRTStartup</code>'s
+address. The next F11 goes straight into <code>main</code>: <code>root.main()</code> is called first, as
+<code>wrapMain</code>'s argument, and <code>wrapMain</code> only runs after <code>main</code> returns.</p></details></div>
+
+<pre class="sketch"><code>stack now:   RtlUserThreadStart &gt; BaseThreadInitThunk &gt; WinStartup &gt; main</code></pre>
+
+<h2 id="main">4. Your main</h2>
+
+<div class="note"><strong>In the debugger.</strong> You are on the first line of <code>main</code>, which F11
+from <code>start.zig:800</code> brought you to. Look at the editor tab's file name before reading on.</div>
+
+<div class="callout"><strong>Checkpoint 4.1.</strong> Which file is <code>main</code> in?<br>
+<b>(a)</b> <code>examples/hello_world_owned_main/hello_world_owned_main.zig</code><br>
+<b>(b)</b> <code>src/wgpu_runner.zig</code>, a file of zimr's
+<details><summary>answer</summary><p><b>(a),</b> line 88. Zig's start code called your function directly: right
+after <code>WinStartup</code>, the next frame on the stack is code you wrote. (For the descriptor-shaped
+<code>hello_world</code>, the answer would be (b).)</p></details></div>
+
+<p>How did your file become the program's root? The build decides it. Every example is registered in
+<code>build.zig</code>; this one with <code>.own_frame = true</code>:</p>
+<figure class="code"><figcaption><span class="path">build.zig</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">        .{ .name = <span class="tok-str">"hello_world_owned_main"</span>, .title = <span class="tok-str">"zimr - WebGPU - hello world, own main"</span>, .own_frame = true },</code></pre></figure>
+<p>and for such an app, the function that makes the native program has a one-line answer — the example's module
+<em>is</em> the executable's root module:</p>
+<figure class="code"><figcaption><span class="path">build.zig:2789 (nativeAppExe)</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">    <span class="tok-kw">if</span> (own_frame) {
+        <span class="tok-kw">return</span> b.<span class="tok-fn">addExecutable</span>(.{ .name = name, .root_module = app_mod });
+    }</code></pre></figure>
+<p>(The lines after it, for a descriptor, make <code>src/wgpu_runner.zig</code> the root and import the example into
+it as a module named <code>user_app</code>.)</p>
+
+<p>The <code>zimr</code> module your file imports is the Windows one: the same <code>src/zimr.zig</code> as the web build,
+compiled for <code>x86_64-windows-gnu</code> with a build option <code>host = "native"</code>. That one string
+decides, at compile time, every fork between platforms in the engine. <code>src/host.zig</code> turns it into
+facts:</p>
+<figure class="code"><figcaption><span class="path">src/host.zig:43</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig"><span class="tok-kw">pub</span> <span class="tok-kw">const</span> kind: Kind = <span class="tok-fn">chosenKind</span>();
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> is_browser: bool = kind == .web;
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> has_gpu: bool = kind != .none;
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> has_window: bool = kind != .none;
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> drives_own_frames: bool = kind == .native <span class="tok-kw">or</span> kind == .headless;</code></pre></figure>
+
+<p>Remember <code>drives_own_frames</code>: in the browser, the page calls the program once per frame; here, the
+program must call itself. That difference is the whole reason a native build has a frame loop of its own, and it is
+the only reason the path below differs from the browser's. It is also why your <code>main</code> ends with
+<code>zimr_app.runNative();</code>.</p>
+
+<p>Being the root comes with two duties, which your file carries out at its top — both declarations, resolved
+at compile time:</p>
+<figure class="code"><figcaption><span class="path">examples/hello_world_owned_main/hello_world_owned_main.zig:26</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig"><span class="tok-comment">/// The program's root routes `std.log` - the runner's job for a descriptor, this file's here.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> std_options: std.Options = z.std_options;
+...
+<span class="tok-kw">pub</span> <span class="tok-kw">var</span> zimr_app: z.App = .{};</code></pre></figure>
+<ul>
+<li><code>std_options</code> must live in the root file; the standard library looks for it there. It routes every
+<code>std.log</code> call — the engine's, yours, the standard library's own — through zimr's
+<code>zimrLogFn</code>, which formats the line into a 16 KiB stack buffer and hands it to the platform's log: the
+browser's console on the web, standard error here. If <code>wrapMain</code> logs an error, it comes out through
+this.</li>
+<li><code>zimr_app</code> is the engine's one <code>App</code>: a global, so it sits in <code>.data</code> holding
+its field defaults — no renderer, no state, no device — and its address never changes, which matters, because the
+engine will keep pointers into it. The engine does not look it up by name: <code>App.run</code> records
+<code>self</code> in a module variable of its own, <code>active_app</code> (chapter 10). The name
+<code>zimr_app</code> is a convention, and the one module-level <code>var</code> zimr's linter accepts in an example
+without a waiver.</li>
+</ul>
+
+<p>And <code>main</code>, whose first line is where this page spends most of its time — the call quoted in
+chapter 1:</p>
+<figure class="code"><figcaption><span class="path">examples/hello_world_owned_main/hello_world_owned_main.zig:87</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig"><span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">main</span>() !void {
+    <span class="tok-kw">try</span> zimr_app.<span class="tok-fn">run</span>(.{
+...
+    }, State, initState, update);</code></pre></figure>
+
+<p>You pass the configuration as a literal, and your two functions by name. <code>run</code> takes the functions
+as <code>comptime</code> parameters, so each call of <code>run</code> with different functions is a different function
+— the calls inside it to your <code>initState</code> are direct calls, known to the compiler, with no function
+pointers involved. (A descriptor's runner passes wrappers of its own here instead, <code>runnerInit</code> and
+<code>runnerUpdate</code>; yours go in bare.)</p>
+
+<h2 id="run">5. App.run: two allocators and a seed</h2>
+
+<div class="note"><strong>In the debugger.</strong> On <code>hello_world_owned_main.zig:88</code>, press F11. You are in
+<code>App.run</code>; the call stack may name it <code>run__func_</code> and a number — one instantiation of a
+function that takes <code>comptime</code> parameters, numbered by the compiler.</div>
+
+<figure class="code"><figcaption><span class="path">src/wgpu_app.zig:666</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">    <span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">run</span>(
+        self: *App,
+        cfg: Config,
+        <span class="tok-kw">comptime</span> State: type,
+        <span class="tok-kw">comptime</span> init_fn: <span class="tok-kw">fn</span> (Allocator, *Frame, *State) anyerror!void,
+        <span class="tok-kw">comptime</span> update_fn: <span class="tok-kw">fn</span> (*Frame, *State) void,
+    ) !void {
+        <span class="tok-comment">// Without a GPU host (host tests, tools) there is nothing to run: returning an error lets those builds</span>
+        <span class="tok-comment">// link, and lazy analysis strips the whole GPU call chain from them.</span>
+        <span class="tok-kw">if</span> (<span class="tok-kw">comptime</span> !host.has_gpu) {
+            <span class="tok-kw">return</span> <span class="tok-kw">error</span>.NoGpuHost;
+        }
+
+        self.example_meter = .{ .backing = host.heap, .label = <span class="tok-str">"example"</span> };
+        <span class="tok-kw">const</span> gpa: Allocator = self.example_meter.<span class="tok-fn">allocator</span>();
+        self.engine_meter = .{ .backing = host.heap, .label = <span class="tok-str">"engine"</span> };
+        <span class="tok-kw">const</span> engine_gpa: Allocator = self.engine_meter.<span class="tok-fn">allocator</span>();
+        self.config = cfg;
+        self.gpa = gpa;
+        self.engine_gpa = engine_gpa;
+        self.rng = Random.DefaultPrng.<span class="tok-fn">init</span>(<span class="tok-fn">resolveRngSeed</span>(cfg.rng_seed));</code></pre></figure>
+
+<div class="callout"><strong>Checkpoint 5.1.</strong> Which line of <code>run</code> did F11 land on?<br>
+<b>(a)</b> the check, <code>if (comptime !host.has_gpu) {</code><br>
+<b>(b)</b> <code>self.example_meter = .{ .backing = host.heap, .label = "example" };</code>, line 679
+<details><summary>answer</summary><p><b>(b).</b> A <code>comptime</code> condition is decided by the compiler, and
+this one is false: there is no code for the check, so there is no line to stop on. Every
+<code>if (comptime ...)</code> on this page behaves the same — the debugger steps right over it, or right into
+it.</p></details></div>
+
+<p>The <code>has_gpu</code> check is compile-time and true, so it vanishes. Then the first real work of the engine
+is to decide <em>where memory comes from</em>, before anything allocates:</p>
+<ul>
+<li><code>host.heap</code> is <code>std.heap.smp_allocator</code> natively (the wasm allocator in a browser): a
+thread-safe general allocator that gets its pages from <code>NtAllocateVirtualMemory</code>. Nothing has asked it for
+memory yet.</li>
+<li>Two <code>CountingAllocator</code>s are laid on top of it, one labelled <code>"example"</code> and one
+<code>"engine"</code>. Each is a thin wrapper that counts live bytes and passes every call through. They exist for
+the leak gate, which runs examples through init and teardown and checks that every byte comes back: two counters let
+the engine say, when one does not, <em>which side</em> kept the memory. Your program never tears down — it runs until
+its window closes — but it gets the same two. <code>gpa</code> is what your <code>initState</code> will be handed;
+<code>engine_gpa</code> is what the engine's long-lived caches and renderer will use.</li>
+<li>The random generator is seeded. <code>Config.rng_seed</code> is null in your config, and on a native host
+<code>resolveRngSeed</code> returns a fixed constant, <code>0x853c_49e6_748f_ea9b</code>, so that native and
+headless runs repeat exactly (a browser asks <code>crypto.getRandomValues</code> instead). This program never draws a
+random number, but every frame will carry <code>f.random</code>.</li>
+</ul>
+
+<div class="callout"><strong>Checkpoint 5.2.</strong> F10 to line 680, <code>const gpa: Allocator =
+self.example_meter.allocator();</code>, and press F11. Which file opens?<br>
+<b>(a)</b> <code>src/memwatch.zig</code><br>
+<b>(b)</b> the standard library's <code>heap</code> code, where <code>smp_allocator</code> lives
+<details><summary>answer</summary><p><b>(a).</b> <code>CountingAllocator</code> is zimr's, in
+<code>memwatch.zig</code>; its <code>allocator()</code> is one line, <code>return .{ .ptr = self, .vtable =
+&amp;vtable };</code> — an <code>Allocator</code> is just a pointer and a table of functions. Nothing is allocated
+yet. Shift+F11 to go back.</p></details></div>
+
+<div class="callout"><strong>Checkpoint 5.3.</strong> F10 to the line that seeds <code>self.rng</code>, and F11 into
+<code>resolveRngSeed</code>. Which <code>return</code> does it reach?<br>
+<b>(a)</b> <code>return rng_fallback_seed;</code><br>
+<b>(b)</b> <code>return readInt(u64, &amp;b, .little);</code>, after asking the operating system for random bytes
+<details><summary>answer</summary><p><b>(a).</b> <code>cfg.rng_seed</code> is null, and the browser branch is a
+<code>comptime</code> branch compiled out of a native program — the debugger cannot even stop in it. The seed is the
+fixed <code>0x853c_49e6_748f_ea9b</code>. (Expect the debugger to rest for one step on <code>return s;</code> on
+the way, without returning: a flash like the one chapter 0 describes.)</p></details></div>
+
+<h2 id="window">6. A window</h2>
+
+<div class="note"><strong>In the debugger.</strong> Back in <code>run</code>, F10 until you reach the
+<code>try native_loop.openWindow(.{</code> call — the debugger stops on its argument lines, 692 and 693, first — and
+F11 until you are in <code>native_loop.zig</code>. F10 to
+<code>try window.open(options);</code> and F11 again: <code>win32.zig</code>, <code>Window.open</code>. A window will
+appear during this chapter — watch for it.</div>
+
+<p>The next statement opens the window — before any GPU call, and the comment says why:</p>
+<figure class="code"><figcaption><span class="path">src/wgpu_app.zig:688</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">        <span class="tok-comment">// A native program opens its window before the first GPU call: the Vulkan host creates its surface from it,</span>
+        <span class="tok-comment">// and choosing a GPU depends on presenting to it.</span>
+        <span class="tok-kw">if</span> (<span class="tok-kw">comptime</span> host.kind == .native) {
+            <span class="tok-kw">try</span> native_loop.<span class="tok-fn">openWindow</span>(.{
+                .title = cfg.window.title,
+                .logical_width = cfg.window.width,
+                .logical_height = cfg.window.height,
+            });
+        }</code></pre></figure>
+
+<p>A machine can have two GPUs — a laptop's integrated one and a discrete one — and only some of them may be able
+to show pictures in a given window. So the window must exist first, and the GPU is chosen by asking each one
+"can you present to <em>this</em>?". <code>native_loop.openWindow</code> is short:</p>
+<figure class="code"><figcaption><span class="path">src/native_loop.zig:596</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig"><span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">openWindow</span>(options: native_window.WindowOptions) OpenError!void {
+    <span class="tok-kw">if</span> (<span class="tok-kw">comptime</span> !has_window_loop) {
+        console.<span class="tok-fn">log</span>(.err, <span class="tok-str">"the window and its loop are not written for this system: the program stops here"</span>);
+        <span class="tok-kw">return</span> <span class="tok-kw">error</span>.WindowUnwritten;
+    }
+    <span class="tok-kw">try</span> window.<span class="tok-fn">open</span>(options);
+    <span class="tok-comment">// The input method starts off: it turns on only while a text field takes text (`startTextInput`).</span>
+    window.<span class="tok-fn">setInputMethodEnabled</span>(false);
+    window.input_handler = &amp;queueInput;
+    logs_input = <span class="tok-fn">readInputLogSetting</span>();
+    <span class="tok-kw">try</span> vulkan_host.<span class="tok-fn">attachWindow</span>(&amp;window);
+}</code></pre></figure>
+
+<p><code>window</code> here is a module-level <code>var</code> in <code>native_loop.zig</code>, of type
+<code>native_window.Window</code> — which, on Windows, <code>native_window.zig</code> resolves at compile time to
+<code>win32.Window</code> (on Linux, the X11 one). It is a global on purpose: Windows will keep a pointer to it, so it
+must never move. Into <code>window.open</code>:</p>
+
+<figure class="code"><figcaption><span class="path">src/win32.zig:1477</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">    <span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">open</span>(window: *Window, options: WindowOptions) WindowError!void {
+        <span class="tok-comment">// Per-monitor DPI awareness, version 2. It fails harmlessly if the process is already aware (a manifest).</span>
+        <span class="tok-kw">const</span> per_monitor_v2: usize = <span class="tok-builtin">@bitCast</span>(dpi_awareness_context_per_monitor_aware_v2);
+        _ = <span class="tok-fn">SetProcessDpiAwarenessContext</span>(<span class="tok-builtin">@ptrFromInt</span>(per_monitor_v2));
+        <span class="tok-kw">const</span> module: HINSTANCE = <span class="tok-fn">GetModuleHandleW</span>(null) <span class="tok-kw">orelse</span> <span class="tok-kw">return</span> WindowError.NoModuleHandle;</code></pre></figure>
+
+<p>First, a declaration to Windows: <em>this program understands that monitors have different scales.</em>
+Without it, Windows would pretend every monitor is 96 dots per inch and stretch our frames into a blur on a 150%
+laptop screen. With it, the window's client area is measured in physical pixels, and zimr divides by the scale
+itself to get the logical pixels (the browser's CSS pixels) that your coordinates are in. Then
+<code>GetModuleHandleW(null)</code>: the handle of our own image — which is, in fact, just its base address,
+<code>0x140000000</code> unless relocated.</p>
+
+<pre><code class="zig">        window.* = .{
+            .module = module,
+            .handle = null,
+            .dpi = <span class="tok-fn">GetDpiForSystem</span>(),
+            .client_width = <span class="tok-num">0</span>,
+            .client_height = <span class="tok-num">0</span>,
+            .close_requested = false,
+            .minimized = false,
+            .size_changed = false,
+            .input_handler = null,
+            .title_utf16 = <span class="tok-builtin">@splat</span>(<span class="tok-num">0</span>),
+        };
+        <span class="tok-kw">const</span> title_room: []u16 = window.title_utf16[<span class="tok-num">0</span> .. window.title_utf16.len - <span class="tok-num">1</span>];
+        <span class="tok-kw">const</span> title_length: usize = <span class="tok-fn">utf8ToUtf16Le</span>(title_room, options.title) <span class="tok-kw">catch</span> <span class="tok-kw">return</span> WindowError.TitleNotUtf8;
+        window.title_utf16[title_length] = <span class="tok-num">0</span>;</code></pre>
+<p>The struct is filled whole (zimr's lint insists on it), its DPI taken from the system for now. The title
+<code>"zimr - hello_world_owned_main"</code> is UTF-8 in Zig and must be UTF-16 for Windows, so it is converted into a
+fixed 256-character buffer inside the struct — no allocation.</p>
+
+<pre><code class="zig">        <span class="tok-kw">const</span> window_class: WNDCLASSEXW = .{
+            .cbSize = <span class="tok-builtin">@sizeOf</span>(WNDCLASSEXW),
+            .style = CS_HREDRAW | CS_VREDRAW | CS_OWNDC,
+            .lpfnWndProc = &amp;windowProcedure,
+...
+            .hCursor = <span class="tok-fn">LoadCursorW</span>(null, <span class="tok-builtin">@ptrFromInt</span>(IDC_ARROW)),
+            .hbrBackground = null,
+...
+            .lpszClassName = class_name,
+            .hIconSm = null,
+        };
+        <span class="tok-kw">if</span> (<span class="tok-fn">RegisterClassExW</span>(&amp;window_class) == <span class="tok-num">0</span>) {
+            <span class="tok-kw">return</span> WindowError.RegisterClassFailed;
+        }</code></pre>
+<p>A Windows window belongs to a <em>class</em>, which names the function that will receive its messages:
+<code>windowProcedure</code>. <code>hbrBackground = null</code> means Windows never paints the background itself —
+Vulkan will cover every pixel, and a background brush would only flash between frames.</p>
+
+<pre><code class="zig">        <span class="tok-kw">var</span> outer: RECT = .{
+            .left = <span class="tok-num">0</span>,
+            .top = <span class="tok-num">0</span>,
+            .right = <span class="tok-builtin">@intCast</span>(options.logical_width * window.dpi / USER_DEFAULT_SCREEN_DPI),
+            .bottom = <span class="tok-builtin">@intCast</span>(options.logical_height * window.dpi / USER_DEFAULT_SCREEN_DPI),
+        };
+        _ = <span class="tok-fn">AdjustWindowRectExForDpi</span>(&amp;outer, WS_OVERLAPPEDWINDOW, <span class="tok-num">0</span>, <span class="tok-num">0</span>, window.dpi);</code></pre>
+<p>Your <code>main</code> asked for 480 by 200. Those are logical pixels; at a 150% scale (144 dpi) the client area must be
+720 by 300 physical pixels. And the size <code>CreateWindowExW</code> takes is the <em>outer</em> size, title bar
+and borders included, so <code>AdjustWindowRectExForDpi</code> grows the rectangle by exactly the frame Windows
+will draw at that scale.</p>
+
+<pre><code class="zig">        <span class="tok-kw">const</span> handle: HWND = <span class="tok-fn">CreateWindowExW</span>(
+            <span class="tok-num">0</span>,
+            class_name,
+            &amp;window.title_utf16,
+            WS_OVERLAPPEDWINDOW,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            outer.right - outer.left,
+            outer.bottom - outer.top,
+            null,
+            null,
+            module,
+            window,
+        ) <span class="tok-kw">orelse</span> {</code></pre>
+<p>The window is born. Look at the last argument: <code>window</code>, a pointer to our struct. Windows does not
+look at it; it hands it back, once, inside the <code>WM_NCCREATE</code> message — and Windows sends messages
+<em>during</em> this call, before <code>CreateWindowExW</code> has returned a handle to us. Our thread, still inside
+<code>CreateWindowExW</code>, is called back in <code>windowProcedure</code>.</p>
+
+<div class="callout"><strong>Checkpoint 6.1.</strong> Stopped on <code>CreateWindowExW(</code> (line 1525), add a
+breakpoint on <code>win32.zig:2014</code>, the first line of <code>windowProcedure</code>,
+<code>if (message == WM_NCCREATE) {</code>. Then press F10. Where does the debugger stop?<br>
+<b>(a)</b> on line 1542, <code>window.handle = handle;</code>, after <code>CreateWindowExW</code> returned<br>
+<b>(b)</b> in <code>windowProcedure</code>, with <code>CreateWindowExW</code> still on the call stack below it
+<details><summary>answer</summary><p><b>(b).</b> The call stack shows <code>windowProcedure</code> on top, then
+frames in <code>user32.dll</code>, then <code>open</code> — still on the <code>CreateWindowExW</code> line. Windows
+called us back from inside the call we made.</p></details></div>
+
+<div class="callout"><strong>Checkpoint 6.2.</strong> In the variables panel, what is <code>message</code> on that
+first stop?<br>
+<b>(a)</b> 129, <code>WM_NCCREATE</code>, carrying our pointer<br>
+<b>(b)</b> 36, <code>WM_GETMINMAXINFO</code>
+<details><summary>answer</summary><p><b>(b).</b> Before it creates anything, Windows asks the window for its size
+limits — and our pointer has not arrived yet. Press F10 and watch: the <code>if</code> is false, the user-data slot
+reads 0, and <code>if (stored == 0)</code> sends the message to <code>DefWindowProcW</code>. Those two lines exist
+for exactly this message. F5, and the second message is 129, <code>WM_NCCREATE</code>.</p></details></div>
+
+<p>The second message, <code>WM_NCCREATE</code>, is the one that carries the pointer:</p>
+<figure class="code"><figcaption><span class="path">src/win32.zig:2008</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">        <span class="tok-kw">if</span> (message == WM_NCCREATE) {
+            <span class="tok-comment">// The creation parameters carry the `*Window`; keep it in the window's user-data slot.</span>
+            <span class="tok-kw">const</span> creation: *<span class="tok-kw">const</span> CREATESTRUCTW = <span class="tok-builtin">@ptrFromInt</span>(<span class="tok-builtin">@as</span>(usize, <span class="tok-builtin">@bitCast</span>(l_param)));
+            _ = <span class="tok-fn">SetWindowLongPtrW</span>(handle, GWLP_USERDATA, <span class="tok-builtin">@bitCast</span>(<span class="tok-builtin">@intFromPtr</span>(creation.lpCreateParams)));
+            <span class="tok-kw">return</span> <span class="tok-fn">DefWindowProcW</span>(handle, message, w_param, l_param);
+        }
+        <span class="tok-kw">const</span> stored: LONG_PTR = <span class="tok-fn">GetWindowLongPtrW</span>(handle, GWLP_USERDATA);</code></pre></figure>
+<p>The pointer is tucked into the window's user-data slot, and from then on every message finds its
+<code>Window</code> there. This is how one window procedure serves a window without any global variable — and why
+the <code>Window</code> must never move. Two more messages arrive before <code>CreateWindowExW</code> returns,
+<code>WM_NCCALCSIZE</code> (131) and <code>WM_CREATE</code> (1); about seventeen more come while the window is shown
+below — activation, focus, painting, and <code>WM_SIZE</code> (5), which records the client size and sets
+<code>size_changed</code>.</p>
+
+<div class="note"><strong>In the debugger.</strong> Remove the breakpoint in <code>windowProcedure</code> now — it
+would stop on every one of those messages — and put one on <code>win32.zig:1542</code>,
+<code>window.handle = handle;</code>. F5.</div>
+
+<div class="callout"><strong>Checkpoint 6.3.</strong> On line 1542, <code>CreateWindowExW</code> has returned.
+Expand <code>window</code> in the variables panel: what is <code>client_width</code>?<br>
+<b>(a)</b> 0<br>
+<b>(b)</b> the window's client width in pixels
+<details><summary>answer</summary><p><b>(a).</b> The window exists but has never been sized for us: no
+<code>WM_SIZE</code> has come yet. The struct still holds what <code>open</code> wrote into it.</p></details></div>
+
+<pre><code class="zig">        window.handle = handle;
+        window.dpi = <span class="tok-fn">GetDpiForWindow</span>(handle);
+        _ = <span class="tok-fn">ShowWindow</span>(handle, SW_SHOW);
+        <span class="tok-comment">// Files dropped on the window arrive as `WM_DROPFILES`.</span>
+        <span class="tok-fn">DragAcceptFiles</span>(handle, <span class="tok-num">1</span>);
+        window.<span class="tok-fn">readClientSize</span>();
+        window.size_changed = false;
+    }</code></pre>
+<p>Now the DPI is the window's own (it may have opened on a different monitor from the system's main one), and
+<code>ShowWindow</code> puts it on screen — empty: nothing has drawn into it, and nothing will until the first
+frame presents. Showing a window usually activates it, and activation sends <code>WM_SETFOCUS</code>, which the
+window procedure passes to <code>forwardInput</code>; but no input handler is set yet, so
+<code>forwardInput</code>'s first line, <code>window.input_handler orelse return</code>, drops it. Finally the
+client size is read back with <code>GetClientRect</code> — the truth, in physical pixels, whatever was asked
+for.</p>
+
+<div class="callout"><strong>Checkpoint 6.4.</strong> F10 over <code>_ = ShowWindow(handle, SW_SHOW);</code>. Two
+things changed. Which pair?<br>
+<b>(a)</b> the window is on screen, and <code>window.client_width</code> is no longer 0<br>
+<b>(b)</b> the window is on screen, showing the dark blue clear, and <code>client_width</code> is still 0
+<details><summary>answer</summary><p><b>(a).</b> <code>WM_SIZE</code> arrived during <code>ShowWindow</code>
+and wrote the client size (480 at a 100% display scale). The window's inside shows nothing of ours: no frame has been
+drawn, let alone presented — that happens only after the end of this page.</p></details></div>
+
+<p>Back in <code>openWindow</code>, three more lines before the GPU. The input method (the system's composition
+window for typing, say, Japanese) is switched off until a text field wants it. The window is given its input
+handler, <code>queueInput</code>: from now on, keys and mouse messages are translated and queued, to be handed to
+the engine between frames. And <code>readInputLogSetting</code> reads one environment variable:</p>
+<figure class="code"><figcaption><span class="path">src/native_loop.zig:87</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig"><span class="tok-kw">fn</span> <span class="tok-fn">readInputLogSetting</span>() bool {
+    <span class="tok-kw">var</span> setting_buffer: [<span class="tok-num">8</span>]u8 = undefined;
+    <span class="tok-kw">const</span> setting: []<span class="tok-kw">const</span> u8 = native_os.<span class="tok-fn">environmentVariable</span>(<span class="tok-str">"ZIMR_LOG_INPUT"</span>, &amp;setting_buffer) <span class="tok-kw">orelse</span> <span class="tok-kw">return</span> false;
+    <span class="tok-kw">return</span> <span class="tok-fn">eql</span>(u8, setting, <span class="tok-str">"1"</span>);
+}</code></pre></figure>
+<p>Set <code>ZIMR_LOG_INPUT=1</code> and every input event is printed as the engine receives it. Then the
+window is handed to the Vulkan host: <code>vulkan_host.attachWindow(&amp;window)</code>, where the next chapter
+begins.</p>
+
+<h2 id="gpu">7. A GPU</h2>
+
+<div class="note"><strong>In the debugger.</strong> Finish <code>openWindow</code> with Shift+F11 (twice, if you
+are still in <code>open</code>) and you are back in <code>run</code>. F10 to line 701,
+<code>const device: wgpu.DeviceHandle = wgpu.initDevice();</code>, and F11 twice: through <code>wgpu.zig</code>'s
+wrapper into the Vulkan host's <code>initDevice</code>. Keep the program's console in view: the host logs as it goes.</div>
+
+<p>First, how a GPU call reaches Vulkan at all. The engine never names Vulkan; it calls <code>src/wgpu.zig</code>,
+a WebGPU-shaped API of numbered handles. In the browser those calls become WebGPU through the JavaScript bridge;
+here, they go to <code>src/wgpu_vulkan.zig</code>, the Vulkan host. The choice is one compile-time switch:</p>
+<figure class="code"><figcaption><span class="path">src/wgpu.zig:486</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig"><span class="tok-kw">const</span> gpu_host = <span class="tok-kw">switch</span> (host.kind) {
+    .native, .headless =&gt; vulkan_host,
+    .web, .none =&gt; web_host,
+};</code></pre></figure>
+<p>and every wrapper is a thin cast through it — <code>initDevice</code>, for one, is
+<code>return @fromBackingInt(@intCast(gpu_host.initDevice()));</code>. The Vulkan host's header states its whole
+job in one heading, <em>keeping WebGPU's promises on Vulkan</em>: every image kept in the GENERAL layout behind a full
+barrier before every pass, objects destroyed only when the GPU is done with them, queue writes ordered before the next
+submission, new memory zeroed, and Y pointing up. Everything below is that job, starting.</p>
+
+<h3>attachWindow: a host, and nothing else</h3>
+<figure class="code"><figcaption><span class="path">src/wgpu_vulkan.zig:702</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig"><span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">attachWindow</span>(window: *native_window.Window) Allocator.Error!void {
+    <span class="tok-kw">if</span> (host != null) {
+        <span class="tok-fn">panic</span>(<span class="tok-str">"vulkan host: a host has already started"</span>, .{});
+    }
+    <span class="tok-kw">const</span> created: *Host = <span class="tok-kw">try</span> heap.<span class="tok-fn">create</span>(Host);
+    created.* = .{ .gpa = heap, .window = window };
+    host = created;
+}</code></pre></figure>
+<p>The last line of <code>openWindow</code> creates the Vulkan host — the one <code>Host</code> struct that will
+hold the instance, the device, the swapchain and every table of GPU objects — and gives it the window. No Vulkan
+call yet: its doc comment says "Vulkan itself comes up in <code>initDevice</code>". That is the next line of
+<code>run</code>.</p>
+
+<h3>initDevice: the chain from loader to device</h3>
+<figure class="code"><figcaption><span class="path">src/wgpu_app.zig:701</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">        <span class="tok-kw">const</span> device: wgpu.DeviceHandle = wgpu.<span class="tok-fn">initDevice</span>();
+        <span class="tok-kw">const</span> queue: wgpu.QueueHandle = wgpu.<span class="tok-fn">getQueue</span>(device);
+        <span class="tok-kw">const</span> surface: wgpu.SurfaceHandle = wgpu.<span class="tok-fn">getSurface</span>();
+        <span class="tok-kw">const</span> fmt: wgpu.TextureFormat = wgpu.<span class="tok-fn">getSurfaceFormat</span>(surface);</code></pre></figure>
+<p>In a browser these four lines only hand back what the bridge already has — it did the asynchronous work of
+finding an adapter and a device before the program's first tick. Natively, they do that work.
+<code>initDevice</code> calls <code>bringUp</code> once:</p>
+<figure class="code"><figcaption><span class="path">src/wgpu_vulkan.zig:1343</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig"><span class="tok-kw">fn</span> <span class="tok-fn">bringUp</span>(self: *Host) BringUpError!void {
+    <span class="tok-kw">const</span> library: native_os.VulkanLibrary = <span class="tok-kw">try</span> native_os.<span class="tok-fn">openVulkanLibrary</span>();
+    self.library = library;
+    <span class="tok-kw">const</span> get_instance_proc_address: vk.PfnGetInstanceProcAddr = library.get_instance_proc_address;
+    self.global = <span class="tok-kw">try</span> vk.<span class="tok-fn">loadGlobalDispatch</span>(get_instance_proc_address);
+    <span class="tok-kw">try</span> <span class="tok-fn">createInstance</span>(self, get_instance_proc_address);
+    <span class="tok-kw">if</span> (self.window) |window| {
+        <span class="tok-kw">try</span> <span class="tok-fn">createWindowSurface</span>(self, get_instance_proc_address, window);
+    }
+    self.gpu = <span class="tok-kw">try</span> <span class="tok-fn">chooseGpu</span>(self);
+...
+    self.instance_dispatch.<span class="tok-fn">getPhysicalDeviceMemoryProperties</span>(self.gpu.physical_device, &amp;self.memory_properties);
+    <span class="tok-kw">try</span> <span class="tok-fn">createDevice</span>(self);
+    <span class="tok-kw">try</span> <span class="tok-fn">createFrameObjects</span>(self);
+}</code></pre></figure>
+<div class="callout"><strong>Checkpoint 7.1.</strong> In <code>initDevice</code>, F10 to
+<code>bringUp(self) catch ...</code> and F11 into <code>bringUp</code>; then F10 over its first line,
+<code>native_os.openVulkanLibrary()</code>. Was anything printed in the console?<br>
+<b>(a)</b> no — loading the library logs nothing<br>
+<b>(b)</b> yes, <code>Vulkan 1.x, validation on</code>
+<details><summary>answer</summary><p><b>(a).</b> The library is only loaded here. The first line appears when you
+F10 over <code>try createInstance(...)</code>, three lines down — the instance is what knows the version and whether
+validation runs. But the process changed: list its modules again, as in chapter 2's experiment 3, and
+<code>vulkan-1.dll</code> is there now, loaded by our <code>LoadLibraryW</code>.</p></details></div>
+
+<p>Each step needs the one before it. A failure anywhere panics with the step's error name —
+<code>vulkan host: bringing Vulkan up failed: NoSuitableGpu</code> — which, thanks to the handler
+<code>WinStartup</code> installed, comes with a stack trace.</p>
+
+<h4>The loader</h4>
+<figure class="code"><figcaption><span class="path">src/win32.zig:1355</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">    <span class="tok-kw">const</span> library_name: [*:<span class="tok-num">0</span>]<span class="tok-kw">const</span> u16 = <span class="tok-fn">utf8ToUtf16LeStringLiteral</span>(<span class="tok-str">"vulkan-1.dll"</span>);
+    <span class="tok-kw">const</span> module: HMODULE = <span class="tok-fn">LoadLibraryW</span>(library_name) <span class="tok-kw">orelse</span> <span class="tok-kw">return</span> <span class="tok-kw">error</span>.VulkanNotInstalled;
+    <span class="tok-kw">const</span> entry: *<span class="tok-kw">const</span> anyopaque = <span class="tok-fn">GetProcAddress</span>(module, <span class="tok-str">"vkGetInstanceProcAddr"</span>) <span class="tok-kw">orelse</span> {
+        _ = <span class="tok-fn">FreeLibrary</span>(module);
+        <span class="tok-kw">return</span> <span class="tok-kw">error</span>.VulkanLoaderIncomplete;
+    };</code></pre></figure>
+<p><code>vulkan-1.dll</code> is the Khronos loader, installed with every GPU driver. Loading it is the moment the
+process grows: the loader reads the registry for the installed drivers (each GPU vendor's ICD) and any layers, and
+maps what it needs. From the whole DLL, zimr takes exactly one function, <code>vkGetInstanceProcAddr</code>; every
+other Vulkan function is asked of it by name. There is no Vulkan SDK in the build and no C header: the declarations
+in <code>src/vk.zig</code> are generated from the Vulkan registry and checked against the official headers by a
+build step.</p>
+<p>The asking is done by <em>dispatch tables</em>: structs whose fields are Vulkan functions under their Zig names.
+One generic function fills any table, and the C name of each field is computed at compile time:</p>
+<figure class="code"><figcaption><span class="path">src/vk.zig:4074</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig"><span class="tok-kw">fn</span> <span class="tok-fn">commandName</span>(<span class="tok-kw">comptime</span> field_name: []<span class="tok-kw">const</span> u8) [:<span class="tok-num">0</span>]<span class="tok-kw">const</span> u8 {
+    <span class="tok-kw">return</span> <span class="tok-kw">comptime</span> <span class="tok-fn">comptimePrint</span>(<span class="tok-str">"vk{c}{s}"</span>, .{ <span class="tok-fn">toUpper</span>(field_name[<span class="tok-num">0</span>]), field_name[<span class="tok-num">1</span>..] });
+}
+...
+    <span class="tok-kw">inline</span> <span class="tok-kw">for</span> (fields.field_names, fields.field_types) |field_name, FieldType| {
+        <span class="tok-kw">const</span> command: ?PfnVoidFunction = <span class="tok-fn">lookup</span>(handle, <span class="tok-fn">commandName</span>(field_name).ptr);
+        <span class="tok-builtin">@field</span>(table, field_name) = <span class="tok-kw">try</span> <span class="tok-fn">commandOrNull</span>(FieldType, command);
+    }</code></pre></figure>
+<p>The field <code>createInstance</code> becomes the string <code>"vkCreateInstance"</code> at compile time; at run
+time the loop is unrolled into one lookup per field. The first table, the global one, holds the four functions that
+exist before an instance: <code>vkCreateInstance</code> and the three that enumerate versions, layers and
+extensions.</p>
+
+<h4>The instance</h4>
+<figure class="code"><figcaption><span class="path">src/wgpu_vulkan.zig:889</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">    <span class="tok-kw">var</span> version: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">try</span> vk.<span class="tok-fn">check</span>(self.global.<span class="tok-fn">enumerateInstanceVersion</span>(&amp;version));
+    <span class="tok-kw">if</span> (version &lt; vk.api_version_1_3) {
+        <span class="tok-kw">return</span> BringUpError.VulkanTooOld;
+    }
+    <span class="tok-kw">var</span> setting_buffer: [<span class="tok-num">16</span>]u8 = undefined;
+    <span class="tok-kw">const</span> validation_setting: ?[]<span class="tok-kw">const</span> u8 = native_os.<span class="tok-fn">environmentVariable</span>(<span class="tok-str">"ZIMR_VK_VALIDATE"</span>, &amp;setting_buffer);
+    <span class="tok-kw">const</span> validation_wanted: bool = <span class="tok-kw">if</span> (validation_setting) |setting| !<span class="tok-fn">eql</span>(u8, setting, <span class="tok-str">"0"</span>) <span class="tok-kw">else</span> true;
+...
+    <span class="tok-kw">const</span> has_validation_layer: bool = <span class="tok-kw">try</span> <span class="tok-fn">hasInstanceLayer</span>(self, vk.khronos_validation_layer_name);
+    <span class="tok-kw">const</span> has_debug_utils: bool = <span class="tok-kw">try</span> <span class="tok-fn">hasInstanceExtension</span>(self, vk.ext_debug_utils_extension_name);
+    <span class="tok-kw">const</span> validate: bool = validation_wanted <span class="tok-kw">and</span> has_validation_layer <span class="tok-kw">and</span> has_debug_utils;</code></pre></figure>
+<p>Vulkan 1.3 or nothing. Then a decision a release of most engines would not make: <strong>validation is on by
+default</strong>. If the Khronos validation layer is installed (it comes with the Vulkan SDK) the program runs under
+it unless <code>ZIMR_VK_VALIDATE=0</code>; on a machine without the SDK the layer is absent, and validation is off
+by itself. Each "is it installed" question is Vulkan's <em>two-call enumeration</em>: call once to learn the
+count, allocate, call again to fill.</p>
+
+<p>The instance asks for two extensions, because there is a window: <code>VK_KHR_surface</code>, and
+<code>VK_KHR_win32_surface</code> — the one name <code>native_window.zig</code> switches for X11 on Linux. Plus
+<code>VK_EXT_debug_utils</code> when validating. And one neat trick:</p>
+<pre><code class="zig">    <span class="tok-comment">// The messenger's description serves twice: for the messenger created below, and in the instance's `p_next`</span>
+    <span class="tok-comment">// chain. A `p_next` chain extends a create-info with further structures, each pointing to the next; this one makes</span>
+    <span class="tok-comment">// the loader report through a temporary messenger while the instance itself is created, so that call is validated</span>
+    <span class="tok-comment">// too.</span>
+    <span class="tok-kw">const</span> messenger_info: vk.DebugUtilsMessengerCreateInfoEXT = .{
+        .message_severity = .{ .warning = true, .@"error" = true },
+        .message_type = .{ .general = true, .validation = true, .performance = true },
+        .pfn_user_callback = <span class="tok-builtin">@ptrCast</span>(&amp;debugMessage),
+        .p_user_data = &amp;self.counts,
+    };</code></pre>
+<p><code>vkCreateInstance</code> runs. The instance's own functions are loaded into a second table (through the
+instance this time), the surface functions into a third, and, when validating, the debug messenger is created. Its
+callback counts every error and warning into <code>self.counts</code> — counts that, at the very end of the program,
+make it exit with status 1 if the validation layer complained even once. The host logs its first line, through
+<code>zimrLogFn</code> and the console platform's <code>[zimr]</code> prefix, on standard error:</p>
+<pre class="sketch"><code>[zimr] (vulkan) Vulkan 1.4, validation on</code></pre>
+<p>(the numbers are the loader's version, and "on" only with the SDK installed).</p>
+
+<h4>The surface</h4>
+<figure class="code"><figcaption><span class="path">src/wgpu_vulkan.zig:1320</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">        <span class="tok-kw">const</span> creation: vk.Win32SurfaceDispatch =
+            <span class="tok-kw">try</span> vk.<span class="tok-fn">loadWin32SurfaceDispatch</span>(get_instance_proc_address, self.instance);
+        <span class="tok-kw">var</span> surface_info: vk.Win32SurfaceCreateInfoKHR = .{ .hinstance = window.module, .hwnd = window.handle };
+        <span class="tok-kw">try</span> vk.<span class="tok-fn">check</span>(creation.<span class="tok-fn">createWin32SurfaceKHR</span>(self.instance, &amp;surface_info, null, &amp;self.surface));</code></pre></figure>
+<p>This is where the window of <a href="#window">chapter 6</a> meets Vulkan: the module handle and the window handle,
+nothing more, and a one-function table loaded for this single call. A <code>VkSurfaceKHR</code> is Vulkan's name
+for "a place on screen": it is not yet anything that can be drawn into.</p>
+
+<h4>Choosing the GPU</h4>
+<p><code>chooseGpu</code> enumerates the physical devices (two calls), and asks each, in
+<code>suitableQueueFamily</code>, a series of questions; a "no" anywhere rules the device out:</p>
+<figure class="code"><figcaption><span class="path">src/wgpu_vulkan.zig:1063</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">    <span class="tok-kw">if</span> (properties.api_version &lt; vk.api_version_1_3) {
+        <span class="tok-kw">return</span> null;
+    }
+...
+    <span class="tok-kw">var</span> vulkan_13: vk.PhysicalDeviceVulkan13Features = .{};
+    <span class="tok-kw">var</span> vulkan_12: vk.PhysicalDeviceVulkan12Features = .{ .p_next = &amp;vulkan_13 };
+    <span class="tok-kw">var</span> features: vk.PhysicalDeviceFeatures2 = .{ .p_next = &amp;vulkan_12 };
+    self.instance_dispatch.<span class="tok-fn">getPhysicalDeviceFeatures2</span>(physical_device, &amp;features);
+...
+    <span class="tok-kw">const</span> has_features: bool = has_dynamic_rendering <span class="tok-kw">and</span> has_synchronization_2 <span class="tok-kw">and</span> has_maintenance_4 <span class="tok-kw">and</span>
+        has_timeline_semaphores <span class="tok-kw">and</span> has_robust_buffer_access;</code></pre></figure>
+<p>Five features, each one a WebGPU promise made cheap: render passes without render-pass objects, the newer
+barriers, layouts that may be released early, one counter numbering every submission, and out-of-bounds buffer
+accesses kept inside the buffer. Then: does it offer <code>VK_KHR_swapchain</code>? And then the queue families:</p>
+<pre><code class="zig">    <span class="tok-kw">for</span> (families[<span class="tok-num">0</span>..family_count], <span class="tok-num">0</span>..) |family, index| {
+        <span class="tok-kw">const</span> renders_and_computes: bool = family.queue_flags.graphics <span class="tok-kw">and</span> family.queue_flags.compute;
+...
+        <span class="tok-comment">// On a laptop with two GPUs, the one that does not drive the display may not present to it: ask.</span>
+        <span class="tok-kw">var</span> presents: vk.Bool32 = vk.bool_false;</code></pre>
+<p>The first family that draws <em>and</em> computes <em>and</em> can present to our surface is the one: zimr uses
+a single queue for everything. This is why the surface had to exist before this step. Each device is logged
+(<code>[zimr] (vulkan) GPU 1: NVIDIA GeForce RTX 5060 Laptop GPU (discrete_gpu)</code>, say), and the suitable ones are ranked:</p>
+<pre><code class="zig">        <span class="tok-kw">const</span> ranks_higher: bool = best == null <span class="tok-kw">or</span> <span class="tok-fn">typeRank</span>(candidate.device_type) &gt; <span class="tok-fn">typeRank</span>(best.?.device_type);</code></pre>
+<p>Discrete beats integrated beats virtual beats software, and among equals the first wins.
+<code>ZIMR_GPU=1</code> or <code>ZIMR_GPU=Intel</code> overrides the choice by index or by name. The host logs
+<code>using ...</code> and three lines of compute capabilities (subgroup sizes, atomics, memory) — computed for the
+GPU simulator's kernels; this program never reads them. A check that the device can bind four descriptor sets at
+once (zimr's bind groups), and the memory heaps and types are read for every allocation to come.</p>
+
+<div class="callout"><strong>Checkpoint 7.2.</strong> In <code>bringUp</code>, F10 over
+<code>self.gpu = try chooseGpu(self);</code>. On a laptop with an integrated GPU and a discrete one, what does the
+<code>using</code> line in the console name?<br>
+<b>(a)</b> the integrated GPU, the one listed as <code>GPU 0</code><br>
+<b>(b)</b> the discrete GPU
+<details><summary>answer</summary><p><b>(b),</b> if it can present to the window. On the laptop this page was
+checked on, the list was <code>GPU 0: AMD Radeon 780M Graphics (integrated_gpu)</code> and <code>GPU 1: NVIDIA
+GeForce RTX 5060 Laptop GPU (discrete_gpu)</code>, then <code>using NVIDIA GeForce RTX 5060 Laptop GPU</code>: the
+order in the list does not matter, the rank does. (A machine with one GPU lists one.)</p></details></div>
+
+<h4>The device</h4>
+<p><code>createDevice</code> asks for one queue at priority 1.0 from the chosen family and enables the five
+features, through the same <code>p_next</code> chain that asked for them, plus two more where offered. Its comments are
+a small catalogue of WebGPU-versus-Vulkan differences; one, verbatim:</p>
+<figure class="code"><figcaption><span class="path">src/wgpu_vulkan.zig:1238</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">    <span class="tok-comment">// maintenance5 gives a point whose vertex shader writes no `PointSize` the size of one pixel, WebGPU's only point</span>
+    <span class="tok-comment">// size. WGSL has no point size, so no zimr shader writes one, and without the feature a `point_list` pipeline is</span>
+    <span class="tok-comment">// invalid (VUID-VkGraphicsPipelineCreateInfo-topology-08773, point_rendering's points). The instance asks for ...</span></code></pre></figure>
+<pre><code class="zig">    <span class="tok-kw">try</span> vk.<span class="tok-fn">check</span>(self.instance_dispatch.<span class="tok-fn">createDevice</span>(self.gpu.physical_device, &amp;device_info, null, &amp;self.device));
+    self.device_dispatch = <span class="tok-kw">try</span> vk.<span class="tok-fn">loadDeviceDispatch</span>(self.instance_dispatch.getDeviceProcAddr, self.device);
+    <span class="tok-kw">if</span> (self.window != null) {
+        self.swapchain_dispatch = <span class="tok-kw">try</span> vk.<span class="tok-fn">loadSwapchainDispatch</span>(self.instance_dispatch.getDeviceProcAddr, self.device);
+    }
+    self.device_dispatch.<span class="tok-fn">getDeviceQueue</span>(self.device, self.gpu.queue_family, <span class="tok-num">0</span>, &amp;self.queue);</code></pre>
+<p><code>vkCreateDevice</code> is the moment the driver commits to us. The device's functions are then loaded through
+<code>vkGetDeviceProcAddr</code> — straight from the driver, skipping the loader's per-call trampoline — and the queue
+is fetched.</p>
+
+<h4>The frame objects</h4>
+<figure class="code"><figcaption><span class="path">src/wgpu_vulkan.zig:1303</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">    <span class="tok-kw">const</span> pool_info: vk.CommandPoolCreateInfo = .{
+        .flags = .{ .reset_command_buffer = true },
+        .queue_family_index = self.gpu.queue_family,
+    };
+    <span class="tok-kw">try</span> vk.<span class="tok-fn">check</span>(self.device_dispatch.<span class="tok-fn">createCommandPool</span>(self.device, &amp;pool_info, null, &amp;self.command_pool));
+    <span class="tok-kw">const</span> timeline_type: vk.SemaphoreTypeCreateInfo = .{ .semaphore_type = .timeline, .initial_value = <span class="tok-num">0</span> };
+    <span class="tok-kw">const</span> timeline_info: vk.SemaphoreCreateInfo = .{ .p_next = &amp;timeline_type };
+    <span class="tok-kw">try</span> vk.<span class="tok-fn">check</span>(self.device_dispatch.<span class="tok-fn">createSemaphore</span>(self.device, &amp;timeline_info, null, &amp;self.timeline));
+    <span class="tok-kw">for</span> (&amp;self.acquire_semaphores) |*semaphore| {
+        semaphore.* = <span class="tok-kw">try</span> <span class="tok-fn">createBinarySemaphore</span>(self);
+    }</code></pre></figure>
+<p>A command pool, where command buffers will come from. One <em>timeline</em> semaphore — a counter, not a flag —
+that will number every submission: "has the GPU finished submission 41?" becomes one comparison, and the host has no
+fences at all. And two binary semaphores, one per frame in flight, for the presentation engine to signal when it
+hands over an image. No command buffer exists yet. <code>bringUp</code> is done, and <code>initDevice</code> returns
+the handle 1: the host has one device, as a page has one.</p>
+
+<h3>getQueue, getSurface: the swapchain</h3>
+<p><code>getQueue</code> returns 1, without a Vulkan call. <code>getSurface</code> is where the swapchain — the
+ring of images that take turns being drawn and being shown — is made, on first use:</p>
+<figure class="code"><figcaption><span class="path">src/wgpu_vulkan.zig:3774</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">    <span class="tok-kw">if</span> (self.swapchain.handle == .null_handle) {
+        <span class="tok-fn">rebuildSwapchain</span>(self) <span class="tok-kw">catch</span> |err| <span class="tok-fn">panic</span>(<span class="tok-str">"vulkan host: creating the swapchain failed: {s}"</span>, .{<span class="tok-builtin">@errorName</span>(err)});
+    }
+    <span class="tok-kw">return</span> <span class="tok-num">1</span>;</code></pre></figure>
+<p><code>rebuildSwapchain</code> waits for the device to be idle (it is), has no old swapchain to destroy, and calls
+<code>createSwapchain</code>, which:</p>
+<ol>
+<li>asks the surface's capabilities; its <code>current_extent</code> is the window's client size in physical
+pixels — 480 by 200 at 100%, 720 by 300 at 150%;</li>
+<li>picks a format, by two-call enumeration, preferring <code>R8G8B8A8_UNORM</code> and then
+<code>B8G8R8A8_UNORM</code>, either in the sRGB colour space:
+<pre><code class="zig">    <span class="tok-kw">const</span> preferred_formats = [_]vk.Format{ .r8g8b8a8_unorm, .b8g8r8a8_unorm };</code></pre>
+UNORM, not the <code>_SRGB</code> formats: values written are values shown, exactly as on a browser canvas.
+Which of the two depends on the driver; on the NVIDIA laptop this page was checked on, it was
+<code>r8g8b8a8_unorm</code>;</li>
+<li>asks for one image more than the surface's minimum — typically three — so one can be drawn while the display
+holds another;</li>
+<li>creates the swapchain:
+<pre><code class="zig">        .image_usage = .{ .color_attachment = true, .transfer_dst = true, .transfer_src = true },
+...
+        .present_mode = .fifo_khr,</code></pre>
+FIFO is the one present mode every surface must support: each image waits for the display's next refresh, which is
+what makes the frame loop run at the display's rate, as <code>requestAnimationFrame</code> does in a browser;</li>
+<li>gets the images (two calls), makes one present semaphore per image, and a view of each image, registered under a
+handle that the engine will see as "the current texture's view" — the same handle for that position for the host's
+whole life, so the engine never holds a stale one across a resize.</li>
+</ol>
+<div class="callout"><strong>Checkpoint 7.3.</strong> Shift+F11 out to <code>run</code>, F10 to
+<code>const surface: wgpu.SurfaceHandle = wgpu.getSurface();</code>, put a breakpoint on
+<code>wgpu_vulkan.zig:1900</code> (<code>const swapchain_info: vk.SwapchainCreateInfoKHR = .{</code>; it stops on
+1901) and F5. In the
+variables panel, how does <code>image_count</code> compare with <code>capabilities.min_image_count</code>?<br>
+<b>(a)</b> they are equal<br>
+<b>(b)</b> <code>image_count</code> is one more
+<details><summary>answer</summary><p><b>(b),</b> unless the surface's maximum is lower: 2 and 3 on the laptop this
+was checked on (whose maximum was 8). And <code>extent</code> is the window's client size in physical pixels — 480 by
+200 at a 100% display scale.</p></details></div>
+
+<p><code>getSurfaceFormat</code> answers what a browser's <code>getPreferredCanvasFormat</code> answers:
+<code>.bgra8_unorm</code> or <code>.rgba8_unorm</code>, whichever the swapchain got. Every 2D pipeline about to be
+built is built for it.</p>
+
+<p>The Vulkan side of startup is complete: an instance, perhaps a messenger, a surface, a device, a queue, a command
+pool, three semaphores and a swapchain with its views. The GPU has not been given any work yet.</p>
+
+<h2 id="wiring">8. Caches, the frame object and the gl handle</h2>
+
+<div class="note"><strong>In the debugger.</strong> Shift+F11 until you are back in <code>run</code>, and F10 to
+line 706, <code>self.pipeline_cache = gpu.PipelineCache.init(engine_gpa, device);</code>.</div>
+
+<p>Back in <code>run</code>, with four numbers in hand — device 1, queue 1, surface 1, and a format — the engine
+builds the objects it will draw through. None of them calls the GPU:</p>
+<figure class="code"><figcaption><span class="path">src/wgpu_app.zig:706</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">        self.pipeline_cache = gpu.PipelineCache.<span class="tok-fn">init</span>(engine_gpa, device);
+        self.bind_group_cache = BindGroupCache.<span class="tok-fn">init</span>(engine_gpa, device);
+        self.gpu_frame = GpuFrame.<span class="tok-fn">init</span>(device, queue, surface, fmt, &amp;self.pipeline_cache, &amp;self.bind_group_cache);
+        self.gpu_frame.depth_format = cfg.window.depth_format;
+
+        <span class="tok-comment">// Pre-wire the gl handle: owner + pass pointers are stable; `renderer`</span>
+        <span class="tok-comment">// is filled by the first beginDrawing (which also lazily creates the</span>
+        <span class="tok-comment">// Renderer2D). f.gl points here, so z.beginDrawing(f.gl) can reach back.</span>
+        self.gl = .{ .renderer_slot = &amp;self.renderer_2d, .pass = &amp;self.pass, .owner = self };</code></pre></figure>
+<ul>
+<li>The two caches are empty hash maps on the engine's allocator. They will hand back an existing pipeline or bind
+group for a key already seen, so that an app asking for the same thing every frame creates it once.
+<code>PipelineCache.init</code> is, entirely, <code>return .{ .device = device, .gpa = gpa };</code>.</li>
+<li><code>GpuFrame</code> is the bundle every drawing call reaches the GPU through: device, queue, surface,
+backbuffer format, the caches. Its per-frame fields — the command encoder, the current swapchain view — stay
+invalid until a frame begins.</li>
+<li><code>depth_format</code> is null: your config asked for no depth buffer, and 2D does not need one. (It is opt-in
+because a 2D pipeline has no depth state, and a pass with a depth attachment does not match it: a validation error and
+a black frame — what the source calls the recurring "ported 2D demo is black" footgun.)</li>
+<li><code>self.gl</code> is the <code>WgpuGl</code> handle examples know as <code>f.gl</code>: raylib-shaped
+immediate drawing. Its pointers are wired now — to the renderer slot (still empty), to the pass state, and back to
+the <code>App</code> as its <code>owner</code>. Every engine function that takes only a <code>gl</code> finds the
+whole <code>App</code> through that pointer.</li>
+</ul>
+<p>These are fields of <code>zimr_app</code>, a global, so every pointer into them stays valid for the program's
+life.</p>
+
+<div class="callout"><strong>Checkpoint 8.1.</strong> F11 into <code>PipelineCache.init</code>. How long is it?<br>
+<b>(a)</b> one line: <code>return .{ .device = device, .gpa = gpa };</code><br>
+<b>(b)</b> a loop that creates the engine's pipelines up front
+<details><summary>answer</summary><p><b>(a).</b> A cache starts empty; pipelines are made the first time they
+are asked for. The engine's own five are made by the renderer, in the next chapter.</p></details></div>
+
+<div class="callout"><strong>Checkpoint 8.2.</strong> Shift+F11, then F10 past line 709. Expand <code>self</code>,
+then <code>gpu_frame</code>: what is <code>depth_format</code>?<br>
+<b>(a)</b> null<br>
+<b>(b)</b> <code>depth24_plus</code>
+<details><summary>answer</summary><p><b>(a).</b> Your config sets no <code>depth_format</code>, and
+the default is null: no depth buffer, now or later.</p></details></div>
+
+<h2 id="state">9. The State, and a font</h2>
+
+<div class="note"><strong>In the debugger.</strong> F10 to line 731, <code>try init_fn(gpa, &amp;init_frame,
+state_ptr);</code>. Before stepping in, put a breakpoint on <code>renderer_2d.zig:397</code>, the first line of
+<code>Renderer2D.init</code>, <code>var r: Renderer2D = .{ .gpa = gpa };</code> — this chapter's question is when it
+is reached.</div>
+
+<p>The engine is ready; now your code gets its turn — not <code>update</code> yet, but <code>init</code>.
+<code>run</code> builds a <code>Frame</code> for it, allocates the State, and calls the init function it was
+given:</p>
+<figure class="code"><figcaption><span class="path">src/wgpu_app.zig:728</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">        <span class="tok-kw">var</span> init_frame: Frame = self.<span class="tok-fn">makeFrame</span>(null);
+        <span class="tok-kw">const</span> state_ptr: *State = <span class="tok-kw">try</span> gpa.<span class="tok-fn">create</span>(State);
+        <span class="tok-kw">errdefer</span> gpa.<span class="tok-fn">destroy</span>(state_ptr);
+        <span class="tok-kw">try</span> <span class="tok-fn">init_fn</span>(gpa, &amp;init_frame, state_ptr);</code></pre></figure>
+
+<p><code>makeFrame(null)</code> stamps a <code>Frame</code>: pointers to the engine's GPU frame, the gl handle,
+the input state, the audio device and the mixer; a time of 0 (the <code>null</code> means "no frame driver ticked
+this one"); the window's size in logical pixels — <code>.responsive</code> mode, so the live size of the surface,
+480 by 200 on a 100% display; and a view of the random generator. It is a value on <code>run</code>'s stack, built
+fresh, never kept.</p>
+
+<p><code>gpa.create(State)</code> is the example side's first allocation: <code>@sizeOf(State)</code> bytes
+(one <code>z.Font</code>), counted on the <code>"example"</code> side. The State is allocated <em>before</em> init
+runs, so its address is final before your code sees it: anything init does with <code>&amp;s.field</code>
+stays valid for the whole run. The comment above these lines in the source tells the history: a struct returned by
+value and moved afterwards once left interior pointers pointing at its old address, and only a release build
+showed it.</p>
+
+<p><code>init_fn</code> is your <code>initState</code> — the function you named in <code>main</code>'s call to
+<code>run</code> — and since it is a <code>comptime</code> parameter, this is a direct call to it. And so zimr calls
+your code for the first time:</p>
+<figure class="code"><figcaption><span class="path">examples/hello_world_owned_main/hello_world_owned_main.zig:39</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig"><span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-kw">const</span> font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">32</span>);
+    s.* = .{ .font = font };
+}</code></pre></figure>
+<p><code>atkinson_mono_ttf</code> is <code>@embedFile("atkinson_mono_ttf")</code>: the whole TrueType file,
+compiled into the image's read-only data. No file is opened; the bytes have been in memory since the loader mapped
+the image.</p>
+
+<div class="callout"><strong>Checkpoint 9.1.</strong> From line 731, press F11 once. Where are you?<br>
+<b>(a)</b> <code>hello_world_owned_main.zig:40</code>, the <code>loadFont</code> line of <code>initState</code><br>
+<b>(b)</b> in a wrapper of zimr's that will call <code>initState</code> for you
+<details><summary>answer</summary><p><b>(a),</b> in one step: nothing stands between <code>run</code> and your
+function. (The descriptor-shaped hello_world takes three F11 here, through the runner's <code>runnerInit</code> and
+<code>initInto</code>.) The first function of yours zimr calls is <code>initState</code>, not
+<code>update</code>. Now F5.</p></details></div>
+
+<p><code>loadFont</code> first decides which characters to make: printable ASCII (32 to 126, 95 of them) and the
+upper half of Latin-1 (160 to 255, 96 more), in a 191-entry array on the stack.</p>
+<figure class="code"><figcaption><span class="path">src/wgpu_app.zig:4412</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">    <span class="tok-comment">// Printable ASCII, then Latin-1's upper half: 127..159 are control codes, and 160 is the no-break space.</span>
+    <span class="tok-kw">const</span> ascii_count: usize = <span class="tok-num">126</span> - <span class="tok-num">32</span> + <span class="tok-num">1</span>;
+    <span class="tok-kw">const</span> latin1_count: usize = <span class="tok-num">255</span> - <span class="tok-num">160</span> + <span class="tok-num">1</span>;
+    <span class="tok-kw">var</span> codepoints: [ascii_count + latin1_count]u21 = undefined;
+    <span class="tok-kw">for</span> (codepoints[<span class="tok-num">0</span>..ascii_count], <span class="tok-num">0</span>..) |*codepoint, offset| {
+        codepoint.* = <span class="tok-builtin">@intCast</span>(<span class="tok-num">32</span> + offset);
+    }
+    <span class="tok-kw">for</span> (codepoints[ascii_count..], <span class="tok-num">0</span>..) |*codepoint, offset| {
+        codepoint.* = <span class="tok-builtin">@intCast</span>(<span class="tok-num">160</span> + offset);
+    }
+    <span class="tok-kw">return</span> <span class="tok-fn">loadFontEx</span>(f, gpa, ttf_bytes, size, &amp;codepoints);</code></pre></figure>
+
+<p><code>loadFontEx</code> bakes an atlas, then builds a <em>face</em>:</p>
+<figure class="code"><figcaption><span class="path">src/wgpu_app.zig:4382</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">    <span class="tok-kw">var</span> font: Font = <span class="tok-kw">try</span> <span class="tok-fn">bakeAtlasFont</span>(f, gpa, ttf_bytes, size, codepoints, .mipmapped);
+    <span class="tok-kw">errdefer</span> text2d.<span class="tok-fn">unloadFontOwned</span>(gpa, font);
+    <span class="tok-kw">const</span> glyph_count: usize = <span class="tok-builtin">@intCast</span>(font.glyphCount);
+    font.face = <span class="tok-kw">try</span> text2d.<span class="tok-fn">createFontFace</span>(gpa, ttf_bytes, font.glyphs[<span class="tok-num">0</span>..glyph_count]);
+    <span class="tok-kw">return</span> font;</code></pre></figure>
+
+<p>And <code>bakeAtlasFont</code> opens with a line that changes the order of everything:</p>
+<figure class="code"><figcaption><span class="path">src/wgpu_app.zig:4314</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">    <span class="tok-kw">const</span> app: *App = <span class="tok-fn">appOf</span>(f.gl);
+    <span class="tok-comment">// Ensure the Renderer2D (which owns the texture registry + device) exists.</span>
+    _ = <span class="tok-kw">try</span> app.<span class="tok-fn">ensureRenderer2D</span>();
+    <span class="tok-kw">const</span> r: *Renderer2D = &amp;app.renderer_2d.?;</code></pre></figure>
+
+<p><code>appOf(f.gl)</code> walks back from the gl handle to the <code>App</code> through the
+<code>owner</code> pointer set in <a href="#wiring">chapter 8</a>. Then <code>ensureRenderer2D</code>: the 2D
+renderer is created <em>lazily</em>, the first time something needs it, so a purely 3D app never pays for it. For
+this program, the first thing that needs it is not a draw call but this font, inside your init. So the 2D renderer
+is built here, in the middle of <code>initState</code>:</p>
+<figure class="code"><figcaption><span class="path">src/wgpu_app.zig:919</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">    <span class="tok-kw">fn</span> <span class="tok-fn">ensureRenderer2D</span>(self: *App) !*Renderer2D {
+        <span class="tok-kw">if</span> (self.renderer_2d == null) {
+            self.renderer_2d = <span class="tok-kw">try</span> Renderer2D.<span class="tok-fn">init</span>(self.engine_gpa, &amp;self.gpu_frame);
+        }
+        <span class="tok-kw">return</span> &amp;self.renderer_2d.?;
+    }</code></pre></figure>
+<p>Always the engine's allocator, whoever asked — the renderer outlives any one example. (The comment above this
+function remembers when it was otherwise: five call sites each made the renderer with whatever allocator was at
+hand, three of them the example's.) <code>Renderer2D.init</code> is where the GPU first gets objects of the
+engine's own. In order:</p>
+
+<h4>Two shaders, written in Zig</h4>
+<figure class="code"><figcaption><span class="path">src/renderer_2d.zig:396</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">        r.shapes_vs_module = wgpu.<span class="tok-fn">createShaderModuleWgsl</span>(
+            f.device,
+            default_shapes_vs_wgsl,
+            <span class="tok-str">"shapes_vs"</span>,
+        );</code></pre></figure>
+<p>The function says WGSL and the constant is <code>@embedFile("default_shapes_vs.wgsl")</code>. On Windows, those
+bytes are not WGSL. The shader is written in Zig (<code>src/shaders/default_shapes_vs.zig</code>) and compiled by the
+Zig compiler to SPIR-V; the web build translates that SPIR-V to WGSL with <code>spv2wgsl</code>, and the Windows build
+embeds the SPIR-V itself <em>under the WGSL's name</em>:</p>
+<figure class="code"><figcaption><span class="path">build.zig:5643</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">            <span class="tok-kw">const</span> wgsl_import_name: []<span class="tok-kw">const</span> u8 = b.<span class="tok-fn">fmt</span>(<span class="tok-str">"{s}.wgsl"</span>, .{sh_name});
+            zimr_mod.<span class="tok-fn">addAnonymousImport</span>(wgsl_import_name, .{ .root_source_file = wgsl_path });
+            zimr_windows_mod.<span class="tok-fn">addAnonymousImport</span>(wgsl_import_name, .{ .root_source_file = out.spv });</code></pre></figure>
+<p>So the engine's call is the same on both hosts, and the Vulkan host receives SPIR-V. Its
+<code>createShaderModule</code> checks the bytes look like SPIR-V, copies them into 32-bit words (embedded bytes
+are only byte-aligned), runs <code>spv_vulkan.legalize</code> — a handful of rewrites that make the compiler's
+SPIR-V valid for Vulkan — and calls <code>vkCreateShaderModule</code>. Twice: vertex and fragment.</p>
+
+<h4>A white pixel, and the first command buffer</h4>
+<pre><code class="zig">        r.white_tex = WgpuTexture.<span class="tok-fn">createWhite1x1</span>(f.device, f.queue);</code></pre>
+<p>A 1 × 1 white texture, bound whenever a shape is drawn without one, so that the shader can always multiply by a
+texture. On Vulkan this one line is the first image the host creates itself (the swapchain's images belong to the
+presentation engine), the first memory allocation (<code>vkAllocateMemory</code>, device-local), a view, and the
+first sampler. And it is the first <em>write</em>, which brings in two more firsts. The host's <code>uploads</code> command buffer is begun — the very
+first <code>vkAllocateCommandBuffers</code> of the run — into which every queue write is recorded, to be submitted
+ahead of the next frame, as WebGPU orders a queue's writes. And the first <em>staging chunk</em>: a 4 MiB buffer in
+memory the CPU can write, mapped once for the host's life, into which the four bytes 255, 255, 255, 255 are copied
+before a copy command takes them to the image. Before that, the new image is cleared to zeros: "new memory reads as
+zeros", one of the promises.</p>
+
+<h4>The engine's bindings</h4>
+<p><code>shader_runtime.Resources(EngineSchema).init</code> derives the shaders' bindings from a typed schema rather
+than from hand-counted numbers: group 0 is a 64-byte uniform buffer (a 4 × 4 matrix, identity for now), group 1 the
+texture and its sampler. That is a buffer, two bind group layouts and two bind groups — on Vulkan, the engine's
+first <code>vkCreateBuffer</code> (the staging chunk was the host's), two descriptor set layouts, and a first descriptor pool page (room for 512 sets) from
+which the sets are allocated.</p>
+
+<h4>A ring of 32 projections</h4>
+<pre><code class="zig">        <span class="tok-kw">for</span> (&amp;r.ortho_ring_bufs, &amp;r.ortho_ring_bgs) |*buf, *bg| {
+            buf.* = wgpu.<span class="tok-fn">createBuffer</span>(f.device, .{
+                .size = shader.<span class="tok-fn">wireSizeOf</span>(EngineSchema.Ubo),
+                .usage = .{ .uniform = true, .copy_dst = true },
+                .label = <span class="tok-str">"renderer2d_ortho_ring"</span>,
+            });</code></pre>
+<p>Thirty-two more 64-byte uniform buffers, each with its own bind group. The reason is a WebGPU rule that bit:
+every <code>queue.writeBuffer</code> lands before the whole submission, so a single uniform written twice in one frame
+(say, for a render-to-texture pass and then for the screen) has only its last value when either pass runs. A ring
+gives each pass of a frame its own projection. (The source's comment names the bug it fixed: the zimr516
+shader_effects "duplicated grid" glitch.)</p>
+
+<h4>Five pipelines</h4>
+<pre><code class="zig">        <span class="tok-kw">const</span> blend_modes = [_]wgpu.BlendMode{ .none, .alpha, .additive, .multiply, .premultiplied };</code></pre>
+<p>A pipeline layout joining the two groups, then one render pipeline per blend mode — five
+<code>vkCreateGraphicsPipelines</code> calls, each for triangle lists, the 20-byte vertex of position, texture
+coordinate and colour, the swapchain's format from <a href="#gpu">chapter 7</a>, and no depth. This is where the
+driver compiles the SPIR-V to the GPU's own instructions. The alpha-blended pipeline becomes the default.</p>
+
+<h4>Room for a frame's geometry</h4>
+<p>One vertex buffer of 1,048,576 vertices (20 MiB) and one index buffer of 1,572,864 indices (3 MiB), into which
+every frame's shapes and text are batched. Each is zero-filled on creation, by a command recorded in
+<code>uploads</code>.</p>
+
+<p>Counted on Vulkan, <code>Renderer2D.init</code> made two shader modules, an image with its view and sampler, 35
+buffers, two descriptor set layouts, a descriptor pool, 34 descriptor sets, a pipeline layout and five pipelines —
+and <strong>submitted nothing</strong>. Every clear, fill and copy so far waits in the open <code>uploads</code>
+command buffer; the GPU will run them all, in order, ahead of the first frame.</p>
+
+<div class="callout"><strong>Checkpoint 9.2.</strong> The F5 stopped on <code>renderer_2d.zig:397</code>. Look
+down the call stack: is your <code>initState</code> in it?<br>
+<b>(a)</b> yes — five frames below the top<br>
+<b>(b)</b> no — the renderer is made by <code>App.run</code> before your init
+<details><summary>answer</summary><p><b>(a).</b> From the top: <code>init</code> (the renderer's),
+<code>ensureRenderer2D</code>, <code>bakeAtlasFont</code>, <code>loadFontEx</code>, <code>loadFont</code>,
+<code>initState</code>, then <code>run</code> and your <code>main</code>. The engine's renderer is built inside
+your init, because your font asked for it.</p></details></div>
+
+<div class="callout"><strong>Checkpoint 9.3.</strong> Put a breakpoint on <code>wgpu_app.zig:4340</code>,
+<code>const atlas: text2d.FontAtlas = try text2d.bakeFontAtlas(...)</code>, and F5. What is
+<code>bake_size</code>?<br>
+<b>(a)</b> 32 times your display scale — 32 at 100%, 48 at 150%<br>
+<b>(b)</b> always 32, the size <code>initState</code> asked for
+<details><summary>answer</summary><p><b>(a).</b> <code>dpr</code> beside it is the swapchain's width over the
+window's logical width: 1 on a 100% display, where the two are equal.</p></details></div>
+
+<p>With a renderer to register textures with, the font is baked:</p>
+<ol>
+<li><code>codecs.truetype.loadFontFromTtf(gpa, ttf_bytes)</code> parses the TrueType file's tables — the
+character map, the glyph outlines, the horizontal metrics — in zimr's own Zig parser.</li>
+<li>The device-pixel ratio is measured: the surface's backing size over its CSS size, 1.0 on a 100% display, 1.5
+at 150%. The atlas is baked at <code>size × ratio</code>, so 32 px text is exactly one atlas texel per screen pixel
+when drawn at 32.</li>
+<li><code>text2d.bakeFontAtlas</code> rasterizes the 191 glyphs from their outlines into one RGBA8 image, on the
+CPU, with their rectangles and metrics.</li>
+<li><code>WgpuTexture.createMipmappedFromPixels</code> uploads it as a GPU texture with a full chain of smaller
+copies for drawing small; the CPU image is freed by a <code>defer</code> once the upload is queued.</li>
+<li><code>r.registerOwnedTexture(tex)</code> gives the texture a small integer id in the renderer's registry.
+That id is what <code>z.Font</code> holds; draw calls refer to it.</li>
+</ol>
+<p>Back in <code>loadFontEx</code>, <code>createFontFace</code> keeps a copy of the TTF bytes and the glyph list, so
+that text drawn at a size other than 32 can later be rasterized sharp at the size it lands at, into the shared glyph
+cache. The baked atlas is only the fallback.</p>
+
+<p>The font returns to <code>initState</code>, and <code>s.* = .{ .font = font };</code> writes the State whole.
+Your init is done. So far, of the code you wrote, the first line of <code>main</code> has started and
+<code>initState</code> has run; <code>update</code> has not.</p>
+
+<h2 id="leaving">10. Leaving run</h2>
+
+<div class="note"><strong>In the debugger.</strong> Clear the last two breakpoints. Shift+F11 until you are in
+<code>run</code> again, just after <code>init_fn</code>, and F10 on through this chapter.</div>
+
+<p>Three more things, and <code>run</code> returns.</p>
+<figure class="code"><figcaption><span class="path">src/wgpu_app.zig:733</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">        <span class="tok-comment">// Comptime-uniqued thunk: cast the opaque state back + call the user's</span>
+        <span class="tok-comment">// strongly-typed update. Resolves statically per run() instantiation.</span>
+        <span class="tok-kw">const</span> Thunk = <span class="tok-kw">struct</span> {
+            <span class="tok-kw">fn</span> <span class="tok-fn">dispatch</span>(frame: *Frame, opaque_state: ?*anyopaque) void {
+                <span class="tok-kw">const</span> s: *State = <span class="tok-builtin">@ptrCast</span>(<span class="tok-builtin">@alignCast</span>(opaque_state.?));
+                <span class="tok-fn">update_fn</span>(frame, s);
+            }
+        };
+        self.state = state_ptr;
+        self.update_fn = Thunk.dispatch;</code></pre></figure>
+<p>This is where the compile-time world hands over to the run-time one. Up to here, <code>update_fn</code> was a
+<code>comptime</code> parameter, a function the compiler knew. But the frame loop is generic engine code that cannot
+know the State's type, so the engine stores two type-erased things in the <code>App</code>: the State as an
+<code>?*anyopaque</code>, and a function pointer to <code>Thunk.dispatch</code> — a tiny function generated for this
+one State type, which casts the pointer back and calls <code>update_fn</code> — your <code>update</code> — directly. Every frame
+will go through this pointer.</p>
+
+<figure class="code"><figcaption><span class="path">src/wgpu_app.zig:748</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">        active_app = self;
+...
+        profiler.<span class="tok-fn">setClock</span>(&amp;profilerClock);
+        profiler.<span class="tok-fn">probeResolution</span>();
+    }</code></pre></figure>
+<p><code>active_app</code> is a module-level pointer: the one way the exported <code>update</code> — called with
+nothing but a timestamp — finds the app. Then the profiler gets its clock (the debug and release modes build the
+profiler in; <code>-Dmode=ship</code> strips it), and <code>probeResolution</code> measures that clock by reading
+it 4,000 times in a row and keeping the smallest non-zero difference. On Windows the clock is the performance
+counter (<code>QueryPerformanceCounter</code>), typically a 100 ns tick; in a browser the same probe reveals
+whether <code>performance.now()</code> was coarsened to 100 µs.</p>
+
+<div class="callout"><strong>Checkpoint 10.1.</strong> On <code>profiler.probeResolution();</code>, press F11 and
+read the loop. How many times does it read the clock?<br>
+<b>(a)</b> 4,001: once before the loop, 4,000 in it<br>
+<b>(b)</b> until two readings differ
+<details><summary>answer</summary><p><b>(a).</b> <code>while (i &lt; 4000)</code>, with one read before it. Do
+not F10 through it — Shift+F11 out. (The result, <code>timer_res_ms</code>, came out as 0.0000999 ms on the laptop
+this was checked on: the 100 ns tick.)</p></details></div>
+
+<p><code>run</code> returns into your <code>main</code>. On the web, this is where <code>main</code> would return
+and the browser would take over, calling the <code>update</code> export once per frame. A native program has no
+browser, so your <code>main</code> says what comes next itself:</p>
+<figure class="code"><figcaption><span class="path">examples/hello_world_owned_main/hello_world_owned_main.zig:96</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">    <span class="tok-comment">// On the web `run` returns at once and the browser calls each frame through the `update` export. A native</span>
+    <span class="tok-comment">// program calls its frames itself, here, until its window closes.</span>
+    zimr_app.<span class="tok-fn">runNative</span>();</code></pre></figure>
+<figure class="code"><figcaption><span class="path">src/wgpu_app.zig:630</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">    <span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">runNative</span>(self: *App) void {
+        <span class="tok-kw">const</span> max_frames_per_second: ?f32 = self.config.max_frames_per_second;
+        <span class="tok-kw">switch</span> (<span class="tok-kw">comptime</span> host.kind) {
+            <span class="tok-comment">// lint:off decl-order: `update` and `receiveEvent` sit with the browser's exports, after App</span>
+            .native =&gt; self.script_outcome = native_loop.<span class="tok-fn">run</span>(&amp;update, &amp;receiveEvent, &amp;saveFrame, max_frames_per_second),</code></pre></figure>
+<div class="callout"><strong>Checkpoint 10.2.</strong> Shift+F11 out of <code>run</code>: you are back on line 88
+of your <code>main</code>. Press F10. Where are you?<br>
+<b>(a)</b> line 98, <code>zimr_app.runNative();</code><br>
+<b>(b)</b> on the closing brace of <code>main</code>: <code>run</code> was the whole program
+<details><summary>answer</summary><p><b>(a).</b> <code>run</code> built everything and returned; nothing has drawn
+a frame yet. If you deleted line 98, the program would end right here, window and all. F11 into
+<code>runNative</code>.</p></details></div>
+
+<div class="note"><strong>Yours to decide.</strong> When the window is closed, <code>runNative</code> returns and
+your <code>main</code> ends: <code>wrapMain</code> returns 0 and the process exits, and Windows takes back the
+window, the memory and the GPU objects. The runner a descriptor goes through does more at this point — it tears the
+engine down (<code>runnerShutdown</code>), shuts Vulkan down and prints the validation layer's verdict
+(<code>finishNative</code>, the <code>validation: 0 errors, 0 warnings</code> line), and exits with status 1 if
+anything was wrong. Your <code>main</code> does none of that, because you did not write it: here, the choice and
+the work are both yours.</div>
+
+<p><code>max_frames_per_second</code> defaults to null natively — draw every frame the display gives — where a
+browser build defaults to 60. And the loop is handed three function pointers: <code>update</code>, the very
+function a browser calls; <code>receiveEvent</code>, where input goes; <code>saveFrame</code>, for scripted
+screenshots.</p>
+
+<pre class="sketch"><code>stack now:   ... WinStartup &gt; main &gt; App.runNative &gt; native_loop.run</code></pre>
+
+<h2 id="loop">11. The frame loop</h2>
+
+<div class="note"><strong>In the debugger.</strong> F11 from <code>runNative</code>'s
+<code>native_loop.run(...)</code> line into the loop. Then, before going further, set three breakpoints:
+<code>native_loop.zig:1428</code> (<code>sleepUntilInputOrDue(frame_wait_step_milliseconds);</code>, inside the
+frame's wait), <code>wgpu_vulkan.zig:2059</code> (<code>self.image_acquired_ahead = image_index;</code>) and
+<code>wgpu_app.zig:5364</code> (the first line of the <code>update</code> export). Checkpoint 11.1 asks which one
+F5 reaches first.</div>
+
+<figure class="code"><figcaption><span class="path">src/native_loop.zig:1597</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">    reported_size = <span class="tok-fn">size</span>();
+    <span class="tok-kw">var</span> setting_buffer: [<span class="tok-num">512</span>]u8 = undefined;
+    <span class="tok-kw">if</span> (native_os.<span class="tok-fn">environmentVariable</span>(<span class="tok-str">"ZIMR_SCRIPT"</span>, &amp;setting_buffer)) |script_path| {
+        <span class="tok-kw">return</span> <span class="tok-fn">runScriptInWindow</span>(update, receive_event, capture, script_path);
+    }
+    <span class="tok-kw">var</span> pacer: FramePacer = .{};
+    <span class="tok-kw">while</span> (true) {
+        <span class="tok-kw">var</span> pass: WindowPass = <span class="tok-fn">serviceWindow</span>(receive_event);
+        <span class="tok-comment">// The frame's beat, for an app that asks for fewer frames than the display gives (`waitForBeat`).</span>
+        <span class="tok-kw">if</span> (pass == .draw) {
+            <span class="tok-kw">if</span> (max_frames_per_second) |frames_per_second| {
+                pass = <span class="tok-fn">waitForBeat</span>(receive_event, &amp;pacer, frames_per_second);
+            }
+        }
+        <span class="tok-comment">// The frame's wait, here, input handed over as it arrives (`waitForFrame`).</span>
+        <span class="tok-kw">if</span> (pass == .draw) {
+            pass = <span class="tok-fn">waitForFrame</span>(receive_event);
+        }
+        <span class="tok-kw">switch</span> (pass) {
+            .draw =&gt; <span class="tok-fn">update</span>(native_os.<span class="tok-fn">monotonicMilliseconds</span>()),
+            .hidden =&gt; <span class="tok-fn">sleepWhileHidden</span>(),
+            .closed =&gt; <span class="tok-kw">return</span> null,
+        }
+    }</code></pre></figure>
+
+<p>This is what a browser does for a page, done by the program itself. Before the loop:
+<code>reported_size</code> remembers the window's size (logical width, height and scale), so that a later change can
+be reported as a resize event; and one environment variable is checked. With <code>ZIMR_SCRIPT</code> set, the
+window would be driven by a script of input and frames, the same scripts a headless run uses — not this time.</p>
+
+<p>Then the first pass of the loop. <code>serviceWindow</code>:</p>
+<figure class="code"><figcaption><span class="path">src/native_loop.zig:1310</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig"><span class="tok-kw">fn</span> <span class="tok-fn">serviceWindow</span>(receive_event: EventFunction) WindowPass {
+    window.<span class="tok-fn">pump</span>();
+    <span class="tok-kw">if</span> (window.close_requested) {
+        <span class="tok-kw">return</span> .closed;
+    }
+    <span class="tok-kw">if</span> (window.minimized != reported_hidden) {
+        reported_hidden = window.minimized;
+        <span class="tok-fn">deliverWindowEvent</span>(receive_event, <span class="tok-kw">if</span> (reported_hidden) .hidden <span class="tok-kw">else</span> .shown);
+    }
+    <span class="tok-kw">if</span> (window.minimized) {
+        <span class="tok-kw">return</span> .hidden;
+    }
+    <span class="tok-kw">const</span> current_size: contract.Size = <span class="tok-fn">size</span>();
+...
+    contract_events.arrival_ms = native_os.<span class="tok-fn">monotonicMilliseconds</span>();
+    <span class="tok-fn">deliverInput</span>(receive_event);
+    <span class="tok-kw">return</span> .draw;
+}</code></pre></figure>
+<p><code>window.pump()</code> is the classic Win32 message loop, minus the waiting:</p>
+<pre><code class="zig">        <span class="tok-kw">while</span> (<span class="tok-fn">PeekMessageW</span>(&amp;message, null, <span class="tok-num">0</span>, <span class="tok-num">0</span>, PM_REMOVE) != <span class="tok-num">0</span>) {
+            _ = <span class="tok-fn">TranslateMessage</span>(&amp;message);
+            _ = <span class="tok-fn">DispatchMessageW</span>(&amp;message);
+        }</code></pre>
+<p><code>PeekMessageW</code> takes whatever messages wait in the thread's queue — the first paint request, mouse
+movement if the pointer is over the new window — and <code>DispatchMessageW</code> calls
+<code>windowProcedure</code> with each. Then the checks, each false on this first pass: the window was not closed,
+is not minimized, has not changed size since <code>reported_size</code>. <code>deliverInput</code> converts
+whatever input was queued into the contract's events and calls <code>receiveEvent</code> with each — usually nothing
+yet, or a mouse move. The pass says <code>.draw</code>.</p>
+
+<p><code>max_frames_per_second</code> is null, so there is no beat to wait for. Then <code>waitForFrame</code>:</p>
+<figure class="code"><figcaption><span class="path">src/native_loop.zig:1422</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig"><span class="tok-kw">fn</span> <span class="tok-fn">waitForFrame</span>(receive_event: EventFunction) WindowPass {
+    <span class="tok-kw">if</span> (!<span class="tok-fn">canSleepPrecisely</span>()) {
+        <span class="tok-kw">return</span> .draw;
+    }
+    <span class="tok-kw">while</span> (!vulkan_host.<span class="tok-fn">tryAcquireAhead</span>()) {
+        <span class="tok-comment">// Due one step from now: the wait ends at the step, or at input.</span>
+        <span class="tok-fn">sleepUntilInputOrDue</span>(frame_wait_step_milliseconds);
+        <span class="tok-comment">// Whichever woke it - input, or the step - the window's messages are handled and its input handed over.</span>
+        <span class="tok-kw">const</span> pass: WindowPass = <span class="tok-fn">serviceWindow</span>(receive_event);
+        <span class="tok-kw">if</span> (pass != .draw) {
+            <span class="tok-kw">return</span> pass;
+        }
+    }
+    <span class="tok-kw">return</span> .draw;
+}</code></pre></figure>
+<p>The idea: a frame should not <em>start</em> until it can run to the end without blocking, so that the input it
+reads is as fresh as possible. <code>canSleepPrecisely</code> asks, on the first call only, for a high-resolution
+waitable timer:</p>
+<figure class="code"><figcaption><span class="path">src/native_loop.zig:1340</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">        frame_wait_timer = win32.<span class="tok-fn">CreateWaitableTimerExW</span>(
+            null,
+            null,
+            win32.CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+            win32.TIMER_ALL_ACCESS,
+        );</code></pre></figure>
+<p>(Windows 10 1803 and later have them; an ordinary timer wakes on the system's 15.6 ms tick, which can make a
+frame start a whole refresh late.) Then <code>vulkan_host.tryAcquireAhead()</code>:</p>
+<figure class="code"><figcaption><span class="path">src/wgpu_vulkan.zig:2037</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig"><span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">tryAcquireAhead</span>() bool {
+    <span class="tok-kw">const</span> self: *Host = host <span class="tok-kw">orelse</span> <span class="tok-kw">return</span> true;
+    <span class="tok-kw">if</span> (self.image_acquired_ahead != null) {
+        <span class="tok-kw">return</span> true;
+    }
+    <span class="tok-kw">const</span> completed: u64 = <span class="tok-fn">readCompleted</span>(self) <span class="tok-kw">catch</span> <span class="tok-kw">return</span> true;
+    <span class="tok-kw">if</span> (completed &lt; self.present_serials[self.frame_slot]) {
+        <span class="tok-kw">return</span> false;
+    }
+    <span class="tok-kw">const</span> window: *native_window.Window = <span class="tok-fn">theWindow</span>(self);
+    <span class="tok-kw">const</span> is_stale: bool = self.swapchain_dirty <span class="tok-kw">or</span> window.size_changed <span class="tok-kw">or</span> self.swapchain.handle == .null_handle;
+    <span class="tok-kw">if</span> (is_stale) {
+        <span class="tok-kw">return</span> true;
+    }
+    <span class="tok-kw">var</span> image_index: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">const</span> result: vk.Result = <span class="tok-fn">acquireNextImage</span>(self, &amp;image_index, <span class="tok-num">0</span>);
+    <span class="tok-kw">switch</span> (result) {
+        .success, .suboptimal_khr =&gt; {
+...
+            self.image_acquired_ahead = image_index;
+            <span class="tok-kw">return</span> true;
+        },
+        .not_ready, .timeout =&gt; <span class="tok-kw">return</span> false,
+        <span class="tok-kw">else</span> =&gt; <span class="tok-kw">return</span> true,
+    }
+}</code></pre></figure>
+<p>Two questions, neither of which may block. Is the frame slot free — has the GPU finished the submission that last
+presented from it? <code>readCompleted</code> reads the timeline semaphore's counter
+(<code>vkGetSemaphoreCounterValue</code>): 0, and the slot's last present was serial 0, i.e. never, so yes. Is a
+swapchain image free <em>right now</em>? <code>vkAcquireNextImageKHR</code> with a timeout of zero; on this first
+frame, with every image fresh, it normally succeeds at once, and the index is kept as
+<code>image_acquired_ahead</code>. (Note why the window was careful to set <code>size_changed = false</code> at the
+end of <code>open</code>: otherwise this check would have called the brand-new swapchain stale.) The wait loop is not
+entered at all.</p>
+<p>On later frames this is where the program spends its idle time: FIFO hands an image back only when the display
+has shown the one after it, so the loop sleeps in steps of a millisecond, pumping messages, until it does — and input
+arriving meanwhile reaches the app the moment it comes, not at the next frame.</p>
+
+<div class="callout"><strong>Checkpoint 11.1.</strong> Press F5. Which of the three breakpoints stops
+first?<br>
+<b>(a)</b> <code>native_loop.zig:1428</code>: the loop sleeps, waiting for an image<br>
+<b>(b)</b> <code>wgpu_vulkan.zig:2059</code>: an image is acquired ahead, at once
+<details><summary>answer</summary><p><b>(b).</b> The first frame never sleeps: <code>tryAcquireAhead</code>
+returns true on its first call, so the <code>while</code> body — and its breakpoint — is skipped. Line 1428 is first
+reached on a later frame, when FIFO makes the loop wait for the display.</p></details></div>
+
+<div class="callout"><strong>Checkpoint 11.2.</strong> F5 again. Where now?<br>
+<b>(a)</b> <code>native_loop.zig:1428</code><br>
+<b>(b)</b> <code>wgpu_app.zig:5364</code>, in the <code>update</code> export
+<details><summary>answer</summary><p><b>(b).</b> With an image in hand, <code>waitForFrame</code> returns
+<code>.draw</code> and the loop calls <code>update</code>. The call stack below it is short:
+<code>update</code>, <code>run</code> (native_loop's), <code>runNative</code>, <code>main</code>. Clear the
+breakpoint at 1428 now, or it will stop on the second frame.</p></details></div>
+
+<p>The pass is <code>.draw</code>, and the loop makes the call it exists to make:</p>
+<pre><code class="zig">            .draw =&gt; <span class="tok-fn">update</span>(native_os.<span class="tok-fn">monotonicMilliseconds</span>()),</code></pre>
+<p>The time is the performance counter in milliseconds. That number is the frame's time, given to the engine rather
+than read by it — the browser passes its <code>requestAnimationFrame</code> timestamp in the same place.</p>
+
+<div class="callout"><strong>Checkpoint 11.3.</strong> What is <code>frame_ms</code>, the export's argument?<br>
+<b>(a)</b> 0, since this is the first frame<br>
+<b>(b)</b> a large number — about 86 million milliseconds for every day your computer has been on
+<details><summary>answer</summary><p><b>(b).</b> The performance counter counts from about when Windows started,
+not from when the program did: 1,894,774,487 ms when this was checked, almost 22 days. The engine only ever uses
+differences of it (<code>first_frame_ms</code>, <code>prev_frame_ms</code>).</p></details></div>
+
+<h2 id="export">12. The update export</h2>
+
+<div class="note"><strong>In the debugger.</strong> On <code>wgpu_app.zig:5364</code>, the first line of the
+export. F10 through it while you read.</div>
+
+<p><code>update</code> is declared <code>pub export fn</code>: in the browser it is an export of the wasm module,
+and the JavaScript bridge calls it every frame. Natively, the export changes nothing; the loop calls it through a
+pointer like any function. The point is that this is <em>the same function</em> on every platform, line for line.</p>
+<figure class="code"><figcaption><span class="path">src/wgpu_app.zig:5363</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig"><span class="tok-kw">pub</span> <span class="tok-kw">export</span> <span class="tok-kw">fn</span> <span class="tok-fn">update</span>(frame_ms: f64) void {
+    <span class="tok-kw">const</span> app: *App = active_app <span class="tok-kw">orelse</span> <span class="tok-kw">return</span>;
+    <span class="tok-kw">const</span> thunk: UpdateThunk = app.update_fn <span class="tok-kw">orelse</span> <span class="tok-kw">return</span>;
+    <span class="tok-comment">// In a browser, the display's frames beyond the app's highest rate are let pass undrawn: the canvas keeps the</span>
+    <span class="tok-comment">// frame drawn last (`Config.max_frames_per_second`). The time between frames is measured from the last one drawn.</span>
+    <span class="tok-kw">if</span> (<span class="tok-kw">comptime</span> host.is_browser) {
+...
+    }
+
+    <span class="tok-comment">// Close the previous frame / open this one, then wrap the whole tick.</span>
+    profiler.<span class="tok-fn">frameMark</span>();
+    profiler.<span class="tok-fn">recordGpuMs</span>(wgpu.<span class="tok-fn">gpuMs</span>()); <span class="tok-comment">// GPU pass time from the last readback</span>
+    <span class="tok-kw">const</span> zframe: profiler.Zone = profiler.<span class="tok-fn">zoneNamed</span>(<span class="tok-builtin">@src</span>(), <span class="tok-str">"frame"</span>);
+    <span class="tok-kw">defer</span> zframe.<span class="tok-fn">end</span>();
+
+    <span class="tok-kw">var</span> frame: Frame = app.<span class="tok-fn">makeFrame</span>(frame_ms);
+    <span class="tok-comment">// The frame's duration: the time between this frame's and the last one's, on the frame driver's clock.</span>
+    <span class="tok-kw">if</span> (prev_frame_ms != <span class="tok-num">0</span>) {
+...
+    }
+    prev_frame_ms = frame_ms;
+
+    <span class="tok-fn">readGamepads</span>(app);
+    {
+        <span class="tok-kw">const</span> zu: profiler.Zone = profiler.<span class="tok-fn">zoneNamed</span>(<span class="tok-builtin">@src</span>(), <span class="tok-str">"update"</span>);
+        <span class="tok-kw">defer</span> zu.<span class="tok-fn">end</span>();
+        <span class="tok-fn">thunk</span>(&amp;frame, app.state);
+    }</code></pre></figure>
+<ol>
+<li><code>active_app</code> and <code>update_fn</code> were set at the end of <code>run</code>; both are present.
+(Before <code>run</code> finished, a browser calling <code>update</code> early would have returned here,
+harmlessly.)</li>
+<li>The browser-only frame skipping is compiled out.</li>
+<li>The profiler marks the start of frame 0, records the GPU time of the last frame (none yet: 0), and opens a zone
+named <code>"frame"</code> that closes when <code>update</code> returns.</li>
+<li><code>makeFrame(frame_ms)</code> builds this frame's <code>Frame</code>. Because it is the first frame with a
+time, it records <code>first_frame_ms</code> = this time, and the elapsed time comes out 0.</li>
+<li><code>prev_frame_ms</code> is 0 — there was no previous frame — so <code>delta_time</code> stays 0. The second
+frame will be the first with a duration.</li>
+<li><code>readGamepads</code> reads every gamepad slot from the platform into the input state (none
+connected, typically).</li>
+<li>A zone named <code>"update"</code>, and then the indirect call: <code>thunk</code> is
+<code>Thunk.dispatch</code>, and <code>app.state</code> is the State's address as an opaque pointer.</li>
+</ol>
+
+<div class="callout"><strong>Checkpoint 12.1.</strong> F10 from <code>if (prev_frame_ms != 0) {</code> until you
+reach <code>readGamepads(app);</code>. Did you stop on the block's first line, <code>const measured_seconds: f64 =
+...</code>?<br>
+<b>(a)</b> yes: the first frame measures its duration<br>
+<b>(b)</b> no: the block is skipped
+<details><summary>answer</summary><p><b>(b).</b> <code>prev_frame_ms</code> is a global that starts at 0, and no
+frame has set it yet: the first frame has no duration, and <code>delta_time</code> stays 0. (The debugger shows
+line 5387, the block's last, for one step — the flash described in chapter 0 — then
+<code>prev_frame_ms = frame_ms;</code>.)</p></details></div>
+
+<div class="callout"><strong>Checkpoint 12.2.</strong> F10 to line 5395, <code>thunk(&amp;frame, app.state);</code>,
+and F11. Where are you?<br>
+<b>(a)</b> in a function named <code>dispatch</code>, in <code>wgpu_app.zig</code><br>
+<b>(b)</b> in your <code>update</code>
+<details><summary>answer</summary><p><b>(a).</b> <code>thunk</code> is a function pointer, and it points at the
+<code>Thunk.dispatch</code> generated inside <code>App.run</code> (chapter 10). Its one real line casts the pointer and
+calls <code>update_fn</code>.</p></details></div>
+
+<p><code>Thunk.dispatch</code> casts the pointer back to <code>*State</code> and calls <code>update_fn</code> —
+which, since you passed it to <code>run</code> yourself, is your <code>update</code>. No wrapper, no runner: one hop.</p>
+
+<div class="callout"><strong>Checkpoint 12.3.</strong> From <code>dispatch</code>, keep pressing F11. Where do you
+land?<br>
+<b>(a)</b> <code>hello_world_owned_main.zig:46</code>, the first line of your <code>update</code><br>
+<b>(b)</b> in a function of zimr's that opens the frame before calling you
+<details><summary>answer</summary><p><b>(a)</b> — you have arrived. (The descriptor-shaped hello_world goes through
+the runner's <code>runnerUpdate</code> here, which opens the frame for it first.)</p></details></div>
+
+<h2 id="arrival">13. The first line</h2>
+
+<div class="note"><strong>In the debugger.</strong> On <code>hello_world_owned_main.zig:46</code>,
+<code>z.beginDrawing(f.gl);</code> — where checkpoint 12.3 left you. (To come back to this point on a later run, put
+a breakpoint on that line by file and line, and F5.)</div>
+
+<p>The program counter is on the first line of your <code>update</code>:</p>
+<figure class="code"><figcaption><span class="path">examples/hello_world_owned_main/hello_world_owned_main.zig:44</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig"><span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-comment">// The frame is ours to open and close: the runner does this for a descriptor.</span>
+    z.<span class="tok-fn">beginDrawing</span>(f.gl);
+    <span class="tok-kw">defer</span> z.<span class="tok-fn">endDrawing</span>(f.gl);
+
+    z.<span class="tok-fn">clearViewport</span>(f, .{ .r = <span class="tok-num">30</span>, .g = <span class="tok-num">30</span>, .b = <span class="tok-num">40</span>, .a = <span class="tok-num">255</span> });</code></pre></figure>
+
+<p>The call stack at this instant, as LLDB prints it, top to bottom:</p>
+<pre class="sketch"><code>update               hello_world_owned_main.zig:46    &lt;-- here: your update
+dispatch             wgpu_app.zig:738                 Thunk.dispatch, generated for your State
+update               wgpu_app.zig:5395                the export a browser calls
+run                  native_loop.zig:1626             the frame loop, first pass
+runNative            wgpu_app.zig:634
+main                 hello_world_owned_main.zig:98    your main
+callMain [inlined]   start.zig:800
+wWinMainCRTStartup   start.zig:582                    WinStartup, under its exported name
+BaseThreadInitThunk  kernel32.dll
+RtlUserThreadStart   ntdll.dll                        every thread starts here</code></pre>
+<p>Read it from the bottom: Windows' two frames, Zig's start code, <strong>your</strong> <code>main</code>, zimr's
+frame loop and its export, one hop, <strong>your</strong> <code>update</code>. Everything between your two functions
+is the engine doing what your <code>main</code> asked: run the frames.</p>
+
+<div class="callout"><strong>Checkpoint 13.1.</strong> Two frames in that stack are named <code>update</code>. How
+many frames lie between them?<br>
+<b>(a)</b> one: <code>dispatch</code><br>
+<b>(b)</b> none: the export calls your <code>update</code> directly
+<details><summary>answer</summary><p><b>(a).</b> The type-erased hop: the frame loop cannot know your
+<code>State</code>, and <code>dispatch</code> is where it becomes known again. The same name twice is also why
+<code>b update</code> in LLDB finds several places: put breakpoints on <code>hello_world_owned_main.zig:46</code> by
+file and line.</p></details></div>
+
+<div class="callout"><strong>Checkpoint 13.2.</strong> Look at the program's window. Does it show anything zimr
+drew?<br>
+<b>(a)</b> no — no frame has been drawn, let alone presented<br>
+<b>(b)</b> yes — a dark blue clear
+<details><summary>answer</summary><p><b>(a).</b> Not even a frame is open yet: opening it is what your first line
+is about to do. And nothing has been submitted to the GPU at all — the uploads of chapter 9 still wait in their
+command buffer.</p></details></div>
+
+<h2 id="open">14. Your first line opens the frame</h2>
+
+<div class="note"><strong>In the debugger.</strong> On <code>z.beginDrawing(f.gl);</code>, line 46 of your
+<code>update</code>, press F11 (you pass through the profiler's <code>zoneNamed</code> first; Shift+F11 out of
+it). F10 over the zone and <code>appOf</code> lines to <code>_ = app.beginDrawing(...)</code>, and F11 again:
+you are in <code>App.beginDrawing</code>.</div>
+
+<div class="warn"><strong>F11 on line 46, not F10.</strong> F10 would open the whole frame in one step and
+land you on <code>z.clearViewport</code>, three lines down, without showing you how.</div>
+
+<p>This is the work a descriptor's runner does before it calls the example; here, it is your line, and you are
+about to watch it.</p>
+
+<figure class="code"><figcaption><span class="path">src/wgpu_app.zig:1178</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig"><span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">beginDrawing</span>(gl: *WgpuGl) void {
+    <span class="tok-kw">const</span> zb: profiler.Zone = profiler.<span class="tok-fn">zoneNamed</span>(<span class="tok-builtin">@src</span>(), <span class="tok-str">"beginDrawing"</span>);
+    <span class="tok-kw">defer</span> zb.<span class="tok-fn">end</span>();
+    <span class="tok-kw">const</span> app: *App = <span class="tok-fn">appOf</span>(gl);
+    <span class="tok-comment">// lint:off scope-balance: engine frame primitive (frame closed by endDrawing elsewhere)</span>
+    _ = app.<span class="tok-fn">beginDrawing</span>(app.config.window.clear) <span class="tok-kw">catch</span> <span class="tok-kw">return</span>;
+}</code></pre></figure>
+<p>The clear colour is the config's default, <code>ClearColor{ .r = 0.05, .g = 0.06, .b = 0.10, .a = 1.0 }</code>,
+a near-black blue: your config did not set one. Into the method:</p>
+<figure class="code"><figcaption><span class="path">src/wgpu_app.zig:956</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">        <span class="tok-kw">if</span> (self.child_tick_active <span class="tok-kw">or</span> self.drawing_active) {
+            self.drawing_active = true;
+            self.<span class="tok-fn">enterFrame2D</span>();
+            <span class="tok-kw">return</span> &amp;self.gl;
+        }
+        <span class="tok-kw">try</span> self.<span class="tok-fn">ensureFrame</span>();</code></pre></figure>
+<div class="callout"><strong>Checkpoint 14.1.</strong> F10 from the <code>if</code> until you reach
+<code>try self.ensureFrame();</code>. Did you stop on <code>self.drawing_active = true;</code>, the block's first
+line?<br>
+<b>(a)</b> yes: a frame is already open<br>
+<b>(b)</b> no: the block is skipped
+<details><summary>answer</summary><p><b>(b).</b> Neither flag is set — the variables panel shows both
+<code>false</code> under <code>self</code>. (On the way, the debugger flashes on <code>return &amp;self.gl;</code>,
+the block's last line, without returning: the jump over the block, as in chapter 0.)</p></details></div>
+
+<p>Neither flag is set (no launcher, no frame open), so the frame really begins. <code>ensureFrame</code>:</p>
+<figure class="code"><figcaption><span class="path">src/wgpu_app.zig:930</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">    <span class="tok-kw">fn</span> <span class="tok-fn">ensureFrame</span>(self: *App) !void {
+        <span class="tok-kw">if</span> (self.frame_begun) {
+            <span class="tok-kw">return</span>;
+        }
+        _ = <span class="tok-kw">try</span> self.<span class="tok-fn">ensureRenderer2D</span>();
+...
+        self.renderer_2d.?.shapes_batch.vbo_vertex_base = <span class="tok-num">0</span>;
+        self.renderer_2d.?.shapes_batch.ibo_index_base = <span class="tok-num">0</span>;
+...
+        self.renderer_2d.?.glyph_cache.<span class="tok-fn">beginFrame</span>();
+        _ = Backend.<span class="tok-fn">beginFrame</span>(&amp;self.gpu_frame);
+        self.frame_begun = true;
+    }</code></pre></figure>
+<p><code>ensureRenderer2D</code> finds the renderer the font already made, and returns. The vertex and index
+rings rewind to their start: this frame's shapes will be written from offset 0. The glyph cache starts a frame
+(it would start over here if the last frame had filled it). And then <code>Backend.beginFrame</code>:</p>
+<figure class="code"><figcaption><span class="path">src/gpu_iface.zig:488</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">    <span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">beginFrame</span>(f: *GpuFrame) FrameContext {
+        f.surface_view = wgpu.<span class="tok-fn">getCurrentTextureView</span>(f.surface);
+        f.encoder = wgpu.<span class="tok-fn">createCommandEncoder</span>(f.device);
+        <span class="tok-comment">// Make the owned depth texture exist + match the surface size (no-op</span>
+        <span class="tok-comment">// when the frame has no depth_format). This is what guarantees the</span>
+        <span class="tok-comment">// depth attachment can never mismatch the color attachment.</span>
+        f.<span class="tok-fn">ensureDepth</span>();</code></pre></figure>
+<p>Three WebGPU-shaped steps. <code>getCurrentTextureView</code> is the browser's
+<code>context.getCurrentTexture().createView()</code>; on Vulkan it is <code>acquireImage</code>, and since an image
+was acquired ahead, it takes the fast path:</p>
+<figure class="code"><figcaption><span class="path">src/wgpu_vulkan.zig:2070</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">    <span class="tok-kw">if</span> (self.image_acquired_ahead) |ahead_index| {
+        self.image_acquired_ahead = null;
+        <span class="tok-kw">try</span> <span class="tok-fn">retireCompleted</span>(self);
+        <span class="tok-kw">return</span> <span class="tok-fn">prepareAcquiredImage</span>(self, ahead_index);
+    }</code></pre></figure>
+<p>(The slow path below it — wait for the slot, rebuild a stale swapchain, acquire with no timeout, retry once if
+out of date — is what a frame does when nothing was acquired ahead.) <code>prepareAcquiredImage</code> records the
+image's preparation into <code>uploads</code>, the same command buffer that has been open since the white pixel:</p>
+<figure class="code"><figcaption><span class="path">src/wgpu_vulkan.zig:2016</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">    <span class="tok-fn">imageBarrier</span>(self, uploads, image, single_color_range, .undefined, .general);
+    <span class="tok-comment">// WebGPU's current texture starts as zeros (transparent black) every frame: a first pass that LOADS instead of</span>
+    <span class="tok-comment">// clearing sees black on the web, so it must here too - not whatever the image held.</span>
+    <span class="tok-kw">const</span> zero_color: vk.ClearColorValue = .{ .float_32 = <span class="tok-builtin">@splat</span>(<span class="tok-num">0</span>) };
+    self.device_dispatch.<span class="tok-fn">cmdClearColorImage</span>(uploads, image, .general, &amp;zero_color, <span class="tok-num">1</span>, <span class="tok-builtin">@ptrCast</span>(&amp;single_color_range));
+    <span class="tok-kw">return</span> self.swapchain.view_handles.items[image_index];</code></pre></figure>
+<p>One layout change, to GENERAL, where every image in this host lives; a clear to transparent black, because that
+is what WebGPU promises a frame's texture holds; and the stable view handle the engine will draw into.</p>
+
+<div class="callout"><strong>Checkpoint 14.2.</strong> Follow it with F11: in <code>ensureFrame</code>, into
+<code>Backend.beginFrame</code>, into <code>wgpu.getCurrentTextureView</code>, and on into the Vulkan host until
+you reach <code>acquireImage</code>. Which way does it go?<br>
+<b>(a)</b> into <code>if (self.image_acquired_ahead) |ahead_index| {</code>, the fast path<br>
+<b>(b)</b> on to <code>try waitTimeline(...)</code> and a blocking acquire
+<details><summary>answer</summary><p><b>(a).</b> The image chapter 11 acquired ahead is waiting here. Shift+F11
+back out to <code>App.beginDrawing</code> when you have seen it.</p></details></div>
+<p><code>createCommandEncoder</code> begins the frame's command buffer — the second
+<code>vkAllocateCommandBuffers</code> of the run (later frames reuse finished ones) — and counts an encoder open,
+which holds back the destruction of anything released while it records. <code>ensureDepth</code> returns at once:
+no depth format.</p>
+
+<p>Back in <code>beginDrawing</code>, the render pass opens:</p>
+<pre><code class="zig">        self.pass = Backend.<span class="tok-fn">beginRenderPass</span>(self.<span class="tok-fn">frameEncoder</span>(), .{
+            .color_view = self.gpu_frame.surface_view,
+            .clear = .{ .r = clear_color.r, .g = clear_color.g, .b = clear_color.b, .a = clear_color.a },
+...
+            .depth_view = self.gpu_frame.depth_view,
+        });</code></pre>
+<p><code>frameEncoder()</code> asserts the frame was begun — the guard that turns a forgotten
+<code>ensureFrame</code> into a loud message instead of a black screen. This program has no depth buffer
+(<code>depth_format</code> null), so <code>depth_view</code> is <code>.invalid</code> and the pass has only a colour
+attachment: the swapchain image, to be cleared to the dark blue.</p>
+<p>On Vulkan, <code>beginRenderPass</code> records three things into the frame's command buffer. A full memory
+barrier — the bluntest synchronization Vulkan has, and the reason the host never has to reason about which pass
+wrote what. Then <code>vkCmdBeginRendering</code>: dynamic rendering, with no <code>VkRenderPass</code> or
+framebuffer object, one colour attachment in the GENERAL layout, loaded with a clear, stored at the end. And then the
+viewport, where the two APIs' coordinate systems are reconciled:</p>
+<figure class="code"><figcaption><span class="path">src/wgpu_vulkan.zig:3475</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig">    <span class="tok-comment">// WebGPU's normalized device coordinates point Y up; Vulkan's point it down. A viewport of negative height,</span>
+    <span class="tok-comment">// starting at the bottom, flips Y back - and both APIs then agree on where every pixel lands.</span>
+    <span class="tok-kw">const</span> width: f32 = <span class="tok-builtin">@floatFromInt</span>(first_color.extent.width);
+    <span class="tok-kw">const</span> height: f32 = <span class="tok-builtin">@floatFromInt</span>(first_color.extent.height);
+    <span class="tok-kw">const</span> viewport: vk.Viewport = .{
+        .x = <span class="tok-num">0</span>,
+        .y = height,
+        .width = width,
+        .height = -height,
+        .min_depth = <span class="tok-num">0</span>,
+        .max_depth = <span class="tok-num">1</span>,
+    };</code></pre></figure>
+<p>Then a scissor rectangle covering the image. The same shaders, the same projection matrix, the same vertices, and
+every pixel lands where the browser puts it.</p>
+
+<pre><code class="zig">        <span class="tok-kw">const</span> size: wgpu.SurfaceSize = wgpu.<span class="tok-fn">getSurfaceCssSize</span>(self.gpu_frame.surface);
+        <span class="tok-kw">const</span> css_w: f32 = <span class="tok-fn">float</span>(<span class="tok-builtin">@max</span>(size.width, <span class="tok-num">1</span>));
+        <span class="tok-kw">const</span> css_h: f32 = <span class="tok-fn">float</span>(<span class="tok-builtin">@max</span>(size.height, <span class="tok-num">1</span>));
+        <span class="tok-kw">const</span> vp: [<span class="tok-num">16</span>]f32 = <span class="tok-kw">switch</span> (self.config.window.scale_mode) {
+            <span class="tok-comment">// Responsive: ortho == live CSS size; coords are CSS px.</span>
+            .responsive =&gt; renderer_2d.<span class="tok-fn">orthoTopLeft</span>(css_w, css_h),</code></pre>
+<p>The 2D coordinate system is decided here, every frame: an orthographic projection whose origin is the top-left
+corner and whose units are logical pixels, from (0, 0) to (480, 200). That is why your <code>update</code> can write
+<code>cx = sw / 2</code> and have it be the middle of the window on any display. The GPU still renders at the
+physical resolution; the projection just maps logical coordinates onto it.</p>
+
+<pre><code class="zig">        self.renderer_2d.?.<span class="tok-fn">updatePerFrame</span>(&amp;self.gpu_frame, .{ .view_projection = vp });
+        self.renderer_2d.?.<span class="tok-fn">bindForPass</span>(&amp;self.pass);
+
+        self.pass.batch = &amp;self.renderer_2d.?.shapes_batch;
+...
+        self.gl = WgpuGl.<span class="tok-fn">init</span>(&amp;self.renderer_2d, &amp;self.pass);
+        self.gl.owner = self;
+...
+        <span class="tok-kw">const</span> backing: wgpu.SurfaceSize = wgpu.<span class="tok-fn">getSurfaceSize</span>(self.gpu_frame.surface);
+        self.gl.render_w = backing.width;
+        self.gl.render_h = backing.height;
+...
+        self.gl.<span class="tok-fn">setDeviceMapping</span>(vp, backing.width, backing.height);
+        self.drawing_active = true;
+        self.<span class="tok-fn">enterFrame2D</span>();
+        <span class="tok-kw">return</span> &amp;self.gl;</code></pre>
+<p>The projection is written into the renderer's uniform buffer; the 2D pipeline and its bind groups are bound
+into the pass; the batch that collects shapes is attached; the gl handle is reset to a fresh per-frame state —
+identity transforms, white colour — and pointed back at its owner. It learns the backing size, for clamping scissor
+rectangles, and the logical-to-device mapping, so text knows the pixel size it will land at. The frame is open:
+<code>drawing_active</code>, phase <code>frame_2d</code>.</p>
+
+<p>What those lines cost on Vulkan is small, and one of them is subtly deferred:</p>
+<ul>
+<li><code>updatePerFrame</code> advances the ortho ring's cursor (to slot 1 — the cursor moves before it writes) and
+writes the 64-byte projection with <code>queueWriteBuffer</code>: staged into the 4 MiB chunk, a copy recorded into
+<code>uploads</code>, which runs before the frame's commands.</li>
+<li><code>bindForPass</code> binds the alpha pipeline — an immediate <code>vkCmdBindPipeline</code> — and sets
+groups 0 and 1. But the Vulkan host only <em>notes</em> the descriptor sets; the actual
+<code>vkCmdBindDescriptorSets</code> waits for the first draw, which will happen inside <code>update</code>. So at
+the moment <code>update</code> starts, no descriptor set has been bound.</li>
+</ul>
+
+<div class="callout"><strong>Checkpoint 14.3.</strong> Shift+F11 back to your <code>update</code> and press F10.
+Where does it stop?<br>
+<b>(a)</b> line 49, <code>z.clearViewport(...)</code><br>
+<b>(b)</b> line 47, <code>defer z.endDrawing(f.gl);</code>
+<details><summary>answer</summary><p><b>(a).</b> A <code>defer</code> runs nothing where it is written: it
+schedules <code>z.endDrawing</code> for the moment <code>update</code> returns — when the frame is flushed, the pass
+ended, everything recorded since chapter 9 submitted, and the image presented. So there is no code on line 47 to stop
+at.</p></details></div>
+
+<p>And the next line of yours is almost an anticlimax. <code>clearViewport</code> is not a clear at all:</p>
+<figure class="code"><figcaption><span class="path">src/wgpu_app.zig:2772</span><span class="lang">zig</span></figcaption>
+<pre><code class="zig"><span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">clearViewport</span>(f: *Frame, color: Color) void {
+    <span class="tok-fn">drawRectangleRec</span>(f.gl, .{ .x = <span class="tok-num">0</span>, .y = <span class="tok-num">0</span>, .width = f.window.<span class="tok-fn">widthf</span>(), .height = f.window.<span class="tok-fn">heightf</span>() }, color);
+}</code></pre></figure>
+<p>The render pass already cleared the screen to the config's dark blue when your first line opened it; that clear is
+a load operation, fixed when the pass began. A "clear" in the middle of a pass is a rectangle the size of the
+viewport, drawn over it. Clear the breakpoints and press F5: the frame is presented, and the window shows what your
+<code>update</code> drew.</p>
+
+<h2 id="recap">15. The whole path on one page</h2>
+
+<p>What happened, in order, on one thread:</p>
+<table>
+<tr><th>#</th><th>where</th><th>what</th></tr>
+<tr><td>1</td><td>kernel, ntdll</td><td>read the header, map the image, map its 6 DLLs and theirs (about 20 in all), fill the import table, set up TLS from <code>_tls_used</code>; no static constructors exist to run</td></tr>
+<tr><td>2</td><td>std/start.zig</td><td><code>WinStartup</code>: <code>fninit</code>, the segfault handler, the PEB's command line, <code>callMain</code> → your <code>main()</code></td></tr>
+<tr><td>3</td><td>your main</td><td><code>zimr_app.run(.{ .window = ... }, State, initState, update)</code></td></tr>
+<tr><td>4</td><td>App.run</td><td>two counting allocators over <code>smp_allocator</code>; the config; a fixed seed</td></tr>
+<tr><td>5</td><td>win32.zig</td><td>DPI awareness, a window class, <code>CreateWindowExW</code> (the <code>*Window</code> tucked into user data on <code>WM_NCCREATE</code>), <code>ShowWindow</code></td></tr>
+<tr><td>6</td><td>native_loop.zig</td><td>input method off, input handler on, <code>ZIMR_LOG_INPUT</code>, the window handed to Vulkan</td></tr>
+<tr><td>7</td><td>wgpu_vulkan.zig</td><td><code>vulkan-1.dll</code> and one function from it; an instance (validation on if the SDK is there); a Win32 surface; the GPU that presents, discrete first; a device, a queue, a command pool, a timeline semaphore, two acquire semaphores; a FIFO swapchain of about three images</td></tr>
+<tr><td>8</td><td>App.run</td><td>two empty caches, the <code>GpuFrame</code>, no depth; the gl handle wired to its owner</td></tr>
+<tr><td>9</td><td>App.run</td><td>an init <code>Frame</code>; <code>gpa.create(State)</code>; a direct call to your <code>initState</code></td></tr>
+<tr><td>10</td><td>your initState, wgpu_app</td><td><code>loadFont</code>: 191 codepoints; the 2D renderer created lazily; the TTF parsed, an atlas baked and uploaded with mipmaps, registered; a face kept</td></tr>
+<tr><td>11</td><td>App.run</td><td>the type-erased thunk and State stored; <code>active_app</code>; the profiler's clock, probed 4,000 times</td></tr>
+<tr><td>12</td><td>your main</td><td><code>zimr_app.runNative()</code>: the native program runs its own frames</td></tr>
+<tr><td>13</td><td>native_loop.run</td><td>no <code>ZIMR_SCRIPT</code>; first pass: pump messages, no resize, deliver input; a high-resolution timer; a swapchain image acquired ahead</td></tr>
+<tr><td>14</td><td>update export</td><td>profiler frame mark; <code>makeFrame</code> (time 0, delta 0); gamepads; <code>thunk</code> → <code>dispatch</code> → your <code>update</code>, line 46</td></tr>
+<tr><td>15</td><td>your first line</td><td><code>z.beginDrawing</code>: rings rewound, the image's preparation and the frame's command buffer begun, a render pass cleared to (0.05, 0.06, 0.10), an ortho of 480 × 200 logical pixels, the 2D pipeline bound</td></tr>
+</table>
+
+<p>Two observations to take away. First, almost none of this is specific to Windows. Steps 4, 8-11 and 14-15 are
+the code a browser runs too, line for line; Windows contributes the loader and start code (1-2), the window (5-6),
+the Vulkan host beneath the GPU calls (7), and the frame loop (12-13) that replaces the browser's
+<code>requestAnimationFrame</code>. Everything that differs is chosen at compile time from one build option, so the
+native program contains no code for the browser and the browser's contains none for Windows.</p>
+
+<p>Second, look at who decided what. You wrote three functions, and each is a decision the engine carried out:
+<code>main</code> said <em>build a window of this size, and here are my init and my update</em>, then <em>run the
+frames</em>; <code>initState</code> said <em>I need this font</em> — which is why the 2D renderer exists before any
+frame; <code>update</code> says <em>open a frame now</em>. The rest follows from those: the window before the GPU
+because the GPU must present to it; the device before your State because your font needs a texture; the State before
+the thunk because the thunk must find it; the swapchain image before the frame so that the frame never waits.
+Between Zig's start code and your <code>main</code> there is nothing; between the frame loop and your
+<code>update</code>, one hop. <a href="backends-tutorial.html">The backends tutorial</a> explains each layer in depth;
+this page was the walk through all of them at once.</p>
+
+</body>
+</html>
